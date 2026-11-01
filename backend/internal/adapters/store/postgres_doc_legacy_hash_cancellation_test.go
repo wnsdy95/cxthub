@@ -48,7 +48,7 @@ func legacySourceHashLargeProof(test testing.TB) domain.VerifiedSessionDoc {
 		if err := json.Unmarshal(testCase.raw, &document); err != nil {
 			test.Fatal(err)
 		}
-		document.Events[0].Blocks[0].Text = strings.Repeat("original <한🙂> \"\\\n", 32<<10)
+		document.Events[0].Blocks[0].Text = strings.Repeat("original <\ud55c🙂> \"\\\n", 32<<10)
 		return legacyMonolithicVerifierProof(test, document)
 	}
 	test.Fatal("missing canonical legacy verifier fixture")

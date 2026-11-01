@@ -7,7 +7,7 @@ import (
 )
 
 func TestLegacyNativeBlocksIntegrationGiantTextAndDuplicateBacking(test *testing.T) {
-	giant, err := json.Marshal(strings.Repeat("x", 5*ConversationManifestChunkBytes+73) + "한🙂<&>\n")
+	giant, err := json.Marshal(strings.Repeat("x", 5*ConversationManifestChunkBytes+73) + "\ud55c🙂<&>\n")
 	if err != nil {
 		test.Fatal(err)
 	}

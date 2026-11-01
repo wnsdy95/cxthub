@@ -26,9 +26,9 @@ func TestLocateDocFindTextSourceFieldOrder(testContext *testing.T) {
 	}{
 		{
 			name: "message escapes and skipped blocks",
-			raw:  " \n" + `{"kind":"message","locked":{"blob":"never search"},"blocks":[null,{"type":"image","text":"hidden"},{"type":"text","text":""},{"type":"text","text":"한🙂\n\u003c\u003e\u0026\"\\\/\b\f\r\t\u2028\u2029"},{"type":"text","text":"tail"}]}` + "\t",
+			raw:  " \n" + "{\"kind\":\"message\",\"locked\":{\"blob\":\"never search\"},\"blocks\":[null,{\"type\":\"image\",\"text\":\"hidden\"},{\"type\":\"text\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"\ud55c🙂\\n\\u003c\\u003e\\u0026\\\"\\\\\\/\\b\\f\\r\\t\\u2028\\u2029\"},{\"type\":\"text\",\"text\":\"tail\"}]}" + "\t",
 			fields: []docFindSourceTestField{
-				{"한🙂\n<>&\"\\/\b\f\r\t\u2028\u2029", `"한🙂\n\u003c\u003e\u0026\"\\\/\b\f\r\t\u2028\u2029"`},
+				{"\ud55c🙂\n<>&\"\\/\b\f\r\t\u2028\u2029", "\"\ud55c🙂\\n\\u003c\\u003e\\u0026\\\"\\\\\\/\\b\\f\\r\\t\\u2028\\u2029\""},
 				{"tail", `"tail"`},
 			},
 		},
@@ -39,15 +39,15 @@ func TestLocateDocFindTextSourceFieldOrder(testContext *testing.T) {
 		},
 		{
 			name:   "reasoning ignores opaque provider state",
-			raw:    `{"kind":"reasoning","locked":{"blob":"opaque","nested":[1e9999]},"replacement":[{"kind":"message","blocks":[{"type":"text","text":"hidden"}]}],"redacted_summary":"visible\n한"}`,
-			fields: []docFindSourceTestField{{"visible\n한", `"visible\n한"`}},
+			raw:    "{\"kind\":\"reasoning\",\"locked\":{\"blob\":\"opaque\",\"nested\":[1e9999]},\"replacement\":[{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"hidden\"}]}],\"redacted_summary\":\"visible\\n\ud55c\"}",
+			fields: []docFindSourceTestField{{"visible\n\ud55c", "\"visible\\n\ud55c\""}},
 		},
 		{
 			name: "provider name then sorted recursive input",
-			raw:  `{"kind":"tool_call","tool_name":"shell","provider_tool_name":"Bash","input":{"z":[true,null,"",{"v":"finish"}],"n":1.00,"a":["x",{"β":"한"}],"":"empty-key-value","empty":""}}`,
+			raw:  "{\"kind\":\"tool_call\",\"tool_name\":\"shell\",\"provider_tool_name\":\"Bash\",\"input\":{\"z\":[true,null,\"\",{\"v\":\"finish\"}],\"n\":1.00,\"a\":[\"x\",{\"β\":\"\ud55c\"}],\"\":\"empty-key-value\",\"empty\":\"\"}}",
 			fields: []docFindSourceTestField{
 				{"Bash", `"Bash"`}, {"empty-key-value", `"empty-key-value"`},
-				{"a", `"a"`}, {"x", `"x"`}, {"β", `"β"`}, {"한", `"한"`},
+				{"a", `"a"`}, {"x", `"x"`}, {"β", `"β"`}, {"\ud55c", "\"\ud55c\""},
 				{"empty", `"empty"`}, {"n", `"n"`}, {"1", `1.00`},
 				{"z", `"z"`}, {"true", `true`}, {"null", `null`}, {"v", `"v"`}, {"finish", `"finish"`},
 			},
@@ -73,8 +73,8 @@ func TestLocateDocFindTextSourceFieldOrder(testContext *testing.T) {
 		},
 		{
 			name:   "scalar output",
-			raw:    `{"kind":"tool_result","output":"result\n한🙂"}`,
-			fields: []docFindSourceTestField{{"result\n한🙂", `"result\n한🙂"`}},
+			raw:    "{\"kind\":\"tool_result\",\"output\":\"result\\n\ud55c🙂\"}",
+			fields: []docFindSourceTestField{{"result\n\ud55c🙂", "\"result\\n\ud55c🙂\""}},
 		},
 		{
 			name:   "numeric output",
@@ -185,7 +185,7 @@ func TestLocateDocFindSourceSurrogateParity(testContext *testing.T) {
 	for _, encoded := range []string{
 		`"\ud800"`, `"\udc00"`, `"\ud800x\udc00"`, `"\uD83D\uDE42"`,
 		`"\uD83D\uD83D\uDE00"`, `"\udc00\ud800"`, `"\ud800\u0041\udc00"`,
-		`"한\ud800🙂\ufffd\udc00끝"`, `"\u0000\n\u003C\u003e\u0026"`,
+		"\"\ud55c\\ud800🙂\\ufffd\\udc00\ub05d\"", `"\u0000\n\u003C\u003e\u0026"`,
 	} {
 		var decoded string
 		if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
@@ -211,8 +211,8 @@ func TestLocateDocFindPublicTextSourceMatchesWholeEvent(testContext *testing.T) 
 		kind EventKind
 		raw  string
 	}{
-		{EventReasoning, `"visible\n\u003c한\uD83D\uDE42\ud800tail"`},
-		{EventMessage, `[{"type":"image","text":"hidden"},{"type":"text","text":""},{"type":"text","text":"첫\n\u003c🙂"},{"type":"text","text":"second"}]`},
+		{EventReasoning, "\"visible\\n\\u003c\ud55c\\uD83D\\uDE42\\ud800tail\""},
+		{EventMessage, "[{\"type\":\"image\",\"text\":\"hidden\"},{\"type\":\"text\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"\uccab\\n\\u003c🙂\"},{\"type\":\"text\",\"text\":\"second\"}]"},
 		{EventTurn, `[{"type":"text","text":"turn"}]`},
 	} {
 		name := "blocks"
@@ -291,7 +291,7 @@ func TestLocateDocFindSourceRejectsMalformedAndOutsideCursors(testContext *testi
 			testContext.Fatal("absent field accepted", raw, err)
 		}
 	}
-	raw := []byte(`{"kind":"reasoning","redacted_summary":"한🙂x"}`)
+	raw := []byte("{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c🙂x\"}")
 	for _, cursor := range [][3]int{
 		{-1, 0, 1}, {1, 0, 1}, {0, -1, 1}, {0, 0, 0}, {0, 0, -1}, {0, 1, 2},
 		{0, 0, 1}, {0, 3, 1}, {0, 4, 3}, {0, 7, 2}, {0, 8, 1},
@@ -375,7 +375,7 @@ func TestLocateDocFindTextSourceMatchesDocFindTexts(testContext *testing.T) {
 		}
 		switch choice {
 		case 0:
-			return []string{"", "한🙂\n<>&", "alpha", "�", "\"\\\t"}[random.Intn(5)]
+			return []string{"", "\ud55c🙂\n<>&", "alpha", "�", "\"\\\t"}[random.Intn(5)]
 		case 1:
 			return nil
 		case 2:
@@ -474,9 +474,9 @@ func docFindSourceAssertDecoded(testContext *testing.T, raw []byte, span DocFind
 
 func TestLocateDocFindTextSourcesBatchParityAndOrder(testContext *testing.T) {
 	for _, raw := range []string{
-		`{"kind":"tool_result","output":{"z":[true,null,1.00,1e20,9007199254740993],"a":"한\n\u003c\uD83D\uDE42\ud800","b":{"d":"second","c":"third"}}}`,
-		`{"kind":"message","blocks":[{"type":"text","text":"한\n<🙂"},{"type":"image","text":"skip"},{"type":"text","text":"second field"}]}`,
-		`{"kind":"reasoning","redacted_summary":"한\n\u003c\uD83D\uDE42\ud800tail"}`,
+		"{\"kind\":\"tool_result\",\"output\":{\"z\":[true,null,1.00,1e20,9007199254740993],\"a\":\"\ud55c\\n\\u003c\\uD83D\\uDE42\\ud800\",\"b\":{\"d\":\"second\",\"c\":\"third\"}}}",
+		"{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"\ud55c\\n<🙂\"},{\"type\":\"image\",\"text\":\"skip\"},{\"type\":\"text\",\"text\":\"second field\"}]}",
+		"{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c\\n\\u003c\\uD83D\\uDE42\\ud800tail\"}",
 		`{"kind":"tool_call","provider_tool_name":"tool","tool_name":"ignored","input":{"z":[null,true],"a":"first"}}`,
 	} {
 		var event CIREvent
@@ -533,8 +533,8 @@ func TestLocateDocFindPublicTextSourcesBatch(testContext *testing.T) {
 		raw  string
 		kind EventKind
 	}{
-		{` "한\n\u003c\uD83D\uDE42\ud800tail" `, EventReasoning},
-		{` [{"type":"image","text":"hidden"},{"type":"text","text":"한\n\u003c🙂"},{"type":"text","text":"second"}] `, EventMessage},
+		{" \"\ud55c\\n\\u003c\\uD83D\\uDE42\\ud800tail\" ", EventReasoning},
+		{" [{\"type\":\"image\",\"text\":\"hidden\"},{\"type\":\"text\",\"text\":\"\ud55c\\n\\u003c🙂\"},{\"type\":\"text\",\"text\":\"second\"}] ", EventMessage},
 	} {
 		var fields []string
 		if scenario.kind == EventReasoning {
@@ -572,7 +572,7 @@ func TestLocateDocFindPublicTextSourcesBatch(testContext *testing.T) {
 }
 
 func TestLocateDocFindTextSourcesBatchRejectsInvalid(testContext *testing.T) {
-	raw := []byte(`{"kind":"reasoning","redacted_summary":"한🙂text"}`)
+	raw := []byte("{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c🙂text\"}")
 	for _, matches := range [][]DocFindMatch{
 		make([]DocFindMatch, DocFindPageMatches+1),
 		{{Field: 0, Length: 3}, {Field: 1, Length: 1}},
@@ -587,7 +587,7 @@ func TestLocateDocFindTextSourcesBatchRejectsInvalid(testContext *testing.T) {
 		if spans, err := LocateDocFindTextSources(raw, matches); spans != nil || !errors.Is(err, ErrValidation) {
 			testContext.Fatal("invalid batch returned partial results", spans, err)
 		}
-		if spans, err := LocateDocFindPublicTextSources([]byte(`"한🙂text"`), EventReasoning, matches); spans != nil || !errors.Is(err, ErrValidation) {
+		if spans, err := LocateDocFindPublicTextSources([]byte("\"\ud55c🙂text\""), EventReasoning, matches); spans != nil || !errors.Is(err, ErrValidation) {
 			testContext.Fatal("invalid public batch returned partial results", spans, err)
 		}
 	}
@@ -787,9 +787,9 @@ func BenchmarkLocateDocFindTextSource(benchmark *testing.B) {
 }
 
 func FuzzLocateDocFindSource(fuzzContext *testing.F) {
-	fuzzContext.Add([]byte(`{"kind":"reasoning","redacted_summary":"한\n\uD83D\uDE42\ud800"}`), 0, 0, 3)
+	fuzzContext.Add([]byte("{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c\\n\\uD83D\\uDE42\\ud800\"}"), 0, 0, 3)
 	fuzzContext.Add([]byte(`{"kind":"tool_result","output":{"b":[true,null,1.00],"a":"x"}}`), 0, 0, 1)
-	fuzzContext.Add([]byte(`"\ud800한"`), 0, 0, 3)
+	fuzzContext.Add([]byte("\"\\ud800\ud55c\""), 0, 0, 3)
 	fuzzContext.Fuzz(func(testContext *testing.T, raw []byte, field, offset, length int) {
 		before := bytes.Clone(raw)
 		matches := []DocFindMatch{{Field: field, Offset: offset, Length: length}, {Field: 0, Length: 1}}

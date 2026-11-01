@@ -1175,13 +1175,18 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putRef(w http.ResponseWriter, r *http.Request) {
-	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
+	class := app.ResourceBulk
+	bounded, supported := s.repositoryRefs.(interface{ SupportsBoundedTagWrites() bool })
+	if supported && bounded.SupportsBoundedTagWrites() && r.PathValue("kind") == string(domain.RefTag) && !strings.HasPrefix(r.PathValue("name"), "cxt/") {
+		class = app.ResourceInteractive
+	}
+	r, release, ok := s.admitResourceRequest(w, r, class)
 	if !ok {
 		return
 	}
 	defer release()
 	var body putRefBody
-	if !s.decode(w, r, &body) {
+	if !s.decodeLimited(w, r, &body, 16<<10) {
 		return
 	}
 	rid := s.repoID(r)

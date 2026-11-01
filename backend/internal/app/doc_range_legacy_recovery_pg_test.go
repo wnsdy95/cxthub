@@ -260,7 +260,7 @@ func newDocRangeLegacyRecoveryPGFixture(test *testing.T) docRangeLegacyRecoveryP
 		test.Fatal("could not seed the monolithic recovery source", updated, err)
 	}
 	if err := fixture.storage.PutMemoryMeta(ctx, fixture.repo, domain.MemoryDigest{
-		SnapshotID: fixture.document.Hash, Summary: "preserved recovery memory 한🙂", KeyFacts: []string{"immutable source"},
+		SnapshotID: fixture.document.Hash, Summary: "preserved recovery memory \ud55c🙂", KeyFacts: []string{"immutable source"},
 		OpenTasks: []string{"retain pending work"}, Provider: domain.ProviderCodex,
 	}); err != nil {
 		test.Fatal(err)

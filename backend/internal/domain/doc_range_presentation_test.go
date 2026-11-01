@@ -55,7 +55,7 @@ func TestDocRangePresentationClassification(t *testing.T) {
 		{name: "reasoning backspace visible", body: `{"kind":"reasoning","redacted_summary":"\b"}`},
 		{name: "reasoning escaped slash visible", body: `{"kind":"reasoning","redacted_summary":"\/"}`},
 		{name: "reasoning emoji visible", body: `{"kind":"reasoning","redacted_summary":"\ud83d\ude42"}`},
-		{name: "reasoning unicode visible", body: `{"kind":"reasoning","redacted_summary":"한글"}`},
+		{name: "reasoning unicode visible", body: "{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c\uae00\"}"},
 		{name: "tool seed is not message", body: `{"kind":"tool_result","blocks":[{"text":"[cxt seed] Branch-switch context:"}],"redacted_summary":""}`},
 		{name: "nested replacement seed ignored", body: `{"kind":"compaction","replacement":[{"kind":"message","blocks":[{"text":"[cxt seed] Branch-switch context:"}]}]}`},
 	} {

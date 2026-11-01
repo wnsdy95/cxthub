@@ -13,7 +13,7 @@ import (
 func legacyCanonicalBlocksCostEvent(count int) CIREvent {
 	blocks := make([]ContentBlock, count)
 	for position := range blocks {
-		blocks[position] = ContentBlock{Type: "text", Text: strconv.Itoa(position) + " <&>\n한🙂\u2028\u2029\"\\"}
+		blocks[position] = ContentBlock{Type: "text", Text: strconv.Itoa(position) + " <&>\n\ud55c🙂\u2028\u2029\"\\"}
 	}
 	created := json.Number("1787683260.123456789")
 	return CIREvent{

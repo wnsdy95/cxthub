@@ -197,8 +197,8 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	fixture.publishSnapshot(test, ctx)
 	fixture.assertDocumentReads(test, ctx, api, mcp)
 	legacySettings := []domain.SettingsBundle{
-		{Kind: "claude", Files: []domain.SettingsFile{{Path: "CLAUDE.md", ContentB64: base64.StdEncoding.EncodeToString([]byte("historical Claude settings 한🙂"))}}},
-		{Kind: "agents", Files: []domain.SettingsFile{{Path: "AGENTS.md", ContentB64: base64.StdEncoding.EncodeToString([]byte("historical Agents settings 한🙂"))}}},
+		{Kind: "claude", Files: []domain.SettingsFile{{Path: "CLAUDE.md", ContentB64: base64.StdEncoding.EncodeToString([]byte("historical Claude settings \ud55c🙂"))}}},
+		{Kind: "agents", Files: []domain.SettingsFile{{Path: "AGENTS.md", ContentB64: base64.StdEncoding.EncodeToString([]byte("historical Agents settings \ud55c🙂"))}}},
 	}
 	for _, bundle := range legacySettings {
 		fixture.settingsSchemaHandoffSettings(test, ctx, api, bundle, true)

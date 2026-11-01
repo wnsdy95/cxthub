@@ -20,6 +20,8 @@ type legacyNativeAnyArray struct {
 	tracked      bool
 	resourceRead weak.Pointer[legacyNormalizationCapture]
 	aliasCounter weak.Pointer[legacyNativeInitialAliasNode]
+	resource     *legacyNativeResourceOwner
+	offset       int
 }
 
 func newLegacyNativeAnyArray(maximum int) (*legacyNativeAnyArray, error) {
@@ -82,6 +84,15 @@ func (list *legacyNativeAnyArray) appendWithChild(ctx context.Context, input *le
 	}
 	if valueHeap.bytes < 0 || excess < 0 {
 		return false, ErrIntegrity
+	}
+	if list.resource != nil {
+		expected, err := list.resourceValue(ctx, len(list.decoded))
+		if err != nil {
+			return false, err
+		}
+		if !legacyNativeCheckpointGoGraphSame(expected.value, value) {
+			return false, ErrConflict
+		}
 	}
 	var childCost int
 	children := docRangeHeaderHeapEstimate{bytes: list.childBytes}
@@ -197,6 +208,10 @@ func (list *legacyNativeAnyArray) validateRetained(payload, metadata, children d
 	retained.include(metadata)
 	retained.include(children)
 	retained.include(legacyNativeAnyArrayBacking(previousCapacity))
+	if list.resource != nil {
+		bytes, err := list.resource.retainedBytes()
+		retained.include(docRangeHeaderHeapEstimate{bytes: bytes, err: err})
+	}
 	if retained.err != nil {
 		return retained.err
 	}
@@ -235,4 +250,8 @@ func (list *legacyNativeAnyArray) retained(estimate *docRangeHeaderHeapEstimate)
 	list.children.retained(estimate)
 	estimate.include(docRangeHeaderHeapEstimate{bytes: list.childBytes})
 	list.tail.retained(estimate)
+	if list.resource != nil {
+		retained, err := list.resource.retainedBytes()
+		estimate.include(docRangeHeaderHeapEstimate{bytes: retained, err: err})
+	}
 }

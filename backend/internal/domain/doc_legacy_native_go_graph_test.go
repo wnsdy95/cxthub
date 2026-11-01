@@ -347,7 +347,7 @@ func TestLegacyNativeCheckpointGoGraphW85Values(test *testing.T) {
 		{name: "maximum-finite", value: math.MaxFloat64},
 		{name: "exact-mantissa", value: math.Float64frombits(0x4340000000000001)},
 		{name: "empty-text", value: ""},
-		{name: "escaped-and-unicode-text", value: "\x00\"\\\n한글😀"},
+		{name: "escaped-and-unicode-text", value: "\x00\"\\\n\ud55c\uae00\U0001f600"},
 		{name: "typed-nil-map", value: map[string]any(nil)},
 		{name: "typed-nil-array", value: []any(nil)},
 		{name: "empty-map", value: map[string]any{}},
@@ -433,7 +433,7 @@ func TestLegacyNativeCheckpointGoGraphW85AliasesAndScale(test *testing.T) {
 		}
 	})
 	test.Run("large-text-array-map-and-source-backing", func(test *testing.T) {
-		text := strings.Repeat("한x", ConversationManifestChunkBytes+19)
+		text := strings.Repeat("\ud55cx", ConversationManifestChunkBytes+19)
 		array := make([]any, 8193, 8209)
 		for position := range array {
 			array[position] = float64(position)
@@ -597,7 +597,15 @@ func TestLegacyNativeCheckpointGoGraphW85Rejections(test *testing.T) {
 				test.Fatal(err)
 			}
 			defer work.close()
-			legacyNativeGoGraphW85Drain(test, work, registry, legacyNativeGoGraphW85Budget)
+			for attempt := 0; attempt < legacyNativeGoGraphW85StepLimit && !work.verifying; attempt++ {
+				if ready, err := work.step(context.Background()); err != nil || ready {
+					test.Fatal("source fixture did not stop before sample verification", ready, err)
+				}
+				legacyNativeGoGraphW85BudgetCheck(test, work, registry, legacyNativeGoGraphW85Budget)
+			}
+			if !work.verifying || work.frame != nil || work.verifyPosition != 0 || work.verify != registry.first {
+				test.Fatal("raw mutation fixture did not reach completed import before sample verification")
+			}
 			switch name {
 			case "map-size":
 				object["new"] = true
@@ -611,6 +619,21 @@ func TestLegacyNativeCheckpointGoGraphW85Rejections(test *testing.T) {
 				array[0] = float64(0)
 			case "array-child-alias":
 				array[1] = map[string]any{"value": float64(1)}
+			}
+			var verificationFailure error
+			for attempt := 0; attempt < legacyNativeGoGraphW85StepLimit; attempt++ {
+				ready, err := work.step(context.Background())
+				if ready {
+					test.Fatal("changed source samples completed verification", err)
+				}
+				if err != nil {
+					verificationFailure = err
+					break
+				}
+				legacyNativeGoGraphW85BudgetCheck(test, work, registry, legacyNativeGoGraphW85Budget)
+			}
+			if !errors.Is(verificationFailure, ErrConflict) && !errors.Is(verificationFailure, ErrIntegrity) {
+				test.Fatal("changed source samples lacked the original conflict/integrity rejection", verificationFailure)
 			}
 			value, failure := work.take(context.Background())
 			if !reflect.DeepEqual(value, legacyNativeAnyValue{}) || !errors.Is(failure, ErrConflict) && !errors.Is(failure, ErrIntegrity) {

@@ -59,7 +59,7 @@ func TestLegacyRangeMetadataSeedOriginalPlanToFrozenMetadataParity(test *testing
 			case "byte-blocks":
 				proof, _ = legacyDocByteGenerationLargeFixture(test)
 			case "split-utf8":
-				proof, _ = legacyDocByteBackfillBoundaryFixture(test, "한🙂")
+				proof, _ = legacyDocByteBackfillBoundaryFixture(test, "\ud55c🙂")
 			case "split-escape":
 				proof, _ = legacyDocByteBackfillBoundaryFixture(test, "\\\"\n\t")
 			default:

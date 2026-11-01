@@ -508,7 +508,7 @@ func TestLegacyNormalizationPreparationResetDiscardsStoredHistory(test *testing.
 }
 
 func TestLegacyNormalizationPreparationLargeEventBorrowedBuffers(test *testing.T) {
-	payload := strings.Repeat("x", (512<<10)+73) + "한🙂<&>\"\\\n"
+	payload := strings.Repeat("x", (512<<10)+73) + "\ud55c🙂<&>\"\\\n"
 	raw := []byte(fmt.Sprintf(`{"envelope":{"cir_version":"2"},"events":[{"kind":"message","seq":9,"role":"user","blocks":[{"type":"text","text":%q}]},{"kind":"turn","seq":-1}]}`, payload))
 	canonical, original, err := legacyNormalizationPreparationOracle(raw)
 	if err != nil {

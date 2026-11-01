@@ -96,7 +96,7 @@ func TestSourceReadFacadePreservesExactExistingSource(test *testing.T) {
 		test.Run(fmt.Sprintf("legacy=%t", legacy), func(test *testing.T) {
 			queries, fixture := newReadOnlyQueries(test, legacy, []domain.CIREvent{
 				legacyFindGenerationMessage(domain.RoleUser, "first"),
-				legacyFindGenerationMessage(domain.RoleAssistant, "selected 한글🙂"),
+				legacyFindGenerationMessage(domain.RoleAssistant, "selected \ud55c\uae00🙂"),
 			})
 			assertReadOnlyDependencies(test, queries)
 			metadata := &sourceReadSnapshots{reader: queries.metadata}

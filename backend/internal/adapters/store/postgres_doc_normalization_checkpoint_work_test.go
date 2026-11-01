@@ -72,9 +72,11 @@ func normalizationCheckpointPGColdReclaim(test *testing.T, storage *PostgresStor
 	if expectedParser != "" {
 		command.Env = append(command.Env, "CXT_NORMALIZATION_CHECKPOINT_EXPECTED_PARSER="+string(expectedParser))
 	}
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := command.CombinedOutput()
+	if err != nil {
 		test.Fatalf("processing checkpoint cold child failed: %v\n%s", err, output)
 	}
+	test.Logf("processing checkpoint cold child:\n%s", output)
 	legacyByteRecoveryPGAssertPublished(test, storage, ctx, fixture)
 	public := legacyByteRecoveryPGPublicationImage(test, storage, ctx, fixture)
 	if stale, err := work.store.PrepareDocRangeWork(ctx, job); stale != nil || !errors.Is(err, domain.ErrConflict) {
@@ -86,7 +88,15 @@ func normalizationCheckpointPGColdReclaim(test *testing.T, storage *PostgresStor
 }
 
 func TestNormalizationCheckpointPGColdRestartPublishes(test *testing.T) {
-	for _, cut := range []string{"merge", "compose", "verify"} {
+	normalizationCheckpointPGColdRestart(test, "merge", "compose", "verify")
+}
+
+func normalizationCheckpointPGColdRestart(test *testing.T, cuts ...string) {
+	test.Helper()
+	if len(cuts) == 0 {
+		test.Fatal("cold normalization requires a restart cut")
+	}
+	for _, cut := range cuts {
 		test.Run(cut, func(test *testing.T) {
 			storage, ctx := chunkReusePG(test)
 			directory := rangeSpoolTempDir(test)
@@ -212,8 +222,15 @@ func TestNormalizationCheckpointPGRootCommitFailureAndLostResponse(test *testing
 }
 
 func TestNormalizationCheckpointPGColdChild(test *testing.T) {
+	if strings.TrimSpace(os.Getenv("CXT_TEST_DSN")) == "" {
+		test.Fatal("cold normalization requires an explicit CXT_TEST_DSN")
+	}
+	if os.Getenv("CXT_NORMALIZATION_CHECKPOINT_CHILD") == "" {
+		normalizationCheckpointPGColdRestart(test, "merge")
+		return
+	}
 	if os.Getenv("CXT_NORMALIZATION_CHECKPOINT_CHILD") != "1" {
-		test.Skip("only the processing-checkpoint parent launches this child")
+		test.Fatal("invalid cold normalization child mode")
 	}
 	started := time.Now()
 	var prior domain.DocRangeIndexJob
@@ -291,6 +308,7 @@ func TestNormalizationCheckpointPGColdChild(test *testing.T) {
 	if err := work.Publish(ctx, job); err != nil {
 		test.Fatal("new process could not atomically publish its reverified result", err)
 	}
+	test.Log("cold worker published", "elapsed", time.Since(started), "queries", trace.queries.Load())
 	fixture := legacyByteStagePGFixture{repo: job.RepoID, hash: job.DocHash}
 	public := legacyByteRecoveryPGPublicationImage(test, peer, base, fixture)
 	if err := work.Publish(ctx, job); !errors.Is(err, domain.ErrConflict) {

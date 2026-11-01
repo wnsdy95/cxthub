@@ -58,7 +58,7 @@ func legacySourceProofDocument(test *testing.T, count, payload int) ([]byte, Ver
 	document := CIRDocument{Envelope: CIREnvelope{CIRVersion: "2", SourceProvider: ProviderCodex, Fidelity: FidelityFull}}
 	for ordinal := range count {
 		document.Events = append(document.Events, CIREvent{Kind: EventMessage, Seq: ordinal, Role: RoleUser,
-			Blocks: []ContentBlock{{Type: "text", Text: fmt.Sprintf("%d:", ordinal) + strings.Repeat("x", payload) + "한🙂\"\\\n"}}})
+			Blocks: []ContentBlock{{Type: "text", Text: fmt.Sprintf("%d:", ordinal) + strings.Repeat("x", payload) + "\ud55c🙂\"\\\n"}}})
 	}
 	raw, err := CanonicalBytes(document)
 	if err != nil {

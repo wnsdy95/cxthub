@@ -246,8 +246,8 @@ func TestDocDisplayStringSourceSelection(test *testing.T) {
 		`{"kind":"tool_result","locked":{"kind":"message","output":"secret"},"output":"public","nested":[{"kind":"tool_call","output":"secret"}]}`,
 		`{"kind":"tool_result","output":"same","locked":{"output":"same"},"unknown":{"output":"same"}}`,
 		`{"kind":"tool_result","output_extra":"secret","output\u0000":"secret","output":"public","locked":"opaque"}`,
-		`{"\u006b\u0069\u006e\u0064":"tool_result","\u006f\u0075\u0074\u0070\u0075\u0074":"한글🙂"}`,
-		" \n\t{\"kind\" : \"tool_result\", \"output\" : \"line\\n끝\", \"locked\" : {\"blob\":\"secret\"}}\r\n ",
+		"{\"\\u006b\\u0069\\u006e\\u0064\":\"tool_result\",\"\\u006f\\u0075\\u0074\\u0070\\u0075\\u0074\":\"\ud55c\uae00🙂\"}",
+		" \n\t{\"kind\" : \"tool_result\", \"output\" : \"line\\n\ub05d\", \"locked\" : {\"blob\":\"secret\"}}\r\n ",
 	}
 	for index, body := range fixtures {
 		test.Run(fmt.Sprint(index), func(test *testing.T) {
@@ -410,7 +410,7 @@ func TestDocDisplayStringSourceIntegrityAndIO(test *testing.T) {
 
 func TestDocDisplayStringMatchesJSONAndToolDisplay(test *testing.T) {
 	for _, token := range []string{
-		`""`, `"plain"`, `" 한글🙂é\nlast "`,
+		`""`, `"plain"`, "\" \ud55c\uae00🙂é\\nlast \"",
 		`"quote\" slash\/ backslash\\ controls\b\f\n\r\t\u0000\u001f"`,
 		`"\u0041\u00e9\uAC00\u2028\u2029\ufeff\ud83d\ude42"`,
 		`"\ud800"`, `"\udfff"`, `"\ud800x"`, `"\ud800\u0061"`,
@@ -456,11 +456,11 @@ func TestDocDisplayStringMatchesJSONAndToolDisplay(test *testing.T) {
 
 func TestDocDisplayStringUnicodeAtReadAndPageBoundaries(test *testing.T) {
 	for _, boundary := range []int{DocDisplayPageTextBytes, DocDisplayStepSourceBytes} {
-		for _, encoded := range []string{`\n`, `\uAC00`, `\ud83d\ude42`, `\ud800\u0061`, "한", "🙂"} {
+		for _, encoded := range []string{`\n`, `\uAC00`, `\ud83d\ude42`, `\ud800\u0061`, "\ud55c", "🙂"} {
 			for split := 1; split < len(encoded); split++ {
 				test.Run(fmt.Sprintf("boundary-%d/%x/split-%d", boundary, encoded, split), func(test *testing.T) {
 					prefix := `{"locked":"` + strings.Repeat("z", 31) + `","kind":"tool_result","output":"`
-					body := prefix + strings.Repeat("a", boundary-split-1) + encoded + `끝\u0000\udc00","locked":{"blob":"not displayed"}}`
+					body := prefix + strings.Repeat("a", boundary-split-1) + encoded + "\ub05d\\u0000\\udc00\",\"locked\":{\"blob\":\"not displayed\"}}"
 					raw := []byte(body)
 					reader := &docDisplayStringTestReader{reader: strings.NewReader(body), chunk: 64 << 10}
 					source, err := BuildDocDisplayStringSourceReader(context.Background(), HashContent(raw), len(raw), reader)
@@ -686,7 +686,7 @@ func TestDocDisplayStringCancellation(test *testing.T) {
 }
 
 func TestDocDisplayStringPageRangeRejectsNonRuneBoundaries(test *testing.T) {
-	built := docDisplayStringTestBuildAll(test, []byte(`{"kind":"tool_result","output":"한🙂\n끝"}`), true)
+	built := docDisplayStringTestBuildAll(test, []byte("{\"kind\":\"tool_result\",\"output\":\"\ud55c🙂\\n\ub05d\"}"), true)
 	page := built.pages[0]
 	for _, interval := range [][2]int{{-1, 1}, {0, 0}, {0, -1}, {len(page.Text), 1}, {0, len(page.Text) + 1}, {1, 1}, {0, 1}, {3, 1}, {4, 3}, {int(^uint(0) >> 1), 1}, {1, int(^uint(0) >> 1)}} {
 		span, err := page.SourceRange(interval[0], interval[1])
@@ -967,7 +967,7 @@ func TestDocDisplayStringSelectedPageLogarithmicAuthentication(test *testing.T) 
 }
 
 func TestDocDisplayStringPageRejectsAuthenticatedInvalidPayload(test *testing.T) {
-	built := docDisplayStringTestBuildAll(test, []byte(`{"kind":"tool_result","output":"한🙂\n끝"}`), true)
+	built := docDisplayStringTestBuildAll(test, []byte("{\"kind\":\"tool_result\",\"output\":\"\ud55c🙂\\n\ub05d\"}"), true)
 	pageRaw, err := built.pages[0].Encode(built.source)
 	if err != nil {
 		test.Fatal(err)

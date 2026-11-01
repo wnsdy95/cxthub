@@ -32,8 +32,12 @@ func (probe statusMCPQueryProbe) QueryCodeApplicability(ctx context.Context, rep
 	return domain.CodeApplicability{}, probe.read(ctx, repo)
 }
 
+func (probe statusMCPQueryProbe) GetGitAssociationStatus(ctx context.Context, repo domain.ContentHash, _ domain.GitAssociationStatusRequest) (domain.GitAssociationStatusPage, error) {
+	return domain.GitAssociationStatusPage{}, probe.read(ctx, repo)
+}
+
 func TestStatusMCPProtocolReauthorizesAfterAdmissionAndInsideSnapshot(test *testing.T) {
-	for _, tool := range []string{"git_changes", "git_observations", "code_applicability"} {
+	for _, tool := range []string{"git_changes", "git_observations", "code_applicability", "context_link_status"} {
 		for _, profile := range []inbound.ContextQueryProfile{inbound.ContextQueryCompatibility, inbound.ContextQueryPinnedSnapshots} {
 			for _, documentProfile := range []inbound.DocumentQueryProfile{inbound.DocumentQueryCompatibility, inbound.DocumentQueryVerifiedRoots} {
 				for _, revoked := range []bool{false, true} {
@@ -89,6 +93,9 @@ func TestStatusMCPProtocolReauthorizesAfterAdmissionAndInsideSnapshot(test *test
 						fixture.server.SetGitChanges(probe)
 						fixture.server.SetGitScans(probe)
 						fixture.server.SetCodeApplicability(probe)
+						if err := fixture.server.SetGitAssociationStatus(probe); err != nil {
+							test.Fatal(err)
+						}
 						request := documentEventRequest(test, context.Background(), fixture.token, tool, toolArgs{
 							Repository: string(fixture.repo.ID), CodeCommit: strings.Repeat("a", 40), SourceCommit: strings.Repeat("b", 40), Paths: []string{"file.go"},
 						})

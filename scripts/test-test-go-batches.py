@@ -214,6 +214,59 @@ class GoBatchesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("expected=36 run=36 pass=36 fail=0 skip=0 missing=0", result.stdout)
 
+    def test_required_tests_do_not_narrow_batches_or_repetitions(self):
+        config = self.configure()
+        result = self.run_fixture("--require-test", "TestPGCase001", "--require-test", "TestPGCase012")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = self.read_log("batches.jsonl")
+        self.assertEqual([len(run["tests"]) for run in runs], [5, 5, 2])
+        self.assertEqual(Counter(name for run in runs for name in run["tests"]), Counter(config["names"]))
+        self.assertTrue(all(run["count"] == 3 for run in runs))
+        self.assertIn("expected=36 run=36 pass=36 fail=0 skip=0 missing=0", result.stdout)
+
+    def test_required_names_reject_missing_registration_despite_other_matches(self):
+        cases = (
+            (["TestPGOne", "TestPGOne"], "duplicate --require-test"),
+            (["TestPGUnknown"], "not in discovered selection"),
+            (["TestOutsideSelection"], "not in discovered selection"),
+            (["TestPG.*"], "not in discovered selection"),
+            (["^TestPGOne$"], "not in discovered selection"),
+            (["TestPGOne/detail"], "not in discovered selection"),
+            (["TestPGOneSuffix"], "not in discovered selection"),
+            ([""], "not in discovered selection"),
+        )
+        self.configure(names=["TestPGOne", "TestOutsideSelection"])
+        for names, message in cases:
+            with self.subTest(names=names):
+                arguments = [argument for name in names for argument in ("--require-test", name)]
+                result = self.run_fixture(*arguments)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(self.read_log("batches.jsonl"), [])
+                self.assertNotIn("[go-batches] passed", result.stdout)
+
+    def test_required_tests_cannot_be_allowlisted_skips(self):
+        self.configure(names=["TestPGOne"])
+        result = self.run_fixture("--require-test", "TestPGOne", "--allow-skip", "TestPGOne")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("required tests cannot allow skips: TestPGOne", result.stderr)
+        self.assertEqual(self.read_log("batches.jsonl"), [])
+
+    def test_required_registration_does_not_replace_observed_outcomes(self):
+        for changes, message in (
+            ({"outcome": "skip"}, "unexpected top-level test skip"),
+            ({"omit": ["TestPGOne"]}, "missing test2json outcomes"),
+            ({"actual_count": 1}, "missing test2json outcomes"),
+        ):
+            with self.subTest(changes=changes):
+                (self.root / "batches.jsonl").unlink(missing_ok=True)
+                self.configure(names=["TestPGOne"], **changes)
+                result = self.run_fixture("--require-test", "TestPGOne")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(len(self.read_log("batches.jsonl")), 1)
+                self.assertNotIn("[go-batches] passed", result.stdout)
+
     def test_exact_skip_allowlist_counts_observed_outcomes_across_batches_and_repetitions(self):
         self.configure(outcomes={
             "TestPGCase001": "skip",

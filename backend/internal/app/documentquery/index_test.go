@@ -102,7 +102,7 @@ func indexOwnerFixture(test *testing.T) (*Queries, *indexOwnerPorts) {
 	document := domain.SessionDoc{CIR: domain.CIRDocument{
 		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex, SessionOriginID: "index-owner"},
 		Events: []domain.CIREvent{
-			{Seq: 20, Kind: domain.EventMessage, Role: domain.RoleAssistant, Blocks: []domain.ContentBlock{{Type: "text", Text: "answer 한글"}}},
+			{Seq: 20, Kind: domain.EventMessage, Role: domain.RoleAssistant, Blocks: []domain.ContentBlock{{Type: "text", Text: "answer \ud55c\uae00"}}},
 			{Seq: 10, Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "question"}}},
 		},
 	}}

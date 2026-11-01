@@ -249,14 +249,34 @@ func putLegacyByteCheckpointObjects(ctx context.Context, transaction pgx.Tx, job
 	if err := legacyByteCheckpointProtocols(ctx, transaction); err != nil {
 		return err
 	}
+	if err := writeLegacyByteCheckpointObjects(ctx, transaction, job, state, objects); err != nil {
+		return err
+	}
+	return liveLegacyByteJob(ctx, transaction, job)
+}
+
+func writeLegacyByteCheckpointObjects(ctx context.Context, transaction pgx.Tx, job domain.DocRangeIndexJob, state legacyByteCheckpoint, objects []legacyByteCheckpointOwnedObject) error {
+	if state.stage.plan != "" {
+		return domain.ErrConflict
+	}
 	for _, object := range objects {
 		var storedBytes int
 		var storedHash domain.ContentHash
+		var touched bool
 		read := func() error {
-			return transaction.QueryRow(ctx, `SELECT octet_length(bytes),CASE WHEN octet_length(bytes)=$4
- THEN 'sha256:'||encode(sha256(bytes),'hex') ELSE '' END
- FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3`,
-				job.DocHash, state.stage.incarnation, object.hash, len(object.data)).Scan(&storedBytes, &storedHash)
+			return transaction.QueryRow(ctx, `WITH verified AS MATERIALIZED (
+ SELECT octet_length(bytes) AS stored_bytes,CASE WHEN octet_length(bytes)=$4
+ THEN 'sha256:'||encode(sha256(bytes),'hex') ELSE '' END AS stored_hash
+ FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3
+), touched AS (
+ INSERT INTO doc_legacy_checkpoint_staging_v1(doc_hash,stage_id,hash,last_sequence)
+ SELECT $1,$2::uuid,$3,$5 FROM verified WHERE stored_bytes=$4 AND stored_hash=$3
+ ON CONFLICT(doc_hash,stage_id,hash) DO UPDATE
+ SET last_sequence=GREATEST(doc_legacy_checkpoint_staging_v1.last_sequence,EXCLUDED.last_sequence)
+ RETURNING 1
+)
+ SELECT stored_bytes,stored_hash,EXISTS(SELECT 1 FROM touched) FROM verified`,
+				job.DocHash, state.stage.incarnation, object.hash, len(object.data), state.sequence).Scan(&storedBytes, &storedHash, &touched)
 		}
 		err := read()
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -269,11 +289,8 @@ func putLegacyByteCheckpointObjects(ctx context.Context, transaction pgx.Tx, job
 		if err != nil {
 			return err
 		}
-		if storedBytes != len(object.data) || storedHash != object.hash {
+		if storedBytes != len(object.data) || storedHash != object.hash || !touched {
 			return domain.ErrPreparedDocRangeObject
-		}
-		if err := touchLegacyCheckpointObject(ctx, transaction, job, state, object.hash, len(object.data)); err != nil {
-			return err
 		}
 		if object.structure != 0 {
 			if _, err := transaction.Exec(ctx, `INSERT INTO doc_legacy_checkpoint_structures_v1(doc_hash,stage_id,hash,kind)
@@ -290,7 +307,7 @@ func putLegacyByteCheckpointObjects(ctx context.Context, transaction pgx.Tx, job
 			}
 		}
 	}
-	return liveLegacyByteJob(ctx, transaction, job)
+	return ctx.Err()
 }
 
 func (storage *PostgresStore) stageLegacyNormalizationCheckpointObjects(ctx context.Context, job domain.DocRangeIndexJob, expected legacyByteCheckpoint, objects []legacyByteCheckpointObject) error {
@@ -362,6 +379,23 @@ func (storage *PostgresStore) readLegacyNormalizationCheckpointObject(ctx contex
 		return nil, err
 	}
 	defer rollbackPG(transaction)
+	data, err := readLegacyNormalizationCheckpointObject(ctx, transaction, job, expected, hash, size)
+	if err != nil {
+		return nil, err
+	}
+	if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
+		return nil, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func readLegacyNormalizationCheckpointObject(ctx context.Context, transaction pgx.Tx, job domain.DocRangeIndexJob, expected legacyByteCheckpoint, hash domain.ContentHash, size int) ([]byte, error) {
+	if domain.ValidateContentHash(hash) != nil || size < 1 || size > domain.LegacyCanonicalEncodingBytes {
+		return nil, domain.ErrValidation
+	}
 	var data []byte
 	if err := transaction.QueryRow(ctx, `SELECT substring(bytes FROM 1 FOR $4) FROM doc_legacy_byte_stage_checkpoint_objects_v1
  WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3`, job.DocHash, expected.stage.incarnation, hash, size+1).Scan(&data); err != nil {
@@ -370,12 +404,6 @@ func (storage *PostgresStore) readLegacyNormalizationCheckpointObject(ctx contex
 	actual, err := domain.HashContentContext(ctx, data)
 	if err != nil || len(data) != size || actual != hash {
 		return nil, errors.Join(domain.ErrPreparedDocRangeObject, err)
-	}
-	if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
-		return nil, err
-	}
-	if err := transaction.Commit(ctx); err != nil {
-		return nil, err
 	}
 	return data, nil
 }

@@ -26,13 +26,13 @@ func legacyNativeGoGraphW86Fixtures() []legacyNativeGoGraphW86Fixture {
 	separateArray := separateBacking[:1:3]
 	nestedBacking := []any{true, "nested hidden", sharedMap}
 	backing := []any{
-		sharedMap, "\x00\"\\\n한글🙂", math.Copysign(0, -1), nil,
+		sharedMap, "\x00\"\\\n\ud55c\uae00\U0001f642", math.Copysign(0, -1), nil,
 		map[string]any(nil), []any(nil), map[string]any{}, make([]any, 0),
 		map[string]any{"array": nestedBacking[:1:3], "empty": map[string]any{}},
 		sharedArray, sharedMap, separateMap, sharedArray, separateArray,
 	}
 	emptyBacking := []any{"entirely hidden", math.Copysign(0, -1), sharedMap, sharedArray}
-	largeBacking := []any{true, strings.Repeat("한🙂\x00\\\"", LegacyCanonicalEncodingBytes/3+19)}
+	largeBacking := []any{true, strings.Repeat("\ud55c\U0001f642\x00\\\"", LegacyCanonicalEncodingBytes/3+19)}
 	wideBacking := make([]any, 97)
 	for position := range wideBacking {
 		wideBacking[position] = float64(position)
@@ -526,7 +526,7 @@ func TestLegacyNativeGoGraphW86TailFences(test *testing.T) {
 	})
 	test.Run("actual-hidden-dependent-corruption", func(test *testing.T) {
 		storage := legacyNativeGoGraphSetW85Storage(test)
-		backing := []any{map[string]any{"hidden": true}, strings.Repeat("한🙂", LegacyCanonicalEncodingBytes/3+7)}
+		backing := []any{map[string]any{"hidden": true}, strings.Repeat("\ud55c\U0001f642", LegacyCanonicalEncodingBytes/3+7)}
 		roots := []any{backing[:0:2]}
 		snapshot := legacyNativeGoGraphW85SourceSnapshot(roots)
 		defer legacyNativeGoGraphW85SourceUnchanged(test, snapshot)

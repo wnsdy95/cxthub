@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -345,8 +346,13 @@ func (storage *PostgresStore) stageLegacyNormalizationPrefix(ctx context.Context
 	if len(body) != length {
 		return legacyNormalizationPrefix{}, domain.ErrPreparedDocRangeObject
 	}
+	transaction, state, err := storage.openLegacyByteCheckpoint(ctx, job, expected.stage, &expected, false)
+	if err != nil {
+		return legacyNormalizationPrefix{}, err
+	}
+	defer rollbackPG(transaction)
 	editor := legacyNormalizationPrefixEditor{chunkBytes: chunkBytes, read: func(ctx context.Context, hash domain.ContentHash, size int) ([]byte, error) {
-		return storage.readLegacyNormalizationCheckpointObject(ctx, job, expected, hash, size)
+		return readLegacyNormalizationCheckpointObject(ctx, transaction, job, state, hash, size)
 	}}
 	leaf, err := editor.put(ctx, body)
 	if err != nil {
@@ -364,7 +370,14 @@ func (storage *PostgresStore) stageLegacyNormalizationPrefix(ctx context.Context
 	if !prefix.valid() {
 		return legacyNormalizationPrefix{}, domain.ErrIntegrity
 	}
-	if err := storage.stageLegacyNormalizationCheckpointObjects(ctx, job, expected, editor.objects); err != nil {
+	objects, err := legacyByteCheckpointObjects(ctx, editor.objects)
+	if err != nil {
+		return legacyNormalizationPrefix{}, err
+	}
+	if err := putLegacyByteCheckpointObjects(ctx, transaction, job, state, objects); err != nil {
+		return legacyNormalizationPrefix{}, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
 		return legacyNormalizationPrefix{}, err
 	}
 	return prefix, nil
@@ -380,19 +393,36 @@ func (storage *PostgresStore) readLegacyNormalizationPrefix(ctx context.Context,
 	if prefix.Stage != expected.stage.incarnation {
 		return nil, domain.ErrConflict
 	}
-	if length == 0 {
-		transaction, _, err := storage.openLegacyByteCheckpoint(ctx, job, expected.stage, &expected, false)
-		if err != nil {
-			return nil, err
-		}
-		defer rollbackPG(transaction)
-		if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
-			return nil, err
-		}
-		return nil, transaction.Commit(ctx)
+	transaction, state, err := storage.openLegacyByteCheckpoint(ctx, job, expected.stage, &expected, false)
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackPG(transaction)
+	result, err := readLegacyNormalizationPrefix(ctx, transaction, job, state, prefix, offset, length)
+	if err != nil {
+		return nil, err
+	}
+	if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
+		return nil, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func readLegacyNormalizationPrefix(ctx context.Context, transaction pgx.Tx, job domain.DocRangeIndexJob, state legacyByteCheckpoint, prefix legacyNormalizationPrefix, offset, length int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !prefix.valid() || prefix.Generation == 0 || offset < 0 || length < 0 || length > prefix.ChunkBytes || offset > prefix.Tree.DataBytes || length > prefix.Tree.DataBytes-offset {
+		return nil, domain.ErrIntegrity
+	}
+	if prefix.Stage != state.stage.incarnation {
+		return nil, domain.ErrConflict
 	}
 	editor := legacyNormalizationPrefixEditor{chunkBytes: prefix.ChunkBytes, read: func(ctx context.Context, hash domain.ContentHash, size int) ([]byte, error) {
-		return storage.readLegacyNormalizationCheckpointObject(ctx, job, expected, hash, size)
+		return readLegacyNormalizationCheckpointObject(ctx, transaction, job, state, hash, size)
 	}}
 	result := make([]byte, 0, length)
 	for len(result) < length {

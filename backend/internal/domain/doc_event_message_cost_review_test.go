@@ -55,7 +55,7 @@ func TestDocEventMessageChildCheckpointAllocationReduction(test *testing.T) {
 }
 
 func TestDocEventMessageChildCheckpointCanonicalCostReview(test *testing.T) {
-	fixture := newEventMessageChildTestFixture(test, []byte(`{"kind":"message","blocks":[{"type":"text","text":"**한글🙂**"},{"type":"image","name":"asset"},{"type":"image"},{"name":"asset"},{}]}`))
+	fixture := newEventMessageChildTestFixture(test, []byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"**\ud55c\uae00🙂**\"},{\"type\":\"image\",\"name\":\"asset\"},{\"type\":\"image\"},{\"name\":\"asset\"},{}]}"))
 	active := HashContent([]byte("active checkpoint"))
 	text := HashContent([]byte("decoded text"))
 	blockType := HashContent([]byte("decoded type"))

@@ -24,7 +24,7 @@ func legacyCanonicalReplacementCostSource(test testing.TB, count int) *legacyCan
 			ID: "replacement-cost-" + strconv.Itoa(position), Role: RoleAssistant,
 		}
 		if position%64 == 0 {
-			event.Replacement[position].Blocks = []ContentBlock{{Type: "text", Text: strconv.Itoa(position) + " <&>\n한🙂\u2028\u2029\"\\"}}
+			event.Replacement[position].Blocks = []ContentBlock{{Type: "text", Text: strconv.Itoa(position) + " <&>\n\ud55c🙂\u2028\u2029\"\\"}}
 		}
 	}
 	raw, err := json.Marshal(event)

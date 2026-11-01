@@ -14,7 +14,7 @@ import (
 func TestLegacyNativeContainerCheckpointActualMapEntries(test *testing.T) {
 	var builder strings.Builder
 	builder.Grow(256)
-	builder.WriteString("accepted 한글")
+	builder.WriteString("accepted \ud55c\uae00")
 	text := builder.String()
 	bounds := legacyNativeValueCheckpointBounds{PayloadBytes: 1 << 20, Nodes: 64}
 	for _, fixture := range []struct {

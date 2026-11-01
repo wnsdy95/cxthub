@@ -9,7 +9,7 @@ import (
 )
 
 func FuzzDocDisplayStringReplay(fuzz *testing.F) {
-	for _, token := range []string{`""`, `"hello"`, `"한글🙂"`, `"\ud83d\ude42\ud800"`, `"\uFEFF \n\t"`, `"\"\\\b\f\r\t\n"`, `"` + strings.Repeat("x", DocDisplayPageTextBytes-3) + `Needle🙂"`} {
+	for _, token := range []string{`""`, `"hello"`, "\"\ud55c\uae00🙂\"", `"\ud83d\ude42\ud800"`, `"\uFEFF \n\t"`, `"\"\\\b\f\r\t\n"`, `"` + strings.Repeat("x", DocDisplayPageTextBytes-3) + `Needle🙂"`} {
 		fuzz.Add(token)
 	}
 	fuzz.Fuzz(func(test *testing.T, token string) {

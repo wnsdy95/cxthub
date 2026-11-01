@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useReducer } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import { capacityReadRetry, capacityRetryDelay, pendingStateReadRetry, retryCapacityRead, retryPendingStateRead } from './readRetry';
@@ -53,7 +53,9 @@ export async function readRepositoryGraph(repo: string, qc: QueryClient, signal?
 
 export function useRepositoryUpdates(repo: string | null) {
   const qc = useQueryClient();
-  useEffect(() => repo ? startRepositoryUpdates(repo, qc) : undefined, [repo, qc]);
+  const [refreshVersion, refresh] = useReducer(version => version + 1, 0);
+  useEffect(() => repo ? startRepositoryUpdates(repo, qc) : undefined, [repo, qc, refreshVersion]);
+  return refresh;
 }
 
 export function startRepositoryUpdates(repo: string, qc: QueryClient) {

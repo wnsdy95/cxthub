@@ -90,7 +90,7 @@ func TestLegacyDerivedDocByteRangeGenerationMetadataAndBackfillParity(test *test
 		}},
 		{name: "three-chunks", build: legacyDocByteGenerationLargeFixture, wantChunks: 3},
 		{name: "split-utf8", wantChunks: 2, build: func(test testing.TB) (VerifiedSessionDoc, []byte) {
-			return legacyDocByteBackfillBoundaryFixture(test, "한🙂")
+			return legacyDocByteBackfillBoundaryFixture(test, "\ud55c🙂")
 		}},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {
@@ -185,7 +185,7 @@ func TestLegacyDerivedDocByteRangeGenerationMetadataAndBackfillParity(test *test
 				test.Fatal("empty derived generation emitted metadata objects or nonempty directories")
 			}
 			for _, object := range append(objects, DocRangeObject{Bytes: encoded}) {
-				for _, forbidden := range []string{`"locked"`, "opaque-locked-only", "public-message-only", "public-seed-only", "public-summary-only", "private-tool-input-only", "private-tool-output-only", "legacy-byte-large-body-only", "한🙂"} {
+				for _, forbidden := range []string{`"locked"`, "opaque-locked-only", "public-message-only", "public-seed-only", "public-summary-only", "private-tool-input-only", "private-tool-output-only", "legacy-byte-large-body-only", "\ud55c🙂"} {
 					if bytes.Contains(object.Bytes, []byte(forbidden)) {
 						test.Fatalf("derived metadata retained event payload %q", forbidden)
 					}

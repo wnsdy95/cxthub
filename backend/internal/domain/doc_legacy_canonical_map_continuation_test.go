@@ -12,7 +12,7 @@ func legacyCanonicalMapContinuationFixture(test *testing.T) (*LegacyNormalizatio
 	test.Helper()
 	values := make(map[string]any, 5000)
 	for index := 0; index < 5000; index++ {
-		values[fmt.Sprintf("key-%06d", index)] = fmt.Sprintf("value-%d <&> 한🙂", index)
+		values[fmt.Sprintf("key-%06d", index)] = fmt.Sprintf("value-%d <&> \ud55c🙂", index)
 	}
 	body, err := json.Marshal(values)
 	if err != nil {

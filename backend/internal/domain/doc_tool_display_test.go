@@ -135,7 +135,7 @@ func TestDocToolDisplayInvalidSourceAndKind(test *testing.T) {
 }
 
 func TestDocToolDisplayInvalidMatchBoundaries(test *testing.T) {
-	raw := docToolDisplayTestRaw(test, CIREvent{Kind: EventToolResult, Output: "🙂 한글"})
+	raw := docToolDisplayTestRaw(test, CIREvent{Kind: EventToolResult, Output: "🙂 \ud55c\uae00"})
 	display, err := BuildDocToolDisplay(context.Background(), raw)
 	if err != nil {
 		test.Fatal(err)

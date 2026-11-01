@@ -140,7 +140,7 @@ func TestDocMessageDisplayMixedBlocksMatchWholeEventOracle(test *testing.T) {
 		`[]`,
 		`[{"type":"text"},{"type":"text","text":null},{"type":"text","text":""}]`,
 		`[{"type":"text","text":"**first"},{"type":"text","text":"last**"}]`,
-		`[{"type":"text","text":"# **한글\uD83D\uDE42**"},{"type":"image","name":"**asset**"},{"type":"text","text":"- end"}]`,
+		"[{\"type\":\"text\",\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42**\"},{\"type\":\"image\",\"name\":\"**asset**\"},{\"type\":\"text\",\"text\":\"- end\"}]",
 		`[{"type":"text","text":"# first"},{"type":"text","text":""},{"type":"text","text":"\n\n# "},{"type":"text","text":"# last"}]`,
 		`[{"type":"text","text":"paragraph"},{"type":"text","text":"# "},{"type":"text","text":null},{"type":"text","text":"- next"}]`,
 		`[{},{"type":null,"name":"asset"},{"type":"Text","text":"not a text block"}]`,
@@ -251,7 +251,7 @@ func TestDocMessageDisplayBatchReadBudgetAndAtomicFailure(test *testing.T) {
 }
 
 func FuzzDocMessageDisplayWholeEventParity(fuzz *testing.F) {
-	for _, text := range []string{"", "**first", "# 한글🙂", "a\n\nb", "# ", "\u0000\r\t"} {
+	for _, text := range []string{"", "**first", "# \ud55c\uae00🙂", "a\n\nb", "# ", "\u0000\r\t"} {
 		fuzz.Add(text, "last**", true)
 		fuzz.Add(text, "asset", false)
 	}

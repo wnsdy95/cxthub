@@ -87,7 +87,8 @@ func NewRepositoryRefCommands(config RepositoryRefCommandsConfig) (*RepositoryRe
 			}
 		}
 	}
-	return &repositoryRefCommands{profile: config.Profile, meta: config.Store, engine: config.Engine,
+	boundedTags, _ := config.Store.(RepositoryRefBoundedTagStore)
+	return &repositoryRefCommands{profile: config.Profile, meta: config.Store, boundedTags: boundedTags, engine: config.Engine,
 		scope: config.Scope, history: config.History, append: config.Append, revisions: config.Revisions,
 		notifications: config.Notifications, transactional: config.Transactional}, nil
 }

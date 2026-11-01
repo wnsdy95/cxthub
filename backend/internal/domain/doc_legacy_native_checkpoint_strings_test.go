@@ -278,7 +278,7 @@ func legacyNativeCheckpointStringsOracleListCapture(test *testing.T, list *legac
 func TestLegacyNativeCheckpointStringsValuesOracle(test *testing.T) {
 	var giant strings.Builder
 	giant.Grow(4*ConversationManifestChunkBytes + 129)
-	giant.WriteString(strings.Repeat("한🙂", 3*ConversationManifestChunkBytes/7))
+	giant.WriteString(strings.Repeat("\ud55c🙂", 3*ConversationManifestChunkBytes/7))
 	backing := make([]string, 67)
 	for ordinal := range backing {
 		backing[ordinal] = "slot-" + strconv.Itoa(ordinal)
@@ -369,7 +369,7 @@ func TestLegacyNativeCheckpointStringsValuesOracle(test *testing.T) {
 }
 
 func TestLegacyNativeCheckpointStringsNativeCuts(test *testing.T) {
-	giant := `["` + strings.Repeat("\xff", 2*ConversationManifestChunkBytes+37) + `\uD83D\uDE42한",null]`
+	giant := `["` + strings.Repeat("\xff", 2*ConversationManifestChunkBytes+37) + "\\uD83D\\uDE42\ud55c\",null]"
 	for _, fixture := range []struct {
 		name      string
 		raw       string

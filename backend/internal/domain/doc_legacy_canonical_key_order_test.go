@@ -148,7 +148,7 @@ func TestLegacyCanonicalKeyOrderBudgetsAndPairing(test *testing.T) {
 		ascending[index] = fmt.Sprintf("key-%04d", index)
 		reverse[len(reverse)-1-index] = ascending[index]
 	}
-	prefix := strings.Repeat("한🙂", 10000)
+	prefix := strings.Repeat("\ud55c🙂", 10000)
 	cases := []struct {
 		name string
 		keys []string
@@ -162,7 +162,7 @@ func TestLegacyCanonicalKeyOrderBudgetsAndPairing(test *testing.T) {
 		{name: "empty-keys", keys: []string{"z", "", "a", "", "", "b"}},
 		{name: "all-empty", keys: []string{"", "", "", "", ""}},
 		{name: "prefixes", keys: []string{"abc", "a", "ab", "ab\x00", "", "abcd"}},
-		{name: "utf8-and-bytes", keys: []string{"🙂", "한", "z", "é", "a", "中", "\x00", "\x7f", "\x80", "\xff", "\xe2\x82"}},
+		{name: "utf8-and-bytes", keys: []string{"🙂", "\ud55c", "z", "é", "a", "\u4e2d", "\x00", "\x7f", "\x80", "\xff", "\xe2\x82"}},
 		{name: "long-common-prefix", keys: []string{prefix + "z", prefix + "a", prefix, prefix + "a"}},
 		{name: "ascending-1025", keys: ascending},
 		{name: "reverse-1025", keys: reverse},
@@ -185,7 +185,7 @@ func TestLegacyCanonicalKeyOrderPagedAccessMatchesSlice(test *testing.T) {
 		keys []string
 	}
 	cases := make([]orderingCase, 0, 9)
-	pool := []string{"", "a", "a\x00", "é", "한", "🙂"}
+	pool := []string{"", "a", "a\x00", "é", "\ud55c", "🙂"}
 	for _, count := range []int{0, 1, 8, 9, 64, 65, 4096, 4097} {
 		keys := make([]string, count)
 		for index := range keys {
@@ -193,7 +193,7 @@ func TestLegacyCanonicalKeyOrderPagedAccessMatchesSlice(test *testing.T) {
 		}
 		cases = append(cases, orderingCase{name: fmt.Sprintf("fields-%d", count), keys: keys})
 	}
-	prefix := strings.Repeat("한🙂", 10000)
+	prefix := strings.Repeat("\ud55c🙂", 10000)
 	cases = append(cases, orderingCase{name: "long-common-prefix", keys: []string{prefix + "z", prefix + "a", prefix, prefix + "a"}})
 	for _, candidate := range cases {
 		test.Run(candidate.name, func(test *testing.T) {
@@ -406,7 +406,7 @@ func TestLegacyCanonicalKeyOrderExactComparisonCharges(test *testing.T) {
 }
 
 func TestLegacyCanonicalKeyOrderSharedCallerBudget(test *testing.T) {
-	prefix := strings.Repeat("한🙂", 10000)
+	prefix := strings.Repeat("\ud55c🙂", 10000)
 	keys := make([]string, 9)
 	for index := range keys {
 		keys[index] = prefix + fmt.Sprintf("%02d", len(keys)-index)
@@ -447,7 +447,7 @@ func TestLegacyCanonicalKeyOrderSharedCallerBudget(test *testing.T) {
 }
 
 func TestLegacyCanonicalKeyOrderJSONParity(test *testing.T) {
-	keys := []string{"🙂", "z", "", "\x00", "a", "é", "한", "<", "\xff", "\x80", "\xe2\x82", "a\x00", "a\n"}
+	keys := []string{"🙂", "z", "", "\x00", "a", "é", "\ud55c", "<", "\xff", "\x80", "\xe2\x82", "a\x00", "a\n"}
 	fields, _ := drainLegacyCanonicalKeyOrderForTest(test, keys, []int{0, 1, 2, 3, 7})
 	values := make(map[string]any, len(keys))
 	for index, key := range keys {

@@ -159,7 +159,7 @@ func seedDisplayMaintenanceProcessPG(test *testing.T, ctx context.Context, dsn s
 	document := domain.SessionDoc{CIR: domain.CIRDocument{
 		Envelope: domain.CIREnvelope{CIRVersion: "1", SessionOriginID: string(repo), SourceProvider: domain.ProviderCodex, Fidelity: domain.FidelityFull},
 		Events: []domain.CIREvent{{Kind: domain.EventToolCall, ToolName: "generic", CallID: "collector-process",
-			Input: map[string]any{"original": "원문🙂 marker", "nested": []any{true, nil, "value"}}}},
+			Input: map[string]any{"original": "\uc6d0\ubb38🙂 marker", "nested": []any{true, nil, "value"}}}},
 	}}
 	fixture.canonical, err = domain.CanonicalBytes(document.CIR)
 	if err != nil {
@@ -298,7 +298,7 @@ func readDisplayMaintenanceProcessPG(test *testing.T, ctx context.Context, fixtu
 	ctx = inbound.WithSystemActor(ctx)
 	var publication displayMaintenanceProcessPublication
 	oracle, err := domain.BuildDocEventDisplay(ctx, fixture.event)
-	if err != nil || oracle == nil || !strings.Contains(oracle.Text(), "원문🙂 marker") {
+	if err != nil || oracle == nil || !strings.Contains(oracle.Text(), "\uc6d0\ubb38🙂 marker") {
 		test.Fatal("small original event display oracle", err)
 	}
 	if err := storage.WithinReadSnapshot(outbound.WithDocReadOnly(ctx), func(read context.Context) error {
@@ -339,7 +339,7 @@ func readDisplayMaintenanceProcessPG(test *testing.T, ctx context.Context, fixtu
 	}
 	service := app.NewService(storage, storage, nil, nil, storage)
 	service.ConfigureDocumentDisplay(storage)
-	request := domain.DocFindPageRequest{Legacy: true, Query: "원문🙂", Total: 1, To: 1, Representation: domain.DocFindDisplayRepresentation}
+	request := domain.DocFindPageRequest{Legacy: true, Query: "\uc6d0\ubb38🙂", Total: 1, To: 1, Representation: domain.DocFindDisplayRepresentation}
 	publication.Find, err = service.FindDocPage(outbound.WithDocReadOnly(ctx), fixture.target.RepoID, fixture.target.DocHash, request)
 	if err != nil || len(publication.Find.Matches) != 1 {
 		test.Fatal("public readonly display read", publication.Find, err)

@@ -12,7 +12,7 @@ import (
 )
 
 func preparedPageOverlapTestPage() DocDisplayPage {
-	return DocDisplayPage{Version: 2, Text: "ab한🙂cde끝z", Runs: []DocDisplayRun{
+	return DocDisplayPage{Version: 2, Text: "ab\ud55c🙂cde\ub05dz", Runs: []DocDisplayRun{
 		{To: 2, SourceFrom: 100, SourceTo: 102, Linear: true},
 		{To: 5, SourceFrom: 60, SourceTo: 66},
 		{To: 9, SourceFrom: 400, SourceTo: 412},
@@ -87,15 +87,15 @@ func TestDocPreparedPageOverlapBoundariesAndNonmonotonicCover(test *testing.T) {
 	}{
 		{"first-byte", 0, 1, 1, "a"},
 		{"inside-linear", 1, 1, 1, "b"},
-		{"before-four-byte-rune", 1, 6, 2, "b한"},
-		{"exact-run-boundary", 2, 7, 1, "한"},
+		{"before-four-byte-rune", 1, 6, 2, "b\ud55c"},
+		{"exact-run-boundary", 2, 7, 1, "\ud55c"},
 		{"four-byte-rune", 5, 7, 1, "🙂"},
 		{"mapped-to-linear", 5, 7, 2, "🙂cde"},
 		{"clipped-linear-end", 9, 2, 1, "cd"},
-		{"clipped-linear-start", 10, 6, DocDisplayPageRuns, "de끝z"},
-		{"run-limit-before-last", 12, 4, 1, "끝"},
+		{"clipped-linear-start", 10, 6, DocDisplayPageRuns, "de\ub05dz"},
+		{"run-limit-before-last", 12, 4, 1, "\ub05d"},
 		{"last-byte", 15, 1, 1, "z"},
-		{"clipped-multiple-runs", 1, DocDisplayPageTextBytes, 4, "b한🙂cde"},
+		{"clipped-multiple-runs", 1, DocDisplayPageTextBytes, 4, "b\ud55c🙂cde"},
 		{"whole-page", 0, DocDisplayPageTextBytes, DocDisplayPageRuns, display.Text},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
@@ -140,7 +140,7 @@ func TestDocPreparedPageOverlapDenseLateRuns(test *testing.T) {
 
 func TestDocPreparedPageOverlapPageTransitions(test *testing.T) {
 	first := preparedPageOverlapTestPage()
-	last := DocDisplayPage{Version: 2, Text: "尾xy", Runs: []DocDisplayRun{{To: 3, SourceFrom: 900, SourceTo: 906}, {To: 5, SourceFrom: 100, SourceTo: 102, Linear: true}}}
+	last := DocDisplayPage{Version: 2, Text: "\u5c3exy", Runs: []DocDisplayRun{{To: 3, SourceFrom: 900, SourceTo: 906}, {To: 5, SourceFrom: 100, SourceTo: 102, Linear: true}}}
 	input := newPreparedPageOverlapTestInput(test, first, last)
 	cursor := docPreparedPageCursor{Version: 1, Plan: input.source.Plan, Byte: len(first.Text) - 1, From: len(first.Text) - 1}
 	for _, expected := range []struct {
@@ -150,7 +150,7 @@ func TestDocPreparedPageOverlapPageTransitions(test *testing.T) {
 		from int
 	}{
 		{"z", 1, 0, len(first.Text)},
-		{"尾", 1, 3, len(first.Text) + 3},
+		{"\u5c3e", 1, 3, len(first.Text) + 3},
 		{"xy", 2, 0, input.source.TextBytes},
 	} {
 		raw := preparedPageOverlapTestEncode(test, cursor)
@@ -266,7 +266,7 @@ func TestDocPreparedPageOverlapFailureAndCancellationYieldZero(test *testing.T) 
 }
 
 func TestDocPreparedPageOverlapOwnedConcurrentReplay(test *testing.T) {
-	fixture := prepareDocToolStringFixture(test, `"`+strings.Repeat(`x\uD83D\uDE42한\n`, 12)+`"`, DocToolStringQuoted)
+	fixture := prepareDocToolStringFixture(test, `"`+strings.Repeat("x\\uD83D\\uDE42\ud55c\\n", 12)+`"`, DocToolStringQuoted)
 	input, err := NewDocToolStringAssemblyInput(fixture.plan)
 	if err != nil {
 		test.Fatal(err)

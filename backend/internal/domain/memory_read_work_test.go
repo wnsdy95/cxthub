@@ -202,7 +202,7 @@ func TestMemoryReadTargetRejectsLossyUTF8(test *testing.T) {
 }
 
 func TestMemoryReadTargetBranchByteBoundsAndEscaping(test *testing.T) {
-	for _, branch := range []string{strings.Repeat("a", 1024), strings.Repeat("é", 512), strings.Repeat("&", 1024), "feature/한글-😀-\ufffd", "feature/\"quoted\""} {
+	for _, branch := range []string{strings.Repeat("a", 1024), strings.Repeat("é", 512), strings.Repeat("&", 1024), "feature/\ud55c\uae00-😀-\ufffd", "feature/\"quoted\""} {
 		target := memoryReadWorkTargetFixture()
 		target.Selection.Branch = branch
 		raw, err := MemoryReadTargetBytes(context.Background(), target)

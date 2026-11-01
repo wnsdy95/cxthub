@@ -31,7 +31,7 @@ func TestMarshalDocDisplayProjectionStateCanonicalJSON(test *testing.T) {
 		{Directory: DocRangeDirectoryAccumulator{Levels: [][]ContentHash{}}},
 		{Version: 1, Source: HashContent([]byte("source")), TextBytes: 512, Directory: DocRangeDirectoryAccumulator{Count: 1, Levels: [][]ContentHash{{HashContent([]byte("page"))}}}},
 		{Version: 1, Source: HashContent([]byte("source")), Done: true, Directory: DocRangeDirectoryAccumulator{Count: 128, Levels: [][]ContentHash{nil, {HashContent([]byte("directory"))}}}},
-		{Directory: DocRangeDirectoryAccumulator{Levels: [][]ContentHash{nil, {}, {"<>&\u2028\u2029", "한글🙂\x00\"\\/", "\ufffd"}}}},
+		{Directory: DocRangeDirectoryAccumulator{Levels: [][]ContentHash{nil, {}, {"<>&\u2028\u2029", "\ud55c\uae00🙂\x00\"\\/", "\ufffd"}}}},
 		{Version: maximum, Source: "not-a-hash", TextBytes: -maximum - 1, Directory: DocRangeDirectoryAccumulator{Count: maximum, Levels: [][]ContentHash{{"unvalidated"}}}},
 		{Source: "\xff", Directory: DocRangeDirectoryAccumulator{Levels: [][]ContentHash{{"valid"}}}},
 		{Directory: DocRangeDirectoryAccumulator{Levels: [][]ContentHash{{"valid", "\xff\xed\xa0\x80\ufffd"}}}},
@@ -68,7 +68,7 @@ func TestDocDisplayProjectionCheckpointRejectsNoncanonicalWire(test *testing.T) 
 func FuzzMarshalDocDisplayProjectionStateCanonicalJSON(fuzz *testing.F) {
 	fuzz.Add("source", "page", int64(1), uint8(1), false)
 	fuzz.Add("\xff", "\ufffd\xed\xa0\x80", int64(1<<53+1), uint8(2), true)
-	fuzz.Add("<>&", "한글🙂\x00\"\\/", int64(-1<<63), uint8(0), false)
+	fuzz.Add("<>&", "\ud55c\uae00🙂\x00\"\\/", int64(-1<<63), uint8(0), false)
 	fuzz.Fuzz(func(test *testing.T, source, hash string, number int64, shape uint8, done bool) {
 		var levels [][]ContentHash
 		if shape != 0 {

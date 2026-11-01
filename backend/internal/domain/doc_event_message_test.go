@@ -372,12 +372,12 @@ func TestDocEventMessageAuthoritativeModesAndOriginalRuneSpans(test *testing.T) 
 		name string
 		body string
 	}{
-		{"ordinary", `{"kind":"message","blocks":[{"type":"text","text":"# **MESSAGE_PUBLIC_BODY_MARKER 한글🙂** [label](https://hidden.test)"},{"type":"image","name":"**literal** [link](hidden)\n🙂"}]}`},
+		{"ordinary", "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"# **MESSAGE_PUBLIC_BODY_MARKER \ud55c\uae00🙂** [label](https://hidden.test)\"},{\"type\":\"image\",\"name\":\"**literal** [link](hidden)\\n🙂\"}]}"},
 		{"compact", `{"kind":"message","compact_summary":true,"blocks":[{"text":"**MESSAGE_PUBLIC_BODY_MARKER first"},{},{"type":"image","text":"last**"}]}`},
-		{"seed_branch", `{"kind":"message","blocks":[{"type":"text","text":" \ufeff[cxt seed] Branch-switch context: MESSAGE_PUBLIC_BODY_MARKER"},{"text":"**한글🙂**"}]}`},
-		{"seed_resumed", `{"kind":"message","blocks":[{}, {"text":"[cxt] This session was resumed from a branch context seed. MESSAGE_PUBLIC_BODY_MARKER"},{"text":"**한글🙂**"}]}`},
+		{"seed_branch", "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\" \\ufeff[cxt seed] Branch-switch context: MESSAGE_PUBLIC_BODY_MARKER\"},{\"text\":\"**\ud55c\uae00🙂**\"}]}"},
+		{"seed_resumed", "{\"kind\":\"message\",\"blocks\":[{}, {\"text\":\"[cxt] This session was resumed from a branch context seed. MESSAGE_PUBLIC_BODY_MARKER\"},{\"text\":\"**\ud55c\uae00🙂**\"}]}"},
 		{"root_last_blocks", `{"kind":"message","opaque":{"blocks":[{"type":"text","text":"MESSAGE_OPAQUE_BODY_MARKER"}]},"blocks":[{"type":"text","text":"discarded"}],"bl\u006fcks":[{"type":"text","text":"MESSAGE_PUBLIC_BODY_MARKER"}]}`},
-		{"nested_decoys", `{"blocks":[{"opaque":{"type":"text","text":"MESSAGE_OPAQUE_BODY_MARKER","name":"MESSAGE_OPAQUE_BODY_MARKER"},"type":"image","name":"MESSAGE_PUBLIC_BODY_MARKER"},{"type":"image","type":"te\u0078t","text":"old","te\u0078t":"**한글\uD83D\uDE42**"}],"kind":"message"}`},
+		{"nested_decoys", "{\"blocks\":[{\"opaque\":{\"type\":\"text\",\"text\":\"MESSAGE_OPAQUE_BODY_MARKER\",\"name\":\"MESSAGE_OPAQUE_BODY_MARKER\"},\"type\":\"image\",\"name\":\"MESSAGE_PUBLIC_BODY_MARKER\"},{\"type\":\"image\",\"type\":\"te\\u0078t\",\"text\":\"old\",\"te\\u0078t\":\"**\ud55c\uae00\\uD83D\\uDE42**\"}],\"kind\":\"message\"}"},
 		{"escaped_unicode", `{"kind":"message","blocks":[{"type":"text","text":"# **MESSAGE_PUBLIC_BODY_MARKER \uD55C\uAE00\uD83D\uDE42**\n\n- \uD800 \uDC00 e\u0301 \\ \"quoted\""},{"type":"**\uD55C\uAE00**","name":"[\uD83D\uDE42](literal)"}]}`},
 		{"missing", `{"kind":"message","opaque":{"blocks":[{"text":"MESSAGE_OPAQUE_BODY_MARKER"}]}}`},
 		{"null", `{"kind":"message","blocks":null}`},
@@ -435,7 +435,7 @@ func TestDocEventMessageIndependentMarkdownVersusSummaryJoinedOnce(test *testing
 }
 
 func TestDocEventMessageLegacyReasoningCanonicalCompatibility(test *testing.T) {
-	raw := []byte(`{"kind":"reasoning","redacted_summary":"legacy **한글🙂**"}`)
+	raw := []byte("{\"kind\":\"reasoning\",\"redacted_summary\":\"legacy **\ud55c\uae00🙂**\"}")
 	entry := authoritativeDocRangeEntry(test, raw)
 	state, err := NewDocEventDisplayPreparation(entry)
 	if err != nil {
@@ -492,7 +492,7 @@ func TestDocEventMessageNullArrayElementsMatchWholeEventOracle(test *testing.T) 
 }
 
 func eventMessageRestartBody(summary bool) []byte {
-	return []byte(fmt.Sprintf(`{"kind":"message","compact_summary":%t,"opaque":{"blocks":"%s"},"blocks":[{"type":"text","text":"# **MESSAGE_PUBLIC_BODY_MARKER 한글\uD83D\uDE42**"},{"type":"**image**","name":"[MESSAGE_PUBLIC_BODY_MARKER](literal)"},{"type":"text","text":"tail"}]}`, summary, strings.Repeat(eventMessageOpaqueMarker, 3000)))
+	return []byte(fmt.Sprintf("{\"kind\":\"message\",\"compact_summary\":%t,\"opaque\":{\"blocks\":\"%s\"},\"blocks\":[{\"type\":\"text\",\"text\":\"# **MESSAGE_PUBLIC_BODY_MARKER \ud55c\uae00\\uD83D\\uDE42**\"},{\"type\":\"**image**\",\"name\":\"[MESSAGE_PUBLIC_BODY_MARKER](literal)\"},{\"type\":\"text\",\"text\":\"tail\"}]}", summary, strings.Repeat(eventMessageOpaqueMarker, 3000)))
 }
 
 func (fixture *eventMessageFixture) primitiveChildCheckpoints(test *testing.T) {
@@ -1017,7 +1017,7 @@ func TestDocEventMessageManySmallPublicBlocksBoundedBatch(test *testing.T) {
 	blocks := make([]map[string]any, count)
 	text := make([]string, count)
 	for index := range blocks {
-		text[index] = fmt.Sprintf("%s %04d 한글🙂", eventMessagePublicMarker, index)
+		text[index] = fmt.Sprintf("%s %04d \ud55c\uae00🙂", eventMessagePublicMarker, index)
 		blocks[index] = map[string]any{"type": "text", "text": "**" + text[index] + "**"}
 	}
 	for _, summary := range []bool{false, true} {
@@ -1047,7 +1047,7 @@ func TestDocEventMessageManySmallPublicBlocksBoundedBatch(test *testing.T) {
 
 func TestDocEventMessageMultiPageUnicodeOriginalRuneSpans(test *testing.T) {
 	for _, summary := range []bool{false, true} {
-		raw := []byte(fmt.Sprintf(`{"kind":"message","compact_summary":%t,"blocks":[{"type":"text","text":"**MESSAGE_PUBLIC_BODY_MARKER %s**"},{"type":"image","name":"literal **한글🙂**"}]}`, summary, strings.Repeat(`\u0061\uD83D\uDE42`, 600)))
+		raw := []byte(fmt.Sprintf("{\"kind\":\"message\",\"compact_summary\":%t,\"blocks\":[{\"type\":\"text\",\"text\":\"**MESSAGE_PUBLIC_BODY_MARKER %s**\"},{\"type\":\"image\",\"name\":\"literal **\ud55c\uae00🙂**\"}]}", summary, strings.Repeat(`\u0061\uD83D\uDE42`, 600)))
 		fixture := newEventMessageFixture(test, raw)
 		generation := fixture.finish(test)
 		if generation.Pages.Count < 2 || fixture.steps["assembly"] < 2 {

@@ -42,7 +42,7 @@ func legacyMonolithicVerifierCases(test testing.TB) []legacyMonolithicVerifierCa
 			SourceModel: "synthetic", SessionOriginID: "monolithic-verifier", Fidelity: domain.FidelityFull},
 		Events: []domain.CIREvent{
 			{Kind: domain.EventMessage, Seq: 2, Role: domain.RoleUser,
-				Blocks: []domain.ContentBlock{{Type: "text", Text: "original <한🙂> \"\\\n"}}},
+				Blocks: []domain.ContentBlock{{Type: "text", Text: "original <\ud55c🙂> \"\\\n"}}},
 			{Kind: domain.EventToolCall, Seq: 4, CallID: "call", ToolName: "synthetic",
 				Input: map[string]any{"count": float64(7), "label": "original-tool"}},
 			{Kind: domain.EventMessage, Seq: 9, Role: domain.RoleAssistant,

@@ -290,11 +290,17 @@ func (work *preparedLegacyCaptureWork) advanceNormalization(ctx context.Context,
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if err := work.store.confirmLegacyBytePreparation(ctx, job, work.witness.stage); err != nil {
-		if canceled := ctx.Err(); canceled != nil {
-			return 0, canceled
+	checkpointBatch := work.checkpoint != nil && work.checkpoint.restoreFailure == nil &&
+		(work.checkpoint.restoring && work.checkpoint.restore != nil ||
+			work.checkpoint.capture != nil && !work.checkpoint.reclaim && work.checkpoint.position == 14 &&
+				work.checkpoint.pending.hash == "" && work.checkpoint.next.Parser != nil)
+	if !checkpointBatch {
+		if err := work.store.confirmLegacyBytePreparation(ctx, job, work.witness.stage); err != nil {
+			if canceled := ctx.Err(); canceled != nil {
+				return 0, canceled
+			}
+			return 0, err
 		}
-		return 0, err
 	}
 	defer func() {
 		if failure != nil {

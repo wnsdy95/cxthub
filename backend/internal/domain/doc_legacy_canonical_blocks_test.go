@@ -89,7 +89,7 @@ func TestLegacyCanonicalContentBlockParity(test *testing.T) {
 	}{
 		{name: "zero", value: ContentBlock{}},
 		{name: "text", value: ContentBlock{Type: "text", Text: "hello"}},
-		{name: "escaping", value: ContentBlock{Type: "\"\\\x00<&>\u2028\xff", Text: "\b\f\n\r\t\x1f한국🙂\u2029\xff\x80"}},
+		{name: "escaping", value: ContentBlock{Type: "\"\\\x00<&>\u2028\xff", Text: "\b\f\n\r\t\x1f\ud55c\uad6d🙂\u2029\xff\x80"}},
 		{name: "numeric-strings", value: ContentBlock{Type: "01", Text: "NaN"}},
 		{name: "nil", value: []ContentBlock(nil)},
 		{name: "empty", value: []ContentBlock{}},

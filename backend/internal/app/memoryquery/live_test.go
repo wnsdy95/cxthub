@@ -227,7 +227,7 @@ func liveFixture(test *testing.T) (*liveTestSource, LiveConfig, domain.Effective
 	source := &liveTestSource{test: test, scope: scope, scoped: true, repo: repo,
 		origin: "https://example.invalid/live.git", revision: domain.RepositoryRevision{Graph: 4, Evidence: 5},
 		snapshot: domain.Snapshot{ID: snapshot, RepoID: repo},
-		digest:   domain.MemoryDigest{SnapshotID: snapshot, Summary: strings.Repeat("가", 2800), KeyFacts: []string{"historical fact"}},
+		digest:   domain.MemoryDigest{SnapshotID: snapshot, Summary: strings.Repeat("\uac00", 2800), KeyFacts: []string{"historical fact"}},
 		generation: domain.RepositoryMemorySourceGeneration{Version: 1, Epoch: "23456789-abcd-4321-9876-123456789abc", Sequence: 9,
 			Graph: domain.RepositoryViewSourceCheckpoint{Version: 1, Scope: domain.RepositoryGraphSourceScope, RepoID: repo, Epoch: "12345678-abcd-4321-9876-123456789abc", Sequence: 8}},
 		commits: map[string]domain.GitCommitTree{}, nodes: map[string]domain.GitTreeNode{}, deltas: map[string]domain.GitCommitDelta{},

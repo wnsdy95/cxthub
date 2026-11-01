@@ -45,9 +45,9 @@ func TestDocMessagePlaceholderReviewUTF8FragmentEdges(test *testing.T) {
 	for _, scenario := range []struct{ blockType, name string }{
 		{"", ""},
 		{"image", ""},
-		{"", "한글🙂"},
+		{"", "\ud55c\uae00🙂"},
 		{strings.Repeat("a", DocDisplayPageTextBytes-2) + "🙂", "asset"},
-		{"image", strings.Repeat("a", DocDisplayPageTextBytes-10) + "🙂한글"},
+		{"image", strings.Repeat("a", DocDisplayPageTextBytes-10) + "🙂\ud55c\uae00"},
 	} {
 		plan, objects := messagePlaceholderReviewFixture(test, scenario.blockType, scenario.name)
 		cursor, err := NewDocMessagePlaceholderCursor(plan)
@@ -93,7 +93,7 @@ func TestDocMessagePlaceholderReviewUTF8FragmentEdges(test *testing.T) {
 }
 
 func TestDocMessagePlaceholderReviewSelectedPartAndPlanBinding(test *testing.T) {
-	plan, objects := messagePlaceholderReviewFixture(test, strings.Repeat("x", 70000), "한글🙂")
+	plan, objects := messagePlaceholderReviewFixture(test, strings.Repeat("x", 70000), "\ud55c\uae00🙂")
 	load := messageInputReviewLoad(objects)
 	cursor, err := NewDocMessagePlaceholderCursor(plan)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestDocMessagePlaceholderReviewSelectedPartAndPlanBinding(test *testing.T) 
 		loads++
 		return load(ctx, hash)
 	})
-	if err != nil || fragment.Text() != "한글🙂]" || loads != 4 {
+	if err != nil || fragment.Text() != "\ud55c\uae00🙂]" || loads != 4 {
 		test.Fatal("late name read scanned prior type pages", fragment.Text(), loads, err)
 	}
 	cursor.From = plan.TextBytes - 1

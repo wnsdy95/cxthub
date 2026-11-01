@@ -80,13 +80,13 @@
     {
       "name": "escaped Unicode names paths and strings preserve canonical byte provenance",
       "source": "{\"call_id\":\"c\",\"input\":{\"content\":\"\\ud83d\\ude42\\n\\uac00\\r\",\"file_path\":\"\\ud55c/one/two/three/four\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"\\u0057rite\"}",
-      "text": "Write(…/two/three/four)\n+ 🙂\n+ 가\r",
-      "ranges": [{ "text": "W", "source": "\\u0057" }, { "text": "🙂", "source": "\\ud83d\\ude42" }, { "text": "가\r", "source": "\\uac00\\r" }]
+      "text": "Write(…/two/three/four)\n+ 🙂\n+ \uac00\r",
+      "ranges": [{ "text": "W", "source": "\\u0057" }, { "text": "🙂", "source": "\\ud83d\\ude42" }, { "text": "\uac00\r", "source": "\\uac00\\r" }]
     },
     {
       "name": "raw Unicode shortened path anchors remain valid UTF8",
-      "source": "{\"call_id\":\"c\",\"input\":{\"file_path\":\"한/one/two/three/four\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Read\"}",
-      "text": "Read(…/two/three/four)\n{\n  \"file_path\": \"한/one/two/three/four\"\n}"
+      "source": "{\"call_id\":\"c\",\"input\":{\"file_path\":\"\ud55c/one/two/three/four\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Read\"}",
+      "text": "Read(…/two/three/four)\n{\n  \"file_path\": \"\ud55c/one/two/three/four\"\n}"
     },
     {
       "name": "tool result is full literal PRE content including leading and trailing whitespace",
@@ -97,8 +97,8 @@
     {
       "name": "escaped tool result string is decoded without pretty JSON quotes",
       "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\"\\uac80\\uc0c9 \\ud83d\\ude42 \\u003craw\\u003e\\u2028end\",\"seq\":1}",
-      "text": "검색 🙂 <raw>\u2028end",
-      "ranges": [{ "text": "검색 🙂", "source": "\\uac80\\uc0c9 \\ud83d\\ude42" }, { "text": "<raw>", "source": "\\u003craw\\u003e" }]
+      "text": "\uac80\uc0c9 🙂 <raw>\u2028end",
+      "ranges": [{ "text": "\uac80\uc0c9 🙂", "source": "\\uac80\\uc0c9 \\ud83d\\ude42" }, { "text": "<raw>", "source": "\\u003craw\\u003e" }]
     },
     {
       "name": "JS number rendering thresholds precision and negative zero",

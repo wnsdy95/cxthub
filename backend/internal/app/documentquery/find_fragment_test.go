@@ -22,7 +22,7 @@ func TestDocFindFragmentRootReauthorizesAfterInteractiveAdmission(test *testing.
 }
 
 func TestDocFindFragmentRangeUsesBoundedPreviousProbeAndRejectsCorruption(test *testing.T) {
-	raw := []byte(strings.Repeat("a한🙂é", 20_000))
+	raw := []byte(strings.Repeat("a\ud55c🙂é", 20_000))
 	entry := domain.DocEventIndex{Length: len(raw), Hash: domain.HashContent(raw)}
 	hash := domain.HashContent([]byte("document"))
 	var lengths []int

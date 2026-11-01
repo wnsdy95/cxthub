@@ -461,7 +461,7 @@ export function useDismissPending() {
 export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   const t = useT();
   const qc = useQueryClient();
-  useRepositoryUpdates(repoId);
+  const refreshRepository = useRepositoryUpdates(repoId);
   const noticeQuery = useQuery<RepositoryRevision>({queryKey:['repository-notice',repoId],queryFn:skipToken});
   const projection = noticeQuery.data?.pending_projection;
   const graphProjection = noticeQuery.data?.graph_projection;
@@ -491,12 +491,13 @@ export function useRepoView(repoId: string | null, _primaryBranch?: string) {
     graphReadNotice:{view:viewQuery.data,projection:graphProjection,error:viewQuery.error,noticeError},
     pendingLoading:!pendingRows.ready && !pendingRows.inaccessible && !pendingRows.needsAttention && pendingQuery.isPending,
     pendingError:pendingRows.needsAttention ? t('onhold.needsAttention') : pendingRows.error,
-    retryPending:()=>{void pendingQuery.refetch();},
+    retryPending:()=>{if (noticeQuery.error) refreshRepository(); else void pendingQuery.refetch();},
     refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
     unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError && !stale,
     graphLoading:readState.state === 'pending' || (viewQuery.isPending && readState.state === 'legacy'),
     graphError:noticeQuery.error?.message ?? (pendingRows.inaccessible ? pendingRows.error : stale ? undefined : viewQuery.error?.message),
-    graphRefreshError:stale ? viewQuery.error?.message : undefined,retryGraph:()=>{void viewQuery.refetch();}};
+    graphRefreshError:stale ? viewQuery.error?.message : undefined,
+    retryGraph:()=>{if (noticeQuery.error) refreshRepository(); else void viewQuery.refetch();}};
 }
 
 export function useSessionArchive() {

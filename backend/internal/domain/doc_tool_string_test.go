@@ -128,7 +128,7 @@ func TestDocToolStringModesMatchOriginalTextAndEveryRune(test *testing.T) {
 		`""`, `"plain"`, `"**not markdown** [label](url)"`, `"\n\r\nlast\n"`,
 		`"\u003c\u0026\u003e\u2028\u2029\u0000\u000b\b\f\n\r\t\"\\\/\ufffd"`,
 		`"\ud83d\ude42\uac00\r"`, `"\uD800\udfff\ud800\uD800\udc00\ufffd"`,
-		`"한글🙂/<&>"`, `"\ud800x\udfff"`,
+		"\"\ud55c\uae00🙂/<&>\"", `"\ud800x\udfff"`,
 	}
 	for _, mode := range []DocToolStringMode{DocToolStringQuoted, DocToolStringAdd, DocToolStringRemove} {
 		for position, token := range tokens {
@@ -355,7 +355,7 @@ func TestDocToolDisplayJSONOverflowDoesNotChangeSourceFind(test *testing.T) {
 }
 
 func FuzzDocToolStringTransformParity(fuzz *testing.F) {
-	for _, seed := range []string{"", "x\r\n", "한🙂\x00\t\"\\", "**literal**"} {
+	for _, seed := range []string{"", "x\r\n", "\ud55c🙂\x00\t\"\\", "**literal**"} {
 		fuzz.Add(seed, uint8(0))
 	}
 	fuzz.Fuzz(func(test *testing.T, text string, selector uint8) {

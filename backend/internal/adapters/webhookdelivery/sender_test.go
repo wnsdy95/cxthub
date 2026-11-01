@@ -48,7 +48,7 @@ func notificationDelivery() outbound.NotificationDelivery {
 		Destination: "https://hooks.example.test/private-credential?token=private-query",
 		Job: domain.NotificationJob{
 			ID: "evt_original", RepositoryID: "repository", Kind: "ref_updated", State: "pending",
-			Text: "metadata <only> & \"quoted\"\n한글", Attempts: 3, Version: 7,
+			Text: "metadata <only> & \"quoted\"\n\ud55c\uae00", Attempts: 3, Version: 7,
 		},
 	}
 }

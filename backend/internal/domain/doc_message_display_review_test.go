@@ -457,7 +457,7 @@ func TestDocMessageDisplayReviewHydratedCursorMetadata(test *testing.T) {
 
 func TestDocMessageDisplayReviewPrefixOnlyContinuation(test *testing.T) {
 	for _, first := range []string{`a`, `a\n`, `a\n\n`} {
-		raw := []byte(`{"kind":"message","blocks":[{"type":"text","text":"` + first + `"},{"type":"text","text":""},{"type":"text","text":"# "},{"type":"text","text":"# **\uD83D\uDE42tail**"},{"type":"image","name":"한글"},{"type":"text","text":null},{"type":"text","text":"end"}]}`)
+		raw := []byte(`{"kind":"message","blocks":[{"type":"text","text":"` + first + "\"},{\"type\":\"text\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"# \"},{\"type\":\"text\",\"text\":\"# **\\uD83D\\uDE42tail**\"},{\"type\":\"image\",\"name\":\"\ud55c\uae00\"},{\"type\":\"text\",\"text\":null},{\"type\":\"text\",\"text\":\"end\"}]}")
 		fixture := buildMessageDisplayFixture(test, raw)
 		input, err := NewDocMessageDisplayAssemblyInput(fixture.plan)
 		if err != nil {

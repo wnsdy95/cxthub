@@ -13,11 +13,11 @@ import (
 
 func TestDocFindCoordinatesIndexDifferential(test *testing.T) {
 	for _, encoded := range []string{
-		`""`, `"plain"`, `"한🙂끝"`,
+		`""`, `"plain"`, "\"\ud55c🙂\ub05d\"",
 		`"\u0000\b\f\n\r\t\"\\\/\u003c\u003E\u0026\u2028\u2029"`,
 		`"\ud800"`, `"\udc00"`, `"\ud800x\udc00"`, `"\uD83D\uDE42"`,
 		`"\uD83D\uD83D\uDE00"`, `"\udc00\ud800"`, `"\ud800\u0041\udc00"`,
-		`"한\ud800🙂\ufffd\udc00끝"`,
+		"\"\ud55c\\ud800🙂\\ufffd\\udc00\ub05d\"",
 	} {
 		raw := []byte(encoded)
 		if err := validateDocDisplaySource(context.Background(), raw); err != nil {
@@ -47,7 +47,7 @@ func TestDocFindCoordinatesIndexDifferential(test *testing.T) {
 
 func TestDocFindCoordinatesIndexCheckpointBoundaries(test *testing.T) {
 	for prefix := docFindSourceCheckpointStride - 12; prefix <= docFindSourceCheckpointStride+12; prefix++ {
-		raw := []byte(`"` + strings.Repeat("a", prefix) + strings.Repeat(`\uD83D\uDE42한\ud800\u0041\udc00🙂\/`, 20) + `"`)
+		raw := []byte(`"` + strings.Repeat("a", prefix) + strings.Repeat("\\uD83D\\uDE42\ud55c\\ud800\\u0041\\udc00🙂\\/", 20) + `"`)
 		if err := validateDocDisplaySource(context.Background(), raw); err != nil {
 			test.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func TestDocFindCoordinatesIndexCheckpointBoundaries(test *testing.T) {
 func TestDocFindCoordinatesIndexExhaustiveDisplayRanges(test *testing.T) {
 	units := []struct{ encoded, decoded string }{
 		{`\u0061`, "a"}, {`\uD83D\uDE42`, "🙂"}, {`\ud800`, "�"},
-		{"한", "한"}, {`\u0000`, "\x00"}, {`\/`, "/"}, {"Z", "Z"},
+		{"\ud55c", "\ud55c"}, {`\u0000`, "\x00"}, {`\/`, "/"}, {"Z", "Z"},
 	}
 	var encoded, decoded strings.Builder
 	for _, unit := range units {
@@ -153,15 +153,15 @@ func TestDocFindCoordinatesIndexExhaustiveDisplayRanges(test *testing.T) {
 
 func TestDocFindCoordinatesIndexMarkdownAndSummaryCover(test *testing.T) {
 	for _, summary := range []bool{false, true} {
-		raw := []byte(fmt.Sprintf(`{"kind":"message","compact_summary":%t,"blocks":[{"type":"text","text":"# **\uD83D\uDE42 label**\n\n[tail](https://hidden.example)"},{"type":"text","text":"\ud800한"}]}`, summary))
+		raw := []byte(fmt.Sprintf("{\"kind\":\"message\",\"compact_summary\":%t,\"blocks\":[{\"type\":\"text\",\"text\":\"# **\\uD83D\\uDE42 label**\\n\\n[tail](https://hidden.example)\"},{\"type\":\"text\",\"text\":\"\\ud800\ud55c\"}]}", summary))
 		display, err := BuildDocEventDisplay(context.Background(), raw)
 		if err != nil {
 			test.Fatal(err)
 		}
-		wantText := "🙂 label\n\ntail\n\n�한"
-		wantSource := `\uD83D\uDE42 label**\n\n[tail](https://hidden.example)"},{"type":"text","text":"\ud800한`
+		wantText := "🙂 label\n\ntail\n\n�\ud55c"
+		wantSource := "\\uD83D\\uDE42 label**\\n\\n[tail](https://hidden.example)\"},{\"type\":\"text\",\"text\":\"\\ud800\ud55c"
 		if summary {
-			wantText = "🙂 label\n\ntail\n�한"
+			wantText = "🙂 label\n\ntail\n�\ud55c"
 		}
 		span, err := display.SourceRange(0, len(display.Text()))
 		if err != nil || display.Text() != wantText || string(raw[span.From:span.To]) != wantSource {

@@ -49,6 +49,7 @@ type Runtime struct {
 	Archive                inbound.RepositoryArchiveQueries
 	GitChanges             inbound.GitChangeQuery
 	GitScans               inbound.GitScanQuery
+	GitAssociationStatus   inbound.GitAssociationStatusQuery
 	CodeApplicability      inbound.CodeApplicabilityQuery
 	ConversationFind       inbound.ConversationFindQuery
 	Identity               *app.IdentityService

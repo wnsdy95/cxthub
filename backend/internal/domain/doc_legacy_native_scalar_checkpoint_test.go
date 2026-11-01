@@ -231,13 +231,13 @@ func TestLegacyNativeScalarCheckpointOracleNativeContinuation(test *testing.T) {
 		{name: "escaped-surrogate-prefetch", body: `head\"\\\/\b\f\n\r\t\u0000\u2028\u2029\uD83D\uDE42\uD800x\uDC00`,
 			expected: "head\"\\/\b\f\n\r\t\x00\u2028\u2029🙂�x�", accepted: "head", advance: 4,
 			workBytes: ConversationManifestChunkBytes - 8 - 5, buffered: 5, started: true},
-		{name: "unicode-prefetch", body: `seen🙂한\u0061tail`, expected: "seen🙂한atail", accepted: "seen", advance: 4,
+		{name: "unicode-prefetch", body: "seen🙂\ud55c\\u0061tail", expected: "seen🙂\ud55catail", accepted: "seen", advance: 4,
 			workBytes: ConversationManifestChunkBytes - 8 - 2, buffered: 2, started: true},
 		{name: "invalid-utf8-prefetch", body: "bad\xff\xc0\x80\xed\xa0\x80\xf0\x9f" + `\uD800tail`,
 			expected: "bad" + strings.Repeat("�", 8) + "�tail", accepted: "bad", advance: 3,
 			workBytes: ConversationManifestChunkBytes - 6 - 3, buffered: 3, started: true},
-		{name: "completed-expanded", body: "\xff" + `\uDC00` + "한", expected: "��한", accepted: "��한",
-			advance: len("\xff" + `\uDC00` + "한"), started: true, complete: true, expanded: true},
+		{name: "completed-expanded", body: "\xff" + `\uDC00` + "\ud55c", expected: "��\ud55c", accepted: "��\ud55c",
+			advance: len("\xff" + `\uDC00` + "\ud55c"), started: true, complete: true, expanded: true},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {
 			var native string
@@ -287,8 +287,8 @@ func TestLegacyNativeScalarCheckpointOracleNativeContinuation(test *testing.T) {
 
 func TestLegacyNativeScalarCheckpointOracleMigrationAndAppendOnlyDelta(test *testing.T) {
 	invalidBytes := 2*ConversationManifestChunkBytes + 37
-	body := strings.Repeat("\xff", invalidBytes) + `\uD83D\uDE42` + "한"
-	expected := strings.Repeat("�", invalidBytes) + "🙂한"
+	body := strings.Repeat("\xff", invalidBytes) + `\uD83D\uDE42` + "\ud55c"
+	expected := strings.Repeat("�", invalidBytes) + "🙂\ud55c"
 	var native string
 	if err := json.Unmarshal([]byte(`"`+body+`"`), &native); err != nil || native != expected {
 		test.Fatal("migration fixture lost its explicit invalid-UTF8/native oracle", err)

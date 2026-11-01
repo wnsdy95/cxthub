@@ -485,7 +485,7 @@ func TestLegacyNativeCheckpointModelsW79ErrorTypes(test *testing.T) {
 				test.Fatal("closed error type changed concrete identity", decoded, model, err)
 			}
 			for _, offset := range []int64{0, 37, 2*4096 + (64 << 10)} {
-				semantic := &json.UnmarshalTypeError{Value: "number 1e999", Type: model, Offset: offset, Struct: "Outer🙂", Field: "nested.필드"}
+				semantic := &json.UnmarshalTypeError{Value: "number 1e999", Type: model, Offset: offset, Struct: "Outer🙂", Field: "nested.\ud544\ub4dc"}
 				storage := legacyNativeCheckpointModelsW79Storage(test)
 				ref := legacyNativeCheckpointModelsW79Capture(test, semantic, 4096, storage)
 				legacyNativeCheckpointModelsW79Equal(test, legacyNativeCheckpointModelsW79Recover(test, ref, 4096, storage), semantic)
@@ -621,7 +621,7 @@ func TestLegacyNativeCheckpointModelsW79DeferredErrors(test *testing.T) {
 	})
 	for _, semantic := range []*json.UnmarshalTypeError{
 		{Value: "", Type: reflect.TypeFor[string](), Offset: 0},
-		{Value: "string\x00\n\"\\🙂", Type: reflect.TypeFor[bool](), Offset: 1, Struct: strings.Repeat("界", 1365) + "x", Field: strings.Repeat("f", 4096)},
+		{Value: "string\x00\n\"\\🙂", Type: reflect.TypeFor[bool](), Offset: 1, Struct: strings.Repeat("\u754c", 1365) + "x", Field: strings.Repeat("f", 4096)},
 	} {
 		storage := legacyNativeCheckpointModelsW79Storage(test)
 		ref := legacyNativeCheckpointModelsW79Capture(test, semantic, 4096, storage)

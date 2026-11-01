@@ -22,7 +22,7 @@ func graphViewProjectionTestView(repo ContentHash) RepositoryView {
 		Graph: &graph, Revision: graph.Revision, DefaultBranch: "main",
 		Snapshots: []Snapshot{
 			{ID: second, RepoID: repo, Branch: "topic", Branches: []string{"topic", "main", "topic"}, Parents: []ContentHash{first}, DocHash: second, DocIdentity: DocumentIdentityRootV1, MemoryHash: first,
-				ClaudeSettings: first, AgentsSettings: second, CodexSettings: first, Provider: "codex", Fidelity: "full", Message: "preserve <canonical> & 한글", Author: author, CreatedAt: stamp,
+				ClaudeSettings: first, AgentsSettings: second, CodexSettings: first, Provider: "codex", Fidelity: "full", Message: "preserve <canonical> & \ud55c\uae00", Author: author, CreatedAt: stamp,
 				Grafted: true, GraftParents: []ContentHash{second, first}, GraftSeq: 1<<64 - 1, SessionID: "session", Models: []string{"z", "a", "z"}, CompactionCount: 3},
 			{ID: first, RepoID: repo, Branches: []string{}, Parents: []ContentHash{}, GraftParents: []ContentHash{}, Models: []string{}, CreatedAt: stamp},
 			{ID: first, RepoID: repo, CreatedAt: stamp},

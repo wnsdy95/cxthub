@@ -143,14 +143,14 @@ func TestLegacyNativeNestedCheckpointW83IndependentValues(test *testing.T) {
 		value any
 	}{
 		{name: "locked-empty", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{}},
-		{name: "locked-opaque-bytes", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Provider: ProviderKind("opaque\xff"), Scheme: "\x00\xfe\"\\\n", Blob: "한🙂<&>\u2028\u2029"}},
+		{name: "locked-opaque-bytes", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Provider: ProviderKind("opaque\xff"), Scheme: "\x00\xfe\"\\\n", Blob: "\ud55c🙂<&>\u2028\u2029"}},
 		{name: "locked-exact-not-builder-capacity", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Blob: builder.String()}},
-		{name: "locked-giant", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Provider: ProviderKind("claude"), Scheme: "signature", Blob: strings.Repeat("한🙂", 3*LegacyCanonicalEncodingBytes/7+19)}},
+		{name: "locked-giant", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Provider: ProviderKind("claude"), Scheme: "signature", Blob: strings.Repeat("\ud55c🙂", 3*LegacyCanonicalEncodingBytes/7+19)}},
 		{name: "provider-empty-nil-number", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{}},
 		{name: "provider-present-empty-number", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{CreateTime: &empty}},
 		{name: "provider-negative-zero-lexical", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{TurnID: "turn", CreateTime: &exact}},
 		{name: "provider-no-float64-roundtrip", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{CreateTime: &precise}},
-		{name: "provider-giant-number-and-turn-id", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{TurnID: strings.Repeat("turn한🙂", LegacyCanonicalEncodingBytes/7+13), CreateTime: &giant}},
+		{name: "provider-giant-number-and-turn-id", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{TurnID: strings.Repeat("turn\ud55c🙂", LegacyCanonicalEncodingBytes/7+13), CreateTime: &giant}},
 	}
 	for _, fixture := range fixtures {
 		test.Run(fixture.name, func(test *testing.T) {
@@ -208,8 +208,8 @@ func TestLegacyNativeNestedCheckpointW83IndependentFences(test *testing.T) {
 		model uint8
 		value any
 	}{
-		{name: "locked", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Provider: ProviderKind("claude"), Scheme: "signature", Blob: "opaque한🙂"}},
-		{name: "provider", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{TurnID: "turn한🙂", CreateTime: &number}},
+		{name: "locked", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Provider: ProviderKind("claude"), Scheme: "signature", Blob: "opaque\ud55c🙂"}},
+		{name: "provider", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{TurnID: "turn\ud55c🙂", CreateTime: &number}},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {
 			saved := legacyNativeNestedW83FenceCapture(test, reflect.ValueOf(fixture.value), fixture.model, storage)
@@ -382,7 +382,7 @@ func TestLegacyNativeNestedCheckpointW83Lifecycle(test *testing.T) {
 		model uint8
 		value any
 	}{
-		{name: "locked", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Blob: strings.Repeat("body한🙂", LegacyCanonicalEncodingBytes/7+29)}},
+		{name: "locked", model: legacyNativeCheckpointLockedModel, value: &LockedBlob{Blob: strings.Repeat("body\ud55c🙂", LegacyCanonicalEncodingBytes/7+29)}},
 		{name: "provider", model: legacyNativeCheckpointProviderModel, value: &ProviderMetadata{TurnID: "lifecycle", CreateTime: &number}},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {

@@ -111,7 +111,7 @@ func legacyCanonicalBlocksPublicDocument(test *testing.T, count int, nested bool
 	test.Helper()
 	blocks := make([]ContentBlock, count)
 	for ordinal := range blocks {
-		blocks[ordinal] = ContentBlock{Type: "text", Text: fmt.Sprintf("block-%04d: 한🙂<&>\n\"\\\u2028\u2029", ordinal)}
+		blocks[ordinal] = ContentBlock{Type: "text", Text: fmt.Sprintf("block-%04d: \ud55c🙂<&>\n\"\\\u2028\u2029", ordinal)}
 	}
 	message := CIREvent{
 		Kind: EventMessage, Seq: 7, ID: "large-message", Role: RoleAssistant, Blocks: blocks,
@@ -175,7 +175,7 @@ func TestLegacyCanonicalBlocksPublicNativeOverwriteParity(test *testing.T) {
 		{name: "nil", fields: `"blocks":null`, accepted: true},
 		{name: "empty", fields: `"blocks":[]`, accepted: true},
 		{name: "null-elements", fields: `"blocks":[null,{},null]`, accepted: true},
-		{name: "folded-fields", fields: `"BLOCKS":[{"TYPE":"text","te\u0078t":"한🙂<&>\u2028\u2029\uD800","TEXT":null}]`, accepted: true},
+		{name: "folded-fields", fields: "\"BLOCKS\":[{\"TYPE\":\"text\",\"te\\u0078t\":\"\ud55c🙂<&>\\u2028\\u2029\\uD800\",\"TEXT\":null}]", accepted: true},
 		{name: "hidden-tail", fields: `"blocks":[{"type":"text","text":"head"},{"type":"text","text":"tail"}],"blocks":[{"text":"new"}],"blocKſ":[null,{}]`, accepted: true},
 		{name: "empty-resets-backing", fields: `"blocks":[{"type":"text","text":"stale"}],"blocks":[],"blocks":[null,{}]`, accepted: true},
 		{name: "null-resets-backing", fields: `"blocks":[{"type":"text","text":"stale"}],"blocks":null,"blocks":[null,{}]`, accepted: true},

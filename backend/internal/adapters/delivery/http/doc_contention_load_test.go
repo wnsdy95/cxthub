@@ -168,7 +168,7 @@ func TestPostgresDocPublicationContention(t *testing.T) {
 				}
 			}
 			if resp.StatusCode != status {
-				return len(data), fmt.Errorf("%s %s: status=%d bytes=%d expected=%d attempts=%d", method, path, resp.StatusCode, len(data), status, attempt+1)
+				return len(data), fmt.Errorf("%s %s: status=%d bytes=%d expected=%d attempts=%d response=%s", method, path, resp.StatusCode, len(data), status, attempt+1, data)
 			}
 			if out != nil {
 				return len(data), json.Unmarshal(data, out)

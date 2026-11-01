@@ -254,7 +254,7 @@ func TestLegacyNativePagedParityPublicSmallAndTypedInternalDefault(test *testing
 	if err != nil || native == nil || native.object.pagedEvents {
 		test.Fatal("direct native constructor no longer preserves its old typed internal consumer", err)
 	}
-	raw := []byte(`{"events":[{"kind":"turn","seq":9,"role":"user"},{"kind":"compaction","seq":-2,"replacement":[{"kind":"message","seq":3,"role":"assistant","blocks":[{"type":"text","text":"raw <&> 한🙂\n"}]},{"kind":"turn","seq":-4,"role":"developer"}],"replacement_complete":true},{"kind":"turn","seq":9,"role":"system"}],"envelope":{"cir_version":"2","source_provider":"codex","fidelity":"full"}}`)
+	raw := []byte("{\"events\":[{\"kind\":\"turn\",\"seq\":9,\"role\":\"user\"},{\"kind\":\"compaction\",\"seq\":-2,\"replacement\":[{\"kind\":\"message\",\"seq\":3,\"role\":\"assistant\",\"blocks\":[{\"type\":\"text\",\"text\":\"raw <&> \ud55c🙂\\n\"}]},{\"kind\":\"turn\",\"seq\":-4,\"role\":\"developer\"}],\"replacement_complete\":true},{\"kind\":\"turn\",\"seq\":9,\"role\":\"system\"}],\"envelope\":{\"cir_version\":\"2\",\"source_provider\":\"codex\",\"fidelity\":\"full\"}}")
 	legacyNativePagedParityProfiles(test, raw, true, 2)
 }
 
@@ -266,7 +266,7 @@ func TestLegacyNativePagedParityPublic8192Replacement(test *testing.T) {
 		if ordinal != 0 {
 			raw.WriteByte(',')
 		}
-		fmt.Fprintf(&raw, `{"kind":"message","id":"child-%04d","seq":%d,"role":"assistant","blocks":[{"type":"text","text":"original 한🙂 <&>\n"}]}`, ordinal, (count-ordinal)%257-128)
+		fmt.Fprintf(&raw, "{\"kind\":\"message\",\"id\":\"child-%04d\",\"seq\":%d,\"role\":\"assistant\",\"blocks\":[{\"type\":\"text\",\"text\":\"original \ud55c🙂 <&>\\n\"}]}", ordinal, (count-ordinal)%257-128)
 	}
 	raw.WriteString(`],"replacement_complete":false}]}`)
 	if raw.Len() <= ConversationManifestChunkBytes || raw.Len() > 2<<20 {
@@ -276,9 +276,9 @@ func TestLegacyNativePagedParityPublic8192Replacement(test *testing.T) {
 }
 
 func TestLegacyNativePagedParityPublicNestedUnionFidelity(test *testing.T) {
-	const children = `{"kind":"message","seq":8,"agent_message":true,"agent_author":"","agent_recipient":"worker","role":"assistant","blocks":[{"type":"text","text":"quote \" slash \\ \ud800 \u2028\u2029 <&> 한🙂"}],"locked":{"provider":"codex","scheme":"encrypted_content","blob":"ENC<&>"},"provider_metadata":{"turn_id":"turn","create_time":1787683260.123456789}},` +
+	const children = "{\"kind\":\"message\",\"seq\":8,\"agent_message\":true,\"agent_author\":\"\",\"agent_recipient\":\"worker\",\"role\":\"assistant\",\"blocks\":[{\"type\":\"text\",\"text\":\"quote \\\" slash \\\\ \\ud800 \\u2028\\u2029 <&> \ud55c🙂\"}],\"locked\":{\"provider\":\"codex\",\"scheme\":\"encrypted_content\",\"blob\":\"ENC<&>\"},\"provider_metadata\":{\"turn_id\":\"turn\",\"create_time\":1787683260.123456789}}," +
 		`{"kind":"tool_call","seq":-3,"call_id":"call","tool_name":"read","provider_tool_name":"Read","input":{"z":-0,"n":9007199254740993,"a":[null,true,{"z":"<&>","a":1e-7}]},"status":"done"},` +
-		`{"kind":"tool_result","seq":-3,"call_id":"call","output":[{"z":1e21,"a":false},"한🙂"],"is_error":true},` +
+		"{\"kind\":\"tool_result\",\"seq\":-3,\"call_id\":\"call\",\"output\":[{\"z\":1e21,\"a\":false},\"\ud55c🙂\"],\"is_error\":true}," +
 		`{"kind":"reasoning","seq":2,"locked":{"provider":"claude","scheme":"signature","blob":"SIG"},"redacted_summary":"summary","cross_replayable":true},` +
 		`{"kind":"compaction","seq":1,"replacement":[{"kind":"message","seq":0,"blocks":null,"agent_message":false},{"kind":"turn","seq":-1,"role":"developer","provider_metadata":{}}],"replacement_complete":true},` +
 		`{"kind":"compaction","seq":0,"replacement":null,"locked":{"provider":"codex","scheme":"encrypted_content","blob":"opaque"}},` +

@@ -32,7 +32,7 @@ type legacyNativeAnyFieldW84Fixture struct {
 
 func legacyNativeAnyFieldW84Fixtures() []legacyNativeAnyFieldW84Fixture {
 	width := LegacyNormalizationPartBytes
-	longText := strings.Repeat("a", 2*width) + `\n\uD83D\uDE42\u0000한`
+	longText := strings.Repeat("a", 2*width) + "\\n\\uD83D\\uDE42\\u0000\ud55c"
 	pad := func(prefix, ending, suffix string) string {
 		return prefix + strings.Repeat(" ", width-len(prefix)-len(ending)) + ending + suffix
 	}

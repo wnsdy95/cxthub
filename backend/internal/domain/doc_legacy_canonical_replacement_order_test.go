@@ -19,7 +19,7 @@ func LegacyReplacementOrderEvents(count int, prefix string) []CIREvent {
 		marker := fmt.Sprintf("%s-%03d", prefix, count-ordinal)
 		events[ordinal] = CIREvent{
 			Kind: EventMessage, ID: marker, Seq: sequences[ordinal%len(sequences)], Role: RoleAssistant,
-			Blocks: []ContentBlock{{Type: "text", Text: marker + " <&> 한국🙂"}},
+			Blocks: []ContentBlock{{Type: "text", Text: marker + " <&> \ud55c\uad6d🙂"}},
 		}
 	}
 	return events

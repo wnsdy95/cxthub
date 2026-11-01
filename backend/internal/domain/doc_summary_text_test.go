@@ -222,7 +222,7 @@ func TestDocSummaryTextJoinOnlyCheckpointAcrossPageBoundary(test *testing.T) {
 }
 
 func TestDocSummaryTextLargeEscapedAndOpaqueInputs(test *testing.T) {
-	text := strings.Repeat("PUBLIC_BODY_MARKER **한글🙂**\n", 5000)
+	text := strings.Repeat("PUBLIC_BODY_MARKER **\ud55c\uae00🙂**\n", 5000)
 	raw, err := json.Marshal(map[string]any{"kind": "message", "compact_summary": true, "blocks": []any{map[string]any{"text": text, "opaque": strings.Repeat("LOCKED_PRIVATE_BODY", 20000)}, map[string]any{}, map[string]any{"text": "tail"}}})
 	if err != nil {
 		test.Fatal(err)

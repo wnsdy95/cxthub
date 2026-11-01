@@ -7,7 +7,7 @@
     { "name": "paragraph separator is two newlines", "source": "first\n\n\nsecond", "text": "first\n\nsecond" },
     { "name": "heading whitespace collapses", "source": "## Alpha  beta\tend  ", "text": "Alpha beta end" },
     { "name": "only three heading levels", "source": "#### Literal heading", "text": "#### Literal heading" },
-    { "name": "heading unicode", "source": "### 한글  🙂 끝", "text": "한글 🙂 끝" },
+    { "name": "heading unicode", "source": "### \ud55c\uae00  🙂 \ub05d", "text": "\ud55c\uae00 🙂 \ub05d" },
     { "name": "bold and inline code", "source": "before **bold** and `code` after", "text": "before bold and code after" },
     { "name": "inline whitespace inherits paragraph", "source": "` a  b\t c `", "text": " a  b\t c " },
     { "name": "inline whitespace inherits heading", "source": "# ` a  b\t c `", "text": "a b c" },

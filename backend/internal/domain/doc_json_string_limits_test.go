@@ -18,7 +18,7 @@ func TestDocJSONStringDefaultLiteralHashes(test *testing.T) {
 		displayHash ContentHash
 		decodedHash ContentHash
 	}{
-		{name: "mixed", token: `"한글🙂 \n\t\"\\\ud83d\ude42\ud800<>&"`, displayHash: "sha256:b3894a31fb3cdc10676149fb978ebccf3ec20e1cc786fb4b4ca2d7cb9695c0f7", decodedHash: "sha256:17ee4c51db3df95c822bc17eacc8c192d6543417a4c564bf62c6f87f6cf5349c"},
+		{name: "mixed", token: "\"\ud55c\uae00🙂 \\n\\t\\\"\\\\\\ud83d\\ude42\\ud800<>&\"", displayHash: "sha256:b3894a31fb3cdc10676149fb978ebccf3ec20e1cc786fb4b4ca2d7cb9695c0f7", decodedHash: "sha256:17ee4c51db3df95c822bc17eacc8c192d6543417a4c564bf62c6f87f6cf5349c"},
 		{name: "byte-boundary", token: `"` + strings.Repeat("a", DocDisplayPageTextBytes-3) + `🙂tail"`, displayHash: "sha256:b5e9dcf926d79b549139f8fd8d426b099a0c25da8164c6f1ffa64104c6b401f8", decodedHash: "sha256:fb2928d31c70328c6a5985b0da9bf6c75a5a134e289babe53aae176424bd75ec"},
 		{name: "run-boundary", token: `"` + strings.Repeat(`\u0061`, DocDisplayPageRuns+1) + `\ud83d\ude42"`, displayHash: "sha256:4b63e87296b9a201d1ca996f5865e7ee31122673c3be7a9c30489462637ea31d", decodedHash: "sha256:00e75002cb955d907300e93176f40fcd5f73939cfb708c4b79a1d1acfa1a8382"},
 		{name: "encoded-boundary", token: `"` + strings.Repeat("<>&", DocDisplayPageTextBytes/3+1) + `"`, displayHash: "sha256:82769b0da2b8165f1b39c3a631b922f4f757676ea0dee3a6d3b67542cf7be2a1", decodedHash: "sha256:e66f1ed8c6eaf7d524bcf27c5cd4e9dee2a04cd95a148b49f2ef2e5ceba8af5f"},
@@ -127,11 +127,11 @@ func TestDocJSONStringPageLimits(test *testing.T) {
 		failure    bool
 	}{
 		{name: "one-byte", token: `"abc"`, maxBytes: 1, text: "a", resultNext: 2},
-		{name: "utf8-fits", token: `"한"`, maxBytes: 3, text: "한", resultNext: 4},
-		{name: "utf8-does-not-fit", token: `"한"`, maxBytes: 2, failure: true},
+		{name: "utf8-fits", token: "\"\ud55c\"", maxBytes: 3, text: "\ud55c", resultNext: 4},
+		{name: "utf8-does-not-fit", token: "\"\ud55c\"", maxBytes: 2, failure: true},
 		{name: "astral-fits", token: `"🙂"`, maxBytes: 4, text: "🙂", resultNext: 5},
 		{name: "astral-does-not-fit", token: `"🙂"`, maxBytes: 3, failure: true},
-		{name: "escaped-fits", token: `"\ud55c"`, maxBytes: 3, text: "한", resultNext: 7},
+		{name: "escaped-fits", token: `"\ud55c"`, maxBytes: 3, text: "\ud55c", resultNext: 7},
 		{name: "escaped-does-not-fit", token: `"\ud55c"`, maxBytes: 2, failure: true},
 		{name: "surrogate-fits", token: `"\ud83d\ude42"`, maxBytes: 4, text: "🙂", resultNext: 13},
 		{name: "surrogate-does-not-fit", token: `"\ud83d\ude42"`, maxBytes: 3, failure: true},
@@ -210,7 +210,7 @@ func docJSONStringDecodeLimited(test *testing.T, raw []byte, request docJSONStri
 }
 
 func TestDocJSONStringLimitsResumeParity(test *testing.T) {
-	token := `"` + strings.Repeat(`ab한🙂\n\t\"\\\/\u003c\ud55c\ud83d\ude42\ud800x\udc00`, 513) + `"`
+	token := `"` + strings.Repeat("ab\ud55c🙂\\n\\t\\\"\\\\\\/\\u003c\\ud55c\\ud83d\\ude42\\ud800x\\udc00", 513) + `"`
 	prefix, suffix := `{"input":`, `,"other":"not decoded"}`
 	raw := []byte(prefix + token + suffix)
 	var expected string

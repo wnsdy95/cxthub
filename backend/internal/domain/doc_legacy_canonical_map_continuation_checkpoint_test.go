@@ -264,7 +264,7 @@ func TestLegacyCanonicalMapContinuationCheckpointSegmentedKeysBorrowedValues(tes
 	number := json.Number("UNVISITED_PAYLOAD-invalid-number")
 	nested := map[string]any{"not-prepared": []any{number}}
 	values := []any{nested, []any{nested}, number, &number, nil}
-	keys := []string{"", "한🙂", strings.Repeat("a", LegacyCanonicalEncodingBytes-1) + strings.Repeat("🙂한", LegacyCanonicalEncodingBytes/2), "number-pointer", "nil"}
+	keys := []string{"", "\ud55c🙂", strings.Repeat("a", LegacyCanonicalEncodingBytes-1) + strings.Repeat("🙂\ud55c", LegacyCanonicalEncodingBytes/2), "number-pointer", "nil"}
 	var fields []legacyCanonicalKeyField
 	for index, key := range keys {
 		field := legacyCanonicalKeyField{key: key, value: values[index]}

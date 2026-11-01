@@ -124,7 +124,7 @@ func docAllHTTPRoutes(test *testing.T, repo, hash domain.ContentHash) []docAllHT
 	}
 	legacyPage.Projection, legacyPage.NextCursor = domain.DocLegacyFindProjection, &legacyCursor
 	fragmentPage := domain.DocFindFragmentPage{Projection: domain.DocFindFragmentProjection, Hash: hash,
-		Generation: generation, Index: 4, Offset: 7, Total: 23, JSON: "한🙂", Next: 14, Previous: 0}
+		Generation: generation, Index: 4, Offset: 7, Total: 23, JSON: "\ud55c🙂", Next: 14, Previous: 0}
 	legacyFragment := fragmentPage
 	legacyFragment.Projection = domain.DocLegacyFindFragmentProjection
 	return []docAllHTTPRoute{
@@ -134,7 +134,7 @@ func docAllHTTPRoutes(test *testing.T, repo, hash domain.ContentHash) []docAllHT
 			arguments: []any{base, 2, 1, "chat"}, output: domain.DocViewPage{Hash: hash, Total: 12, Offset: 2, Next: 3, Events: []domain.DocViewEvent{}},
 			missingStatus: 503, missingCode: "unavailable"},
 		{name: "view fragment", method: "view-fragment", path: "/event-fragments?index=4&offset=7&budget=64", arguments: []int{4, 7, 64},
-			output: domain.DocViewFragment{Index: 4, Offset: 7, Total: 23, JSON: "한🙂", Next: 14}, missingStatus: 503, missingCode: "unavailable"},
+			output: domain.DocViewFragment{Index: 4, Offset: 7, Total: 23, JSON: "\ud55c🙂", Next: 14}, missingStatus: 503, missingCode: "unavailable"},
 		{name: "visible cursor", method: "visible", path: "/events?" + url.Values{"projection": {domain.DocVisibleProjection}, "cursor": {visibleCursor}}.Encode(),
 			arguments: domain.DocVisiblePageRequest{Cursor: visibleCursor},
 			output: domain.DocVisiblePage{Projection: domain.DocVisibleProjection, Kind: "units", Hash: hash, Generation: generation, Rules: 1, View: "chat",

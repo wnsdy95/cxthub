@@ -107,8 +107,8 @@ func TestDocFindFieldsReaderMatchesRawBuilder(testContext *testing.T) {
 		`{"kind":"reasoning","redacted_summary":"selected","blocks":false}`,
 		`{"kind":"reasoning","redacted_summary":"selected","blocks":[{"type":"text","text":"ignored"}]}`,
 		`{"kind":"message","unknown":{"blocks":[]},"blocks_extra":[],"blocks\u0000":[]}`,
-		" \n\t\r{\"redacted_summary\" : \"한글\ufeff🙂\",\"kind\":\"reasoning\"}\r\n\t ",
-		" \n\t\r{\"blocks\" : [{\"type\":\"text\",\"text\":\"한글\ufeff🙂\"}],\"kind\":\"message\"}\r\n\t ",
+		" \n\t\r{\"redacted_summary\" : \"\ud55c\uae00\ufeff🙂\",\"kind\":\"reasoning\"}\r\n\t ",
+		" \n\t\r{\"blocks\" : [{\"type\":\"text\",\"text\":\"\ud55c\uae00\ufeff🙂\"}],\"kind\":\"message\"}\r\n\t ",
 	} {
 		testContext.Run(body, func(testContext *testing.T) {
 			raw := []byte(body)

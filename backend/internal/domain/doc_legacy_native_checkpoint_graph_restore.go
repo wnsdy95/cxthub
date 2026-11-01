@@ -17,6 +17,7 @@ type legacyNativeCheckpointGraphRestoredEntry struct {
 	owned       int64
 	descendants int64
 	active      bool
+	resource    *legacyNativeResourceOwner
 }
 
 type legacyNativeCheckpointGraphRestoredLookup struct {
@@ -31,6 +32,7 @@ type legacyNativeCheckpointGraphRestored struct {
 	owned   int64
 	closed  bool
 	failure error
+	capture *legacyNormalizationCapture
 }
 
 func newLegacyNativeCheckpointGraphRestored() *legacyNativeCheckpointGraphRestored {
@@ -67,11 +69,18 @@ func (registry *legacyNativeCheckpointGraphRestored) retainedBytes() (int64, err
 	}
 	heap := docRangeHeaderHeapEstimate{bytes: metadata}
 	heap.include(docRangeHeaderHeapEstimate{bytes: registry.owned})
+	if registry.capture != nil {
+		heap.allocation(1, int64(unsafe.Sizeof(legacyNormalizationMutation{})))
+		heap.allocation(1, int64(unsafe.Sizeof(legacyNormalizationCapture{})))
+	}
 	return heap.bytes, heap.err
 }
 
 func (registry *legacyNativeCheckpointGraphRestored) close() {
 	if registry != nil {
+		if registry.capture != nil {
+			registry.capture.release()
+		}
 		failure := registry.failure
 		*registry = legacyNativeCheckpointGraphRestored{closed: true, failure: failure}
 	}
@@ -115,6 +124,11 @@ const (
 	legacyNativeCheckpointGraphRestoreDirty
 	legacyNativeCheckpointGraphRestoreFinish
 	legacyNativeCheckpointGraphRestoreText
+	legacyNativeCheckpointGraphRestoreBacking
+	legacyNativeCheckpointGraphRestoreWaitingBacking
+	legacyNativeCheckpointGraphRestoreResource
+	legacyNativeCheckpointGraphRestoreAllocate
+	legacyNativeCheckpointGraphRestoreNilBacking
 )
 
 type legacyNativeCheckpointGraphRestoreFrame struct {
@@ -123,6 +137,7 @@ type legacyNativeCheckpointGraphRestoreFrame struct {
 	state     legacyNativeValueCheckpoint
 	record    legacyNativeCheckpointOwner
 	entry     *legacyNativeCheckpointGraphRestoredEntry
+	backing   *legacyNativeCheckpointGraphRestoredEntry
 	members   *legacyNativeCheckpointListReader[legacyNativeCheckpointMember]
 	dirty     *legacyNativeCheckpointListReader[uint32]
 	member    legacyNativeCheckpointMember
@@ -132,6 +147,7 @@ type legacyNativeCheckpointGraphRestoreFrame struct {
 	cleared   uint64
 	dirtyRead uint64
 	workspace int64
+	compared  int
 	phase     uint8
 }
 
@@ -142,6 +158,7 @@ type legacyNativeCheckpointGraphRestore struct {
 	registry    *legacyNativeCheckpointGraphRestored
 	frame       *legacyNativeCheckpointGraphRestoreFrame
 	text        *legacyNativeCheckpointScalarRestore
+	resource    *legacyNativeResourcePreparation
 	result      legacyNativeAnyValue
 	workspace   int64
 	depth       int
@@ -346,6 +363,10 @@ func (work *legacyNativeCheckpointGraphRestore) refresh(frame *legacyNativeCheck
 	heap.include(legacyNativeCheckpointGraphRestoreSavedHeap(frame.member.Value))
 	heap.allocation(int64(len(frame.record.Members.Ref.Hash)), 1)
 	heap.allocation(int64(len(frame.record.Dirty.Ref.Hash)), 1)
+	if frame.record.Allocation != nil {
+		heap.allocation(1, int64(unsafe.Sizeof(*frame.record.Allocation)))
+		legacyNativeCheckpointGraphCapturedValueHeap(&heap, frame.record.Allocation.Backing)
+	}
 	heap.include(legacyNativeCheckpointGraphRestorePendingHeap(frame.key))
 	heap.include(legacyNativeCheckpointGraphRestorePendingHeap(frame.pending))
 	if frame.members != nil {
@@ -491,6 +512,16 @@ func (work *legacyNativeCheckpointGraphRestore) loadOwner(ctx context.Context, f
 		(record.Length == 0) != (record.Members == (legacyNativeCheckpointTree{})) || !record.Dirty.valid() {
 		return ErrIntegrity
 	}
+	frame.record = record
+	if record.Allocation != nil {
+		frame.phase = legacyNativeCheckpointGraphRestoreBacking
+		return work.refresh(frame)
+	}
+	return work.allocateOwner(ctx, frame)
+}
+
+func (work *legacyNativeCheckpointGraphRestore) allocateOwner(ctx context.Context, frame *legacyNativeCheckpointGraphRestoreFrame) error {
+	record, state := frame.record, frame.state
 	var planned docRangeHeaderHeapEstimate
 	if state.Kind == legacyNativeCheckpointObject {
 		if record.Capacity != 0 || record.Maximum != 0 || record.Dirty.Count > record.Length ||
@@ -506,7 +537,11 @@ func (work *legacyNativeCheckpointGraphRestore) loadOwner(ctx context.Context, f
 			record.Dirty != (legacyNativeCheckpointTree{}) || record.Capacity > uint64(int(^uint(0)>>1))/uint64(unsafe.Sizeof(any(nil))) {
 			return ErrIntegrity
 		}
-		planned = legacyNativeAnyArrayBacking(int(record.Capacity))
+		if record.Allocation == nil {
+			planned = legacyNativeAnyArrayBacking(int(record.Capacity))
+		} else if frame.backing == nil || frame.backing.resource == nil {
+			return ErrIntegrity
+		}
 		planned.allocation(1, int64(unsafe.Sizeof([]any(nil))))
 		planned.allocation(1, int64(unsafe.Sizeof(legacyNativeAnyArray{})))
 	}
@@ -521,8 +556,15 @@ func (work *legacyNativeCheckpointGraphRestore) loadOwner(ctx context.Context, f
 	if state.Kind == legacyNativeCheckpointObject {
 		frame.entry.object = newLegacyNativeAnyMap()
 	} else {
-		frame.entry.array, err = newLegacyNativeAnyArray(int(record.Maximum))
-		if err == nil {
+		if frame.backing != nil {
+			frame.entry.array, err = newLegacyNativeResourceArray(ctx, frame.backing.resource, int(record.Allocation.Offset), int(record.logicalLength()), int(record.Capacity))
+			if err == nil {
+				frame.entry.array.maximum = int(record.Maximum)
+			}
+		} else {
+			frame.entry.array, err = newLegacyNativeAnyArray(int(record.Maximum))
+		}
+		if err == nil && frame.backing == nil {
 			frame.entry.array.decoded = make([]any, 0, int(record.Capacity))
 			frame.entry.array.tracked = true
 			frame.entry.array.estimate.include(legacyNativeAnyArrayBacking(int(record.Capacity)))
@@ -565,6 +607,13 @@ func (work *legacyNativeCheckpointGraphRestore) account(entry *legacyNativeCheck
 		return ErrIntegrity
 	}
 	owned := heap.bytes - descendants
+	if entry.array != nil && entry.array.resource != nil {
+		metadata := entry.array.viewMetadataHeap()
+		if metadata.err != nil {
+			return metadata.err
+		}
+		owned = metadata.bytes
+	}
 	next := docRangeHeaderHeapEstimate{bytes: work.registry.owned - entry.owned}
 	next.include(docRangeHeaderHeapEstimate{bytes: owned})
 	if next.err != nil {
@@ -616,12 +665,41 @@ func (work *legacyNativeCheckpointGraphRestore) nextMember(ctx context.Context, 
 		frame.phase = legacyNativeCheckpointGraphRestoreClearDirty
 	} else {
 		frame.phase = legacyNativeCheckpointGraphRestoreFinish
+		if frame.record.Allocation != nil && !frame.record.FullBacking {
+			frame.phase = legacyNativeCheckpointGraphRestoreNilBacking
+		}
 	}
 	return work.refresh(frame)
 }
 
 func (work *legacyNativeCheckpointGraphRestore) attach(ctx context.Context, frame *legacyNativeCheckpointGraphRestoreFrame) error {
 	entry := frame.entry
+	if entry.array != nil && entry.array.resource != nil {
+		expected, err := entry.array.resourceValue(ctx, int(frame.position))
+		if err != nil {
+			return err
+		}
+		if text, ok := expected.value.(string); ok {
+			actual, matches := frame.pending.value.(string)
+			if !matches || len(actual) != len(text) {
+				return ErrIntegrity
+			}
+			end := min(len(text), frame.compared+canonicalCheckBytes)
+			if actual[frame.compared:end] != text[frame.compared:end] {
+				return ErrIntegrity
+			}
+			frame.compared = end
+			if end < len(text) {
+				return nil
+			}
+		} else if !legacyNativeCheckpointGoGraphSame(expected.value, frame.pending.value) {
+			return ErrIntegrity
+		}
+		if expected.owner != frame.pending.owner || expected.heap != frame.pending.heap || expected.excess != frame.pending.excess || expected.capacity != frame.pending.capacity {
+			return ErrIntegrity
+		}
+		frame.pending = expected
+	}
 	descendants := docRangeHeaderHeapEstimate{bytes: entry.descendants}
 	if frame.pending.owner.object != nil || frame.pending.owner.array != nil {
 		childState, err := legacyNativeCheckpointGraphRestoreDescriptor(ctx, frame.member.Value)
@@ -685,6 +763,7 @@ func (work *legacyNativeCheckpointGraphRestore) attach(ctx context.Context, fram
 		return err
 	}
 	frame.key, frame.pending, frame.member = legacyNativeAnyValue{}, legacyNativeAnyValue{}, legacyNativeCheckpointMember{}
+	frame.compared = 0
 	frame.position++
 	frame.phase = legacyNativeCheckpointGraphRestoreMembers
 	return work.refresh(frame)
@@ -758,6 +837,9 @@ func (work *legacyNativeCheckpointGraphRestore) finishOwner(frame *legacyNativeC
 			owner: legacyNativeAnyValueOwner{object: entry.object, revision: entry.object.revision, bytes: metadata.bytes}}
 	} else {
 		entry.array.revision = frame.record.Revision
+		if entry.array.resource != nil {
+			entry.array.finishResource()
+		}
 		if entry.array.previous != nil || uint64(len(entry.array.decoded)) != frame.record.logicalLength() ||
 			uint64(cap(entry.array.decoded)) != frame.record.Capacity || entry.array.children.length() != len(entry.array.decoded) {
 			return ErrIntegrity
@@ -832,6 +914,8 @@ func (work *legacyNativeCheckpointGraphRestore) complete(frame *legacyNativeChec
 	}
 	parent := work.frame
 	switch parent.phase {
+	case legacyNativeCheckpointGraphRestoreWaitingBacking:
+		parent.pending, parent.phase = value, legacyNativeCheckpointGraphRestoreResource
 	case legacyNativeCheckpointGraphRestoreWaitingKey:
 		parent.key, parent.phase = value, legacyNativeCheckpointGraphRestoreValue
 	case legacyNativeCheckpointGraphRestoreWaitingValue:
@@ -895,6 +979,29 @@ func (work *legacyNativeCheckpointGraphRestore) step(ctx context.Context) (bool,
 		err = work.finishOwner(frame)
 	case legacyNativeCheckpointGraphRestoreText:
 		err = work.restoreText(ctx, frame)
+	case legacyNativeCheckpointGraphRestoreBacking:
+		frame.phase = legacyNativeCheckpointGraphRestoreWaitingBacking
+		err = work.push(ctx, frame.record.Allocation.Backing)
+	case legacyNativeCheckpointGraphRestoreResource:
+		err = work.prepareResource(ctx, frame)
+	case legacyNativeCheckpointGraphRestoreAllocate:
+		err = work.allocateOwner(ctx, frame)
+	case legacyNativeCheckpointGraphRestoreNilBacking:
+		for checked := 0; checked < legacyNativeCheckpointPageItems && frame.position < frame.record.Capacity; checked++ {
+			value, failure := frame.entry.array.resourceValue(ctx, int(frame.position))
+			if failure != nil {
+				err = failure
+				break
+			}
+			if value.value != nil {
+				err = ErrIntegrity
+				break
+			}
+			frame.position++
+		}
+		if frame.position == frame.record.Capacity {
+			frame.phase = legacyNativeCheckpointGraphRestoreFinish
+		}
 	default:
 		err = ErrIntegrity
 	}
@@ -918,6 +1025,10 @@ func (work *legacyNativeCheckpointGraphRestore) retainedBytes() (int64, error) {
 		return 0, ErrIntegrity
 	}
 	var heap docRangeHeaderHeapEstimate
+	if work.resource != nil {
+		bytes, err := work.resource.retainedBytes()
+		heap.include(docRangeHeaderHeapEstimate{bytes: bytes, err: err})
+	}
 	heap.allocation(1, int64(unsafe.Sizeof(*work)))
 	heap.include(docRangeHeaderHeapEstimate{bytes: work.workspace})
 	heap.include(legacyNativeCheckpointGraphRestorePendingHeap(work.result))
@@ -980,6 +1091,9 @@ func (work *legacyNativeCheckpointGraphRestore) close() {
 	}
 	if work.text != nil {
 		work.text.close()
+	}
+	if work.resource != nil {
+		work.resource.close()
 	}
 	for frame := work.frame; frame != nil; frame = frame.parent {
 		if frame.members != nil {

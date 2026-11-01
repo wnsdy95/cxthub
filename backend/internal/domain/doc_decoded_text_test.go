@@ -150,7 +150,7 @@ func TestDocDecodedTextReasoningSourceRequiresVerifiedLastRootField(test *testin
 }
 
 func TestDocDecodedTextRetainsWhitespaceEscapesAndSurrogates(test *testing.T) {
-	for _, token := range []string{`""`, `" \t\n\r\u00a0 "`, `"a\"b\\c\/d\b\f\n\r\t"`, `"\uD83D\uDE42\uD800X\uDC00\u0000"`, `"한글🙂<>&"`} {
+	for _, token := range []string{`""`, `" \t\n\r\u00a0 "`, `"a\"b\\c\/d\b\f\n\r\t"`, `"\uD83D\uDE42\uD800X\uDC00\u0000"`, "\"\ud55c\uae00🙂<>&\""} {
 		raw := []byte(`{"kind":"reasoning","redacted_summary":` + token + `}`)
 		fixture := buildDecodedTextFixture(test, raw)
 		var want string
@@ -171,7 +171,7 @@ func TestDocDecodedTextRetainsWhitespaceEscapesAndSurrogates(test *testing.T) {
 }
 
 func TestDocDecodedTextLargeHashAndLocatorResume(test *testing.T) {
-	for _, text := range []string{strings.Repeat("한글🙂content\n", 14000), strings.Repeat("\\\t\n\r\"", 18000), strings.Repeat("x", 64*1024)} {
+	for _, text := range []string{strings.Repeat("\ud55c\uae00🙂content\n", 14000), strings.Repeat("\\\t\n\r\"", 18000), strings.Repeat("x", 64*1024)} {
 		raw, err := json.Marshal(map[string]any{"kind": "reasoning", "redacted_summary": text, "opaque": strings.Repeat("locked", 60000)})
 		if err != nil {
 			test.Fatal(err)

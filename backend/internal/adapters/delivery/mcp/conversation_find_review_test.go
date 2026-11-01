@@ -28,7 +28,7 @@ func conversationFindReviewSelection() (*preparedMemoryTestBackend, domain.Repo,
 func conversationFindReviewPage(hash domain.ContentHash) domain.ConversationFindPage {
 	return domain.ConversationFindPage{ReplayCursor: "native-replay", Page: domain.DocFindPage{
 		Hash: hash, Projection: domain.DocFindPreparedProjection, Prepared: &domain.DocFindPreparedProgress{},
-		Matches: []domain.DocFindMatch{{Preview: strings.Repeat("한🙂\"<>&\n", 1600)}},
+		Matches: []domain.DocFindMatch{{Preview: strings.Repeat("\ud55c🙂\"<>&\n", 1600)}},
 	}}
 }
 

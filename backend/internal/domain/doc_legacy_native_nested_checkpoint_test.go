@@ -32,7 +32,7 @@ type legacyNativeNestedW83Fixture struct {
 
 func legacyNativeNestedW83Fixtures() []legacyNativeNestedW83Fixture {
 	width := LegacyNormalizationPartBytes
-	longText := strings.Repeat("a", 2*width) + `\n\uD83D\uDE42\u0000한`
+	longText := strings.Repeat("a", 2*width) + "\\n\\uD83D\\uDE42\\u0000\ud55c"
 	validNumber := `"0.` + strings.Repeat("0", 2*width) + `1"`
 	invalidNumber := `"0.` + strings.Repeat("0", 2*width) + `x"`
 	keyPrefix := `{"locked":{"provider":"codex",`

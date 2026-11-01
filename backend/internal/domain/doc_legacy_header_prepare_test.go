@@ -67,8 +67,8 @@ func TestLegacyHeaderPreparationActiveCancellation(test *testing.T) {
 
 func TestLegacyHeaderPreparationExactOwnedEnvelopeAndMetadata(test *testing.T) {
 	document := CIRDocument{
-		Envelope: CIREnvelope{CIRVersion: "2", SourceModels: []string{strings.Repeat("x", canonicalCheckBytes-3) + `},"events":[{"escape":"\\"}]` + "한🙂\u2028\u2029<&>"}},
-		Events:   []CIREvent{{Kind: EventMessage, Role: RoleUser, Seq: 7, Blocks: []ContentBlock{{Type: "text", Text: "kept-한🙂"}}}},
+		Envelope: CIREnvelope{CIRVersion: "2", SourceModels: []string{strings.Repeat("x", canonicalCheckBytes-3) + `},"events":[{"escape":"\\"}]` + "\ud55c🙂\u2028\u2029<&>"}},
+		Events:   []CIREvent{{Kind: EventMessage, Role: RoleUser, Seq: 7, Blocks: []ContentBlock{{Type: "text", Text: "kept-\ud55c🙂"}}}},
 	}
 	proof, raw := legacyDocByteBackfillDocumentFixture(test, document)
 	header, err := canonicalJSON(document.Envelope)

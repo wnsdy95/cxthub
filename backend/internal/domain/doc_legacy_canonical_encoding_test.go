@@ -184,7 +184,7 @@ func TestLegacyCanonicalEncodingMarshalParity(test *testing.T) {
 	values := []any{
 		nil, false, true, int(9007199254740993), math.Copysign(0, -1),
 		1e-7, 1e21, math.SmallestNonzeroFloat64, math.MaxFloat64,
-		"", "\"\\/\b\f\n\r\t\x00\x01\x1f<&>\u2028\u2029한국🙂\ufffd\xff\x80",
+		"", "\"\\/\b\f\n\r\t\x00\x01\x1f<&>\u2028\u2029\ud55c\uad6d🙂\ufffd\xff\x80",
 		EventMessage, RoleAssistant, ProviderKind("codex"), FidelityTier("exact"),
 		map[string]any(nil), map[string]any{}, []any(nil), []any{},
 		[]map[string]any(nil), []map[string]any{}, (*json.Number)(nil), &number,
@@ -356,7 +356,7 @@ func TestLegacyCanonicalEncodingAdaptiveOutputAndActions(test *testing.T) {
 
 func TestLegacyCanonicalEncodingASCIIRunBoundaries(test *testing.T) {
 	for _, offset := range []int{-4, -1, 0, 1, 5} {
-		for _, separator := range []string{"<>&", "\"\\", "\x00\n\t", "한🙂\u2028\u2029", "\xff"} {
+		for _, separator := range []string{"<>&", "\"\\", "\x00\n\t", "\ud55c🙂\u2028\u2029", "\xff"} {
 			text := strings.Repeat("a", LegacyCanonicalEncodingBytes+offset) + separator + strings.Repeat("z", LegacyCanonicalEncodingBytes+3)
 			assertLegacyCanonicalEncodingValue(test, map[string]any{"body": text})
 		}

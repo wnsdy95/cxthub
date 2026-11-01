@@ -11,7 +11,7 @@ import (
 
 func legacyNativeEventRecordFieldsCut(test *testing.T) (*LegacyNormalizationDecoder, *legacyNativeEventList) {
 	test.Helper()
-	large := strings.Repeat("replacement-최신", ConversationManifestChunkBytes/4)
+	large := strings.Repeat("replacement-\ucd5c\uc2e0", ConversationManifestChunkBytes/4)
 	fixture := legacyDecoderCheckpointFixture{name: "completed-child-before-active-replacement", raw: `{"envelope":{"cir_version":"2","source_provider":"codex","fidelity":"full"},"events":[{"kind":"compaction","seq":0,"replacement":[{"kind":"not-a-valid-kind","id":"retained","seq":9007199254740993,"role":"assistant","input":{"nested":[null,false,3.5,"` + large + `"]},"output":{"visible":"` + large + `"},"is_error":false,"cross_replayable":true,"locked":{"provider":"codex","scheme":"opaque","blob":"` + large + `"},"provider_metadata":{"turn_id":"kept","create_time":9007199254740993},"agent_message":true,"agent_author":"author","agent_recipient":"recipient","compact_summary":true,"replacement_complete":true,"tool_name":"must-not-disappear","call_id":"call","provider_tool_name":"native","status":"done","redacted_summary":"kept"},{"kind":"message","seq":2,"id":"` + large + `","role":"user","blocks":[]}]}]}`,
 		cut: func(decoder *LegacyNormalizationDecoder) bool {
 			if decoder.native == nil || !decoder.native.object.eventActive {

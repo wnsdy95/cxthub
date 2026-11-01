@@ -15,7 +15,7 @@ import (
 )
 
 func TestPGMCPStatusProtocolReauthorizesPinnedReads(test *testing.T) {
-	for _, tool := range []string{"git_changes", "git_observations", "code_applicability"} {
+	for _, tool := range []string{"git_changes", "git_observations", "code_applicability", "context_link_status"} {
 		for _, change := range []string{"current", "session-revoked", "membership-revoked"} {
 			test.Run(fmt.Sprintf("%s/%s", tool, change), func(test *testing.T) {
 				fixture := newMemorySnapshotPGFixture(test)
@@ -83,6 +83,9 @@ func TestPGMCPStatusProtocolReauthorizesPinnedReads(test *testing.T) {
 				fixture.server.SetGitChanges(probe)
 				fixture.server.SetGitScans(probe)
 				fixture.server.SetCodeApplicability(probe)
+				if err := fixture.server.SetGitAssociationStatus(probe); err != nil {
+					test.Fatal(err)
+				}
 				request := documentEventRequest(test, fixture.ctx, fixture.pair.AccessToken, tool, toolArgs{
 					Repository: string(fixture.repo.ID), CodeCommit: strings.Repeat("a", 40), SourceCommit: strings.Repeat("b", 40), Paths: []string{"file.go"},
 				})

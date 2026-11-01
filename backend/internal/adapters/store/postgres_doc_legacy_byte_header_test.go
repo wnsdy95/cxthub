@@ -57,7 +57,7 @@ func legacyByteHeaderPGSource(test *testing.T, storage *PostgresStore, ctx conte
 	test.Helper()
 	repo, _ := docRangeJobPGRepo(test, storage, ctx)
 	document := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "2", SourceProvider: domain.ProviderCodex,
-		SessionOriginID: string(repo), Fidelity: domain.FidelityFull, GitBranch: "한🙂\"\\\n<>&"}, Events: []domain.CIREvent{}}
+		SessionOriginID: string(repo), Fidelity: domain.FidelityFull, GitBranch: "\ud55c🙂\"\\\n<>&"}, Events: []domain.CIREvent{}}
 	if streamBytes > 0 {
 		document.Events = append(document.Events, domain.CIREvent{Kind: domain.EventMessage, Seq: 7, Role: domain.RoleAssistant,
 			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", streamBytes)}}})

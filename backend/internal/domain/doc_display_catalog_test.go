@@ -101,11 +101,11 @@ func docDisplayCatalogTestPRE(test *testing.T, raw string) docDisplayCatalogTest
 func docDisplayCatalogTestFixtures(test *testing.T) map[string]docDisplayCatalogTestFixture {
 	test.Helper()
 	return map[string]docDisplayCatalogTestFixture{
-		"public_reasoning":   docDisplayCatalogTestPublic(test, `{"kind":"reasoning","redacted_summary":"**public 한글🙂**","opaque":"private"}`),
-		"public_message":     docDisplayCatalogTestPublic(test, `{"kind":"message","blocks":[{"type":"text","text":"**public 한글🙂**"}]}`),
+		"public_reasoning":   docDisplayCatalogTestPublic(test, "{\"kind\":\"reasoning\",\"redacted_summary\":\"**public \ud55c\uae00🙂**\",\"opaque\":\"private\"}"),
+		"public_message":     docDisplayCatalogTestPublic(test, "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"**public \ud55c\uae00🙂**\"}]}"),
 		"public_tool_call":   docDisplayCatalogTestPublic(test, `{"kind":"tool_call","tool_name":"Bash","input":{"command":"echo public"}}`),
-		"public_tool_result": docDisplayCatalogTestPublic(test, `{"kind":"tool_result","output":{"value":[true,1,"public 한글🙂"]}}`),
-		"pre_string":         docDisplayCatalogTestPRE(test, `{"kind":"tool_result","output":"public 한글🙂\nend"}`),
+		"public_tool_result": docDisplayCatalogTestPublic(test, "{\"kind\":\"tool_result\",\"output\":{\"value\":[true,1,\"public \ud55c\uae00🙂\"]}}"),
+		"pre_string":         docDisplayCatalogTestPRE(test, "{\"kind\":\"tool_result\",\"output\":\"public \ud55c\uae00🙂\\nend\"}"),
 	}
 }
 

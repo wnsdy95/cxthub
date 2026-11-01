@@ -16,7 +16,7 @@ func TestConversationFindPreparationInputBounds(test *testing.T) {
 		func(value *ConversationFindPreparationRequest) { value.Hash = "bad" },
 		func(value *ConversationFindPreparationRequest) { value.Find.Query = "" },
 		func(value *ConversationFindPreparationRequest) {
-			value.Find.Query = strings.Repeat("한", MaxDocFindQueryRunes+1)
+			value.Find.Query = strings.Repeat("\ud55c", MaxDocFindQueryRunes+1)
 		},
 		func(value *ConversationFindPreparationRequest) { value.Find.Query = "invalid\xff" },
 		func(value *ConversationFindPreparationRequest) {

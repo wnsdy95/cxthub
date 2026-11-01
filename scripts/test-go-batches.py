@@ -210,6 +210,15 @@ def run_batches(args):
         unknown_skips = sorted(allow_skip - set(tests))
         if unknown_skips:
             raise ValueError("--allow-skip names not in discovered selection: " + ", ".join(unknown_skips))
+        required = set(args.require_test)
+        if len(required) != len(args.require_test):
+            raise ValueError("duplicate --require-test test names")
+        missing_required = sorted(required - set(tests))
+        if missing_required:
+            raise ValueError("--require-test names not in discovered selection: " + ", ".join(missing_required))
+        optional_required = sorted(required.intersection(allow_skip))
+        if optional_required:
+            raise ValueError("required tests cannot allow skips: " + ", ".join(optional_required))
         batches = [tests[start:start + args.batch_size] for start in range(0, len(tests), args.batch_size)]
         print(f"[go-batches] {len(tests)} tests, {len(batches)} serial batches, {args.count} repetitions; cwd={package_dir}", flush=True)
         results = []
@@ -252,6 +261,7 @@ def main(argv=None):
     parser.add_argument("package")
     parser.add_argument("--tags", default="")
     parser.add_argument("--run", default="^Test")
+    parser.add_argument("--require-test", action="append", default=[], metavar="TEST", help="require an exact top-level test name in the discovered selection and forbid allowing it to skip; repeat for each name")
     parser.add_argument("--allow-skip", action="append", default=[], metavar="TEST", help="allow an exact discovered top-level test name to skip; repeat for each name")
     parser.add_argument("--race", action="store_true")
     parser.add_argument("--count", type=positive_int, default=1)

@@ -25,7 +25,7 @@ func TestMinimalMCPRuntimeHasActualQueryOwnersAndNoCommandService(test *testing.
 	if runtime.Context != nil || runtime.RepositoryAssets != nil {
 		test.Fatal("MCP constructed a command service")
 	}
-	if runtime.Archive == nil || runtime.GitChanges == nil || runtime.GitScans == nil || runtime.CodeApplicability == nil || runtime.ConversationFind == nil || runtime.ContextQueries == nil {
+	if runtime.Archive == nil || runtime.GitChanges == nil || runtime.GitScans == nil || runtime.GitAssociationStatus == nil || runtime.CodeApplicability == nil || runtime.ConversationFind == nil || runtime.ContextQueries == nil {
 		test.Fatal("MCP omitted a query dependency")
 	}
 	if _, actual := runtime.DocumentQueries.(*documentquery.Queries); !actual {
@@ -34,7 +34,7 @@ func TestMinimalMCPRuntimeHasActualQueryOwnersAndNoCommandService(test *testing.
 	if _, actual := runtime.MemoryLive.(*memoryquery.LiveQueries); !actual {
 		test.Fatal("memory reader is not the actual owner")
 	}
-	for _, query := range []any{runtime.Archive, runtime.DocumentQueries, runtime.ContextQueries, runtime.MemoryLive, runtime.PreparedMemory, runtime.MemorySnapshots, runtime.GitChanges, runtime.GitScans, runtime.CodeApplicability, runtime.ConversationFind} {
+	for _, query := range []any{runtime.Archive, runtime.DocumentQueries, runtime.ContextQueries, runtime.MemoryLive, runtime.PreparedMemory, runtime.MemorySnapshots, runtime.GitChanges, runtime.GitScans, runtime.GitAssociationStatus, runtime.CodeApplicability, runtime.ConversationFind} {
 		if _, writable := query.(inbound.CommitSnapshot); writable {
 			test.Fatal("MCP query retains a context command service")
 		}

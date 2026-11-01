@@ -36,6 +36,8 @@ type legacyNativeResourceLookup struct {
 
 type legacyNativeResourcePreparation struct {
 	parent      *legacyNativeObjectCheckpoint
+	restore     *legacyNativeCheckpointGraphRestore
+	graph       *legacyNativeCheckpointGoGraph
 	root        legacyNativeAnyValue
 	capture     *legacyNormalizationCapture
 	index       *legacyNativeResourceLookup
@@ -119,6 +121,27 @@ func newLegacyNativeResourcePreparation(ctx context.Context, parent *legacyNativ
 }
 
 func (work *legacyNativeResourcePreparation) checkSource() error {
+	if work != nil && work.graph != nil {
+		graph := work.graph
+		if work.closed || work.transferred || graph.closed || graph.resource != work || graph.registry == nil || graph.registry.closed || graph.registry.active != graph || !work.capture.valid(work.capture.scope) {
+			return ErrConflict
+		}
+		if graph.registry.source != nil {
+			if err := graph.registry.source.checkSource(); err != nil {
+				return err
+			}
+		}
+		return work.root.validateOwnership()
+	}
+	if work != nil && work.restore != nil {
+		if work.closed || work.transferred || work.restore.closed || work.restore.resource != work || work.restore.registry == nil || work.restore.registry.closed || !work.capture.valid(work.capture.scope) {
+			return ErrConflict
+		}
+		if err := work.restore.refreshSharedBudget(); err != nil {
+			return err
+		}
+		return work.root.validateOwnership()
+	}
 	if work == nil || work.closed || work.transferred || work.parent == nil || work.parent.resourceTask != work ||
 		work.parent.native == nil || !work.capture.valid(work.parent.native.mutation) {
 		return ErrConflict
@@ -132,6 +155,12 @@ func (work *legacyNativeResourcePreparation) checkSource() error {
 func (work *legacyNativeResourcePreparation) admit(extra int64) error {
 	if err := work.checkSource(); err != nil {
 		return err
+	}
+	if work.restore != nil {
+		return work.restore.admit(extra, 0)
+	}
+	if work.graph != nil {
+		return work.graph.admit(extra, 0)
 	}
 	return work.parent.admit(extra)
 }
@@ -290,6 +319,10 @@ func (work *legacyNativeResourcePreparation) advance(ctx context.Context) error 
 		work.cursor = nil
 	} else if work.position < cap(node.owner.array.decoded) {
 		array := node.owner.array
+		if work.position >= len(array.decoded) && array.tail == nil {
+			work.position = cap(array.decoded)
+			return nil
+		}
 		var value legacyNativeAnyValue
 		var err error
 		if work.position < len(array.decoded) {

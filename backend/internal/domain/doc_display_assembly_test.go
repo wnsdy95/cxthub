@@ -188,7 +188,7 @@ func (fixture *assemblyTestFixture) build(test *testing.T) (DocDisplayAssemblySt
 }
 
 func TestDocDisplayAssemblyRestartsShortFragments(test *testing.T) {
-	text := strings.Repeat("양🙂abc<", 150)
+	text := strings.Repeat("\uc591🙂abc<", 150)
 	fixture := newAssemblyTestFixture(test, text, 11, false)
 	state, err := NewDocDisplayAssemblyState(fixture.input)
 	if err != nil {
@@ -200,7 +200,7 @@ func TestDocDisplayAssemblyRestartsShortFragments(test *testing.T) {
 		test.Fatal("short fragment was not staged separately", state, err)
 	}
 	checkpoint := assemblyTestEncode(test, fixture.input, state)
-	if bytes.Contains(checkpoint, []byte("양")) || bytes.Contains(checkpoint, []byte(`"text"`)) || bytes.Contains(checkpoint, []byte(`"runs"`)) {
+	if bytes.Contains(checkpoint, []byte("\uc591")) || bytes.Contains(checkpoint, []byte(`"text"`)) || bytes.Contains(checkpoint, []byte(`"runs"`)) {
 		test.Fatal("checkpoint contains body text")
 	}
 	if _, err := DecodeDocDisplayProjectionPage(fixture.input.source, state.Pending, fixture.objects[state.Pending]); !errors.Is(err, ErrIntegrity) {

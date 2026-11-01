@@ -38,6 +38,8 @@ jobs:
         run: python3 scripts/test-test-go-batches.py
       - name: Verify Go test batch outcomes
         run: python3 scripts/test-go-batches-outcomes.py
+      - name: Verify fail-closed public Git metadata checks
+        run: python3 scripts/test-check-public-git-metadata.py
       - name: Verify repository export and synchronization fences
         run: python3 scripts/test-distribute-repositories.py
       - name: Verify E2E publication fence and failure evidence
@@ -95,8 +97,16 @@ jobs:
         working-directory: backend
         env:
           CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
+          CXT_ROOT_WRITER_COST: "1"
         run: |
           python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres \
+            --require-test TestLegacyByteRecoveryPGColdChild \
+            --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
+            --require-test TestNormalizationCheckpointPGColdChild \
+            --require-test TestNormalizationCheckpointPGColdRestartPublishes \
+            --require-test TestPGRootWriterCost \
+            --require-test TestPGRootWriterCostPreparationReferenceRead \
+            --require-test TestPGRootWriterWait \
             --allow-skip TestLegacyProofStreamAllocationQualification \
             --allow-skip TestLegacyStreamingPGMemoryQualification \
             --allow-skip TestPGCycleValidationComparison \
@@ -111,10 +121,13 @@ jobs:
             --allow-skip TestPGReadModelMixedProgress
           go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v
           python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestActivityCommitHistoryPG$'
+          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race \
+            --run '^TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads$' \
+            --require-test TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads
           go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/adapters/federation/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
-          python3 ../scripts/test-go-batches.py ./internal/serverruntime/ --tags postgres --race --run '^Test(ExecutionProfilePostgres|BoundedExecutionProcessesPG|InfrastructurePostgres|RuntimePostgresCallersReuseInfrastructurePool|DisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads)'
+          python3 ../scripts/test-go-batches.py ./internal/serverruntime/ --tags postgres --race --run '^Test(ExecutionProfilePostgres|BoundedExecutionProcessesPG|InfrastructurePostgres|RuntimePostgresCallersReuseInfrastructurePool)'
           python3 ../scripts/test-go-batches.py ./cmd/cxtd/ --tags postgres --race --run '^TestServerLifecyclePGProcess(SIGTERM|BindFailure)'
           go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip)$' -count=1 -timeout=120s -v
           python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --run '^TestPGMCPResourceCutover$'

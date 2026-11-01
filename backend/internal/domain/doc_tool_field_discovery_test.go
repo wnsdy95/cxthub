@@ -137,7 +137,7 @@ func TestDocToolFieldDiscoveryRootSpansAndDuplicates(test *testing.T) {
 	}{
 		{"call", `{"kind":"tool_call","input":{"file_path":"/src/main.go","command":"go test","opaque":{"tool_name":"private"}},"provider_tool_name":"functions.read_file","tool_name":"read","output":1}`, `"tool_call"`, "1", `{"file_path":"/src/main.go","command":"go test","opaque":{"tool_name":"private"}}`, `"functions.read_file"`, `"read"`},
 		{"result", `{"kind":"tool_result","output":{"ok":true,"value":[null,1,"x"]}}`, `"tool_result"`, `{"ok":true,"value":[null,1,"x"]}`, "", "", ""},
-		{"escaped", `{"k\u0069nd":"tool_\u0063all","in\u0070ut":{"a":"\ud800"},"provider\u005ftool_name":"한글\u002eread","tool\u005fname":"\ud83d\ude42","out\u0070ut":"\u0031"}`, `"tool_\u0063all"`, `"\u0031"`, `{"a":"\ud800"}`, `"한글\u002eread"`, `"\ud83d\ude42"`},
+		{"escaped", "{\"k\\u0069nd\":\"tool_\\u0063all\",\"in\\u0070ut\":{\"a\":\"\\ud800\"},\"provider\\u005ftool_name\":\"\ud55c\uae00\\u002eread\",\"tool\\u005fname\":\"\\ud83d\\ude42\",\"out\\u0070ut\":\"\\u0031\"}", `"tool_\u0063all"`, `"\u0031"`, `{"a":"\ud800"}`, "\"\ud55c\uae00\\u002eread\"", `"\ud83d\ude42"`},
 		{"last-values", `{"kind":false,"kind":"tool_call","input":[],"input":{"first":0},"input":null,"provider_tool_name":{},"provider_tool_name":"first","provider_tool_name":null,"provider_tool_name":"last","tool_name":true,"tool_name":"first","tool_name":"last-tool","output":"first","output":[]}`, `"tool_call"`, `[]`, "null", `"last"`, `"last-tool"`},
 		{"last-null-names", `{"kind":"tool_call","provider_tool_name":"first","provider_tool_name":null,"tool_name":"first","tool_name":null,"output":1,"output":null}`, `"tool_call"`, "null", "", "", ""},
 		{"opaque", `{"opaque":{"kind":"tool_call","input":{},"provider_tool_name":"private","tool_name":"private","output":"private"},"list":[{"output":"private"}],"provider_tool_nameX":"private","provider_tool_name_extra":"private","Provider_tool_name":"private","provider_tool_names":"private","tool_nameX":"private","redacted_summary":"private","blocks":[],"kind":"tool_call"}`, `"tool_call"`, "", "", "", ""},
@@ -246,7 +246,7 @@ func TestDocToolFieldDiscovery64KLexicalSplits(test *testing.T) {
 	}{
 		{`{"`, "provider_tool_name", `":"visible","kind":"tool_call","input":{}}`},
 		{`{"`, `provider\u005ftool_name`, `":"visible","kind":"tool_call"}`},
-		{`{"provider_tool_name":"`, `한글\ud800🙂\u002evisible`, `","kind":"tool_call"}`},
+		{`{"provider_tool_name":"`, "\ud55c\uae00\\ud800🙂\\u002evisible", `","kind":"tool_call"}`},
 		{`{"kind":"`, "tool_call", `","provider_tool_name":"visible"}`},
 		{`{"kind":"`, `tool_\u0072esult`, `","output":1}`},
 		{`{"kind":"tool_result","output":`, "1", `}`},

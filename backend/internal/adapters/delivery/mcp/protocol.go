@@ -225,7 +225,7 @@ func (s *Server) dispatch(r *http.Request, user domain.User, req rpcRequest) (an
 			}
 			ctx = inbound.WithDocumentReadAuthorizer(ctx, s.protocolReadAuthorizer(r, user, pinned))
 		}
-		if call.Name == "git_changes" || call.Name == "git_observations" || call.Name == "code_applicability" {
+		if call.Name == "git_changes" || call.Name == "git_observations" || call.Name == "code_applicability" || call.Name == "context_link_status" {
 			ctx = inbound.WithDocumentReadAuthorizer(ctx, s.protocolReadAuthorizer(r, user, s.contextQueryProfile == inbound.ContextQueryPinnedSnapshots))
 		}
 		text, err := s.runTool(ctx, user, call.Name, call.Arguments)

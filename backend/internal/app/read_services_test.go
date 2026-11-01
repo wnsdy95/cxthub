@@ -52,9 +52,10 @@ func TestReadServicesBindsIndependentQueriesAndLifetimeCaches(test *testing.T) {
 	_, archiveOwner := services.Archive.(*archivequery.ArchiveQueries)
 	_, changeOwner := services.GitChanges.(*evidencequery.ChangeQueries)
 	_, scanOwner := services.GitScans.(*evidencequery.ScanQueries)
+	_, associationOwner := services.GitAssociationStatus.(*GitAssociationStatusQueries)
 	_, codeOwner := services.CodeApplicability.(*evidencequery.CodeQueries)
 	if !documentOwner || !conversationOwner || documents != conversation || !contextOwner || !liveOwner ||
-		!preparedOwner || !snapshotOwner || !archiveOwner || !changeOwner || !scanOwner || !codeOwner {
+		!preparedOwner || !snapshotOwner || !archiveOwner || !changeOwner || !scanOwner || !associationOwner || !codeOwner {
 		test.Fatal("read assembly did not bind standalone query owners")
 	}
 	segmentPointer := reflect.ValueOf(contextQueries).Elem().FieldByName("cache").Pointer()

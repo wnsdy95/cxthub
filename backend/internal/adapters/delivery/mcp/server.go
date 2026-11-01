@@ -113,6 +113,7 @@ type Server struct {
 	codeApplicability           inbound.CodeApplicabilityQuery
 	gitChanges                  inbound.GitChangeQuery
 	gitScans                    inbound.GitScanQuery
+	gitAssociationStatus        inbound.GitAssociationStatusQuery
 	context                     ContextBackend
 	identity                    IdentityBackend
 	oauth                       outbound.OAuthStore

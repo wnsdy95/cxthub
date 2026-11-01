@@ -147,7 +147,7 @@ func TestDocToolKeyDigestSemanticAliases(test *testing.T) {
 		{"pair", `"🙂"`, []string{`"🙂"`, `"\uD83D\uDE42"`, `"\ud83d\uDE42"`}},
 		{"escapes", `"\"\\/"`, []string{`"\"\\\/"`, `"\u0022\u005c\u002f"`}},
 		{"controls", `"\n\r\t\b\f\u0000"`, []string{`"\n\r\t\b\f\u0000"`, `"\u000A\u000D\u0009\u0008\u000c\u0000"`}},
-		{"unicode", "\"한글\u2028\u2029\"", []string{"\"한글\u2028\u2029\"", `"\ud55c\uae00\u2028\u2029"`}},
+		{"unicode", "\"\ud55c\uae00\u2028\u2029\"", []string{"\"\ud55c\uae00\u2028\u2029\"", `"\ud55c\uae00\u2028\u2029"`}},
 		{"lone-alias", `"\ud800"`, []string{`"\ud800"`, `"\uD800"`}},
 		{"replacement-alias", `"�"`, []string{`"�"`, `"\ufffd"`}},
 	} {

@@ -57,7 +57,7 @@ func TestDocFindFieldsLargeOpaqueStateOnlyReadsDecodedSummary(test *testing.T) {
 }
 
 func TestDocFindFieldsLargeSummaryResumesWithinPublicSpan(test *testing.T) {
-	event := domain.CIREvent{Kind: domain.EventReasoning, RedactedSummary: strings.Repeat("x", docFindFragmentBytes-5) + "Needle🙂" + strings.Repeat("끝", 100_000) + "NEEDLE🙂",
+	event := domain.CIREvent{Kind: domain.EventReasoning, RedactedSummary: strings.Repeat("x", docFindFragmentBytes-5) + "Needle🙂" + strings.Repeat("\ub05d", 100_000) + "NEEDLE🙂",
 		Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: "needle🙂 must never match"}}
 	source, selector, bytesRead, fields := docFindFieldsFixture(test, event)
 	read := source.read
@@ -103,7 +103,7 @@ func TestDocFindFieldsLargeAgentMessageNeverSearchesOpaqueFields(test *testing.T
 		test.Run(map[bool]string{false: "decoded", true: "raw blocks"}[largePublic], func(test *testing.T) {
 			text := "public \"Needle🙂\"\nonly"
 			if largePublic {
-				text = strings.Repeat("끝", 70_000) + text
+				text = strings.Repeat("\ub05d", 70_000) + text
 			}
 			event := domain.CIREvent{Kind: domain.EventMessage, Role: domain.RoleAssistant, AgentMessage: true,
 				Blocks: []domain.ContentBlock{{Type: "text", Text: text}},

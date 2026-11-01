@@ -47,7 +47,7 @@ func legacyNativeLockedNestedString(test *testing.T, prefix string) string {
 		scalar.WriteString(boundary.token)
 	}
 	scalar.WriteString(`\"\\\/\b\f\n\r\t\u0000\u2028\u2029\uDC00`)
-	scalar.WriteString("한<&>")
+	scalar.WriteString("\ud55c<&>")
 	const ending = `\uD800`
 	padding := 5*ConversationManifestChunkBytes + 73 - scalar.Len() - len(ending)
 	if padding < 0 {
@@ -148,7 +148,31 @@ func legacyNativeLockedNestedCheck(test *testing.T, event string, expected Locke
 		for _, emitted := range step.Events {
 			if emitted.Sequence == 7 && len(events) == 0 {
 				fields, ok := emitted.Encoding.root.(map[string]any)
-				if !ok || !reflect.DeepEqual(legacyCanonicalBlocksProjectionForTest(fields), wantEvent) {
+				if !ok {
+					test.Fatalf("native locked handoff changed its event object type: %T", emitted.Encoding.root)
+				}
+				projected := legacyCanonicalBlocksProjectionForTest(fields).(map[string]any)
+				if blocks, paged := fields["blocks"].(*legacyNativeBlockValues); paged {
+					if blocks == nil || blocks.length() < 0 {
+						test.Fatal("native locked handoff lost its block pages")
+					}
+					visible := make([]ContentBlock, blocks.length())
+					for ordinal := range visible {
+						record := blocks.at(ordinal)
+						if record == nil {
+							test.Fatal("native locked handoff omitted a visible block", ordinal)
+						}
+						visible[ordinal] = record.block
+					}
+					projected["blocks"] = legacyCanonicalBlocksProjectionForTest(visible)
+				}
+				for name, expected := range wantEvent {
+					actual, present := projected[name]
+					if !present || !reflect.DeepEqual(actual, expected) {
+						test.Errorf("native locked handoff field %q differs from typed oracle: present=%t got=%T want=%T", name, present, actual, expected)
+					}
+				}
+				if !reflect.DeepEqual(projected, wantEvent) {
 					test.Fatal("native locked handoff changed event fields, visible content, or locked values")
 				}
 			}
@@ -178,6 +202,30 @@ func legacyNativeLockedNestedCheck(test *testing.T, event string, expected Locke
 		return
 	}
 	test.Fatal("full locked normalization exhausted its original per-part progress allowance")
+}
+
+func TestLegacyNativeLockedNestedBlockViewsMatchTypedOracle(test *testing.T) {
+	paged := `[{"type":"text","text":"first"},` + strings.Repeat(`{"type":"text","text":"middle"},`, 7) + `{"type":"text","text":"last"}]`
+	for _, fixture := range []struct {
+		name   string
+		fields string
+	}{
+		{name: "missing"},
+		{name: "null", fields: `,"blocks":null`},
+		{name: "empty", fields: `,"blocks":[]`},
+		{name: "single", fields: ",\"blocks\":[{\"type\":\"text\",\"text\":\"visible \ud55c🙂<&>\\n\"}]"},
+		{name: "inline", fields: `,"blocks":[{"type":"text","text":"first"},{"type":"text","text":"last"}]`},
+		{name: "paged", fields: `,"blocks":` + paged},
+		{name: "shortened-merge", fields: `,"blocks":` + paged + `,"BLOCKS":[{"text":"merged"}]`},
+		{name: "empty-reset", fields: `,"blocks":` + paged + `,"blocks":[]`},
+		{name: "null-reset", fields: `,"blocks":` + paged + `,"blocks":null`},
+	} {
+		test.Run(fixture.name, func(test *testing.T) {
+			event := `{"id":"locked","seq":7,"kind":"message","role":"assistant","agent_message":true,` +
+				`"agent_author":"worker","agent_recipient":"parent","locked":{"provider":"codex","scheme":"encrypted_content","blob":"opaque"}` + fixture.fields + `}`
+			legacyNativeLockedNestedCheck(test, event, LockedBlob{Provider: ProviderCodex, Scheme: "encrypted_content", Blob: "opaque"})
+		})
+	}
 }
 
 func TestLegacyNativeLockedNestedGiantStringsMatchTypedOracle(test *testing.T) {
@@ -220,7 +268,7 @@ func TestLegacyNativeLockedNestedGiantStringsMatchTypedOracle(test *testing.T) {
 }
 
 func TestLegacyNativeLockedNestedDuplicateMergeAndNullMatchTypedOracle(test *testing.T) {
-	blob := strings.Repeat("b", 2*ConversationManifestChunkBytes+73) + "한🙂<&>\n"
+	blob := strings.Repeat("b", 2*ConversationManifestChunkBytes+73) + "\ud55c🙂<&>\n"
 	scheme := strings.Repeat("s", 2*ConversationManifestChunkBytes+91) + "\u2028\u2029\"\\"
 	blobJSON, err := json.Marshal(blob)
 	if err != nil {

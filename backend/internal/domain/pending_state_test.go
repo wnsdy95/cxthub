@@ -10,7 +10,7 @@ import (
 
 func TestPendingStateRefOrderDoesNotDependOnDatabaseCollation(t *testing.T) {
 	root := graphFixture("ref order")
-	refs := []Ref{{Kind: RefBranch, Name: "topic/a", Target: root.ID}, {Kind: RefBranch, Name: "topic/한글", Target: root.ID}, {Kind: RefTag, Name: "tag", Target: root.ID}, {Kind: RefBranch, Name: "topic/B", Target: root.ID}}
+	refs := []Ref{{Kind: RefBranch, Name: "topic/a", Target: root.ID}, {Kind: RefBranch, Name: "topic/\ud55c\uae00", Target: root.ID}, {Kind: RefTag, Name: "tag", Target: root.ID}, {Kind: RefBranch, Name: "topic/B", Target: root.ID}}
 	want := []Ref{refs[3], refs[0], refs[1], refs[2]}
 	view, err := ProjectPendingState(context.Background(), RepositoryView{Snapshots: []Snapshot{root}, Refs: refs})
 	if err != nil || !reflect.DeepEqual(view.Refs, want) {

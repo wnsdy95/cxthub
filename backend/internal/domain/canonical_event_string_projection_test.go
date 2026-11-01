@@ -30,7 +30,7 @@ func giantCanonicalDocument(t testing.TB, event string) []byte {
 }
 
 func TestCanonicalGiantStringProjectionOracleParity(t *testing.T) {
-	large := giantCanonicalString(t, strings.Repeat("context 한글 <>&\n\t\\\"\u2028\x00", 6000))
+	large := giantCanonicalString(t, strings.Repeat("context \ud55c\uae00 <>&\n\t\\\"\u2028\x00", 6000))
 	largeKey := giantCanonicalString(t, strings.Repeat("key", canonicalCheckBytes))
 	cases := map[string]string{
 		"message":              `{"blocks":[{"text":` + large + `,"type":"text"}],"kind":"message","role":"user","seq":1}`,
@@ -111,7 +111,7 @@ func TestCanonicalGiantStringProjectionErrorPrecedence(t *testing.T) {
 
 func TestCanonicalGiantStringFragmentBoundaries(t *testing.T) {
 	for shift := -12; shift <= 12; shift++ {
-		for _, value := range []string{"한글😀", "\x00<>&\u2028\u2029", "\\\"\n\r\t\b\f"} {
+		for _, value := range []string{"\ud55c\uae00😀", "\x00<>&\u2028\u2029", "\\\"\n\r\t\b\f"} {
 			text := strings.Repeat("a", canonicalCheckBytes+shift) + value + strings.Repeat("b", canonicalCheckBytes) + value
 			quoted := []byte(giantCanonicalString(t, text))
 			if err := verifyCanonicalStringFragments(context.Background(), quoted[1:len(quoted)-1]); err != nil {
@@ -233,7 +233,7 @@ func TestCanonicalVerificationFrameVersionErrorPrecedence(t *testing.T) {
 }
 
 func FuzzCanonicalGiantStringProjectionParity(f *testing.F) {
-	for _, seed := range []string{"plain", "한글😀<>&\u2028\\\"", "\x00\n\t", string([]byte{0xff})} {
+	for _, seed := range []string{"plain", "\ud55c\uae00😀<>&\u2028\\\"", "\x00\n\t", string([]byte{0xff})} {
 		f.Add(seed, uint8(0), uint16(0))
 	}
 	f.Fuzz(func(t *testing.T, text string, mutation uint8, position uint16) {

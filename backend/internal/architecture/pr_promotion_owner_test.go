@@ -114,7 +114,7 @@ func wave45PROwnerViolations(set wave42LegacyGitSourceSet) []string {
 		"PRPromotionWorker": {"meta": "outbound.MetadataStore", "blobs": "outbound.BlobStore", "engine": "outbound.GitEngine",
 			"repositories": "outbound.RepositoryStore", "work": "*repositoryWork", "refs": "*repositoryRefCommands",
 			"history": "*historyRecorder", "evidence": "outbound.RepositoryReader", "requireCompleteMemory": "bool", "capturedEvidence": "bool"},
-		"repositoryRefCommands": {"meta": "RepositoryRefStore", "engine": "RepositoryRefEngine", "scope": "RepositoryRefWriteScope",
+		"repositoryRefCommands": {"meta": "RepositoryRefStore", "boundedTags": "RepositoryRefBoundedTagStore", "engine": "RepositoryRefEngine", "scope": "RepositoryRefWriteScope",
 			"history": "RepositoryRefHistory", "append": "RepositoryRefAppend", "revisions": "RepositoryRefRevisions",
 			"notifications": "RepositoryRefNotifications", "transactional": "bool", "profile": "RepositoryRefProfile", "configurationError": "error"},
 		"repositoryRefScope": {"work": "*repositoryWork", "metadata": "RepositoryAuthorityMetadata", "repositories": "repositoryRefRepositoryReader",
@@ -249,7 +249,7 @@ type PRPromotionWorker struct {
  work *repositoryWork; refs *repositoryRefCommands; history *historyRecorder; evidence outbound.RepositoryReader; requireCompleteMemory bool; capturedEvidence bool
 }
 type repositoryRefCommands struct {
- meta RepositoryRefStore; engine RepositoryRefEngine; scope RepositoryRefWriteScope
+ meta RepositoryRefStore; boundedTags RepositoryRefBoundedTagStore; engine RepositoryRefEngine; scope RepositoryRefWriteScope
  history RepositoryRefHistory; append RepositoryRefAppend; revisions RepositoryRefRevisions
  notifications RepositoryRefNotifications; transactional bool; profile RepositoryRefProfile; configurationError error
 }

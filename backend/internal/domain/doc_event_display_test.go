@@ -249,7 +249,7 @@ func TestDocEventDisplaySmallOracleAndOriginalRuneSpans(test *testing.T) {
 		name string
 		body string
 	}{
-		{"markdown", `{"kind":"reasoning","opaque":{"secret":"LOCKED_PRIVATE_BODY"},"redacted_summary":"# PUBLIC_BODY_MARKER **한글🙂**\n\n[label](https://hidden.test) and ` + "`code`" + `"}`},
+		{"markdown", "{\"kind\":\"reasoning\",\"opaque\":{\"secret\":\"LOCKED_PRIVATE_BODY\"},\"redacted_summary\":\"# PUBLIC_BODY_MARKER **\ud55c\uae00🙂**\\n\\n[label](https://hidden.test) and " + "`code`" + `"}`},
 		{"missing", `{"kind":"reasoning","opaque":{"redacted_summary":"LOCKED_PRIVATE_BODY"}}`},
 		{"null", `{"kind":"reasoning","redacted_summary":null,"opaque":"LOCKED_PRIVATE_BODY"}`},
 		{"empty", `{"kind":"reasoning","redacted_summary":""}`},
@@ -367,7 +367,7 @@ func TestDocEventDisplayInvalidTypesAndRawInputFailWithoutResult(test *testing.T
 }
 
 func TestDocEventDisplayCancellationAndLoadFailuresAreAtomic(test *testing.T) {
-	raw := []byte(`{"kind":"reasoning","opaque":"` + strings.Repeat(eventDisplayTestOpaque, 4000) + `","redacted_summary":"# **PUBLIC_BODY_MARKER 한글🙂** [label](https://hidden.test)"}`)
+	raw := []byte(`{"kind":"reasoning","opaque":"` + strings.Repeat(eventDisplayTestOpaque, 4000) + "\",\"redacted_summary\":\"# **PUBLIC_BODY_MARKER \ud55c\uae00🙂** [label](https://hidden.test)\"}")
 	fixture := newEventDisplayTestFixture(test, raw, false)
 	fixture.finish(test)
 	loadFailure := errors.New("event display loader failed")
@@ -526,11 +526,11 @@ func TestDocEventDisplaySealedStepDoesNotAliasPriorDecodingInput(test *testing.T
 
 func FuzzDocEventDisplayPreparationParity(fuzz *testing.F) {
 	for _, text := range []string{
-		"PUBLIC_BODY_MARKER normal 한글🙂",
+		"PUBLIC_BODY_MARKER normal \ud55c\uae00🙂",
 		"",
 		" \t\r\n\u00a0\u2000\u2028\ufeff ",
 		"first\n\nsecond\r\nthird",
-		"**strong 한글🙂**",
+		"**strong \ud55c\uae00🙂**",
 		"[label](https://hidden.test)",
 		"```go\n**literal**\r\n```",
 		`\uD800 \uDC00 \uD83D\uDE42`,
@@ -664,9 +664,9 @@ func TestDocEventDisplayPublicationRejectsValidForeignObjects(test *testing.T) {
 
 func TestDocEventDisplayLargeFormattedReasoningResumesLateAssembly(test *testing.T) {
 	const lines = 1200
-	line := "PUBLIC_BODY_MARKER " + strings.Repeat("readable ", 6) + "한글🙂 label"
+	line := "PUBLIC_BODY_MARKER " + strings.Repeat("readable ", 6) + "\ud55c\uae00🙂 label"
 	want := strings.TrimSuffix(strings.Repeat(line+"\n", lines), "\n")
-	tokenLine := "# **PUBLIC_BODY_MARKER " + strings.Repeat("readable ", 6) + `한글\uD83D\uDE42** [label](https://hidden.test)\n`
+	tokenLine := "# **PUBLIC_BODY_MARKER " + strings.Repeat("readable ", 6) + "\ud55c\uae00\\uD83D\\uDE42** [label](https://hidden.test)\\n"
 	raw := []byte(" \n\t" + `{"opaque":{"secret":"` + strings.Repeat(eventDisplayTestOpaque, 6000) + `"},"kind":"reasoning","redacted_summary":"` + strings.Repeat(tokenLine, lines) + `"}` + "\r\n")
 	fixture := newEventDisplayTestFixture(test, raw, false)
 	for {

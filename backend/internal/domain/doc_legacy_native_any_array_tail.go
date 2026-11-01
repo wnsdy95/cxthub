@@ -111,7 +111,10 @@ func (list *legacyNativeAnyArray) appendTailValueGuarded(ctx context.Context, in
 		excess.bytes, owners.bytes = tail.excess, tail.childBytes
 		position += children.length()
 	}
-	if position >= cap(list.decoded) || list.decoded[:cap(list.decoded)][position] != nil {
+	if position >= cap(list.decoded) {
+		return false, ErrIntegrity
+	}
+	if previous := list.decoded[:cap(list.decoded)][position]; list.resource == nil && previous != nil || list.resource != nil && !legacyNativeCheckpointGoGraphSame(previous, value.value) {
 		return false, ErrIntegrity
 	}
 	storageBytes, metadata, err := children.appendRequirements()
@@ -147,6 +150,10 @@ func (list *legacyNativeAnyArray) appendTailValueGuarded(ctx context.Context, in
 	retained.allocation(1, int64(unsafe.Sizeof(legacyNativeAnyArrayTail{})))
 	retained.include(metadata)
 	retained.include(owners)
+	if list.resource != nil {
+		bytes, err := list.resource.retainedBytes()
+		retained.include(docRangeHeaderHeapEstimate{bytes: bytes, err: err})
+	}
 	if children.single != nil && children.length() == 1 || children.inline != nil && children.length() == legacyCanonicalInlineValues {
 		children.retained(&retained)
 	}

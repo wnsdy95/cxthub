@@ -23,7 +23,7 @@ func TestDocFindFragmentLegacyReconstructsBoundedUTF8AndPrevious(test *testing.T
 	storage := store.NewFSStore(directory)
 	doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{
 		historyMessage(domain.RoleUser, "untouched prefix"),
-		{Kind: domain.EventToolResult, Output: strings.Repeat("한🙂éx", 80_000)},
+		{Kind: domain.EventToolResult, Output: strings.Repeat("\ud55c🙂éx", 80_000)},
 	})
 	verified, err := domain.VerifySessionDoc(doc)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestDocFindFragmentLegacyReconstructsBoundedUTF8AndPrevious(test *testing.T
 func TestDocFindFragmentLegacyChecksActualTotalBoundaryAndFreshAuthority(test *testing.T) {
 	ctx, repo := systemTestContext(), h('1')
 	storage := store.NewFSStore(test.TempDir())
-	doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{{Kind: domain.EventToolResult, Output: "한🙂needle"}})
+	doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{{Kind: domain.EventToolResult, Output: "\ud55c🙂needle"}})
 	service := NewService(storage, storage, nil, nil, nil)
 	request := domain.DocFindFragmentRequest{Legacy: true, Total: 1, Budget: 4}
 	first, err := service.ReadDocFindFragment(ctx, repo, doc.Hash, request)
@@ -106,7 +106,7 @@ func TestDocFindFragmentLegacyChecksActualTotalBoundaryAndFreshAuthority(test *t
 	if err != nil {
 		test.Fatal(err)
 	}
-	for _, offset := range []int{len(raw), len(raw) + 1, bytes.Index(raw, []byte("한")) + 1} {
+	for _, offset := range []int{len(raw), len(raw) + 1, bytes.Index(raw, []byte("\ud55c")) + 1} {
 		invalid := request
 		invalid.Offset = offset
 		page, err := service.ReadDocFindFragment(ctx, repo, doc.Hash, invalid)
@@ -141,7 +141,7 @@ func TestDocFindFragmentLegacyCompatibilityDoesNotWrite(test *testing.T) {
 		test.Run(mode, func(test *testing.T) {
 			ctx, repo, directory := systemTestContext(), h('1'), test.TempDir()
 			storage := store.NewFSStore(directory)
-			doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{historyMessage(domain.RoleUser, "한🙂needle")})
+			doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{historyMessage(domain.RoleUser, "\ud55c🙂needle")})
 			if mode != "indexed_monolithic" {
 				legacyCompatibilityRemoveIndex(test, directory, repo, doc.Hash)
 			}
@@ -156,7 +156,7 @@ func TestDocFindFragmentLegacyCompatibilityDoesNotWrite(test *testing.T) {
 				}
 				page, err := NewService(storage, storage, nil, nil, nil).ReadDocFindFragment(read, repo, doc.Hash,
 					domain.DocFindFragmentRequest{Legacy: true, Total: 1, Budget: 65536})
-				if err != nil || page.Next != -1 || page.Previous != -1 || !strings.Contains(page.JSON, "한🙂needle") || page.Generation != "" {
+				if err != nil || page.Next != -1 || page.Previous != -1 || !strings.Contains(page.JSON, "\ud55c🙂needle") || page.Generation != "" {
 					test.Fatal("old legacy source rejected", page, err)
 				}
 			}
@@ -172,7 +172,7 @@ func TestDocFindFragmentOwnershipAndCorruptionFailClosedEveryRead(test *testing.
 		test.Run(scenario, func(test *testing.T) {
 			ctx, repo, directory := systemTestContext(), h('1'), test.TempDir()
 			storage := store.NewFSStore(directory)
-			doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{{Kind: domain.EventToolResult, Output: "needle 한🙂"}})
+			doc := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{{Kind: domain.EventToolResult, Output: "needle \ud55c🙂"}})
 			service := NewService(storage, storage, nil, nil, nil)
 			request := domain.DocFindFragmentRequest{Legacy: true, Total: 1, Budget: 4}
 			first, err := service.ReadDocFindFragment(ctx, repo, doc.Hash, request)

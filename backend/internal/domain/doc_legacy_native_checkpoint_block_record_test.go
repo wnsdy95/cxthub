@@ -171,7 +171,7 @@ func TestLegacyNativeCheckpointBlockRecordW81RoundTrip(test *testing.T) {
 	typeBuilder.Grow(33)
 	typeBuilder.WriteString("text")
 	textBuilder.Grow(257)
-	textBuilder.WriteString("한글🙂\x00\"\\\n")
+	textBuilder.WriteString("\ud55c\uae00🙂\x00\"\\\n")
 	for _, fixture := range []struct {
 		name        string
 		block       ContentBlock
@@ -180,11 +180,11 @@ func TestLegacyNativeCheckpointBlockRecordW81RoundTrip(test *testing.T) {
 	}{
 		{name: "empty-conservative"},
 		{name: "empty-initialized", initialized: true},
-		{name: "conservative-exact-not-builder-rounded", block: ContentBlock{Type: "text", Text: "abc한🙂"}},
+		{name: "conservative-exact-not-builder-rounded", block: ContentBlock{Type: "text", Text: "abc\ud55c🙂"}},
 		{name: "initialized-excess", block: ContentBlock{Type: typeBuilder.String(), Text: textBuilder.String()}, initialized: true, capacities: [2]int{typeBuilder.Cap(), textBuilder.Cap()}},
 		{name: "empty-with-retained-capacity", initialized: true, capacities: [2]int{16, 64}},
-		{name: "giant-borrowed-unicode", block: ContentBlock{Type: "text", Text: strings.Repeat("한🙂", 1<<20)}},
-		{name: "opaque-invalid-utf8", block: ContentBlock{Type: "\xff", Text: "\x00\xfe\xff한🙂"}},
+		{name: "giant-borrowed-unicode", block: ContentBlock{Type: "text", Text: strings.Repeat("\ud55c🙂", 1<<20)}},
+		{name: "opaque-invalid-utf8", block: ContentBlock{Type: "\xff", Text: "\x00\xfe\xff\ud55c🙂"}},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {
 			storage := legacyNativeBlockRecordW81Storage(test)
@@ -225,7 +225,7 @@ func TestLegacyNativeCheckpointBlockRecordW81RoundTrip(test *testing.T) {
 
 func TestLegacyNativeCheckpointBlockRecordW81Adversarial(test *testing.T) {
 	storage := legacyNativeBlockRecordW81Storage(test)
-	record := legacyNativeBlockRecordW81Record(ContentBlock{Type: "text", Text: "한🙂body"}, [2]int{4, len("한🙂body")})
+	record := legacyNativeBlockRecordW81Record(ContentBlock{Type: "text", Text: "\ud55c🙂body"}, [2]int{4, len("\ud55c🙂body")})
 	saved := legacyNativeBlockRecordW81Capture(test, record, true, storage)
 	for _, fixture := range []struct {
 		name   string
@@ -567,7 +567,7 @@ func TestLegacyNativeCheckpointBlockListW81ControlValidation(test *testing.T) {
 	binding := HashContent([]byte("W81 actual block list control"))
 	test.Run("actual-states", func(test *testing.T) {
 		for _, paged := range []bool{false, true} {
-			for _, raw := range []string{"[]", "null", `[null,{}, {"type":"text","text":"한🙂"}]`} {
+			for _, raw := range []string{"[]", "null", "[null,{}, {\"type\":\"text\",\"text\":\"\ud55c🙂\"}]"} {
 				buffer, source := legacyNativeScalarCheckpointOracleRawSource(test, []byte(raw))
 				list, err := newLegacyNativeBlockList(nil, docRangeHeaderHeapEstimate{}, 0, len(raw))
 				if err != nil {
@@ -619,7 +619,7 @@ func TestLegacyNativeCheckpointBlockListW81ControlValidation(test *testing.T) {
 	test.Run("partial-seed-migration-active-child", func(test *testing.T) {
 		prior := make([]ContentBlock, 300)
 		for index := range prior {
-			prior[index] = ContentBlock{Type: "text", Text: "old한🙂"}
+			prior[index] = ContentBlock{Type: "text", Text: "old\ud55c🙂"}
 		}
 		raw := `[null,null,null]`
 		_, source := legacyNativeScalarCheckpointOracleRawSource(test, []byte(raw))

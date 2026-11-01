@@ -55,7 +55,7 @@ func TestMarshalDocDisplayPageCanonicalJSON(test *testing.T) {
 		name string
 		text string
 	}{
-		{"unicode", "한글 e\u0301 🙂 \ufeff \U0010ffff"},
+		{"unicode", "\ud55c\uae00 e\u0301 🙂 \ufeff \U0010ffff"},
 		{"json-escapes", string(controls) + "\"\\/\x7f"},
 		{"html", "</script><>&"},
 		{"separators", "before\u2028middle\u2029after"},
@@ -248,7 +248,7 @@ func FuzzMarshalDocDisplayPageCanonicalJSON(fuzz *testing.F) {
 	}{
 		{"", "", 0, 0},
 		{"hash", "text", 1, DocDisplayPageRuns + 2},
-		{"<>&\u2028\u2029", "한글🙂\"\\/\b\f\n\r\t\x00\x1f", 1<<53 + 1, 1},
+		{"<>&\u2028\u2029", "\ud55c\uae00🙂\"\\/\b\f\n\r\t\x00\x1f", 1<<53 + 1, 1},
 		{"\xff", "\ufffd\xed\xa0\x80", -1<<53 - 1, DocDisplayPageRuns},
 		{"valid", "\xff", 1<<63 - 1, DocDisplayPageRuns + 1},
 		{"\ufffd", "\ufffd", -1 << 63, 2},

@@ -40,6 +40,9 @@ func HandlerWithReadPreparation(r *serverruntime.Runtime, resourceOrigin string,
 	}
 	s.SetGitChanges(r.GitChanges)
 	s.SetGitScans(r.GitScans)
+	if err := s.SetGitAssociationStatus(r.GitAssociationStatus); err != nil {
+		return nil, err
+	}
 	s.SetCodeApplicability(r.CodeApplicability)
 	if err := s.SetLiveMemoryQueries(r.MemoryLive); err != nil {
 		return nil, err

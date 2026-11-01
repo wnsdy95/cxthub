@@ -12,7 +12,7 @@ import (
 func rfc1Fields(set wave42LegacyGitSourceSet) []dpc1Finding {
 	var findings []dpc1Finding
 	for owner, expected := range map[string]map[string]string{
-		"repositoryRefCommands": {"meta": "RepositoryRefStore", "engine": "RepositoryRefEngine", "scope": "RepositoryRefWriteScope",
+		"repositoryRefCommands": {"meta": "RepositoryRefStore", "boundedTags": "RepositoryRefBoundedTagStore", "engine": "RepositoryRefEngine", "scope": "RepositoryRefWriteScope",
 			"history": "RepositoryRefHistory", "append": "RepositoryRefAppend", "revisions": "RepositoryRefRevisions",
 			"notifications": "RepositoryRefNotifications", "transactional": "bool", "profile": "RepositoryRefProfile", "configurationError": "error"},
 		"RepositoryRefCommandsConfig": {"Profile": "RepositoryRefProfile", "Store": "RepositoryRefStore", "Engine": "RepositoryRefEngine",
@@ -35,12 +35,13 @@ func rfc1Fields(set wave42LegacyGitSourceSet) []dpc1Finding {
 			"ListRefs": "context.Context,domain.ContentHash)([]domain.Ref,error", "ListSnapshots": "context.Context,domain.ContentHash,string)([]domain.Snapshot,error",
 			"CompareAndDeletePending": "context.Context,domain.ContentHash,string,domain.ContentHash)(domain.PendingDeleteResult,error",
 		},
-		"RepositoryRefEngine":        {"ClassifyRefMove": "context.Context,domain.ContentHash,domain.ContentHash,domain.ContentHash)(outbound.RefMoveClass,error"},
-		"RepositoryRefHistory":       {"ListHistory": "context.Context,domain.ContentHash)([]domain.HistoryEvent,error"},
-		"RepositoryRefAppend":        {"AppendRef": "context.Context,domain.ContentHash,domain.Ref,domain.ContentHash)(error"},
-		"RepositoryRefRevisions":     {"RepositoryRevision": "context.Context,domain.ContentHash)(domain.RepositoryRevision,error"},
-		"RepositoryRefNotifications": {"NotifyRefUpdate": "context.Context,domain.ContentHash,domain.Ref,bool,bool)(error"},
-		"RepositoryRefWriteScope":    {"WithinRefWrite": "context.Context,domain.ContentHash,)(inbound.UpdateRefOutput,error", "WithinRefsWrite": "context.Context,domain.ContentHash,bool,)(inbound.UpdateRefsOutput,error"},
+		"RepositoryRefBoundedTagStore": {"HasOrdinaryTagTarget": "context.Context,domain.ContentHash,domain.ContentHash)(bool,error"},
+		"RepositoryRefEngine":          {"ClassifyRefMove": "context.Context,domain.ContentHash,domain.ContentHash,domain.ContentHash)(outbound.RefMoveClass,error"},
+		"RepositoryRefHistory":         {"ListHistory": "context.Context,domain.ContentHash)([]domain.HistoryEvent,error"},
+		"RepositoryRefAppend":          {"AppendRef": "context.Context,domain.ContentHash,domain.Ref,domain.ContentHash)(error"},
+		"RepositoryRefRevisions":       {"RepositoryRevision": "context.Context,domain.ContentHash)(domain.RepositoryRevision,error"},
+		"RepositoryRefNotifications":   {"NotifyRefUpdate": "context.Context,domain.ContentHash,domain.Ref,bool,bool)(error"},
+		"RepositoryRefWriteScope":      {"WithinRefWrite": "context.Context,domain.ContentHash,)(inbound.UpdateRefOutput,error", "WithinRefsWrite": "context.Context,domain.ContentHash,bool,)(inbound.UpdateRefsOutput,error"},
 	} {
 		var methods []string
 		for method := range expected {

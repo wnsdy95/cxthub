@@ -165,7 +165,7 @@ func legacyByteRecoveryPGPreservedImage(test *testing.T, storage *PostgresStore,
 
 func legacyByteRecoveryPGPreservationFixture(test *testing.T, storage *PostgresStore, ctx context.Context, fixture legacyByteStagePGFixture) {
 	test.Helper()
-	digest := domain.MemoryDigest{SnapshotID: fixture.hash, Summary: "preserved memory 한🙂<>& " + string(fixture.repo),
+	digest := domain.MemoryDigest{SnapshotID: fixture.hash, Summary: "preserved memory \ud55c🙂<>& " + string(fixture.repo),
 		KeyFacts: []string{"source bytes and publication identity are immutable"}, OpenTasks: []string{}, Provider: domain.ProviderCodex}
 	memory, err := storage.PutMemory(ctx, fixture.repo, digest)
 	if err != nil {
@@ -276,16 +276,26 @@ func legacyByteRecoveryPGAssertPublished(test *testing.T, storage *PostgresStore
 	}
 }
 
+type legacyByteRecoveryPGColdScenario struct {
+	name        string
+	empty       bool
+	largeHeader bool
+}
+
 func TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource(test *testing.T) {
-	for _, scenario := range []struct {
-		name        string
-		empty       bool
-		largeHeader bool
-	}{
+	legacyByteRecoveryPGColdRestart(test, []legacyByteRecoveryPGColdScenario{
 		{name: "normal"},
 		{name: "empty stream", empty: true},
 		{name: "multi-part header", largeHeader: true},
-	} {
+	})
+}
+
+func legacyByteRecoveryPGColdRestart(test *testing.T, scenarios []legacyByteRecoveryPGColdScenario) {
+	test.Helper()
+	if len(scenarios) == 0 {
+		test.Fatal("cold recovery requires a restart scenario")
+	}
+	for _, scenario := range scenarios {
 		test.Run(scenario.name, func(test *testing.T) {
 			storage, ctx := chunkReusePG(test)
 			directory := rangeSpoolTempDir(test)
@@ -295,12 +305,12 @@ func TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource(test *test
 			document := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "2", SourceProvider: domain.ProviderCodex,
 				SessionOriginID: string(repo), Fidelity: domain.FidelityFull}, Events: []domain.CIREvent{}}
 			if scenario.largeHeader {
-				document.Envelope.Cwd = strings.Repeat("header-", 24<<10) + "한🙂\"\\\n<>&"
+				document.Envelope.Cwd = strings.Repeat("header-", 24<<10) + "\ud55c🙂\"\\\n<>&"
 			}
 			if !scenario.empty {
 				document.Events = []domain.CIREvent{
 					{Kind: domain.EventMessage, Seq: 9, Role: domain.RoleAssistant,
-						Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", 768<<10) + "한🙂\"\\\n<>&"}}},
+						Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", 768<<10) + "\ud55c🙂\"\\\n<>&"}}},
 					{Kind: domain.EventMessage, Seq: 2, Role: domain.RoleUser,
 						Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo)}}},
 				}
@@ -376,8 +386,15 @@ func TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource(test *test
 }
 
 func TestLegacyByteRecoveryPGColdChild(test *testing.T) {
+	if strings.TrimSpace(os.Getenv("CXT_TEST_DSN")) == "" {
+		test.Fatal("cold recovery requires an explicit CXT_TEST_DSN")
+	}
+	if os.Getenv("CXT_L05_RECOVERY_CHILD") == "" {
+		legacyByteRecoveryPGColdRestart(test, []legacyByteRecoveryPGColdScenario{{name: "normal"}})
+		return
+	}
 	if os.Getenv("CXT_L05_RECOVERY_CHILD") != "1" {
-		test.Skip("only the cold recovery parent launches this child")
+		test.Fatal("invalid cold recovery child mode")
 	}
 	var prior domain.DocRangeIndexJob
 	if err := json.Unmarshal([]byte(os.Getenv("CXT_L05_RECOVERY_PRIOR")), &prior); err != nil || prior.Validate() != nil {

@@ -58,8 +58,8 @@ func TestDocFindSelectorCanonicalAndBounded(test *testing.T) {
 
 func TestDocFindTextUnicodeByteCoordinatesAndOverlap(test *testing.T) {
 	for _, fixture := range []struct{ text, query string }{
-		{"앞🙂Kelvin kelvin KELVIN 뒤", "kelvin"}, {"Σ σ ς 한국어", "σ"}, {"banana ANANA", "ana"},
-		{"quoted \"line\"\n다음 줄", "\"LINE\"\n다"}, {"abc", " "}, {"a🙂a🙂", "🙂"},
+		{"\uc55e🙂Kelvin kelvin KELVIN \ub4a4", "kelvin"}, {"Σ σ ς \ud55c\uad6d\uc5b4", "σ"}, {"banana ANANA", "ana"},
+		{"quoted \"line\"\n\ub2e4\uc74c \uc904", "\"LINE\"\n\ub2e4"}, {"abc", " "}, {"a🙂a🙂", "🙂"},
 	} {
 		got, err := FindDocText(context.Background(), fixture.text, fixture.query, 0, DocFindPageMatches)
 		if err != nil {
@@ -94,7 +94,7 @@ func naiveDocFind(text, query string) []DocFindMatch {
 
 func TestDocFindTextMatchesIndependentUnicodeOracle(test *testing.T) {
 	random := rand.New(rand.NewSource(42))
-	alphabet := []rune("abABΣσςKkK한🙂 ")
+	alphabet := []rune("abABΣσςKkK\ud55c🙂 ")
 	for sample := 0; sample < 1000; sample++ {
 		textRunes := make([]rune, 128)
 		queryRunes := make([]rune, 1+random.Intn(8))
@@ -113,7 +113,7 @@ func TestDocFindTextMatchesIndependentUnicodeOracle(test *testing.T) {
 }
 
 func TestDocFindQueryLimitsAndCancellation(test *testing.T) {
-	for _, query := range []string{"a", " ", "\n", strings.Repeat("한", MaxDocFindQueryRunes)} {
+	for _, query := range []string{"a", " ", "\n", strings.Repeat("\ud55c", MaxDocFindQueryRunes)} {
 		if err := ValidateDocFindQuery(query); err != nil {
 			test.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestDocFindQueryLimitsAndCancellation(test *testing.T) {
 			test.Fatal("invalid query accepted", err)
 		}
 	}
-	if _, err := FindDocText(context.Background(), "한글", "글", 1, 20); !errors.Is(err, ErrValidation) {
+	if _, err := FindDocText(context.Background(), "\ud55c\uae00", "\uae00", 1, 20); !errors.Is(err, ErrValidation) {
 		test.Fatal("split rune accepted", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,9 +135,9 @@ func TestDocFindQueryLimitsAndCancellation(test *testing.T) {
 
 func TestDocFindTextsIncludeDecodedToolsButNotLockedState(test *testing.T) {
 	event := CIREvent{Kind: EventToolCall, ToolName: "shell", ProviderToolName: "Bash", Input: map[string]any{
-		"z": []any{"끝", true}, "command": "printf \"안녕\"\nnext", "count": float64(3), "empty": nil,
+		"z": []any{"\ub05d", true}, "command": "printf \"\uc548\ub155\"\nnext", "count": float64(3), "empty": nil,
 	}, Locked: &LockedBlob{Provider: ProviderCodex, Scheme: "encrypted", Blob: "not searchable"}}
-	want := []string{"Bash", "command", "printf \"안녕\"\nnext", "count", "3", "empty", "null", "z", "끝", "true"}
+	want := []string{"Bash", "command", "printf \"\uc548\ub155\"\nnext", "count", "3", "empty", "null", "z", "\ub05d", "true"}
 	if got := DocFindTexts(event); !reflect.DeepEqual(got, want) {
 		test.Fatal(got, want)
 	}
@@ -145,15 +145,15 @@ func TestDocFindTextsIncludeDecodedToolsButNotLockedState(test *testing.T) {
 	if got := DocFindTexts(event); !reflect.DeepEqual(got, []string{"Visible summary"}) {
 		test.Fatal("locked reasoning leaked into find fields", got)
 	}
-	event.Kind, event.Output = EventToolResult, "한글 <decoded>\nnew line"
-	if got := DocFindTexts(event); !reflect.DeepEqual(got, []string{"한글 <decoded>\nnew line"}) {
+	event.Kind, event.Output = EventToolResult, "\ud55c\uae00 <decoded>\nnew line"
+	if got := DocFindTexts(event); !reflect.DeepEqual(got, []string{"\ud55c\uae00 <decoded>\nnew line"}) {
 		test.Fatal(got)
 	}
 }
 
 func TestDocFindPreviewBoundariesAndPageWireBudget(test *testing.T) {
-	text := strings.Repeat("앞🙂", 100) + strings.Repeat("<", MaxDocFindQueryRunes) + strings.Repeat("뒤🙂", 100)
-	match := DocFindMatch{Offset: len(strings.Repeat("앞🙂", 100)), Length: MaxDocFindQueryRunes}
+	text := strings.Repeat("\uc55e🙂", 100) + strings.Repeat("<", MaxDocFindQueryRunes) + strings.Repeat("\ub4a4🙂", 100)
+	match := DocFindMatch{Offset: len(strings.Repeat("\uc55e🙂", 100)), Length: MaxDocFindQueryRunes}
 	preview, err := WithDocFindPreview(text, match)
 	if err != nil || utf8.RuneCountInString(preview.Preview) != MaxDocFindQueryRunes+64 ||
 		preview.PreviewOffset >= match.Offset || !utf8.ValidString(preview.Preview) ||

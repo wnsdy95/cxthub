@@ -28,10 +28,10 @@ func docPayloadProjectionPGSource(test *testing.T, storage *PostgresStore, ctx c
 	for ordinal := range array {
 		object[fmt.Sprintf("entry-%05d", ordinal)] = map[string]any{
 			"count":  float64(ordinal),
-			"label":  "original <한🙂> \\\"",
+			"label":  "original <\ud55c🙂> \\\"",
 			"values": []any{nil, ordinal%2 == 0},
 		}
-		array[ordinal] = []any{float64(ordinal), "original <한🙂>", ordinal%2 == 0, nil}
+		array[ordinal] = []any{float64(ordinal), "original <\ud55c🙂>", ordinal%2 == 0, nil}
 	}
 	object["create_time"] = "payload-not-a-number"
 	object["provider_metadata"] = map[string]any{"create_time": "payload-only"}

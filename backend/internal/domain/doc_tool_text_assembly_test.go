@@ -109,7 +109,7 @@ func assertDocToolTextAssemblyReplay(test *testing.T, input DocDisplayAssemblyIn
 func TestDocToolLiteralAssemblyFixedAnchorAndBudgets(test *testing.T) {
 	event := HashContent([]byte("original tool event"))
 	anchor := DocFindSpan{From: 7, To: 19}
-	for _, text := range []string{":", "\n", " / ", "12345678", "한🙂"} {
+	for _, text := range []string{":", "\n", " / ", "12345678", "\ud55c🙂"} {
 		test.Run(text, func(test *testing.T) {
 			input, err := newDocToolLiteralAssemblyInput(event, 32, text, anchor)
 			if err != nil || input.validate() != nil || input.Source().EventHash != event || input.Source().EventBytes != 32 || input.Source().TextBytes != len(text) {
@@ -160,7 +160,7 @@ func TestDocToolTextAssemblyRejectsInvalidConstructors(test *testing.T) {
 	}{
 		{event, 20, "", DocFindSpan{From: 1, To: 2}},
 		{event, 20, "123456789", DocFindSpan{From: 1, To: 2}},
-		{event, 20, "한한한", DocFindSpan{From: 1, To: 2}},
+		{event, 20, "\ud55c\ud55c\ud55c", DocFindSpan{From: 1, To: 2}},
 		{event, 20, string([]byte{0xff}), DocFindSpan{From: 1, To: 2}},
 		{"invalid", 20, ":", DocFindSpan{From: 1, To: 2}},
 		{event, 0, ":", DocFindSpan{From: 0, To: 1}},
@@ -190,7 +190,7 @@ func TestDocToolTextAssemblyRejectsInvalidConstructors(test *testing.T) {
 }
 
 func TestDocToolDecodedAssemblyExactEscapesSurrogatesAndSpans(test *testing.T) {
-	for _, token := range []string{`"PUBLIC_BODY_MARKER **not markdown**"`, `" \t\n\r\u00a0 "`, `"a\"b\\c\/d\b\f\n\r\t"`, `"\uD83D\uDE42\uD800X\uDC00\u0000"`, `"한글🙂<>&\u2028\u2029"`} {
+	for _, token := range []string{`"PUBLIC_BODY_MARKER **not markdown**"`, `" \t\n\r\u00a0 "`, `"a\"b\\c\/d\b\f\n\r\t"`, `"\uD83D\uDE42\uD800X\uDC00\u0000"`, "\"\ud55c\uae00🙂<>&\\u2028\\u2029\""} {
 		fixture := newDocToolTextAssemblyFixture(test, token)
 		var text string
 		if json.Unmarshal([]byte(token), &text) != nil {
@@ -210,7 +210,7 @@ func TestDocToolDecodedAssemblyExactEscapesSurrogatesAndSpans(test *testing.T) {
 
 func TestDocToolDecodedAssemblyLateSkippedPathUsesBoundedLookup(test *testing.T) {
 	prefix := strings.Repeat(`\u0061`, 70000) + `/`
-	token := `"` + prefix + strings.Repeat(`\u0062`, 1100) + `/한\ud83d\ude42.go"`
+	token := `"` + prefix + strings.Repeat(`\u0062`, 1100) + "/\ud55c\\ud83d\\ude42.go\""
 	fixture := newDocToolTextAssemblyFixture(test, token)
 	if len(fixture.pages) <= DocRangeDirectoryFanout || fixture.generation.Lookup.Count < 2 {
 		test.Fatal("fixture did not cross page and lookup directories")

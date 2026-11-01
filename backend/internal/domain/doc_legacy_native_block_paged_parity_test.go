@@ -230,7 +230,7 @@ func TestLegacyNativeBlockPagedParityPublicSingletonAndPromotionBoundaries(test 
 }
 
 func TestLegacyNativeBlockPagedParityPublicEmptyNullUnionAndVersions(test *testing.T) {
-	const blocks = `[{"type":"text","text":"head <&> 한🙂\n"},{"type":"opaque","text":"quote \" slash \\"},{"text":"\u0000\t\r\b\f"},{"type":"text"},{"type":"","text":""},{"type":"text","text":"\ud800"},{"type":"text","text":"\u2028\u2029"},{"type":"text","text":"tail"}]`
+	const blocks = "[{\"type\":\"text\",\"text\":\"head <&> \ud55c🙂\\n\"},{\"type\":\"opaque\",\"text\":\"quote \\\" slash \\\\\"},{\"text\":\"\\u0000\\t\\r\\b\\f\"},{\"type\":\"text\"},{\"type\":\"\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"\\ud800\"},{\"type\":\"text\",\"text\":\"\\u2028\\u2029\"},{\"type\":\"text\",\"text\":\"tail\"}]"
 	for _, fixture := range []struct {
 		name     string
 		version  string
@@ -253,7 +253,7 @@ func TestLegacyNativeBlockPagedParityPublicEmptyNullUnionAndVersions(test *testi
 			name: "non-message-blocks-stay-dropped", version: "2", accepted: true,
 			events: `{"kind":"turn","seq":3,"role":"user","blocks":` + blocks + `},` +
 				`{"kind":"tool_call","seq":-1,"input":{"z":1,"a":"<&>"},"blocks":` + blocks + `},` +
-				`{"kind":"tool_result","seq":-1,"output":[true,"한🙂"],"blocks":` + blocks + `},` +
+				"{\"kind\":\"tool_result\",\"seq\":-1,\"output\":[true,\"\ud55c🙂\"],\"blocks\":" + blocks + `},` +
 				`{"kind":"reasoning","seq":0,"redacted_summary":"summary","blocks":` + blocks + `},` +
 				`{"kind":"compaction","seq":2,"blocks":` + blocks + `,"replacement":[{"kind":"message","seq":1,"blocks":` + blocks + `},{"kind":"compaction","seq":-1,"blocks":` + blocks + `,"replacement":[{"kind":"message","seq":0,"blocks":[]}]}]}`,
 		},

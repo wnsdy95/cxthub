@@ -150,7 +150,7 @@ func TestDocMarkdownPlanReviewPathologicalDelimiterPasses(test *testing.T) {
 
 func TestDocMarkdownPlanReviewDeterministicGrammarParity(test *testing.T) {
 	fixtures := []string{"first\n\nsecond", "# \r\u2028\u2029", "- ** a **\t` b `", "# a\n```\n```\n# b", "[a[b](https://x)", "**a***b**", "before\n\n\n\n", "\u0085\n\ufeff\nend"}
-	fragments := []string{"a", "한글🙂", "# ", "###\u00a0", "#### ", "- ", "* ", "01) ", "1.\t", "```", "``", "**", "*", "`", "[", "](https://", "](http://", "](HTTPS://", "](javascript:", "x)", " ", "\t", "\r", "\n", "\n\n", "\u2028", "\u2029", "\ufeff", "\u0085", "\v\f"}
+	fragments := []string{"a", "\ud55c\uae00🙂", "# ", "###\u00a0", "#### ", "- ", "* ", "01) ", "1.\t", "```", "``", "**", "*", "`", "[", "](https://", "](http://", "](HTTPS://", "](javascript:", "x)", " ", "\t", "\r", "\n", "\n\n", "\u2028", "\u2029", "\ufeff", "\u0085", "\v\f"}
 	random := rand.New(rand.NewSource(20261021))
 	for count := 0; count < 600; count++ {
 		var source strings.Builder

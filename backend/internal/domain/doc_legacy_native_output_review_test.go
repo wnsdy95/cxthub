@@ -35,7 +35,7 @@ func legacyNativeOutputReviewString(test *testing.T, prefix string) string {
 		scalar.WriteString(boundary.token)
 	}
 	scalar.WriteString(`\"\\\/\b\f\n\r\t\u0000\u2028\u2029\uDC00`)
-	scalar.WriteString("한<&>\xff\xc0\x80")
+	scalar.WriteString("\ud55c<&>\xff\xc0\x80")
 	const finalSurrogate = `\uD800`
 	padding := payloadBytes - scalar.Len() - len(finalSurrogate)
 	if padding < 0 {

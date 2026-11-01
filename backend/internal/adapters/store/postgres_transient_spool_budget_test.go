@@ -233,7 +233,7 @@ func TestPGTransientSpoolBudgetPublicationRollbackAndRecovery(test *testing.T) {
 			if _, err := storage.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
 				test.Fatal(err)
 			}
-			doc := readBlockDoc(test, string(repo), strings.Repeat("SearchNeedle MiXeD 50%_\\ 한🙂 ", 4096), 1)
+			doc := readBlockDoc(test, string(repo), strings.Repeat("SearchNeedle MiXeD 50%_\\ \ud55c🙂 ", 4096), 1)
 			index, err := doc.ReadIndex()
 			if err != nil {
 				test.Fatal(err)

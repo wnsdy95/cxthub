@@ -22,7 +22,7 @@ type legacyDecoderCheckpointFixture struct {
 func legacyDecoderCheckpointFixtures() []legacyDecoderCheckpointFixture {
 	envelope := `{"cir_version":"2","source_provider":"codex","fidelity":"full"}`
 	event := `{"kind":"message","seq":3,"role":"user","provider_metadata":{"turn_id":"before-cut"},"blocks":[{"type":"text","text":"first"}]}`
-	large := strings.Repeat("한🙂x", 4*ConversationManifestChunkBytes/8)
+	large := strings.Repeat("\ud55c🙂x", 4*ConversationManifestChunkBytes/8)
 	return []legacyDecoderCheckpointFixture{
 		{name: "active-envelope-scalar", raw: `{"envelope":{"cwd":"` + large + `","cir_version":"2","source_provider":"codex","fidelity":"full"},"events":[` + event + `]}`, cut: func(decoder *LegacyNormalizationDecoder) bool {
 			return decoder.envelopeActive && decoder.envelopeNative.scalar != nil && decoder.envelopeNative.scalar.text != nil && decoder.envelopeNative.scalar.text.Len() > 0 && decoder.envelopeNative.scalar.position < decoder.envelopeNative.scalar.end

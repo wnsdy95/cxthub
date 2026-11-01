@@ -117,7 +117,7 @@ func TestLegacyEventEncodingCompletedWorkSurvivesCanceledObservation(test *testi
 }
 
 func TestLegacyEventEncodingStagesBoundedChunksBeforeRecord(test *testing.T) {
-	payload := strings.Repeat("raw <>& 한🙂\n\\\"\u2028", 18000)
+	payload := strings.Repeat("raw <>& \ud55c🙂\n\\\"\u2028", 18000)
 	raw := []byte(fmt.Sprintf(`{"events":[{"kind":"message","role":"user","seq":-3,"blocks":[{"type":"text","text":%q}]}],"envelope":{"cir_version":"2"}}`, payload))
 	canonical, original, err := legacyNormalizationPreparationOracle(raw)
 	if err != nil {

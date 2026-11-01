@@ -62,7 +62,7 @@ func TestDocFindFieldsExactSummarySpan(testContext *testing.T) {
 		{
 			name:   "leading and trailing JSON whitespace",
 			prefix: " \n\t\r{\n\t\"redacted_summary\":  ",
-			value:  `"한글 visible"`,
+			value:  "\"\ud55c\uae00 visible\"",
 			suffix: " \r,\"kind\":\"reasoning\"}\n \t",
 		},
 		{
@@ -149,7 +149,7 @@ func TestDocFindFieldsExactMessageBlocksSpan(testContext *testing.T) {
 		{
 			name:   "escaped keys and values",
 			prefix: `{"k\u0069nd":"mess\u0061ge","bl\u006fcks" : `,
-			value:  `[{"te\u0078t":"한글\n\"quoted\"","type":"text"}]`,
+			value:  "[{\"te\\u0078t\":\"\ud55c\uae00\\n\\\"quoted\\\"\",\"type\":\"text\"}]",
 			suffix: `,"locked":{"blocks":["later nested"]}}`,
 		},
 		{

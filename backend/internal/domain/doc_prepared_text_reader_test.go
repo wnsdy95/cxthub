@@ -179,7 +179,7 @@ func TestDocPreparedTextLookupCodecRejectsInvalidObjects(test *testing.T) {
 }
 
 func TestDocPreparedTextReaderNonliteralSourceExactRanges(test *testing.T) {
-	fixture := newPreparedTextReaderFixture(test, strings.Repeat("한🙂x\n", 16000))
+	fixture := newPreparedTextReaderFixture(test, strings.Repeat("\ud55c🙂x\n", 16000))
 	if adjacentDocDecodedTextPages(fixture.pages[0], fixture.pages[1]) {
 		test.Fatal("fixture must require nonliteral source adjacency")
 	}

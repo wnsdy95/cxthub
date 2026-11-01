@@ -50,7 +50,7 @@ func docRangeEnvelopePublishedPG(test *testing.T, storage *PostgresStore, ctx co
 	repo, _ := docRangeJobPGRepo(test, storage, ctx)
 	fixture := legacyByteStagePGDocument(test, storage, ctx, repo, domain.CIRDocument{
 		Envelope: domain.CIREnvelope{CIRVersion: "2", SourceProvider: domain.ProviderCodex,
-			SessionOriginID: string(repo), Cwd: strings.Repeat("h", headerBytes) + "한🙂", Fidelity: domain.FidelityFull},
+			SessionOriginID: string(repo), Cwd: strings.Repeat("h", headerBytes) + "\ud55c🙂", Fidelity: domain.FidelityFull},
 		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 1, Role: domain.RoleUser,
 			Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo) + strings.Repeat("body", 16<<10)}}}},
 	})

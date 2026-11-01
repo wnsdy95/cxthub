@@ -23,7 +23,7 @@ func legacySourceHeaderBudgetEnvelope(name string) CIREnvelope {
 			envelope.SourceModels[position] = fmt.Sprintf("model-%d", position%17)
 		}
 	case "escaping":
-		envelope.SourceModel = strings.Repeat("한🙂<&>\u2028\u2029\"\\\x00\n", 32769)
+		envelope.SourceModel = strings.Repeat("\ud55c🙂<&>\u2028\u2029\"\\\x00\n", 32769)
 	}
 	return envelope
 }

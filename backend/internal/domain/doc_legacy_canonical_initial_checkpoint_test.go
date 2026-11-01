@@ -71,7 +71,7 @@ func legacyCanonicalInitialCheckpointRoot(test *testing.T, stage *LegacyNormaliz
 }
 
 func TestLegacyCanonicalInitialCheckpointActualStageRoundTrip(test *testing.T) {
-	large := strings.Repeat("초기🙂", LegacyCanonicalEncodingBytes/4)
+	large := strings.Repeat("\ucd08\uae30🙂", LegacyCanonicalEncodingBytes/4)
 	for _, fixture := range []struct {
 		name  string
 		event string

@@ -92,22 +92,26 @@ type legacyNativeCheckpointGoGraphEntry struct {
 	complete    bool
 	fullBacking bool
 	verified    bool
+	synthetic   bool
+	resource    *legacyNativeResourceOwner
 }
 
 type legacyNativeCheckpointGoGraphRegistry struct {
-	source      *legacyNativeCheckpointGoGraphSet
-	root        legacyNativeCheckpointGoGraphLink
-	ranges      *legacyNativeCheckpointGoGraphEntry
-	first       *legacyNativeCheckpointGoGraphEntry
-	last        *legacyNativeCheckpointGoGraphEntry
-	active      *legacyNativeCheckpointGoGraph
-	capture     *legacyNormalizationCapture
-	nodes       int64
-	entries     int64
-	owned       int64
-	sourceBytes int64
-	closed      bool
-	failure     error
+	source         *legacyNativeCheckpointGoGraphSet
+	root           legacyNativeCheckpointGoGraphLink
+	ranges         *legacyNativeCheckpointGoGraphEntry
+	first          *legacyNativeCheckpointGoGraphEntry
+	last           *legacyNativeCheckpointGoGraphEntry
+	active         *legacyNativeCheckpointGoGraph
+	capture        *legacyNormalizationCapture
+	backingCapture *legacyNormalizationCapture
+	layout         *legacyNativeCheckpointGoLayout
+	nodes          int64
+	entries        int64
+	owned          int64
+	sourceBytes    int64
+	closed         bool
+	failure        error
 }
 
 func newLegacyNativeCheckpointGoGraphRegistry() *legacyNativeCheckpointGoGraphRegistry {
@@ -138,6 +142,10 @@ func (registry *legacyNativeCheckpointGoGraphRegistry) retainedBytes() (int64, e
 	metadata, err := registry.metadataBytes(registry.nodes, registry.entries)
 	heap := docRangeHeaderHeapEstimate{bytes: metadata, err: err}
 	heap.include(docRangeHeaderHeapEstimate{bytes: registry.owned})
+	if registry.backingCapture != nil {
+		heap.allocation(1, int64(unsafe.Sizeof(legacyNormalizationMutation{})))
+		heap.allocation(1, int64(unsafe.Sizeof(legacyNormalizationCapture{})))
+	}
 	if registry.source != nil && registry.source.record != nil {
 		if err := registry.source.checkOwnerScope(); err != nil {
 			return 0, err
@@ -152,6 +160,9 @@ func (registry *legacyNativeCheckpointGoGraphRegistry) retainedBytes() (int64, e
 
 func (registry *legacyNativeCheckpointGoGraphRegistry) close() {
 	if registry != nil {
+		if registry.backingCapture != nil {
+			registry.backingCapture.release()
+		}
 		failure := registry.failure
 		*registry = legacyNativeCheckpointGoGraphRegistry{closed: true, failure: failure}
 	}
@@ -210,6 +221,12 @@ func (registry *legacyNativeCheckpointGoGraphRegistry) account(entry *legacyNati
 		return ErrIntegrity
 	}
 	heap := docRangeHeaderHeapEstimate{bytes: native.bytes - entry.descendants}
+	if entry.array != nil && entry.array.resource != nil {
+		heap = entry.array.viewMetadataHeap()
+	}
+	if entry.resource != nil {
+		heap.include(entry.resource.metadataHeap())
+	}
 	heap.include(docRangeHeaderHeapEstimate{bytes: entry.sourceBytes})
 	entry.samples.retained(&heap)
 	if heap.err != nil {
@@ -221,6 +238,9 @@ func (registry *legacyNativeCheckpointGoGraphRegistry) account(entry *legacyNati
 		return next.err
 	}
 	registry.owned, entry.owned, entry.nativeBytes = next.bytes, heap.bytes, native.bytes-entry.descendants
+	if entry.array != nil && entry.array.resource != nil {
+		entry.nativeBytes = entry.array.viewMetadataHeap().bytes
+	}
 	return nil
 }
 
@@ -235,6 +255,8 @@ const (
 	legacyNativeCheckpointGoGraphWaiting
 	legacyNativeCheckpointGoGraphAttach
 	legacyNativeCheckpointGoGraphFinish
+	legacyNativeCheckpointGoGraphWaitingBacking
+	legacyNativeCheckpointGoGraphPrepareBacking
 )
 
 type legacyNativeCheckpointGoGraphFrame struct {
@@ -255,6 +277,8 @@ type legacyNativeCheckpointGoGraphFrame struct {
 	charge      int64
 	phase       uint8
 	fullBacking bool
+	synthetic   bool
+	group       *legacyNativeGoLayoutGroup
 }
 
 func legacyNativeCheckpointGoGraphFrameHeap() docRangeHeaderHeapEstimate {
@@ -300,6 +324,8 @@ type legacyNativeCheckpointGoGraph struct {
 	ready          bool
 	closed         bool
 	failure        error
+	layout         *legacyNativeCheckpointGoLayout
+	resource       *legacyNativeResourcePreparation
 }
 
 func newLegacyNativeCheckpointGoGraph(ctx context.Context, value any, registry *legacyNativeCheckpointGoGraphRegistry, budget int64) (*legacyNativeCheckpointGoGraph, error) {
@@ -369,6 +395,10 @@ func (work *legacyNativeCheckpointGoGraph) retainedBytes() (int64, error) {
 	heap.allocation(1, int64(unsafe.Sizeof(*work)))
 	heap.include(docRangeHeaderHeapEstimate{bytes: work.frameBytes})
 	heap.include(docRangeHeaderHeapEstimate{bytes: work.resultBytes})
+	for _, owned := range []interface{ retainedBytes() (int64, error) }{work.layout, work.resource} {
+		bytes, err := owned.retainedBytes()
+		heap.include(docRangeHeaderHeapEstimate{bytes: bytes, err: err})
+	}
 	return heap.bytes, heap.err
 }
 
@@ -482,6 +512,33 @@ func (work *legacyNativeCheckpointGoGraph) begin(ctx context.Context, frame *leg
 		return work.complete(frame, entry.value)
 	}
 	if key.kind == legacyNativeCheckpointArray {
+		layout := work.registry.layout
+		if layout == nil {
+			layout = work.layout
+		}
+		if layout != nil && layout.ready && !frame.synthetic {
+			visit, _ := layout.lookup(key)
+			if visit == nil || visit.key != key {
+				return ErrConflict
+			}
+			frame.fullBacking = visit.fullBacking
+			if visit.group != nil && visit.group.source != nil {
+				frame.group = visit.group
+				if visit.group.owner == nil {
+					if visit.group.preparing {
+						return ErrIntegrity
+					}
+					visit.group.preparing = true
+					frame.phase = legacyNativeCheckpointGoGraphWaitingBacking
+					if err := work.push(ctx, visit.group.source); err != nil {
+						return err
+					}
+					work.frame.synthetic = true
+					return nil
+				}
+				return work.register(ctx, frame)
+			}
+		}
 		frame.overlap, frame.phase = work.registry.ranges, legacyNativeCheckpointGoGraphOverlap
 		return nil
 	}
@@ -583,18 +640,25 @@ func (work *legacyNativeCheckpointGoGraph) register(ctx context.Context, frame *
 		return err
 	}
 	entry = &legacyNativeCheckpointGoGraphEntry{key: frame.key, source: frame.source,
-		length: frame.length, sourceBytes: frame.sourceHeap.bytes, fullBacking: frame.fullBacking}
+		length: frame.length, sourceBytes: frame.sourceHeap.bytes, fullBacking: frame.fullBacking, synthetic: frame.synthetic}
 	if frame.key.kind == legacyNativeCheckpointObject {
 		entry.object = newLegacyNativeAnyMap()
 	} else {
-		entry.array, err = newLegacyNativeAnyArray(frame.key.capacity)
+		if frame.group != nil {
+			offset := int((frame.key.address - frame.group.start) / uintptr(unsafe.Sizeof(any(nil))))
+			entry.array, err = newLegacyNativeResourceArray(ctx, frame.group.owner, offset, frame.length, frame.key.capacity)
+		} else {
+			entry.array, err = newLegacyNativeAnyArray(frame.key.capacity)
+		}
 		if err != nil {
 			return err
 		}
-		entry.array.decoded = make([]any, 0, frame.key.capacity)
-		entry.array.tracked = true
-		entry.array.estimate.include(legacyNativeAnyArrayBacking(frame.key.capacity))
-		if frame.key.capacity > 0 {
+		if frame.group == nil {
+			entry.array.decoded = make([]any, 0, frame.key.capacity)
+			entry.array.tracked = true
+			entry.array.estimate.include(legacyNativeAnyArrayBacking(frame.key.capacity))
+		}
+		if frame.key.capacity > 0 && frame.group == nil {
 			if err := registry.insertRange(entry, frame.rangeParent); err != nil {
 				return err
 			}
@@ -621,7 +685,15 @@ func (work *legacyNativeCheckpointGoGraph) register(ctx context.Context, frame *
 	if frame.parent == nil {
 		work.root = entry
 	}
-	registry.sourceBytes += frame.sourceHeap.bytes
+	if !entry.synthetic {
+		registry.sourceBytes += frame.sourceHeap.bytes
+	} else {
+		layout := work.registry.layout
+		if layout == nil {
+			layout = work.layout
+		}
+		layout.allocations -= legacyNativeAnyArrayBacking(frame.key.capacity).bytes
+	}
 	return registry.account(entry)
 }
 
@@ -690,7 +762,9 @@ func (work *legacyNativeCheckpointGoGraph) next(ctx context.Context, frame *lega
 		return err
 	}
 	entry.sourceBytes += sourceIncrement.bytes
-	work.registry.sourceBytes += sourceIncrement.bytes
+	if !entry.synthetic {
+		work.registry.sourceBytes += sourceIncrement.bytes
+	}
 	frame.phase = legacyNativeCheckpointGoGraphPush
 	return work.registry.account(entry)
 }
@@ -820,6 +894,9 @@ func (work *legacyNativeCheckpointGoGraph) finish(ctx context.Context, frame *le
 			return ErrIntegrity
 		}
 		entry.array.retained(&metadata)
+		if entry.array.resource != nil {
+			entry.array.finishResource()
+		}
 		value = legacyNativeAnyValue{value: entry.array.values(), heap: entry.array.heap(), excess: entry.array.backingExcess(),
 			owner: legacyNativeAnyValueOwner{array: entry.array, revision: entry.array.revision, bytes: metadata.bytes}}
 	}
@@ -847,6 +924,11 @@ func (work *legacyNativeCheckpointGoGraph) complete(frame *legacyNativeCheckpoin
 	work.frameBytes -= frame.charge
 	work.frame, work.depth = frame.parent, work.depth-1
 	if work.frame != nil {
+		if work.frame.phase == legacyNativeCheckpointGoGraphWaitingBacking {
+			work.frame.group.entry = frame.entry
+			work.frame.child, work.frame.phase = value, legacyNativeCheckpointGoGraphPrepareBacking
+			return nil
+		}
 		if work.frame.phase != legacyNativeCheckpointGoGraphWaiting {
 			return ErrIntegrity
 		}
@@ -1022,6 +1104,24 @@ func (work *legacyNativeCheckpointGoGraph) step(ctx context.Context) (bool, erro
 	if err := work.admit(0, 0); err != nil {
 		return work.fail(err)
 	}
+	if work.registry.layout == nil && work.frame != nil && work.frame.phase == legacyNativeCheckpointGoGraphStart && work.layout == nil && work.frame.key.kind != 0 {
+		var planned docRangeHeaderHeapEstimate
+		planned.allocation(1, int64(unsafe.Sizeof(legacyNativeCheckpointGoLayout{})))
+		planned.allocation(1, int64(unsafe.Sizeof(any(nil))))
+		if planned.err != nil {
+			return work.fail(planned.err)
+		}
+		if err := work.admit(planned.bytes, 0); err != nil {
+			return work.fail(err)
+		}
+		work.layout = &legacyNativeCheckpointGoLayout{work: work, roots: []any{work.frame.source}}
+	}
+	if work.layout != nil && !work.layout.ready {
+		if err := work.layout.step(ctx); err != nil {
+			return work.fail(err)
+		}
+		return false, nil
+	}
 	for actions := 0; actions < 8; actions++ {
 		ready, pause, err := work.advanceBounded(ctx)
 		if err != nil {
@@ -1078,6 +1178,9 @@ func (work *legacyNativeCheckpointGoGraph) advanceBounded(ctx context.Context) (
 			err = work.attach(ctx, frame)
 		case legacyNativeCheckpointGoGraphFinish:
 			err = work.finish(ctx, frame)
+		case legacyNativeCheckpointGoGraphPrepareBacking:
+			pause = true
+			err = work.prepareBacking(ctx, frame)
 		default:
 			err = ErrIntegrity
 		}
@@ -1085,7 +1188,7 @@ func (work *legacyNativeCheckpointGoGraph) advanceBounded(ctx context.Context) (
 	if err != nil {
 		return false, false, err
 	}
-	return work.ready, pause, nil
+	return work.ready, pause || work.verifying, nil
 }
 
 func (work *legacyNativeCheckpointGoGraph) fail(err error) (bool, error) {
@@ -1146,6 +1249,12 @@ func (work *legacyNativeCheckpointGoGraph) close() {
 		} else if work.registry.active == work {
 			work.registry.active = nil
 		}
+	}
+	if work.resource != nil {
+		work.resource.close()
+	}
+	if work.layout != nil {
+		work.layout.close()
 	}
 	failure := work.failure
 	*work = legacyNativeCheckpointGoGraph{closed: true, failure: failure}

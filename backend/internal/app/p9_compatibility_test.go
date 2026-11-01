@@ -203,8 +203,9 @@ func TestP9CoherentDiscoveryAggregates(t *testing.T) {
 	if got, err := svc.Contributions(ctx, []string{"legacy", "root"}); err != nil || got["2026-10-08"] != 1 {
 		t.Fatal(got, err)
 	}
-	got, err := svc.Activity(ctx, []domain.Repository{{ID: "legacy"}, {ID: "root", CreatedAt: time.Now()}})
-	if err != nil || len(got) != 1 || got[0].CommitTotal != 1 || len(got[0].Created) != 1 {
+	createdAt := time.Date(2026, time.October, 8, 0, 0, 0, 0, time.UTC)
+	got, err := svc.Activity(ctx, []domain.Repository{{ID: "legacy"}, {ID: "root", CreatedAt: createdAt}})
+	if err != nil || len(got) != 1 || got[0].Month != "2026-10" || got[0].CommitTotal != 1 || len(got[0].Created) != 1 || got[0].Created[0].Date != "2026-10-08" {
 		t.Fatal(got, err)
 	}
 	st.repos[1].RequiredDocIdentity = "unknown"

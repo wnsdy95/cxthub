@@ -46,7 +46,7 @@ func assertMappedAssemblyReplay(test *testing.T, input DocDisplayAssemblyInput, 
 
 func TestDocDisplayAssemblyFactoriesPreserveRealTextAndOriginalCoordinates(test *testing.T) {
 	for _, token := range []string{
-		`"# A  **한글\uD83D\uDE42** [label](https://hidden.test)"`,
+		"\"# A  **\ud55c\uae00\\uD83D\\uDE42** [label](https://hidden.test)\"",
 		`"a\n\nb\n\n- \uD800\t**X**"`,
 		"\"```\\nraw\\r\\n**literal**\\n```\"",
 		`" \t\n\r "`,
@@ -66,7 +66,7 @@ func TestDocDisplayAssemblyFactoriesPreserveRealTextAndOriginalCoordinates(test 
 	for _, blocks := range []string{
 		`[{"text":"**first"},{},{"text":"last**"}]`,
 		"[{\"text\":\"```\"},{\"text\":\"**literal**\"},{},{\"text\":\"```\"}]",
-		`[{"text":"# **한글\uD83D\uDE42**"},{"text":"a\r\nb"}]`,
+		"[{\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42**\"},{\"text\":\"a\\r\\nb\"}]",
 		`[{"text":"[label](https://hidden"},{"text":".test)"}]`,
 		`[]`,
 	} {
@@ -82,7 +82,7 @@ func TestDocDisplayAssemblyFactoriesPreserveRealTextAndOriginalCoordinates(test 
 		}
 		assertMappedAssemblyReplay(test, input, fixture.input.objects, baseline)
 	}
-	raw := []byte(`{"kind":"message","blocks":[{"type":"image","name":"**한글🙂**","text":"not displayed"}]}`)
+	raw := []byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"image\",\"name\":\"**\ud55c\uae00🙂**\",\"text\":\"not displayed\"}]}")
 	plan, objects := messagePlaceholderFixture(test, raw)
 	input, err := NewDocMessagePlaceholderAssemblyInput(plan)
 	if err != nil {
@@ -185,7 +185,7 @@ func TestDocDisplayAssemblyFactoryRejectsForeignCursorAndCancelledMapping(test *
 }
 
 func FuzzDocDisplayMappedReplaySourceParity(fuzz *testing.F) {
-	for _, source := range []string{"", "# **한글🙂**", "a\n\nb", "[label](https://hidden)", "\u0000\r\t"} {
+	for _, source := range []string{"", "# **\ud55c\uae00🙂**", "a\n\nb", "[label](https://hidden)", "\u0000\r\t"} {
 		fuzz.Add(source)
 	}
 	fuzz.Fuzz(func(test *testing.T, source string) {

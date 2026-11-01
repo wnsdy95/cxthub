@@ -459,8 +459,8 @@ func TestLegacyDocRangeGenerationDirectoryFanout(test *testing.T) {
 }
 
 func TestLegacyDocRangeGenerationBoundsAndOwnedOutput(test *testing.T) {
-	role := strings.Repeat("역🙂", 1024)
-	toolName := strings.Repeat("도구🙂", 1024)
+	role := strings.Repeat("\uc5ed🙂", 1024)
+	toolName := strings.Repeat("\ub3c4\uad6c🙂", 1024)
 	payload := "opaque-locked-only" + strings.Repeat("x", 256<<10)
 	document := CIRDocument{Envelope: CIREnvelope{CIRVersion: "2"}, Events: []CIREvent{
 		{Kind: EventMessage, Seq: 41, Role: Role(role), AgentMessage: true, Blocks: []ContentBlock{{Type: "text", Text: "visible-payload-only" + strings.Repeat("y", 256<<10)}},

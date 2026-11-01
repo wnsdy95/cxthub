@@ -64,7 +64,7 @@ func preparedFindReviewSource(test *testing.T, text string) docViewSource {
 func TestDocPreparedScanMatchesWholeTextAcrossResultAndPageLimits(test *testing.T) {
 	for _, scenario := range []struct{ name, text, query string }{
 		{"many-overlaps", strings.Repeat("z", domain.DocDisplayPageTextBytes-8) + strings.Repeat("a", 100) + strings.Repeat("z", 150_000), "aaa"},
-		{"unicode-max-query", strings.Repeat("z", domain.DocDisplayPageTextBytes-8) + strings.Repeat("界", 270) + strings.Repeat("z", 150_000), strings.Repeat("界", domain.MaxDocFindQueryRunes)},
+		{"unicode-max-query", strings.Repeat("z", domain.DocDisplayPageTextBytes-8) + strings.Repeat("\u754c", 270) + strings.Repeat("z", 150_000), strings.Repeat("\u754c", domain.MaxDocFindQueryRunes)},
 		{"unicode-fold-boundary", strings.Repeat("z", domain.DocDisplayPageTextBytes-1) + "KKk" + strings.Repeat("z", 150_000), "k"},
 		{"escape-runs", strings.Repeat("x\n", 510) + strings.Repeat("a", 100) + strings.Repeat("z", 150_000), "aaa"},
 		{"omitted-whitespace", strings.Repeat(" \t\n", 80_000), "x"},

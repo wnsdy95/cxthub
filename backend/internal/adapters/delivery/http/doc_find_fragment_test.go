@@ -39,7 +39,7 @@ func (port *docFindFragmentHTTPPort) ReadDocFindFragment(ctx context.Context, re
 		projection, index = domain.DocLegacyFindFragmentProjection, request.Index
 	}
 	return domain.DocFindFragmentPage{Projection: projection, Hash: hash, Generation: selection.Generation,
-		Index: index, Offset: request.Offset, Total: 23, JSON: "한🙂", Next: request.Offset + 7, Previous: 0}, nil
+		Index: index, Offset: request.Offset, Total: 23, JSON: "\ud55c🙂", Next: request.Offset + 7, Previous: 0}, nil
 }
 
 func docFindFragmentHTTPServer() (*Server, *docVisibleHTTPBackend, *docFindFragmentHTTPPort) {
@@ -79,7 +79,7 @@ func TestDocFindFragmentHTTPExactContract(test *testing.T) {
 		if err := json.Unmarshal(writer.Body.Bytes(), &page); err != nil {
 			test.Fatal(err)
 		}
-		if writer.Code != http.StatusOK || port.calls != 1 || port.repo != repo || port.hash != hash || port.request.Offset != 7 || port.request.Budget != 65536 || page.Index != 4 || page.Offset != 7 || page.Next != 14 || page.Previous != 0 || page.JSON != "한🙂" {
+		if writer.Code != http.StatusOK || port.calls != 1 || port.repo != repo || port.hash != hash || port.request.Offset != 7 || port.request.Budget != 65536 || page.Index != 4 || page.Offset != 7 || page.Next != 14 || page.Previous != 0 || page.JSON != "\ud55c🙂" {
 			test.Fatal("fragment contract changed", writer.Code, port, page)
 		}
 		if query.Has("legacy") {

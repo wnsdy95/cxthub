@@ -236,7 +236,7 @@ func TestLegacyCanonicalRecoverySourceReadRangeLimitAndEOF(test *testing.T) {
 }
 
 func TestLegacyCanonicalRecoverySourceOwnsOutputAndCopiesReusableCallbacks(test *testing.T) {
-	envelope := []byte(`{"cwd":"한🙂\\\"\n"}`)
+	envelope := []byte("{\"cwd\":\"\ud55c🙂\\\\\\\"\\n\"}")
 	stream := []byte(`{"text":"first"},{"text":"second"}`)
 	wantEnvelope, wantStream := bytes.Clone(envelope), bytes.Clone(stream)
 	oracle := AssembleCanonicalDoc(envelope, [][]byte{stream})
@@ -379,10 +379,10 @@ type legacyCanonicalRecoveryVerified struct {
 func legacyCanonicalRecoveryFixture(test testing.TB, headerPadding, eventPadding, eventCount int) legacyCanonicalRecoveryVerified {
 	test.Helper()
 	document := CIRDocument{Envelope: CIREnvelope{CIRVersion: CIRVersionV2, SourceProvider: ProviderCodex, Fidelity: FidelityFull,
-		Cwd: "한🙂/\"\\\n" + strings.Repeat("h", headerPadding), SourceModels: []string{"same", "same", "last"}}, Events: []CIREvent{}}
+		Cwd: "\ud55c🙂/\"\\\n" + strings.Repeat("h", headerPadding), SourceModels: []string{"same", "same", "last"}}, Events: []CIREvent{}}
 	for ordinal := 0; ordinal < eventCount; ordinal++ {
 		document.Events = append(document.Events, CIREvent{Kind: EventMessage, Seq: 7 + 4*ordinal, Role: RoleUser,
-			Blocks: []ContentBlock{{Type: "text", Text: fmt.Sprintf("recovery-%d:", ordinal) + strings.Repeat("x", eventPadding) + "한🙂\"\\\n"}}})
+			Blocks: []ContentBlock{{Type: "text", Text: fmt.Sprintf("recovery-%d:", ordinal) + strings.Repeat("x", eventPadding) + "\ud55c🙂\"\\\n"}}})
 	}
 	proof, raw := legacyDocByteBackfillDocumentFixture(test, document)
 	plan, err := NewLegacyByteBackfill(context.Background(), proof)

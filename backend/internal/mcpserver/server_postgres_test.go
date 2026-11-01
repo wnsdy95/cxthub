@@ -171,7 +171,7 @@ func TestPGIndependentMCP(t *testing.T) {
 		}
 	}
 	assertContextRead := func(want bool) {
-		for _, tool := range []string{"context_list", "context_history", "context_fetch", "context_search", "git_changes", "git_observations"} {
+		for _, tool := range []string{"context_list", "context_history", "context_fetch", "context_search", "git_changes", "git_observations", "context_link_status"} {
 			body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 42, "method": "tools/call", "params": map[string]any{
 				"name": tool, "arguments": map[string]any{"repository": string(repo.ID), "branch": "main", "ref": string(document.Hash), "query": "independent context"},
 			}})

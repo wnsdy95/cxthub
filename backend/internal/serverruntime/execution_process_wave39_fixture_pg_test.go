@@ -216,7 +216,7 @@ func newExecutionProcessFixtureWithMigrations(test *testing.T, ctx context.Conte
 	if err := os.WriteFile(budgetPath, encoded, 0600); err != nil {
 		test.Fatal("write explicit private fixture budget")
 	}
-	fixture := &executionProcessFixture{dsn: dsn, database: database, migrations: migrations, budgetPath: budgetPath, fingerprint: fingerprint, storage: storage, observer: observer, marker: "wave39 durable worker content 한🙂"}
+	fixture := &executionProcessFixture{dsn: dsn, database: database, migrations: migrations, budgetPath: budgetPath, fingerprint: fingerprint, storage: storage, observer: observer, marker: "wave39 durable worker content \ud55c🙂"}
 	fixture.seed(test, ctx)
 	return fixture
 }

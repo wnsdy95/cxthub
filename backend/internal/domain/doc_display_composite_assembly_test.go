@@ -114,7 +114,7 @@ func TestDocCompositeAssemblyBoundedFragmentsAndEmptyTransitions(test *testing.T
 	source := compositeAssemblyTestSource()
 	for _, limits := range [][2]int{{1, 1}, {3, 2}, {4, 1}, {19, 3}, {DocDisplayPageTextBytes, DocDisplayPageRuns}} {
 		test.Run(fmt.Sprint(limits), func(test *testing.T) {
-			text := "ab한🙂cd"
+			text := "ab\ud55c🙂cd"
 			if limits[0] < utf8.UTFMax {
 				text = "abcdef"
 			}
@@ -314,7 +314,7 @@ func TestDocCompositeAssemblyRejectsCursorTransplantsBeforeReads(test *testing.T
 
 func TestDocCompositeAssemblyUTF8AndInvalidBudgets(test *testing.T) {
 	source := compositeAssemblyTestSource()
-	child := newCompositeAssemblyTestChild(test, source, "unicode", "a한🙂z", false)
+	child := newCompositeAssemblyTestChild(test, source, "unicode", "a\ud55c🙂z", false)
 	input := compositeAssemblyTestInput(test, source, child.input)
 	page, next, err := input.read(context.Background(), input.initial, 2, 1, compositeAssemblyTestLoad)
 	if err != nil || page.Text != "a" {
@@ -470,17 +470,17 @@ func TestDocCompositeAssemblyRejectsInvalidChildOutput(test *testing.T) {
 }
 
 func TestDocCompositeAssemblyRealChildrenAndAssembly(test *testing.T) {
-	stringFixture := prepareDocToolStringFixture(test, `"a\uD83D\uDE42\n한글"`, DocToolStringQuoted)
+	stringFixture := prepareDocToolStringFixture(test, "\"a\\uD83D\\uDE42\\n\ud55c\uae00\"", DocToolStringQuoted)
 	stringInput, err := NewDocToolStringAssemblyInput(stringFixture.plan)
 	if err != nil {
 		test.Fatal(err)
 	}
-	valueFixture := newDocToolValuePlanFixture(test, `{"name":"한🙂","nested":[true,null,17]}`)
+	valueFixture := newDocToolValuePlanFixture(test, "{\"name\":\"\ud55c🙂\",\"nested\":[true,null,17]}")
 	valueInput, err := NewDocToolValueAssemblyInput(valueFixture.plan)
 	if err != nil {
 		test.Fatal(err)
 	}
-	mappedFixture := buildDecodedMarkdownFixture(test, []byte(`{"kind":"reasoning","redacted_summary":"**a\uD83D\uDE42** [한글](https://hidden.test)"}`))
+	mappedFixture := buildDecodedMarkdownFixture(test, []byte("{\"kind\":\"reasoning\",\"redacted_summary\":\"**a\\uD83D\\uDE42** [\ud55c\uae00](https://hidden.test)\"}"))
 	mappedInput, err := NewDocDecodedMarkdownAssemblyInput(mappedFixture.plan)
 	if err != nil {
 		test.Fatal(err)
@@ -638,7 +638,7 @@ func TestDocCompositeAssemblyChildReadReceivesCursorCopy(test *testing.T) {
 }
 
 func TestDocCompositeAssemblyConcurrentDeterministicReplay(test *testing.T) {
-	fixture := prepareDocToolStringFixture(test, `"abc\uD83D\uDE42한글"`, DocToolStringQuoted)
+	fixture := prepareDocToolStringFixture(test, "\"abc\\uD83D\\uDE42\ud55c\uae00\"", DocToolStringQuoted)
 	child, err := NewDocToolStringAssemblyInput(fixture.plan)
 	if err != nil {
 		test.Fatal(err)

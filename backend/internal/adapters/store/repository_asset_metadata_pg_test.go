@@ -66,12 +66,12 @@ func TestPGRepositoryAssetMetadataRoundTripAndRollback(test *testing.T) {
 	}{
 		{name: "json-null", topics: nil},
 		{name: "empty-array", topics: []string{}},
-		{name: "duplicates-and-unicode", topics: []string{"한글", "重复", "한글", "🧭", "e\u0301", "é"}},
+		{name: "duplicates-and-unicode", topics: []string{"\ud55c\uae00", "\u91cd\u590d", "\ud55c\uae00", "🧭", "e\u0301", "é"}},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
 			expected := baseline
-			expected.Description = "  설명 — " + scenario.name + "\nretained whitespace  "
-			expected.Website = "https://example.test/경로?kind=" + scenario.name
+			expected.Description = "  \uc124\uba85 — " + scenario.name + "\nretained whitespace  "
+			expected.Website = "https://example.test/\uacbd\ub85c?kind=" + scenario.name
 			expected.Topics = scenario.topics
 			if err := storage.UpdateRepoAbout(fixture.ctx, repo, expected.Description, expected.Website, expected.Topics); err != nil {
 				test.Fatal(err)
@@ -91,9 +91,9 @@ func TestPGRepositoryAssetMetadataRoundTripAndRollback(test *testing.T) {
 	rollback := errors.New("rollback actual uncommitted repository about writes")
 	err = storage.WithinRepository(fixture.ctx, repo, func(bound context.Context) error {
 		uncommitted := committed
-		uncommitted.Description = "uncommitted 설명"
+		uncommitted.Description = "uncommitted \uc124\uba85"
 		uncommitted.Website = "https://example.test/uncommitted"
-		uncommitted.Topics = []string{"transaction", "한글", "transaction"}
+		uncommitted.Topics = []string{"transaction", "\ud55c\uae00", "transaction"}
 		if err := storage.UpdateRepoAbout(bound, repo, uncommitted.Description, uncommitted.Website, uncommitted.Topics); err != nil {
 			return err
 		}

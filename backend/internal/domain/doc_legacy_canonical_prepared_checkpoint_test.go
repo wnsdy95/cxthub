@@ -15,8 +15,8 @@ func legacyCanonicalPreparedMachineFixture(test *testing.T, numbers bool) (*lega
 	for index := 0; index < 32; index++ {
 		output[strings.Repeat("shared-order-prefix", 700)+fmt.Sprintf("-%04d", index)] = index
 	}
-	output["a-array"] = []any{strings.Repeat("array <&>한🙂", 42000), map[string]any{"next": []any{true, nil, "tail"}}, "last"}
-	output["z-body"] = strings.Repeat("body <&>한🙂\"\n", 42000)
+	output["a-array"] = []any{strings.Repeat("array <&>\ud55c🙂", 42000), map[string]any{"next": []any{true, nil, "tail"}}, "last"}
+	output["z-body"] = strings.Repeat("body <&>\ud55c🙂\"\n", 42000)
 	event := CIREvent{Kind: EventToolResult, Seq: 9, CallID: "prepared-machine", Output: output}
 	raw, err := json.Marshal(event)
 	if err != nil {

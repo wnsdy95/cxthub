@@ -185,7 +185,7 @@ func TestLegacyNativeBlockListGiantFieldsAndHiddenCapacities(test *testing.T) {
 	text.WriteString(strings.Repeat("x", LegacyCanonicalEncodingBytes-5))
 	text.WriteString(`\uD83D\uDE42\uD800x\uDC00\"\\\/\b\f\n\r\t\u0000`)
 	text.WriteString(strings.Repeat("y", 2*ConversationManifestChunkBytes))
-	text.WriteString("한🙂\xff\xc0\x80\xed\xa0\x80\xf0\x9f")
+	text.WriteString("\ud55c🙂\xff\xc0\x80\xed\xa0\x80\xf0\x9f")
 	text.WriteString(`\uD800`)
 	raw := `[{"type":"head"},{"type":"` + strings.Repeat("t", ConversationManifestChunkBytes+73) + `","text":"` + text.String() + `","TEXT":null},null]`
 	got := []ContentBlock{{Type: "old", Text: "head"}, {Type: "kept", Text: "replaced"}, {Type: "hidden", Text: "tail"}, {Type: "still", Text: "hidden"}}[:1]

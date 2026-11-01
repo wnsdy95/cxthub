@@ -121,7 +121,7 @@ func settingsCodexBundlePG(kind, content string) domain.SettingsBundle {
 		Kind: kind,
 		Files: []domain.SettingsFile{
 			{Path: "config.toml", ContentB64: base64.StdEncoding.EncodeToString([]byte(content))},
-			{Path: "skills/local.txt", ContentB64: base64.StdEncoding.EncodeToString([]byte("retained\x00bytes\r\n한글\n"))},
+			{Path: "skills/local.txt", ContentB64: base64.StdEncoding.EncodeToString([]byte("retained\x00bytes\r\n\ud55c\uae00\n"))},
 		},
 		UpdatedAt: time.Date(2026, time.October, 28, 3, 4, 5, 0, time.UTC),
 		UpdatedBy: "settings-fixture-owner",

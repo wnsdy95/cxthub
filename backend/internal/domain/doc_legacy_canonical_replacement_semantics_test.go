@@ -80,7 +80,7 @@ func LegacyReplacementSemanticsCheck(test *testing.T, raw []byte, expectedEvents
 
 func TestLegacyReplacementSemanticsNestedUnionCanonical(test *testing.T) {
 	const children = `{"seq":0,"kind":"turn","role":"developer","provider_metadata":{}},` +
-		`{"seq":1,"kind":"message","role":"assistant","blocks":[{"text":"한🙂<&>\n","type":"text"}],` +
+		"{\"seq\":1,\"kind\":\"message\",\"role\":\"assistant\",\"blocks\":[{\"text\":\"\ud55c🙂<&>\\n\",\"type\":\"text\"}]," +
 		`"compact_summary":true,"agent_message":true,"agent_author":"","agent_recipient":"/root",` +
 		`"locked":{"provider":"codex","scheme":"encrypted_content","blob":"ENC<&>"},` +
 		`"provider_metadata":{"turn_id":"old","create_time":"-0.0012500E+003","ignored":1},"provider_metadata":{"turn_id":"new"}},` +
@@ -90,7 +90,7 @@ func TestLegacyReplacementSemanticsNestedUnionCanonical(test *testing.T) {
 		`{"seq":5,"kind":"compaction","replacement":[{"seq":0,"kind":"message","blocks":null}],"replacement_complete":true},` +
 		`{"seq":6,"kind":"compaction","replacement":null,"replacement_complete":true,"locked":{"provider":"codex","scheme":"encrypted_content","blob":"STATE"}}`
 	const expectedChildren = `{"kind":"turn","provider_metadata":{},"role":"developer","seq":0},` +
-		`{"agent_author":"","agent_message":true,"agent_recipient":"/root","blocks":[{"text":"한🙂\u003c\u0026\u003e\n","type":"text"}],` +
+		"{\"agent_author\":\"\",\"agent_message\":true,\"agent_recipient\":\"/root\",\"blocks\":[{\"text\":\"\ud55c🙂\\u003c\\u0026\\u003e\\n\",\"type\":\"text\"}]," +
 		`"compact_summary":true,"kind":"message","locked":{"blob":"ENC\u003c\u0026\u003e","provider":"codex","scheme":"encrypted_content"},` +
 		`"provider_metadata":{"create_time":-0.0012500E+003,"turn_id":"new"},"role":"assistant","seq":1},` +
 		`{"call_id":"call","input":{},"kind":"tool_call","provider_tool_name":"Read","seq":2,"status":"done","tool_name":"read"},` +

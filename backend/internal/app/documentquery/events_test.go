@@ -19,12 +19,12 @@ import (
 const eventPrefixEnvelopeJSON = `{"captured_at":"2026-10-26T00:00:00Z","cir_version":"1","cwd":"/event-prefix","fidelity":"full","git_branch":"main","session_origin_id":"event-prefix","source_model":"fixture","source_provider":"codex"}`
 
 var eventPrefixGoldenJSON = []string{
-	`{"blocks":[{"text":"앞말 NEEDLE","type":"text"}],"kind":"message","role":"user","seq":10}`,
-	`{"blocks":[{"text":"두번째 🌿 needle","type":"text"}],"kind":"message","role":"assistant","seq":20}`,
+	"{\"blocks\":[{\"text\":\"\uc55e\ub9d0 NEEDLE\",\"type\":\"text\"}],\"kind\":\"message\",\"role\":\"user\",\"seq\":10}",
+	"{\"blocks\":[{\"text\":\"\ub450\ubc88\uc9f8 🌿 needle\",\"type\":\"text\"}],\"kind\":\"message\",\"role\":\"assistant\",\"seq\":20}",
 	`{"call_id":"call-1","input":{"text":"needle tool input"},"kind":"tool_call","seq":30,"tool_name":"lookup"}`,
-	`{"cross_replayable":false,"kind":"reasoning","redacted_summary":"Needle 생각","seq":40}`,
+	"{\"cross_replayable\":false,\"kind\":\"reasoning\",\"redacted_summary\":\"Needle \uc0dd\uac01\",\"seq\":40}",
 	`{"call_id":"call-1","kind":"tool_result","output":"needle tool output","seq":50}`,
-	`{"blocks":[{"text":"마지막 줄\nNEEDLE🙂","type":"text"}],"kind":"message","role":"assistant","seq":60}`,
+	"{\"blocks\":[{\"text\":\"\ub9c8\uc9c0\ub9c9 \uc904\\nNEEDLE🙂\",\"type\":\"text\"}],\"kind\":\"message\",\"role\":\"assistant\",\"seq\":60}",
 	`{"kind":"turn","role":"user","seq":70}`,
 }
 
@@ -305,7 +305,7 @@ func (fixture *eventPrefixFixture) golden(api string) any {
 		return domain.DocFragmentPage{Total: len(fixture.document.events), NextIndex: 2,
 			Fragments: []domain.DocEventFragment{{Index: 0, Complete: true, JSON: fixture.document.json[0]}, {Index: 1, Complete: true, JSON: fixture.document.json[1]}}}
 	case "search":
-		return []domain.DocEventIndex{fixture.document.entry(0, "앞말 NEEDLE"), fixture.document.entry(1, "두번째 🌿 needle")}
+		return []domain.DocEventIndex{fixture.document.entry(0, "\uc55e\ub9d0 NEEDLE"), fixture.document.entry(1, "\ub450\ubc88\uc9f8 🌿 needle")}
 	default:
 		fixture.test.Fatalf("unknown event API %q", api)
 		return nil
@@ -456,7 +456,7 @@ func TestEventPrefixEventSelectionUsesOnlyExactInheritedPrefix(test *testing.T) 
 func TestEventPrefixFragmentGoldenUTF8AndCursors(test *testing.T) {
 	fixture := eventPrefix(test)
 	fixture.legacy.chunked = true
-	hangul := strings.Index(fixture.document.json[1], "두")
+	hangul := strings.Index(fixture.document.json[1], "\ub450")
 	emoji := strings.Index(fixture.document.json[1], "🌿")
 	cases := []struct {
 		name       string
@@ -471,7 +471,7 @@ func TestEventPrefixFragmentGoldenUTF8AndCursors(test *testing.T) {
 		{name: "event limit", limit: 1, budget: 64 << 10, fragments: []domain.DocEventFragment{{Index: 0, Complete: true, JSON: fixture.document.json[0]}}, nextIndex: 1},
 		{name: "event boundary", index: 2, limit: 2, budget: 64 << 10, fragments: []domain.DocEventFragment{{Index: 2, Complete: true, JSON: fixture.document.json[2]}, {Index: 3, Complete: true, JSON: fixture.document.json[3]}}, nextIndex: 4},
 		{name: "ascii continuation", offset: 1, limit: 1, budget: 1024, fragments: []domain.DocEventFragment{{Offset: 1, Complete: true, JSON: fixture.document.json[0][1:]}}, nextIndex: 1},
-		{name: "hangul budget", index: 1, offset: hangul, limit: 2, budget: 4, fragments: []domain.DocEventFragment{{Index: 1, Offset: hangul, JSON: "두"}}, nextIndex: 1, nextOffset: hangul + len("두")},
+		{name: "hangul budget", index: 1, offset: hangul, limit: 2, budget: 4, fragments: []domain.DocEventFragment{{Index: 1, Offset: hangul, JSON: "\ub450"}}, nextIndex: 1, nextOffset: hangul + len("\ub450")},
 		{name: "emoji budget", index: 1, offset: emoji, limit: 2, budget: 4, fragments: []domain.DocEventFragment{{Index: 1, Offset: emoji, JSON: "🌿"}}, nextIndex: 1, nextOffset: emoji + len("🌿")},
 		{name: "trim incomplete emoji", index: 1, offset: emoji - 1, limit: 2, budget: 4, fragments: []domain.DocEventFragment{{Index: 1, Offset: emoji - 1, JSON: " "}}, nextIndex: 1, nextOffset: emoji},
 		{name: "exact eof", index: len(fixture.document.events), limit: 50, budget: 64 << 10, fragments: []domain.DocEventFragment{}, nextIndex: len(fixture.document.events)},
@@ -507,7 +507,7 @@ func eventPrefixPaddedMessage(test *testing.T, sequence, length int) string {
 
 func TestEventPrefixChunkBoundariesAndResponseBudgets(test *testing.T) {
 	test.Run("event response cap", func(test *testing.T) {
-		fixture := eventPrefixWithJSON(test, []string{eventPrefixPaddedMessage(test, 10, domain.ChunkTarget-10), eventPrefixMessageJSON(test, 20, "끝 🌿")})
+		fixture := eventPrefixWithJSON(test, []string{eventPrefixPaddedMessage(test, 10, domain.ChunkTarget-10), eventPrefixMessageJSON(test, 20, "\ub05d 🌿")})
 		fixture.legacy.chunked = true
 		queries := fixture.queries(true)
 		first, err := queries.ReadDocEvents(context.Background(), fixture.repo, fixture.document.document.Hash, "", 0, 100)
@@ -585,7 +585,7 @@ func TestEventPrefixChunkBoundariesAndResponseBudgets(test *testing.T) {
 
 func TestEventPrefixSearchGoldenTextAndExclusiveCursor(test *testing.T) {
 	fixture := eventPrefix(test)
-	texts := []string{"앞말 NEEDLE", "두번째 🌿 needle", "", "Needle 생각", "", "마지막 줄\nNEEDLE🙂", ""}
+	texts := []string{"\uc55e\ub9d0 NEEDLE", "\ub450\ubc88\uc9f8 🌿 needle", "", "Needle \uc0dd\uac01", "", "\ub9c8\uc9c0\ub9c9 \uc904\nNEEDLE🙂", ""}
 	cases := []struct {
 		name      string
 		query     string
@@ -595,12 +595,12 @@ func TestEventPrefixSearchGoldenTextAndExclusiveCursor(test *testing.T) {
 	}{
 		{name: "trimmed case insensitive", query: " \tNEEDLE\n", after: -1, limit: 201, positions: []int{0, 1, 3, 5}},
 		{name: "exclusive cursor", query: "needle", after: 0, limit: 1, positions: []int{1}},
-		{name: "reasoning summary", query: "생각", after: -1, limit: 201, positions: []int{3}},
-		{name: "multiline", query: "줄\nneedle", after: -1, limit: 201, positions: []int{5}},
-		{name: "two unicode runes", query: "앞말", after: -1, limit: 201, positions: []int{0}},
+		{name: "reasoning summary", query: "\uc0dd\uac01", after: -1, limit: 201, positions: []int{3}},
+		{name: "multiline", query: "\uc904\nneedle", after: -1, limit: 201, positions: []int{5}},
+		{name: "two unicode runes", query: "\uc55e\ub9d0", after: -1, limit: 201, positions: []int{0}},
 		{name: "tool fields excluded", query: "tool", after: -1, limit: 201},
 		{name: "exhausted", query: "needle", after: 6, limit: 201},
-		{name: "256 unicode runes", query: strings.Repeat("가", 256), after: -1, limit: 201},
+		{name: "256 unicode runes", query: strings.Repeat("\uac00", 256), after: -1, limit: 201},
 	}
 	for _, scenario := range cases {
 		test.Run(scenario.name, func(test *testing.T) {
@@ -627,7 +627,7 @@ func TestEventPrefixPublicValidationBounds(test *testing.T) {
 			test.Fatalf("event range %v escaped validation/atomic zero: %v", bounds, err)
 		}
 	}
-	insideRune := strings.Index(fixture.document.json[0], "앞") + 1
+	insideRune := strings.Index(fixture.document.json[0], "\uc55e") + 1
 	for _, bounds := range [][4]int{{-1, 0, 1, 4}, {0, -1, 1, 4}, {0, 0, 0, 4}, {0, 0, 51, 4}, {0, 0, 1, 3}, {0, 0, 1, (64 << 10) + 1}, {8, 0, 1, 4}, {7, 1, 1, 4}, {0, len(fixture.document.json[0]), 1, 4}, {0, insideRune, 1, 4}} {
 		page, err := queries.ReadDocFragments(ctx, repo, hash, bounds[0], bounds[1], bounds[2], bounds[3])
 		if !errors.Is(err, domain.ErrValidation) || !reflect.DeepEqual(page, domain.DocFragmentPage{}) {
@@ -638,7 +638,7 @@ func TestEventPrefixPublicValidationBounds(test *testing.T) {
 		query string
 		after int
 		limit int
-	}{{"", -1, 1}, {" 가 ", -1, 1}, {strings.Repeat("가", 257), -1, 1}, {"needle", -2, 1}, {"needle", -1, 0}, {"needle", -1, 202}} {
+	}{{"", -1, 1}, {" \uac00 ", -1, 1}, {strings.Repeat("\uac00", 257), -1, 1}, {"needle", -2, 1}, {"needle", -1, 0}, {"needle", -1, 202}} {
 		hits, err := queries.SearchDocEvents(ctx, repo, hash, bounds.query, bounds.after, bounds.limit)
 		if !errors.Is(err, domain.ErrValidation) || hits != nil {
 			test.Fatalf("search bounds escaped validation: after=%d limit=%d err=%v", bounds.after, bounds.limit, err)

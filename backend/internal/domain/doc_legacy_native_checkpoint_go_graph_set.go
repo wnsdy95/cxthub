@@ -124,6 +124,7 @@ type legacyNativeCheckpointGoGraphSet struct {
 	registry   *legacyNativeCheckpointGoGraphRegistry
 	identity   *legacyNativeCheckpointGraphIdentity
 	prepare    *legacyNativeCheckpointGoGraph
+	layout     *legacyNativeCheckpointGoLayout
 	write      *legacyNativeCheckpointGraphWriter
 	value      legacyNativeAnyValue
 	store      legacyNativeCheckpointIO
@@ -239,7 +240,7 @@ func (work *legacyNativeCheckpointGoGraphSet) retainedBytes() (int64, error) {
 	if work.record == nil {
 		heap.include(legacyNativeCheckpointGoGraphSetLeafHeap(work.value))
 	}
-	for _, owner := range []interface{ retainedBytes() (int64, error) }{work.registry, work.identity, work.prepare, work.write} {
+	for _, owner := range []interface{ retainedBytes() (int64, error) }{work.registry, work.identity, work.prepare, work.write, work.layout} {
 		if owner != nil {
 			retained, err := owner.retainedBytes()
 			heap.include(docRangeHeaderHeapEstimate{bytes: retained, err: err})
@@ -309,6 +310,34 @@ func (work *legacyNativeCheckpointGoGraphSet) checkSource() error {
 }
 
 func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error {
+	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil {
+		remaining, err := work.remaining()
+		if err != nil {
+			return err
+		}
+		shared, err := work.registry.retainedBytes()
+		if err != nil {
+			return err
+		}
+		work.prepare, err = newLegacyNativeCheckpointGoGraph(ctx, work.values[work.position], work.registry, remaining+shared)
+		return err
+	}
+	if work.layout == nil {
+		var planned docRangeHeaderHeapEstimate
+		planned.allocation(1, int64(unsafe.Sizeof(legacyNativeCheckpointGoLayout{})))
+		if planned.err != nil {
+			return planned.err
+		}
+		if err := work.admit(planned.bytes); err != nil {
+			return err
+		}
+		work.layout = &legacyNativeCheckpointGoLayout{parent: work, roots: work.values}
+		work.registry.layout = work.layout
+		return nil
+	}
+	if !work.layout.ready {
+		return work.layout.step(ctx)
+	}
 	if work.position == len(work.values) {
 		if err := work.state.validate(work.state.Binding); err != nil {
 			return err
@@ -324,18 +353,6 @@ func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error
 		return nil
 	}
 	if work.phase == 0 {
-		if work.prepare == nil {
-			remaining, err := work.remaining()
-			if err != nil {
-				return err
-			}
-			shared, err := work.registry.retainedBytes()
-			if err != nil {
-				return err
-			}
-			work.prepare, err = newLegacyNativeCheckpointGoGraph(ctx, work.values[work.position], work.registry, remaining+shared)
-			return err
-		}
 		ready, err := work.prepare.step(ctx)
 		if err != nil || !ready {
 			return err
@@ -446,7 +463,7 @@ func (work *legacyNativeCheckpointGoGraphSet) fail(err error) (bool, error) {
 
 func (work *legacyNativeCheckpointGoGraphSet) close() {
 	if work != nil {
-		for _, owner := range []interface{ close() }{work.prepare, work.write, work.registry, work.identity} {
+		for _, owner := range []interface{ close() }{work.prepare, work.write, work.registry, work.identity, work.layout} {
 			if owner != nil {
 				owner.close()
 			}
