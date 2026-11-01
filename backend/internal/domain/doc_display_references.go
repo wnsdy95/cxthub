@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"slices"
 	"unicode/utf8"
 )
@@ -42,46 +41,65 @@ func DocDisplayHashCandidates(ctx context.Context, raw []byte) (result []Content
 	if len(raw) == 0 || len(raw) > MaxDocDisplayPageBytes || !utf8.Valid(raw) {
 		return nil, ErrDocDisplayReferencesUnsupported
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
 	found := make(map[ContentHash]struct{})
-	depth, roots := 0, 0
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	depth, checked := 0, 0
+	for position := 0; position < len(raw); position++ {
+		if position >= checked {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			checked = position + 4096
 		}
-		token, err := decoder.Token()
-		if errors.Is(err, io.EOF) {
-			if depth != 0 || roots != 1 {
+		switch raw[position] {
+		case '{', '[':
+			depth++
+			if depth > 512 {
 				return nil, ErrDocDisplayReferencesUnsupported
 			}
-			break
-		}
-		if err != nil {
-			return nil, ErrDocDisplayReferencesUnsupported
-		}
-		if depth == 0 {
-			roots++
-			if roots > 1 {
+		case '}', ']':
+			depth--
+		case '"':
+			start, escaped := position, false
+			position++
+			for position < len(raw) && raw[position] != '"' {
+				if position >= checked {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+					checked = position + 4096
+				}
+				if raw[position] == '\\' {
+					escaped = true
+					position++
+				}
+				position++
+			}
+			if position >= len(raw) {
 				return nil, ErrDocDisplayReferencesUnsupported
 			}
-		}
-		if delimiter, ok := token.(json.Delim); ok {
-			switch delimiter {
-			case '{', '[':
-				depth++
-				if depth > 512 {
+			value := raw[start+1 : position]
+			hashBytes := len(contentHashPrefix) + 64
+			if len(value) < hashBytes || len(value) > hashBytes*6 {
+				continue
+			}
+			if escaped {
+				var decoded string
+				if json.Unmarshal(raw[start:position+1], &decoded) != nil {
 					return nil, ErrDocDisplayReferencesUnsupported
 				}
-			case '}', ']':
-				depth--
+				value = []byte(decoded)
 			}
-		} else if value, ok := token.(string); ok {
+			if len(value) != hashBytes || !bytes.HasPrefix(value, []byte(contentHashPrefix)) {
+				continue
+			}
 			hash := ContentHash(value)
 			if ValidateContentHash(hash) == nil {
 				found[hash] = struct{}{}
 			}
 		}
+	}
+	if !json.Valid(raw) {
+		return nil, ErrDocDisplayReferencesUnsupported
 	}
 	result = make([]ContentHash, 0, len(found))
 	for hash := range found {

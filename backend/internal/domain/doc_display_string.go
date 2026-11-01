@@ -131,7 +131,7 @@ func (page DocDisplayPage) Encode(source DocDisplayStringSource) ([]byte, error)
 
 func DecodeDocDisplayPage(source DocDisplayStringSource, expected ContentHash, raw []byte) (DocDisplayPage, error) {
 	var page DocDisplayPage
-	if len(raw) == 0 || len(raw) > MaxDocDisplayPageBytes || ValidateContentHash(expected) != nil || HashContent(raw) != expected || json.Unmarshal(raw, &page) != nil {
+	if len(raw) == 0 || len(raw) > MaxDocDisplayPageBytes || ValidateContentHash(expected) != nil || HashContent(raw) != expected || unmarshalDocDisplayPage(raw, &page) != nil {
 		return DocDisplayPage{}, ErrIntegrity
 	}
 	canonical, err := page.Encode(source)
