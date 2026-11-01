@@ -79,10 +79,14 @@ func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool,
 			value = field.value
 		}
 		work.value, err = newLegacyCanonicalPreparedValueWrite(ctx, value, work.numbers, work.binding, work.store, work.budget-retained)
-		if err == nil {
-			work.phase++
+		if err != nil {
+			return false, err
 		}
-		return false, err
+		work.phase++
+		retained, err = work.retainedBytes()
+		if err != nil || retained+legacyNativeAnyCheckpointScratch > work.budget {
+			return false, ErrDocumentResourceLimit
+		}
 	}
 	if work.phase == 1 || work.phase == 3 {
 		childBytes, err := work.value.retainedBytes()
