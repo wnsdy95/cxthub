@@ -783,6 +783,10 @@ func newLegacyNativeObjectAnyCheckpointRestoreInObject(ctx context.Context, save
 	if saved.Destination != nil {
 		value := *saved.Destination
 		value.Wire = append([]byte(nil), value.Wire...)
+		if value.Inline != nil {
+			value.Inline = make([]byte, len(saved.Destination.Inline))
+			copy(value.Inline, saved.Destination.Inline)
+		}
 		value.Body.Hash = ContentHash(strings.Clone(string(value.Body.Hash)))
 		value.Text.Tree.Ref.Hash = ContentHash(strings.Clone(string(value.Text.Tree.Ref.Hash)))
 		saved.Destination = &value

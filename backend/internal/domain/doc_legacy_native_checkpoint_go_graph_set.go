@@ -389,14 +389,22 @@ func (work *legacyNativeCheckpointGoGraphSet) scalarRoot(ctx context.Context) (b
 	}
 	saved := legacyNativeCheckpointValue{Wire: wire}
 	if snapshot.state.Kind == legacyNativeCheckpointString && snapshot.state.Length > 0 {
-		ref, err := legacyNativeCheckpointWrite(ctx, work.store, []byte(snapshot.text))
-		if err != nil {
-			return false, err
+		numberReference := work.record != nil && work.record.state.HasCreateTime && work.position == legacyCanonicalSourceNumberRoot
+		if snapshot.state.Length <= 64 && snapshot.state.Capacity <= 64 && !numberReference {
+			saved.Inline = []byte(snapshot.text)
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+		} else {
+			ref, err := legacyNativeCheckpointWrite(ctx, work.store, []byte(snapshot.text))
+			if err != nil {
+				return false, err
+			}
+			saved.Text = legacyNativeCheckpointText{Bytes: len(snapshot.text), Tree: legacyNativeCheckpointTree{Ref: ref, Count: snapshot.state.Length}}
 		}
 		if err := work.checkSource(); err != nil {
 			return false, err
 		}
-		saved.Text = legacyNativeCheckpointText{Bytes: len(snapshot.text), Tree: legacyNativeCheckpointTree{Ref: ref, Count: snapshot.state.Length}}
 	}
 	work.identity.nextID++
 	work.state.Roots[work.position] = saved

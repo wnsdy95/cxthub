@@ -172,11 +172,24 @@ func legacyNativeCheckpointGraphRestoreDescriptor(ctx context.Context, saved leg
 	if saved.Text.Bytes < 0 || uint64(saved.Text.Bytes) > legacyNativeValueCheckpointPayloadLimit() {
 		return legacyNativeValueCheckpoint{}, ErrIntegrity
 	}
+	payloadBytes := uint64(saved.Text.Bytes)
+	if saved.Inline != nil {
+		if len(saved.Inline) == 0 || len(saved.Inline) > 64 || saved.Text != (legacyNativeCheckpointText{}) || saved.Body != (legacyNativeCheckpointRef{}) {
+			return legacyNativeValueCheckpoint{}, ErrIntegrity
+		}
+		payloadBytes = uint64(len(saved.Inline))
+	}
 	state, err := decodeLegacyNativeValueCheckpoint(ctx, saved.Wire, legacyNativeValueCheckpointBounds{
-		PayloadBytes: uint64(saved.Text.Bytes), Nodes: legacyNativeCheckpointNodes,
+		PayloadBytes: payloadBytes, Nodes: legacyNativeCheckpointNodes,
 	})
 	if err != nil {
 		return legacyNativeValueCheckpoint{}, err
+	}
+	if saved.Inline != nil {
+		if state.Kind != legacyNativeCheckpointString || state.Reference != 0 || state.Length != payloadBytes || state.Capacity > 64 {
+			return legacyNativeValueCheckpoint{}, ErrIntegrity
+		}
+		return state, nil
 	}
 	switch state.Kind {
 	case legacyNativeCheckpointString:
@@ -202,6 +215,7 @@ func legacyNativeCheckpointGraphRestoreDescriptor(ctx context.Context, saved leg
 func legacyNativeCheckpointGraphRestoreSavedHeap(saved legacyNativeCheckpointValue) docRangeHeaderHeapEstimate {
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(int64(cap(saved.Wire)), 1)
+	heap.allocation(int64(cap(saved.Inline)), 1)
 	heap.allocation(int64(len(saved.Body.Hash)), 1)
 	heap.allocation(int64(len(saved.Text.Tree.Ref.Hash)), 1)
 	return heap
@@ -339,6 +353,7 @@ func (work *legacyNativeCheckpointGraphRestore) push(ctx context.Context, saved 
 	var planned docRangeHeaderHeapEstimate
 	planned.allocation(1, int64(unsafe.Sizeof(legacyNativeCheckpointGraphRestoreFrame{})))
 	planned.allocation(int64(len(saved.Wire)), 1)
+	planned.allocation(int64(len(saved.Inline)), 1)
 	planned.allocation(int64(len(saved.Body.Hash)), 1)
 	planned.allocation(int64(len(saved.Text.Tree.Ref.Hash)), 1)
 	if planned.err != nil {
@@ -348,6 +363,11 @@ func (work *legacyNativeCheckpointGraphRestore) push(ctx context.Context, saved 
 		return err
 	}
 	saved.Wire = append([]byte(nil), saved.Wire...)
+	if saved.Inline != nil {
+		inline := make([]byte, len(saved.Inline))
+		copy(inline, saved.Inline)
+		saved.Inline = inline
+	}
 	saved.Body.Hash = ContentHash(strings.Clone(string(saved.Body.Hash)))
 	saved.Text.Tree.Ref.Hash = ContentHash(strings.Clone(string(saved.Text.Tree.Ref.Hash)))
 	frame := &legacyNativeCheckpointGraphRestoreFrame{parent: work.frame, saved: saved, state: state}
@@ -399,6 +419,25 @@ func (work *legacyNativeCheckpointGraphRestore) begin(ctx context.Context, frame
 	state := frame.state
 	switch state.Kind {
 	case legacyNativeCheckpointString:
+		if frame.saved.Inline != nil {
+			if err := work.admit(legacyNativeScalarAllocationBound(int(state.Capacity))+int64(unsafe.Sizeof(strings.Builder{}))+int64(unsafe.Sizeof("")), 0); err != nil {
+				return err
+			}
+			var builder strings.Builder
+			builder.Grow(int(state.Capacity))
+			_, _ = builder.Write(frame.saved.Inline)
+			if builder.Len() != int(state.Length) || builder.Cap() != int(state.Capacity) && state.Capacity != state.Length {
+				return ErrIntegrity
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			text := builder.String()
+			var heap docRangeHeaderHeapEstimate
+			heap.allocation(1, int64(unsafe.Sizeof(text)))
+			heap.allocation(int64(builder.Cap()), 1)
+			return work.complete(frame, legacyNativeAnyValue{value: text, heap: heap, capacity: builder.Cap(), excess: 2 * int64(builder.Cap()-len(text))})
+		}
 		remaining, err := work.available()
 		if err != nil {
 			return err
@@ -642,7 +681,7 @@ func (work *legacyNativeCheckpointGraphRestore) nextMember(ctx context.Context, 
 		}
 	} else {
 		if found {
-			if frame.member.Key.Wire != nil || frame.member.Key.Body != (legacyNativeCheckpointRef{}) ||
+			if frame.member.Key.Wire != nil || frame.member.Key.Inline != nil || frame.member.Key.Body != (legacyNativeCheckpointRef{}) ||
 				frame.member.Key.Text != (legacyNativeCheckpointText{}) {
 				return ErrIntegrity
 			}

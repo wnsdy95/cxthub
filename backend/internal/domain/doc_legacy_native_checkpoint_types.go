@@ -37,9 +37,10 @@ type legacyNativeCheckpointScalar struct {
 }
 
 type legacyNativeCheckpointValue struct {
-	Wire []byte                     `json:"v"`
-	Body legacyNativeCheckpointRef  `json:"b"`
-	Text legacyNativeCheckpointText `json:"t"`
+	Wire   []byte                     `json:"v"`
+	Body   legacyNativeCheckpointRef  `json:"b"`
+	Text   legacyNativeCheckpointText `json:"t"`
+	Inline []byte                     `json:"i,omitempty"`
 }
 
 type legacyNativeCheckpointMember struct {

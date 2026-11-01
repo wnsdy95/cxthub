@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -80,15 +81,27 @@ func TestLegacyNativeCheckpointGraphShortSnapshotOracle(test *testing.T) {
 			value := legacyNativeCheckpointGraphShortValue(text)
 			expected, before, oldSteps, oldIdentity := legacyNativeCheckpointGraphShortCapture(test, value, true)
 			actual, after, newSteps, newIdentity := legacyNativeCheckpointGraphShortCapture(test, value, false)
-			if !reflect.DeepEqual(actual, expected) || !reflect.DeepEqual(after.objects, before.objects) || after.writes != before.writes || after.transferred != before.transferred || newIdentity != oldIdentity {
+			inline := len(text) > 0 && len(text) <= 64 && value.capacity <= 64
+			if inline {
+				if !bytes.Equal(actual.Wire, expected.Wire) || string(actual.Inline) != text || actual.Text != (legacyNativeCheckpointText{}) || actual.Body != expected.Body || before.writes != 1 || after.writes != 0 || after.transferred != 0 || len(after.objects) != 0 || string(before.objects[expected.Text.Tree.Ref.Hash]) != text {
+					test.Fatal("inline snapshot did not replace exactly the raw leaf CAS")
+				}
+			} else if !reflect.DeepEqual(actual, expected) || !reflect.DeepEqual(after.objects, before.objects) || after.writes != before.writes || after.transferred != before.transferred {
 				test.Fatal("short snapshot changed wire, text tree, objects, capacity or identity")
+			}
+			if newIdentity != oldIdentity {
+				test.Fatal("inline snapshot changed identity")
 			}
 			if len(text) <= 64 && newSteps >= oldSteps || len(text) > 64 && newSteps != oldSteps {
 				test.Fatal("short snapshot did not remove only its empty transitions", oldSteps, newSteps)
 			}
 			bounds := legacyNativeValueCheckpointBounds{PayloadBytes: legacyNativeValueCheckpointPayloadLimit(), Nodes: legacyNativeCheckpointNodes}
 			state, err := decodeLegacyNativeValueCheckpoint(context.Background(), actual.Wire, bounds)
-			if err != nil || state.Length != uint64(len(text)) || state.Capacity != uint64(value.capacity) || after.writes != min(len(text), 1) {
+			writes := min(len(text), 1)
+			if inline {
+				writes = 0
+			}
+			if err != nil || state.Length != uint64(len(text)) || state.Capacity != uint64(value.capacity) || after.writes != writes {
 				test.Fatal("short snapshot changed logical/physical capacity or leaf writes", state, err, after.writes)
 			}
 			test.Logf("bytes=%d original_steps=%d candidate_steps=%d writes=%d", len(text), oldSteps, newSteps, after.writes)
@@ -104,23 +117,28 @@ func TestLegacyNativeCheckpointGraphShortNestedOracle(test *testing.T) {
 	value, _ := legacyNativeGoGraphW85Import(test, source, registry)
 	expected, before, oldSteps, oldIdentity := legacyNativeCheckpointGraphShortCapture(test, value, true)
 	actual, after, newSteps, newIdentity := legacyNativeCheckpointGraphShortCapture(test, value, false)
-	if !reflect.DeepEqual(actual, expected) || !reflect.DeepEqual(after.objects, before.objects) || after.writes != before.writes || newIdentity != oldIdentity || newSteps >= oldSteps {
+	if !bytes.Equal(actual.Wire, expected.Wire) || before.writes != 14 || after.writes != before.writes-8 || newIdentity != oldIdentity || newSteps >= oldSteps {
 		test.Fatal("nested short snapshot changed owner/alias representation or failed to remove transitions", oldSteps, newSteps)
 	}
-	restored := newLegacyNativeCheckpointGraphRestored()
-	defer restored.close()
-	reader, err := newLegacyNativeCheckpointGraphRestore(context.Background(), actual, after.io, restored, legacyNativeGoGraphW85Budget)
-	if err != nil {
-		test.Fatal(err)
+	for _, fixture := range []struct {
+		saved legacyNativeCheckpointValue
+		store *legacyNativeGoGraphSetW85Store
+	}{{expected, before}, {actual, after}} {
+		restored := newLegacyNativeCheckpointGraphRestored()
+		defer restored.close()
+		reader, err := newLegacyNativeCheckpointGraphRestore(context.Background(), fixture.saved, fixture.store.io, restored, legacyNativeGoGraphW85Budget)
+		if err != nil {
+			test.Fatal(err)
+		}
+		defer reader.close()
+		legacyNativeGoGraphSetW85Ready[legacyNativeAnyValue](test, reader, fixture.store, legacyNativeGoGraphW85Budget)
+		result, err := reader.take(context.Background())
+		if err != nil {
+			test.Fatal(err)
+		}
+		inspector := &legacyNativeGoGraphW85Inspector{}
+		inspector.check(test, source, result)
 	}
-	defer reader.close()
-	legacyNativeGoGraphSetW85Ready[legacyNativeAnyValue](test, reader, after, legacyNativeGoGraphW85Budget)
-	result, err := reader.take(context.Background())
-	if err != nil {
-		test.Fatal(err)
-	}
-	inspector := &legacyNativeGoGraphW85Inspector{}
-	inspector.check(test, source, result)
 	test.Logf("original_steps=%d candidate_steps=%d writes=%d identities=%d", oldSteps, newSteps, before.writes, newIdentity)
 }
 
@@ -132,7 +150,7 @@ func TestLegacyNativeCheckpointGraphShortOwnerMutation(test *testing.T) {
 	put := store.Put
 	mutated := false
 	store.Put = func(ctx context.Context, hash ContentHash, body []byte) error {
-		if !mutated && string(body) == "key" {
+		if !mutated {
 			mutated = true
 			if _, err := value.owner.object.putValueGuarded("key", 3, legacyNativeCheckpointGraphShortValue("changed"), nil); err != nil {
 				return err
@@ -187,7 +205,13 @@ func TestLegacyNativeCheckpointGraphShortSnapshotFences(test *testing.T) {
 				}
 				return storage.io.Put(current, hash, body)
 			}
-			work, err := newLegacyNativeCheckpointGraphWriter(ctx, legacyNativeCheckpointGraphShortValue("text"), store, identity, legacyNativeGoGraphW85Budget)
+			value := legacyNativeCheckpointGraphShortValue("text")
+			if scenario == "write" || scenario == "cancel-write" {
+				value.capacity = 65
+				value.heap.allocation(65-12, 1)
+				value.excess = 2 * (65 - 4)
+			}
+			work, err := newLegacyNativeCheckpointGraphWriter(ctx, value, store, identity, legacyNativeGoGraphW85Budget)
 			if err != nil {
 				test.Fatal(err)
 			}
@@ -206,7 +230,6 @@ func TestLegacyNativeCheckpointGraphShortSnapshotFences(test *testing.T) {
 				work.frame.snapshot.text = "changed"
 			case "capacity":
 				work.frame.state.Capacity = 3
-				wantCalls = 1
 			case "budget":
 				retained, err := work.retainedBytes()
 				if err != nil {
