@@ -317,6 +317,8 @@ func legacyNativeCheckpointGoGraphSetScalar(value any) bool {
 		return !math.IsNaN(value) && !math.IsInf(value, 0)
 	case string:
 		return len(value) <= LegacyCanonicalEncodingBytes
+	case map[string]any:
+		return value == nil
 	default:
 		return false
 	}
