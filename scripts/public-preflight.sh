@@ -167,11 +167,8 @@ bash scripts/secret-scan.sh tree
 
 if [ "$MODE" = full ]; then
   bash scripts/secret-scan.sh history
+  python3 scripts/check-public-git-metadata.py
   legacy_re='s''wyg|rii''do|team-context-save-''fork|jy''min'
-  if git log --all --format='%an%n%ae%n%cn%n%ce%n%B' | rg -i -q "$legacy_re"; then
-    echo "[public-check] Git metadata history contains a forbidden identifier." >&2
-    exit 1
-  fi
   while IFS= read -r rev; do
     if git grep -I -i -q -E "$legacy_re" "$rev" -- 2>/dev/null; then
       echo "[public-check] Git blob history contains a forbidden identifier: $rev" >&2

@@ -38,6 +38,8 @@ jobs:
         run: python3 scripts/test-test-go-batches.py
       - name: Verify Go test batch outcomes
         run: python3 scripts/test-go-batches-outcomes.py
+      - name: Verify fail-closed public Git metadata checks
+        run: python3 scripts/test-check-public-git-metadata.py
       - name: Verify repository export and synchronization fences
         run: python3 scripts/test-distribute-repositories.py
       - name: Verify E2E publication fence and failure evidence
