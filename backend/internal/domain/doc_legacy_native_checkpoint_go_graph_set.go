@@ -322,6 +322,35 @@ func legacyNativeCheckpointGoGraphSetScalar(value any) bool {
 	}
 }
 
+func legacyNativeCheckpointGoGraphSetTrivial(value any) bool {
+	if text, ok := value.(string); ok {
+		return text == ""
+	}
+	return legacyNativeCheckpointGoGraphSetScalar(value)
+}
+
+func (work *legacyNativeCheckpointGoGraphSet) checkTrivialRoot(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := work.checkSource(); err != nil {
+		return err
+	}
+	if work.registry.failure != nil {
+		return work.registry.failure
+	}
+	if work.identity.failure != nil {
+		return work.identity.failure
+	}
+	if work.registry.closed || work.identity.closed || work.identity.nextID >= legacyNativeCheckpointNodes {
+		return ErrIntegrity
+	}
+	if work.registry.active != nil || work.registry.first != nil || work.identity.first != nil {
+		return ErrConflict
+	}
+	return work.admit(legacyNativeAnyCheckpointScratch)
+}
+
 func (work *legacyNativeCheckpointGoGraphSet) scalarRoot(ctx context.Context) (bool, error) {
 	if !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position]) {
 		return false, nil
@@ -378,6 +407,26 @@ func (work *legacyNativeCheckpointGoGraphSet) scalarRoot(ctx context.Context) (b
 func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error {
 	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil &&
 		(work.layout != nil && work.layout.ready || !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position])) {
+		start := work.position
+		for roots := 0; roots < 32 && work.position < len(work.values) &&
+			legacyNativeCheckpointGoGraphSetTrivial(work.values[work.position]) && work.registry.first == nil && work.identity.first == nil; roots++ {
+			if err := work.checkTrivialRoot(ctx); err != nil {
+				return err
+			}
+			handled, err := work.scalarRoot(ctx)
+			if err != nil {
+				return err
+			}
+			if !handled {
+				break
+			}
+			if err := work.admit(0); err != nil {
+				return err
+			}
+		}
+		if work.position != start {
+			return nil
+		}
 		if handled, err := work.scalarRoot(ctx); handled || err != nil {
 			return err
 		}

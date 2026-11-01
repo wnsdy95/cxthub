@@ -193,6 +193,27 @@ func (layout *legacyNativeCheckpointGoLayout) push(ctx context.Context, value an
 func (layout *legacyNativeCheckpointGoLayout) discover(ctx context.Context) error {
 	frame := layout.frame
 	if frame == nil {
+		if parent := layout.parent; parent != nil && layout.root == nil && len(layout.roots) <= 32 && parent.prepare == nil &&
+			parent.registry.active == nil && parent.registry.first == nil && parent.identity.first == nil {
+			start := layout.rootIndex
+			for roots := 0; roots < 32 && layout.rootIndex < len(layout.roots) &&
+				legacyNativeCheckpointGoGraphSetTrivial(layout.roots[layout.rootIndex]); roots++ {
+				if err := parent.checkTrivialRoot(ctx); err != nil {
+					return err
+				}
+				value := layout.roots[layout.rootIndex]
+				layout.rootIndex++
+				if err := layout.push(ctx, value); err != nil {
+					return err
+				}
+				if err := layout.admit(0); err != nil {
+					return err
+				}
+			}
+			if layout.rootIndex != start {
+				return nil
+			}
+		}
 		if layout.rootIndex == len(layout.roots) {
 			layout.root, layout.roots = nil, nil
 			layout.nodes, layout.visits = 0, int64(layout.views.length())
