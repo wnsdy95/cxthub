@@ -27,21 +27,22 @@ type ReadServicesConfig struct {
 }
 
 type ReadServices struct {
-	Documents         inbound.DocumentQueries
-	DocumentProfile   inbound.DocumentQueryProfile
-	Context           inbound.ContextQuery
-	ContextProfile    inbound.ContextQueryProfile
-	PreparedMemory    inbound.PreparedMemoryReader
-	MemorySnapshots   inbound.MemorySnapshotQueries
-	MemoryLive        inbound.LiveMemoryQueries
-	Archive           inbound.RepositoryArchiveQueries
-	GitChanges        inbound.GitChangeQuery
-	GitScans          inbound.GitScanQuery
-	CodeApplicability inbound.CodeApplicabilityQuery
-	ConversationFind  inbound.ConversationFindQuery
-	memoryOwner       *memoryReadOwner
-	segmentCache      repositoryquery.SegmentCache
-	deliveryCache     memoryquery.DeliveryCache
+	Documents            inbound.DocumentQueries
+	DocumentProfile      inbound.DocumentQueryProfile
+	Context              inbound.ContextQuery
+	ContextProfile       inbound.ContextQueryProfile
+	PreparedMemory       inbound.PreparedMemoryReader
+	MemorySnapshots      inbound.MemorySnapshotQueries
+	MemoryLive           inbound.LiveMemoryQueries
+	Archive              inbound.RepositoryArchiveQueries
+	GitChanges           inbound.GitChangeQuery
+	GitScans             inbound.GitScanQuery
+	GitAssociationStatus inbound.GitAssociationStatusQuery
+	CodeApplicability    inbound.CodeApplicabilityQuery
+	ConversationFind     inbound.ConversationFindQuery
+	memoryOwner          *memoryReadOwner
+	segmentCache         repositoryquery.SegmentCache
+	deliveryCache        memoryquery.DeliveryCache
 }
 
 func NewReadServices(config ReadServicesConfig) (*ReadServices, error) {
@@ -143,6 +144,10 @@ func NewReadServices(config ReadServicesConfig) (*ReadServices, error) {
 		return nil, err
 	}
 	services.GitChanges, services.GitScans, services.CodeApplicability, err = newReadServicesEvidenceQueries(config, archiveScope, transactions != nil)
+	if err != nil {
+		return nil, err
+	}
+	services.GitAssociationStatus, err = newGitAssociationStatusQueries(config.Metadata, archiveScope, transactions != nil)
 	if err != nil {
 		return nil, err
 	}

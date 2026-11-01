@@ -4,15 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
+func (server *Server) SetGitAssociationStatus(query inbound.GitAssociationStatusQuery) error {
+	if query == nil {
+		return domain.ErrGitAssociationStatusUnavailable
+	}
+	switch value := reflect.ValueOf(query); value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return domain.ErrGitAssociationStatusUnavailable
+		}
+	}
+	server.gitAssociationStatus = query
+	return nil
+}
+
 func (server *Server) gitAssociationStatusPage(ctx context.Context, repo domain.Repo, args toolArgs) (string, error) {
-	query, supported := server.context.(inbound.GitAssociationStatusQuery)
-	if !supported {
+	if server.gitAssociationStatus == nil {
 		return "", domain.ErrGitAssociationStatusUnavailable
 	}
 	if args.Kind == "" {
@@ -35,7 +49,7 @@ func (server *Server) gitAssociationStatusPage(ctx context.Context, repo domain.
 	if err := selection.Validate(); err != nil {
 		return "", err
 	}
-	page, err := query.GetGitAssociationStatus(ctx, repo.ID, selection)
+	page, err := server.gitAssociationStatus.GetGitAssociationStatus(ctx, repo.ID, selection)
 	if err != nil {
 		return "", err
 	}

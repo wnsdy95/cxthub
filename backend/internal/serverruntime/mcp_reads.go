@@ -40,6 +40,7 @@ func (runtime *Runtime) configureMCPReads(profile documentquery.Profile, reposit
 	runtime.Archive = queries.Archive
 	runtime.GitChanges = queries.GitChanges
 	runtime.GitScans = queries.GitScans
+	runtime.GitAssociationStatus = queries.GitAssociationStatus
 	runtime.CodeApplicability = queries.CodeApplicability
 	runtime.ConversationFind = queries.ConversationFind
 	return nil
