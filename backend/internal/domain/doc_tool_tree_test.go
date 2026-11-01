@@ -189,7 +189,7 @@ func assertDocToolTreeTopology(test testing.TB, fixture *docToolTreeFixture) {
 }
 
 func TestDocToolTreeAllJSONTypes(test *testing.T) {
-	for _, value := range []string{`{}`, `[]`, `""`, `"한글\ud83d\ude42\ud800\n"`, `0`, `-0`, `123.4e-20`, `1e99999`, `null`, `true`, `false`, `[{},[],"text",0,null,true,false]`} {
+	for _, value := range []string{`{}`, `[]`, `""`, "\"\ud55c\uae00\\ud83d\\ude42\\ud800\\n\"", `0`, `-0`, `123.4e-20`, `1e99999`, `null`, `true`, `false`, `[{},[],"text",0,null,true,false]`} {
 		test.Run(value, func(test *testing.T) {
 			fixture := newDocToolTreeFixture(test, ` {"kind":"tool_result","output":`+value+`} `)
 			if err := fixture.scan(test); err != nil {
@@ -379,7 +379,7 @@ func TestDocToolTreeSourceCostAndMetadataRetention(test *testing.T) {
 }
 
 func TestDocToolTreeLongLexicalBoundaries(test *testing.T) {
-	for _, suffix := range []string{`\u0061`, `\ud83d\ude42`, `\"`, `\\`, "한", "🙂"} {
+	for _, suffix := range []string{`\u0061`, `\ud83d\ude42`, `\"`, `\\`, "\ud55c", "🙂"} {
 		for _, object := range []bool{false, true} {
 			prefix := `"` + strings.Repeat("x", DocToolTreeStepSourceBytes-2)
 			value := prefix + suffix + `PRIVATE_BODY_MARKER"`
@@ -401,7 +401,7 @@ func TestDocToolTreeLongLexicalBoundaries(test *testing.T) {
 }
 
 func TestDocToolTreeCheckpointTokenBoundaries(test *testing.T) {
-	for _, token := range []string{`null`, `true`, `false`, `-12.5e+23`, `"\u0061"`, `"한🙂"`, `"\ud83d\ude42"`} {
+	for _, token := range []string{`null`, `true`, `false`, `-12.5e+23`, `"\u0061"`, "\"\ud55c🙂\"", `"\ud83d\ude42"`} {
 		for width := 1; width < len(token); width++ {
 			value := `{"k":` + strings.Repeat(" ", DocToolTreeStepSourceBytes-5-width) + token + `}`
 			fixture := newDocToolTreeFixture(test, `{"kind":"tool_result","output":`+value+`}`)

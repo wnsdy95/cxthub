@@ -29,14 +29,14 @@ func docSourceHeaderPGSource(test *testing.T, storage *PostgresStore, ctx contex
 	for ordinal := range models {
 		models[ordinal] = "m"
 	}
-	models[0], models[len(models)-1] = "<한🙂> \"\\\n", "last-model"
+	models[0], models[len(models)-1] = "<\ud55c🙂> \"\\\n", "last-model"
 	document := domain.CIRDocument{
 		Envelope: domain.CIREnvelope{CIRVersion: "2", SourceProvider: domain.ProviderCodex,
 			SourceModel: strings.Repeat("m", headerBytes), SourceModels: models,
 			SessionOriginID: string(repo), Fidelity: domain.FidelityFull},
 		Events: []domain.CIREvent{
 			{Kind: domain.EventMessage, Seq: 2, Role: domain.RoleUser,
-				Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo) + strings.Repeat("x", 1<<20) + "한🙂\"\\\n<>&"}}},
+				Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo) + strings.Repeat("x", 1<<20) + "\ud55c🙂\"\\\n<>&"}}},
 			{Kind: domain.EventMessage, Seq: 9, Role: domain.RoleAssistant,
 				Blocks: []domain.ContentBlock{{Type: "text", Text: "original answer"}}},
 		},

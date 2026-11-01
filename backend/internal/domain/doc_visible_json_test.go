@@ -59,7 +59,7 @@ func TestCanonicalDocVisibleObjectJSONShapes(test *testing.T) {
 	for _, value := range []any{docVisiblePage{}, docVisiblePage{Units: []DocVisibleUnit{}}, docVisibleDirectory{}, docVisibleDirectory{Children: []docVisibleSpan{}}} {
 		assertDocVisibleJSONParity(test, value)
 	}
-	hashes := []string{"", "sha256:" + strings.Repeat("a", 64), "<>&", "한글🙂", "\"\\/\b\f\n\r\t\x00\x1f", "\u2028\u2029", "\\u003c", "\xff", "\xfe", "\ufffd", "prefix\xc0\xafsuffix", "\xed\xa0\x80", "\xf0\x9f"}
+	hashes := []string{"", "sha256:" + strings.Repeat("a", 64), "<>&", "\ud55c\uae00🙂", "\"\\/\b\f\n\r\t\x00\x1f", "\u2028\u2029", "\\u003c", "\xff", "\xfe", "\ufffd", "prefix\xc0\xafsuffix", "\xed\xa0\x80", "\xf0\x9f"}
 	for boundaryIndex, boundary := range boundaries {
 		for _, count := range []int{1, 2, 127, 128, 129} {
 			page := docVisiblePage{Start: boundary, Units: make([]DocVisibleUnit, count)}
@@ -231,7 +231,7 @@ func TestCanonicalDocVisibleObjectJSONRandomized(test *testing.T) {
 }
 
 func FuzzCanonicalDocVisibleObjectJSON(fuzzer *testing.F) {
-	for _, seed := range [][]byte{nil, {0}, {1}, {127}, {128}, {129}, bytes.Repeat([]byte{0xff}, 256), []byte("<>&\"\\\n한글\u2028\xff")} {
+	for _, seed := range [][]byte{nil, {0}, {1}, {127}, {128}, {129}, bytes.Repeat([]byte{0xff}, 256), []byte("<>&\"\\\n\ud55c\uae00\u2028\xff")} {
 		fuzzer.Add(seed)
 	}
 	fuzzer.Fuzz(func(test *testing.T, data []byte) {

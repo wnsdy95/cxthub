@@ -64,7 +64,7 @@ func TestLegacyJSONValueScannerOracleEverySplit(test *testing.T) {
 		{"empty_string", `""`, true},
 		{"escapes", `"a\"\\\/\b\f\n\r\t\u0000\u00aB"`, true},
 		{"surrogates", `"\uD800\udfff\ud800x\udfff"`, true},
-		{"unicode", `"한글 😀"`, true},
+		{"unicode", "\"\ud55c\uae00 😀\"", true},
 		{"invalid_utf8", "\"\xff\xc0\x80\xed\xa0\x80\"", true},
 		{"invalid_utf8_key", "{\"\xff\":\"\xfe\"}", true},
 		{"empty_object", `{}`, true},

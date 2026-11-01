@@ -43,7 +43,7 @@ func TestLegacyDerivedRangeMetadataOutputParity(test *testing.T) {
 		}},
 		{name: "three-byte-blocks", build: legacyDocByteGenerationLargeFixture},
 		{name: "split-utf8", build: func(test testing.TB) (VerifiedSessionDoc, []byte) {
-			return legacyDocByteBackfillBoundaryFixture(test, "한🙂")
+			return legacyDocByteBackfillBoundaryFixture(test, "\ud55c🙂")
 		}},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {

@@ -31,7 +31,7 @@ const sources: DocumentFindSource[] = [
 
 function match(source: DocumentFindSource, change: Partial<DocFindMatch> = {}): DocFindMatch {
   return { prepared_page: 0, event_index: 2, field: 0, byte_offset: 4, byte_length: 6, raw: false,
-    preview: '앞 NeedLE🙂 뒤', preview_byte_offset: 0, reveal_cursor: source.protocol === 'legacy' ? '' : 'opaque_reveal-token',
+    preview: '\uc55e NeedLE🙂 \ub4a4', preview_byte_offset: 0, reveal_cursor: source.protocol === 'legacy' ? '' : 'opaque_reveal-token',
     source_range: { from: 120_000, to: 120_006 }, ...change };
 }
 
@@ -47,7 +47,7 @@ function frontier(index = 2, preparedPage = 0, byte = 0, descriptor = generation
 }
 
 test('prepared display root and legacy requests opt in explicitly on initial and opaque continuation reads', () => {
-  const query = ' "Needle" + & ?\n한🙂 ';
+  const query = ' "Needle" + & ?\n\ud55c🙂 ';
   for (const source of sources) {
     const before = structuredClone(source);
     const initial = source.protocol === 'legacy'

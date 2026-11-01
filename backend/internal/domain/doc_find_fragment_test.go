@@ -91,7 +91,7 @@ func TestDocFindFragmentSelectionRejectsMixedScopeAndNoncanonicalTokens(test *te
 
 func TestDocFindFragmentWireContract(test *testing.T) {
 	page := DocFindFragmentPage{Projection: DocLegacyFindFragmentProjection, Hash: HashContent([]byte("doc")), Index: 4, Offset: 7,
-		Total: 23, JSON: "한🙂", Next: 14, Previous: 0}
+		Total: 23, JSON: "\ud55c🙂", Next: 14, Previous: 0}
 	raw, err := json.Marshal(page)
 	if err != nil {
 		test.Fatal(err)

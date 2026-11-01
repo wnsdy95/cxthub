@@ -119,7 +119,7 @@ func TestPGDocumentHTTPResponseRetainsPermitAfterSnapshotUntilWrite(test *testin
 	}
 	document := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1", SessionOriginID: string(repo.ID),
 		SourceProvider: domain.ProviderCodex, Fidelity: domain.FidelityFull}, Events: []domain.CIREvent{
-		{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "retained needle 한🙂"}}},
+		{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "retained needle \ud55c🙂"}}},
 		{Kind: domain.EventMessage, Role: domain.RoleAssistant, Seq: 1, Blocks: []domain.ContentBlock{{Type: "text", Text: "second needle response"}}},
 	}}
 	manifest, chunks, err := domain.ConversationManifestForCIR(document)

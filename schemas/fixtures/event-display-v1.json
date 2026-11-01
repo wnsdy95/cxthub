@@ -9,9 +9,9 @@
     { "name": "seed joins before Markdown", "source": "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"[cxt seed] Branch-switch context: main\"},{\"type\":\"text\",\"text\":\"**next**\"}]}", "text": "[cxt seed] Branch-switch context: main\nnext" },
     { "name": "compact empty middle block", "source": "{\"kind\":\"message\",\"compact_summary\":true,\"blocks\":[{\"type\":\"text\",\"text\":\"left\"},{\"type\":\"text\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"right\"}]}", "text": "left\n\nright" },
     { "name": "non-text block", "source": "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"left\"},{\"type\":\"image\",\"name\":\"diagram\"},{\"type\":\"text\",\"text\":\"right\"}]}", "text": "left\n\n[image: diagram]\n\nright" },
-    { "name": "public reasoning only", "source": "{\"kind\":\"reasoning\",\"redacted_summary\":\"# 공개\\n**메모**\",\"locked\":{\"blob\":\"invisible secret\"}}", "text": "공개\n\n메모" },
+    { "name": "public reasoning only", "source": "{\"kind\":\"reasoning\",\"redacted_summary\":\"# \uacf5\uac1c\\n**\uba54\ubaa8**\",\"locked\":{\"blob\":\"invisible secret\"}}", "text": "\uacf5\uac1c\n\n\uba54\ubaa8" },
     { "name": "empty reasoning omitted", "source": "{\"kind\":\"reasoning\",\"redacted_summary\":\"\\ufeff \\t\",\"locked\":{\"blob\":\"secret\"}}", "text": "" },
-    { "name": "literal code and escapes", "source": "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"`한\\uAE00` **🙂** [label](https://hidden.example)\"}]}", "text": "한글 🙂 label" },
+    { "name": "literal code and escapes", "source": "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"`\ud55c\\uAE00` **🙂** [label](https://hidden.example)\"}]}", "text": "\ud55c\uae00 🙂 label" },
     { "name": "CR preserves literal paragraph", "source": "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"before\\r\\nafter\"}]}", "text": "before\r\nafter" }
   ]
 }

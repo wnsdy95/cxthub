@@ -75,7 +75,7 @@ func TestMarshalDocMessageJSONCanonicalParity(test *testing.T) {
 			})
 		}
 	}
-	for caseIndex, text := range []string{"", "한글🙂 e\u0301", "<>&\u2028\u2029\x00\x01\"\\/", "\ufffd", "\xff", "\xed\xa0\x80", "\ufffd\xff<&>"} {
+	for caseIndex, text := range []string{"", "\ud55c\uae00🙂 e\u0301", "<>&\u2028\u2029\x00\x01\"\\/", "\ufffd", "\xff", "\xed\xa0\x80", "\ufffd\xff<&>"} {
 		for _, field := range []string{"source", "kind", "hash"} {
 			test.Run(fmt.Sprintf("text-%d/%s", caseIndex, field), func(test *testing.T) {
 				source, kind, hash := "source", "markdown", "hash"
@@ -96,7 +96,7 @@ func TestMarshalDocMessageJSONCanonicalParity(test *testing.T) {
 func FuzzMarshalDocMessageJSONCanonicalParity(fuzz *testing.F) {
 	fuzz.Add("source", "markdown", "hash", int64(1), uint16(7))
 	fuzz.Add("\xff", "\ufffd", "\xed\xa0\x80", int64(1<<53+1), uint16(65))
-	fuzz.Add("한글🙂", "<>&\u2028\u2029\x00\"\\/", "\ufffd\xff", int64(-1<<63), uint16(0))
+	fuzz.Add("\ud55c\uae00🙂", "<>&\u2028\u2029\x00\"\\/", "\ufffd\xff", int64(-1<<63), uint16(0))
 	fuzz.Add("valid", "valid", "valid", int64(1<<63-1), uint16(66))
 	fuzz.Fuzz(func(test *testing.T, source, kind, hash string, number int64, shape uint16) {
 		checkDocMessageJSONInputs(test, int(number), shape, source, kind, hash)

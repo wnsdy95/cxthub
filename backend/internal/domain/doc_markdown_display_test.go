@@ -62,7 +62,7 @@ func TestDocMarkdownDisplaySearchAndCanonicalSourceComposition(test *testing.T) 
 	for _, scenario := range []struct{ source, query, original string }{
 		{"before **bold** after", "before bold after", "before **bold** after"},
 		{"# Alpha  **beta**\t end", "Alpha beta end", "Alpha  **beta**\t end"},
-		{"한글 **🙂 끝**", "🙂 끝", "🙂 끝"},
+		{"\ud55c\uae00 **🙂 \ub05d**", "🙂 \ub05d", "🙂 \ub05d"},
 		{"before [label](https://hidden.example/needle) after", "before label after", "before [label](https://hidden.example/needle) after"},
 		{"first\n# second", "first\n\nsecond", "first\n# second"},
 	} {
@@ -110,7 +110,7 @@ func TestDocMarkdownDisplayLimitsCancellationAndUTF8(test *testing.T) {
 			test.Fatal("invalid UTF-8 accepted", err)
 		}
 	}
-	display, err := BuildDocMarkdownDisplay(context.Background(), "🙂 한글")
+	display, err := BuildDocMarkdownDisplay(context.Background(), "🙂 \ud55c\uae00")
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestDocMarkdownDisplayMalformedAndDenseInputsRemainBounded(test *testing.T)
 }
 
 func FuzzDocMarkdownDisplay(fuzz *testing.F) {
-	for _, source := range []string{"# heading", "**bold**", "before [label](https://host/path) after", "# bad\u2028heading", "- a\r\n- b", "```\n\r\n```", "", "🙂\n\n한"} {
+	for _, source := range []string{"# heading", "**bold**", "before [label](https://host/path) after", "# bad\u2028heading", "- a\r\n- b", "```\n\r\n```", "", "🙂\n\n\ud55c"} {
 		fuzz.Add(source)
 	}
 	fuzz.Fuzz(func(test *testing.T, source string) {

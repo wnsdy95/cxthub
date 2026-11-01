@@ -158,8 +158,8 @@ func eventMessageChildTestJSON(test *testing.T, value any) []byte {
 }
 
 func TestDocEventMessageChildRestartAndTypedParity(test *testing.T) {
-	text := "# PUBLIC_BODY_MARKER\n\n" + strings.Repeat("**한글🙂** [label](https://hidden.test)\n\n", 1800)
-	name := "PUBLIC_BODY_MARKER **literal**\n" + strings.Repeat("`한글🙂` [x](hidden)  ", 3000) + " tail  "
+	text := "# PUBLIC_BODY_MARKER\n\n" + strings.Repeat("**\ud55c\uae00🙂** [label](https://hidden.test)\n\n", 1800)
+	name := "PUBLIC_BODY_MARKER **literal**\n" + strings.Repeat("`\ud55c\uae00🙂` [x](hidden)  ", 3000) + " tail  "
 	raw := []byte(`{"kind":"message","opaque":{"secret":"` + strings.Repeat("PRIVATE_BODY_MARKER", 5000) + `"},"blocks":[{},{"type":"text","text":null},{"type":"text","text":` + string(eventMessageChildTestJSON(test, text)) + `},{"type":"tool","name":` + string(eventMessageChildTestJSON(test, name)) + `}]}`)
 	fixture := newEventMessageChildTestFixture(test, raw)
 	expected := messageDisplayChildren(test, raw, fixture.inputs, make(map[ContentHash][]byte))

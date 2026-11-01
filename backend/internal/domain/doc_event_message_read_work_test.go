@@ -19,7 +19,7 @@ func eventMessageReadWorkBody() []byte {
 		if index%7 == 0 {
 			fmt.Fprintf(&raw, `{"type":"image","name":"asset %d","opaque":"private"}`, index)
 		} else {
-			fmt.Fprintf(&raw, `{"type":"text","text":"**block %d 한🙂**","opaque":"private"}`, index)
+			fmt.Fprintf(&raw, "{\"type\":\"text\",\"text\":\"**block %d \ud55c🙂**\",\"opaque\":\"private\"}", index)
 		}
 	}
 	raw.WriteString(`]}`)

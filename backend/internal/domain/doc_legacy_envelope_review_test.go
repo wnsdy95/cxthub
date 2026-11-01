@@ -129,7 +129,7 @@ func legacyEnvelopeReviewString(test *testing.T, prefix string) string {
 		raw.WriteString(boundary.token)
 	}
 	raw.WriteString(`\"\\\/\b\f\n\r\t\u0000\u2028\u2029\uD800x\uDC00`)
-	raw.WriteString("한<&>\xff\xc0\x80\xed\xa0\x80\xf0\x9f")
+	raw.WriteString("\ud55c<&>\xff\xc0\x80\xed\xa0\x80\xf0\x9f")
 	raw.WriteByte('"')
 	return raw.String()
 }

@@ -88,7 +88,7 @@ func docDisplayRangeValidationLiteralPage() DocDisplayPage {
 	}{
 		{text: "ab", width: 2, linear: true},
 		{text: "\n", width: 2},
-		{text: "한", width: 6},
+		{text: "\ud55c", width: 6},
 		{text: "🙂", width: 12},
 		{text: "�", width: 6},
 		{text: "\t", width: 2},
@@ -107,7 +107,7 @@ func docDisplayRangeValidationLiteralPage() DocDisplayPage {
 func TestDocDisplaySourceRangeValidationReferenceParity(test *testing.T) {
 	pages := []DocDisplayPage{
 		docDisplayRangeValidationLiteralPage(),
-		{Text: "ab한🙂\tZ&", Runs: []DocDisplayRun{
+		{Text: "ab\ud55c🙂\tZ&", Runs: []DocDisplayRun{
 			{To: 2, SourceFrom: 40, SourceTo: 42, Linear: true},
 			{To: 5, SourceFrom: 1, SourceTo: 4},
 			{To: 9, SourceFrom: 100, SourceTo: 111},
@@ -206,7 +206,7 @@ func TestDocDisplaySourceRangeLiteralValidationRemainsVersionSpecific(test *test
 		{name: "source-gap", text: "ab", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 2, SourceFrom: 2, SourceTo: 3, Linear: true}}},
 		{name: "two-byte-unescaped", text: "ax", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 2, SourceFrom: 1, SourceTo: 3}}},
 		{name: "nonlinear-multiple-runes", text: "aXY", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 3, SourceFrom: 1, SourceTo: 7}}},
-		{name: "surrogate-pair-bmp", text: "a한", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 4, SourceFrom: 1, SourceTo: 13}}},
+		{name: "surrogate-pair-bmp", text: "a\ud55c", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 4, SourceFrom: 1, SourceTo: 13}}},
 		{name: "single-escape-non-bmp", text: "a🙂", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 5, SourceFrom: 1, SourceTo: 7}}},
 		{name: "unsupported-escape-width", text: "a\n", runs: []DocDisplayRun{{To: 1, SourceFrom: 0, SourceTo: 1, Linear: true}, {To: 2, SourceFrom: 1, SourceTo: 4}}},
 	} {
@@ -239,8 +239,8 @@ func TestDocDisplaySourceRangeValidationErrorPrecedence(test *testing.T) {
 		{name: "negative-offset-before-version", page: DocDisplayPage{Version: 5, Text: "a"}, offset: -1, length: 1, failure: ErrValidation},
 		{name: "empty-selection-before-runs", page: DocDisplayPage{Version: 1, Text: "a"}, failure: ErrValidation},
 		{name: "overflow-before-version", page: DocDisplayPage{Version: 5, Text: "a"}, offset: math.MaxInt, length: math.MaxInt, failure: ErrValidation},
-		{name: "start-boundary-before-version", page: DocDisplayPage{Version: 5, Text: "a한b"}, offset: 2, length: 2, failure: ErrValidation},
-		{name: "end-boundary-before-version", page: DocDisplayPage{Version: 5, Text: "a한b"}, length: 2, failure: ErrValidation},
+		{name: "start-boundary-before-version", page: DocDisplayPage{Version: 5, Text: "a\ud55cb"}, offset: 2, length: 2, failure: ErrValidation},
+		{name: "end-boundary-before-version", page: DocDisplayPage{Version: 5, Text: "a\ud55cb"}, length: 2, failure: ErrValidation},
 		{name: "continuation-before-invalid-text", page: DocDisplayPage{Version: 1, Text: "a\x80"}, offset: 1, length: 1, failure: ErrValidation},
 		{name: "valid-request-invalid-version", page: DocDisplayPage{Version: 5, Text: "a"}, length: 1, failure: ErrIntegrity},
 		{name: "valid-request-invalid-runs", page: DocDisplayPage{Version: 1, Text: "a"}, length: 1, failure: ErrIntegrity},

@@ -11,7 +11,7 @@ func TestMemoryDigestHashBoundedMatchesWire(test *testing.T) {
 	snapshot := HashContent([]byte(test.Name()))
 	for _, digest := range []MemoryDigest{
 		{},
-		{SnapshotID: snapshot, Summary: "한글 <>&\n\t\"\\\u2028\u2029\x00\xff", KeyFacts: []string{}, OpenTasks: []string{"decision"}, TasksAuthoritative: true, Provider: "codex"},
+		{SnapshotID: snapshot, Summary: "\ud55c\uae00 <>&\n\t\"\\\u2028\u2029\x00\xff", KeyFacts: []string{}, OpenTasks: []string{"decision"}, TasksAuthoritative: true, Provider: "codex"},
 		{SnapshotID: snapshot, PreviousMemoryHash: snapshot, ClaimsVersion: 1, Fragments: []MemoryFragment{{SourceSnapshot: snapshot, Summary: "fragment", TasksAuthoritative: true, Claims: []MemoryClaim{{Kind: "code", Text: "claim", Code: &MemoryCodeScope{Commit: strings.Repeat("1", 40), Paths: []string{"a", "b"}}}}}}, GraftCoverage: &MemoryGraftCoverage{ProjectionVersion: 2, ProjectionComplete: true, LineageFingerprint: snapshot, GraftParents: []ContentHash{snapshot}, PinnedSources: []ContentHash{snapshot}, GraftSeq: 1}},
 	} {
 		raw, err := json.Marshal(digest)

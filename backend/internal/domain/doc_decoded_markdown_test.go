@@ -73,7 +73,7 @@ func buildDecodedMarkdownInputFixture(test *testing.T, decoded decodedTextFixtur
 
 func TestDocDecodedMarkdownOriginalJSONCoordinates(test *testing.T) {
 	for _, token := range []string{
-		`"# A  ** B**\n\n[한글](https://hidden.test) ` + "`🙂`" + `"`,
+		"\"# A  ** B**\\n\\n[\ud55c\uae00](https://hidden.test) " + "`🙂`" + `"`,
 		`"a\n\nb"`,
 		`"**a\uD83D\uDE42** [label](https://hidden)"`,
 		`"- \uD800\t**X**\n1. \uDC00"`,
@@ -113,13 +113,13 @@ func TestDocDecodedMarkdownOriginalJSONCoordinates(test *testing.T) {
 }
 
 func TestDocDecodedMarkdownLargeEscapedInputUsesOnlyPreparedObjects(test *testing.T) {
-	text := strings.Repeat("# **한글🙂** [label](https://hidden.test)\n", 5000)
+	text := strings.Repeat("# **\ud55c\uae00🙂** [label](https://hidden.test)\n", 5000)
 	raw, err := json.Marshal(map[string]any{"kind": "reasoning", "redacted_summary": text, "opaque": strings.Repeat("LOCKED_PRIVATE_STATE", 10000)})
 	if err != nil {
 		test.Fatal(err)
 	}
 	fixture := buildDecodedMarkdownFixture(test, raw)
-	want := strings.TrimSuffix(strings.Repeat("한글🙂 label\n", 5000), "\n")
+	want := strings.TrimSuffix(strings.Repeat("\ud55c\uae00🙂 label\n", 5000), "\n")
 	cursor, err := NewDocDecodedMarkdownCursor(fixture.plan)
 	if err != nil {
 		test.Fatal(err)
@@ -195,7 +195,7 @@ func TestDocDecodedMarkdownCursorBindsOriginEvenWhenTextAndPlanAreReusable(test 
 }
 
 func FuzzDocDecodedMarkdownOriginalSourceParity(fuzz *testing.F) {
-	for _, source := range []string{"", "# A  ** B**", "a\n\nb", "[한글](https://hidden.test)", "`🙂`", "x\t\n\r\u00a0", "**a\nb**"} {
+	for _, source := range []string{"", "# A  ** B**", "a\n\nb", "[\ud55c\uae00](https://hidden.test)", "`🙂`", "x\t\n\r\u00a0", "**a\nb**"} {
 		fuzz.Add(source)
 	}
 	fuzz.Fuzz(func(test *testing.T, source string) {

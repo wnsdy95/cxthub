@@ -172,7 +172,7 @@ func TestMCPDocumentEventsUseSeparateCoreQueries(test *testing.T) {
 	repo := domain.Repo{ID: pageHash(1)}
 	snapshot := domain.Snapshot{ID: pageHash(2), DocHash: pageHash(2), RepoID: repo.ID}
 	document := domain.SessionDoc{CIR: domain.CIRDocument{Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 7, Role: domain.RoleUser,
-		Blocks: []domain.ContentBlock{{Type: "text", Text: "needle 한🙂\n"}}}}}}
+		Blocks: []domain.ContentBlock{{Type: "text", Text: "needle \ud55c🙂\n"}}}}}}
 	backend := &documentEventBackendTrap{pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{
 		snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snapshot}}}, docs: map[domain.ContentHash]domain.SessionDoc{snapshot.DocHash: document}},
 		documentEventQueriesProbe: documentEventQueriesProbe{err: domain.ErrIntegrity}}
@@ -217,7 +217,7 @@ func TestMCPDocumentEventsUseSeparateCoreQueries(test *testing.T) {
 		Next string `json:"next_cursor"`
 	}
 	if err := json.Unmarshal([]byte(raw), &search); err != nil || len(search.Hits) != 1 || search.Hits[0].Snapshot != snapshot.ID ||
-		search.Hits[0].Seq != 7 || !strings.Contains(search.Hits[0].Snippet, "needle 한🙂") || search.Next != "" {
+		search.Hits[0].Seq != 7 || !strings.Contains(search.Hits[0].Snippet, "needle \ud55c🙂") || search.Next != "" {
 		test.Fatal("separate core search was not used", raw, err)
 	}
 	if backend.whole != 0 || backend.documentEventQueriesProbe.events != 0 || backend.fragments != 0 || backend.searches != 0 {

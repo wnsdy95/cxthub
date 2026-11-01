@@ -118,7 +118,7 @@ func newMemoryAdmissionFixture(test *testing.T) *memoryAdmissionFixture {
 	snapshot := domain.Snapshot{ID: domain.HashContent([]byte("memory admission snapshot")), RepoID: repo.ID,
 		DocHash: domain.HashContent([]byte("memory admission snapshot")), Branch: "main", CreatedAt: time.Unix(123, 0).UTC()}
 	memory, err := storage.PutMemory(ctx, repo.ID, domain.MemoryDigest{SnapshotID: snapshot.ID,
-		Summary: "Memory is unchanged: 한글", KeyFacts: []string{"historical fact"}, OpenTasks: []string{"retained task"}})
+		Summary: "Memory is unchanged: \ud55c\uae00", KeyFacts: []string{"historical fact"}, OpenTasks: []string{"retained task"}})
 	if err != nil {
 		test.Fatal(err)
 	}

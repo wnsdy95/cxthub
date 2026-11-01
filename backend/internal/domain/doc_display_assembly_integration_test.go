@@ -111,12 +111,12 @@ func assembledFixturePages(test *testing.T, fixture displayAssemblyFixture, chec
 
 func TestDocDisplayAssemblyRealPlansMatchWholeEventOracle(test *testing.T) {
 	for _, raw := range [][]byte{
-		[]byte(`{"kind":"reasoning","redacted_summary":"# **한글\uD83D\uDE42** [label](https://hidden.test)"}`),
+		[]byte("{\"kind\":\"reasoning\",\"redacted_summary\":\"# **\ud55c\uae00\\uD83D\\uDE42** [label](https://hidden.test)\"}"),
 		[]byte(`{"kind":"reasoning","redacted_summary":" \r\n\t "}`),
-		[]byte(`{"kind":"message","blocks":[{"type":"text","text":"# **한글\uD83D\uDE42** [label](https://hidden.test)","opaque":"private"}]}`),
+		[]byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42** [label](https://hidden.test)\",\"opaque\":\"private\"}]}"),
 		[]byte(`{"kind":"message","compact_summary":true,"blocks":[{"text":"**first"},{},{"text":"last**"}]}`),
 		[]byte(`{"kind":"message","compact_summary":true,"blocks":[{"text":""},{"text":null}]}`),
-		[]byte(`{"kind":"message","blocks":[{"type":"image","name":"**한글🙂**","text":"not visible"}]}`),
+		[]byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"image\",\"name\":\"**\ud55c\uae00🙂**\",\"text\":\"not visible\"}]}"),
 	} {
 		var input DocDisplayAssemblyInput
 		var objects map[ContentHash][]byte
@@ -194,7 +194,7 @@ func TestDocDisplayAssemblyLargeEscapedReasoningAndLatePage(test *testing.T) {
 
 func TestDocDisplayAssemblyLargeSummaryAndPlaceholder(test *testing.T) {
 	const lines = 5000
-	text := strings.Repeat("# **한글🙂**\n", lines)
+	text := strings.Repeat("# **\ud55c\uae00🙂**\n", lines)
 	raw, _ := json.Marshal(map[string]any{"kind": "message", "compact_summary": true, "blocks": []any{map[string]any{"text": text}, map[string]any{}, map[string]any{"text": "**tail**"}}})
 	compiled := buildSummaryMarkdownFixture(test, raw)
 	input, err := NewDocSummaryMarkdownAssemblyInput(compiled.plan)
@@ -202,10 +202,10 @@ func TestDocDisplayAssemblyLargeSummaryAndPlaceholder(test *testing.T) {
 		test.Fatal(err)
 	}
 	summary := assembleDisplayFixture(test, input, compiled.input.objects)
-	if got := assembledFixturePages(test, summary, nil); got != strings.Repeat("한글🙂\n", lines)+"\ntail" {
+	if got := assembledFixturePages(test, summary, nil); got != strings.Repeat("\ud55c\uae00🙂\n", lines)+"\ntail" {
 		test.Fatal("large summary pages changed", len(got))
 	}
-	name := strings.Repeat("PUBLIC_BODY_MARKER **한글🙂**\n", 4000)
+	name := strings.Repeat("PUBLIC_BODY_MARKER **\ud55c\uae00🙂**\n", 4000)
 	raw, _ = json.Marshal(map[string]any{"kind": "message", "blocks": []any{map[string]any{"type": "image", "name": name}}})
 	plan, objects := messagePlaceholderFixture(test, raw)
 	input, err = NewDocMessagePlaceholderAssemblyInput(plan)
@@ -220,7 +220,7 @@ func TestDocDisplayAssemblyLargeSummaryAndPlaceholder(test *testing.T) {
 }
 
 func FuzzDocDisplayAssemblyWholeEventParity(fuzz *testing.F) {
-	for _, text := range []string{"", "# **한글🙂**", "a\n\nb", "\u0000\r\t", "[label](https://hidden.test)"} {
+	for _, text := range []string{"", "# **\ud55c\uae00🙂**", "a\n\nb", "\u0000\r\t", "[label](https://hidden.test)"} {
 		fuzz.Add(text, false)
 		fuzz.Add(text, true)
 	}

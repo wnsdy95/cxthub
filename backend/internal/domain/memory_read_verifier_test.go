@@ -25,7 +25,7 @@ func memoryReadVerifierTestNew(test *testing.T, bundle MemoryReadBundle) *Memory
 func memoryReadVerifierTestItems(count int) []EffectiveMemoryItem {
 	items := memoryReadTestItems(count)
 	items[0].Kind = "code"
-	items[0].Text = "preserve <scope> & 한글 😀"
+	items[0].Text = "preserve <scope> & \ud55c\uae00 😀"
 	items[0].Code = &MemoryCodeScope{Commit: strings.Repeat("b", 40), Paths: []string{"src/main.go"}}
 	items[0].PublicationIDs = []string{"publication-id"}
 	items[0].Paths = []CodePathState{{Path: "src/main.go", State: "unknown", Reason: "incomplete_ancestry"}}

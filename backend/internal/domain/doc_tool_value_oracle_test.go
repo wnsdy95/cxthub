@@ -31,7 +31,7 @@ func TestDocToolValueActualNodePrettyOracle(test *testing.T) {
 		case 2:
 			return []string{"-0", "1e309", "1e-99999", "9007199254740993", "0.0000001", "1000000000000000100"}[random.Intn(6)]
 		case 3, 4:
-			return []string{`"\ud800"`, `"\udc00"`, `"\uD800\uDC00"`, `"line\n한🙂\t"`, `"quote\"slash\\"`, `""`}[random.Intn(6)]
+			return []string{`"\ud800"`, `"\udc00"`, `"\uD800\uDC00"`, "\"line\\n\ud55c🙂\\t\"", `"quote\"slash\\"`, `""`}[random.Intn(6)]
 		case 5:
 			values := make([]string, random.Intn(5))
 			for index := range values {

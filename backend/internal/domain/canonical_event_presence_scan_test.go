@@ -138,7 +138,7 @@ func BenchmarkCanonicalEventPresencePipeline(benchmark *testing.B) {
 		name string
 		raw  string
 	}{
-		{"message", `{"blocks":[{"text":"synthetic message 한🙂","type":"text"}],"kind":"message","role":"user","seq":17}`},
+		{"message", "{\"blocks\":[{\"text\":\"synthetic message \ud55c🙂\",\"type\":\"text\"}],\"kind\":\"message\",\"role\":\"user\",\"seq\":17}"},
 		{"agent", `{"agent_author":"author","agent_message":true,"agent_recipient":"all","blocks":[],"kind":"message","role":"assistant","seq":17}`},
 		{"escaped", `{"\u0061gent_message":false,"blocks":[],"kind":"message","role":"assistant","seq":17}`},
 		{"unknown", `{"blocks":[],"kind":"message","role":"user","seq":17,"unknown":"` + strings.Repeat("x", 256<<10) + `"}`},

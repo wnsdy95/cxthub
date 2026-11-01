@@ -54,7 +54,7 @@ func completeStructuredToolResult(test *testing.T, value string) (DocEventDispla
 }
 
 func TestDocEventStructuredToolResultPublicationParity(test *testing.T) {
-	for _, value := range []string{`{}`, `[]`, `true`, `false`, `0`, `1e400`, `-0`, `1.2345`, `{"3":"first","0":"zero","dup":1,"dup":2,"nested":[true,null,"한글\ud800🙂"]}`} {
+	for _, value := range []string{`{}`, `[]`, `true`, `false`, `0`, `1e400`, `-0`, `1.2345`, "{\"3\":\"first\",\"0\":\"zero\",\"dup\":1,\"dup\":2,\"nested\":[true,null,\"\ud55c\uae00\\ud800🙂\"]}"} {
 		test.Run(value, func(test *testing.T) {
 			state, fixture := completeStructuredToolResult(test, value)
 			load := fixture.order.keys.tree.load

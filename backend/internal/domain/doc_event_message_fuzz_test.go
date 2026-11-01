@@ -10,7 +10,7 @@ func FuzzDocEventMessagePreparationParity(fuzz *testing.F) {
 		fuzz.Add("**left", "right**", "**literal**", summary)
 		fuzz.Add("```\nraw", "code\n```", "[name](not-markdown)", summary)
 		fuzz.Add("", "", "", summary)
-		fuzz.Add("한글🙂\n\n# title", "[label](https://hidden.test)", "\x00\n\t🙂", summary)
+		fuzz.Add("\ud55c\uae00🙂\n\n# title", "[label](https://hidden.test)", "\x00\n\t🙂", summary)
 		fuzz.Add("[cxt seed] Branch-switch context: first", "last", "asset", summary)
 	}
 	fuzz.Fuzz(func(test *testing.T, left, right, name string, summary bool) {

@@ -29,7 +29,7 @@ func legacyByteStagePGSource(test *testing.T, storage *PostgresStore, ctx contex
 			SessionOriginID: string(repo), Fidelity: domain.FidelityFull},
 		Events: []domain.CIREvent{
 			{Kind: domain.EventMessage, Seq: 9, Role: domain.RoleAssistant,
-				Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo) + strings.Repeat("x", payloadBytes) + "한🙂\"\\\n<>&"}}},
+				Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo) + strings.Repeat("x", payloadBytes) + "\ud55c🙂\"\\\n<>&"}}},
 			{Kind: domain.EventMessage, Seq: 2, Role: domain.RoleUser,
 				Blocks: []domain.ContentBlock{{Type: "text", Text: test.Name() + ":" + string(repo)}}},
 		},

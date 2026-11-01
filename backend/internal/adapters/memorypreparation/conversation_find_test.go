@@ -29,7 +29,7 @@ func conversationPreparationInput() domain.ConversationFindPreparationRequest {
 		RepoID:  domain.HashContent([]byte("conversation preparation repository")),
 		Hash:    domain.HashContent([]byte("conversation preparation document")),
 		Find: domain.ConversationFindRequest{
-			Query:  "private search 검색",
+			Query:  "private search \uac80\uc0c9",
 			Cursor: "private-conversation-cursor",
 		},
 		DocumentIdentities: []domain.DocumentIdentity{domain.DocumentIdentityLegacy, domain.DocumentIdentityRootV1},
@@ -144,7 +144,7 @@ func TestRequestConversationFindPreparationRejectsInvalidInputBeforeSend(test *t
 		{"missing query", func(input *domain.ConversationFindPreparationRequest) { input.Find.Query = "" }},
 		{"invalid query", func(input *domain.ConversationFindPreparationRequest) { input.Find.Query = "\xff" }},
 		{"query too long", func(input *domain.ConversationFindPreparationRequest) {
-			input.Find.Query = strings.Repeat("한", domain.MaxDocFindQueryRunes+1)
+			input.Find.Query = strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes+1)
 		}},
 		{"cursor too long", func(input *domain.ConversationFindPreparationRequest) {
 			input.Find.Cursor = strings.Repeat("c", base64.RawURLEncoding.EncodedLen(domain.MaxDocFindSelectorBytes)+1)

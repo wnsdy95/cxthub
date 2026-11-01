@@ -35,7 +35,7 @@ func encodeDocLegacyFindHTTPTestSelector(test *testing.T, selector domain.DocLeg
 
 func TestDocLegacyFindHTTPParserContract(test *testing.T) {
 	repo, hash, base := domain.HashContent([]byte("repo")), domain.HashContent([]byte("doc")), domain.HashContent([]byte("base"))
-	for _, text := range []string{"x", " ", "\n", "a+b&c", "한글🙂", strings.Repeat("한", domain.MaxDocFindQueryRunes)} {
+	for _, text := range []string{"x", " ", "\n", "a+b&c", "\ud55c\uae00🙂", strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes)} {
 		test.Run(text, func(test *testing.T) {
 			for _, fixture := range []struct {
 				base                       domain.ContentHash
@@ -224,7 +224,7 @@ func TestDocLegacyFindHTTPRejectsInvalidQueryBeforePort(test *testing.T) {
 			copy.Set("legacy", flag)
 			queries = append(queries, copy.Encode())
 		}
-		for _, text := range []string{strings.Repeat("a", domain.MaxDocFindQueryRunes+1), strings.Repeat("한", domain.MaxDocFindQueryRunes+1), "\xff", "valid\xc3"} {
+		for _, text := range []string{strings.Repeat("a", domain.MaxDocFindQueryRunes+1), strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes+1), "\xff", "valid\xc3"} {
 			copy, err := url.ParseQuery(values.Encode())
 			if err != nil {
 				test.Fatal(err)

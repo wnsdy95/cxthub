@@ -20,7 +20,7 @@ func TestDocFieldSchemaEventCanonicalCompatibility(test *testing.T) {
 	}{
 		{
 			name: "message",
-			body: `{"kind":"message","blocks":false,"blocks":[{"type":"text","text":"한글🙂"}],"output":"visible","redacted_summary":null}`,
+			body: "{\"kind\":\"message\",\"blocks\":false,\"blocks\":[{\"type\":\"text\",\"text\":\"\ud55c\uae00🙂\"}],\"output\":\"visible\",\"redacted_summary\":null}",
 			want: []ContentHash{
 				"sha256:7ee2b42eb1bff7ce50db526f717070a76fe089b0094eea49f92c687acfb74369",
 				"sha256:88b0b733eabf0936775341483a112f756c8679468d37b8fb3fe8398c3e158cc4",
@@ -211,8 +211,8 @@ func TestDocFieldSchemaBlockFragmentedFields(test *testing.T) {
 	}{
 		{
 			name: "text",
-			body: `{"type":"text","name":"speaker","text":"한글🙂"}`,
-			kind: "text", typeToken: `"text"`, nameToken: `"speaker"`, textToken: `"한글🙂"`,
+			body: "{\"type\":\"text\",\"name\":\"speaker\",\"text\":\"\ud55c\uae00🙂\"}",
+			kind: "text", typeToken: `"text"`, nameToken: `"speaker"`, textToken: "\"\ud55c\uae00🙂\"",
 		},
 		{
 			name: "escaped_root_keys_and_kind",

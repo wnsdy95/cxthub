@@ -28,10 +28,10 @@ func legacySourceHeaderCostCases() []struct {
 	name     string
 	envelope CIREnvelope
 } {
-	escaped := strings.Repeat("\"\\\n\x00<&>\u2028\u2029한🙂", 8192)
+	escaped := strings.Repeat("\"\\\n\x00<&>\u2028\u2029\ud55c🙂", 8192)
 	models := make([]string, 1025)
 	for position := range models {
-		models[position] = "same<&>\n한🙂"
+		models[position] = "same<&>\n\ud55c🙂"
 	}
 	models[0], models[512] = "", escaped
 	return []struct {

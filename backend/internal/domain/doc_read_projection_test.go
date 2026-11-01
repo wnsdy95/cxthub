@@ -197,7 +197,7 @@ func docReadProjectionSemanticFixture(test testing.TB) []byte {
 		"blocks":      []any{map[string]any{"type": "text", "text": "nested block"}, nil},
 		"empty_array": []any{}, "empty_object": map[string]any{}, "null": nil,
 	}
-	repeated := CIREvent{Kind: EventMessage, Seq: 11, Role: Role("custom 한글🙂\t\"\\" + fmt.Sprintf("%4096s", "")), Blocks: []ContentBlock{
+	repeated := CIREvent{Kind: EventMessage, Seq: 11, Role: Role("custom \ud55c\uae00🙂\t\"\\" + fmt.Sprintf("%4096s", "")), Blocks: []ContentBlock{
 		{Type: "text", Text: ""}, {Type: "image", Text: "not searchable"},
 		{Type: "text", Text: "first\nline\x00<&>\u2028\u2029"}, {Type: "Text", Text: "case-sensitive"},
 		{Type: "text", Text: " \t "}, {Type: "", Text: "not text"}, {Type: "text", Text: "last 🙂"},
@@ -214,7 +214,7 @@ func docReadProjectionSemanticFixture(test testing.TB) []byte {
 		{Kind: EventToolCall, Seq: 6, CallID: "empty", ToolName: "empty"},
 		{Kind: EventToolResult, Seq: 7, CallID: "empty"},
 		{Kind: EventReasoning, Seq: 8, Locked: &LockedBlob{Provider: "codex", Scheme: "encrypted_content", Blob: "opaque-only"}},
-		{Kind: EventReasoning, Seq: 9, RedactedSummary: " exact summary\n한글🙂\t ", Locked: &LockedBlob{Provider: "claude", Scheme: "signature", Blob: "not searchable"}},
+		{Kind: EventReasoning, Seq: 9, RedactedSummary: " exact summary\n\ud55c\uae00🙂\t ", Locked: &LockedBlob{Provider: "claude", Scheme: "signature", Blob: "not searchable"}},
 		{Kind: EventCompaction, Seq: 10, ReplacementComplete: true, Replacement: []CIREvent{
 			{Kind: EventMessage, Seq: 999, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "replacement must stay hidden"}}},
 			{Kind: EventCompaction, Seq: 1, Replacement: []CIREvent{{Kind: EventReasoning, Seq: 0, RedactedSummary: "nested hidden summary"}}},

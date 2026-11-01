@@ -84,7 +84,7 @@ func memoryReadTestCopy[Value any](test *testing.T, value Value) Value {
 func TestMemoryReadRoundTripAndOwnership(test *testing.T) {
 	items := memoryReadTestItems(130)
 	items[0] = EffectiveMemoryItem{
-		ID: items[0].ID, SourceSnapshot: items[0].SourceSnapshot, Kind: "code", Text: "preserve <scope> & \"evidence\" 한글 😀",
+		ID: items[0].ID, SourceSnapshot: items[0].SourceSnapshot, Kind: "code", Text: "preserve <scope> & \"evidence\" \ud55c\uae00 😀",
 		Code:                  &MemoryCodeScope{Commit: strings.Repeat("b", 40), Parent: strings.Repeat("c", 40), Paths: []string{"src/main.go"}},
 		MemoryClaimAssessment: MemoryClaimAssessment{State: "applied", Reason: "declared_scope_matches"},
 		PublicationIDs:        []string{"publication-id", "another-publication"}, IntegrationReceipt: "opaque-receipt-id",

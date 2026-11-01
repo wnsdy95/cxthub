@@ -33,7 +33,7 @@ func legacySourceHeaderParityFixtures(test *testing.T) []legacySourceHeaderParit
 		{name: "ordered-repeated-models", envelope: CIREnvelope{CIRVersion: CIRVersionV2, SourceModels: []string{"", "same", "same", "last"}}},
 		{name: "signed-counters", envelope: CIREnvelope{CIRVersion: CIRVersionV2, ContextTokens: -17, OutputTokens: 19, CompactionCount: -3}},
 		{name: "integer-extremes", envelope: CIREnvelope{CIRVersion: CIRVersionV2, ContextTokens: int(^uint(0) >> 1), OutputTokens: -int(^uint(0)>>1) - 1}},
-		{name: "canonical-escapes", envelope: CIREnvelope{CIRVersion: CIRVersionV2, Cwd: "한🙂/<&>\u2028\u2029\"\\\b\f\n\r\t\x00\x1f", SourceModels: []string{"한🙂", "\ufffd"}}},
+		{name: "canonical-escapes", envelope: CIREnvelope{CIRVersion: CIRVersionV2, Cwd: "\ud55c🙂/<&>\u2028\u2029\"\\\b\f\n\r\t\x00\x1f", SourceModels: []string{"\ud55c🙂", "\ufffd"}}},
 		{name: "canonical-replacement-runes", envelope: CIREnvelope{CIRVersion: CIRVersionV2, SourceModel: "\xff\xc0\xaf\xed\xa0\x80", SourceModels: []string{"\xff", "\ufffd"}}},
 	} {
 		header, err := canonicalJSON(fixture.envelope)
@@ -43,14 +43,14 @@ func legacySourceHeaderParityFixtures(test *testing.T) []legacySourceHeaderParit
 		fixtures = append(fixtures, legacySourceHeaderParityFixture{name: fixture.name, header: header})
 	}
 	full, err := canonicalJSON(CIREnvelope{CIRVersion: CIRVersionV2, SourceProvider: ProviderCodex, SourceModel: "model",
-		CapturedAt: "2026-10-26T00:00:00Z", Cwd: "한🙂/<&>\u2028\u2029\n", GitBranch: "main", SessionOriginID: "source-session", Fidelity: FidelityFull,
+		CapturedAt: "2026-10-26T00:00:00Z", Cwd: "\ud55c🙂/<&>\u2028\u2029\n", GitBranch: "main", SessionOriginID: "source-session", Fidelity: FidelityFull,
 		ContextTokens: 17, OutputTokens: 19, SourceModels: []string{"first", "same", "same", "last"}, CompactionCount: 3})
 	if err != nil {
 		test.Fatal(err)
 	}
 	fixtures = append(fixtures, legacySourceHeaderParityFixture{name: "all-fields", header: full})
 	for _, member := range []string{
-		`"captured_at":"2026-10-26T00:00:00Z"`, `"cir_version":"2"`, `"cwd":"한🙂/\u003c\u0026\u003e\u2028\u2029\n"`,
+		`"captured_at":"2026-10-26T00:00:00Z"`, `"cir_version":"2"`, "\"cwd\":\"\ud55c🙂/\\u003c\\u0026\\u003e\\u2028\\u2029\\n\"",
 		`"fidelity":"full"`, `"git_branch":"main"`, `"session_origin_id":"source-session"`, `"source_model":"model"`, `"source_provider":"codex"`,
 	} {
 		key, _, found := bytes.Cut([]byte(member), []byte(":"))
@@ -101,9 +101,9 @@ func legacySourceHeaderParityFixtures(test *testing.T) []legacySourceHeaderParit
 		{name: "newline-between-members", before: `"source_model":"model",`, after: "\"source_model\":\"model\",\n\t"},
 		{name: "escaped-key", before: `"source_model":"model"`, after: `"\u0073ource_model":"model"`},
 		{name: "escaped-ascii", before: `"source_model":"model"`, after: `"source_model":"\u006dodel"`},
-		{name: "escaped-slash", before: "한🙂/", after: `한🙂\/`},
-		{name: "escaped-korean", before: "한🙂", after: `\ud55c🙂`},
-		{name: "surrogate-pair", before: "한🙂", after: `한\ud83d\ude42`},
+		{name: "escaped-slash", before: "\ud55c🙂/", after: "\ud55c🙂\\/"},
+		{name: "escaped-korean", before: "\ud55c🙂", after: `\ud55c🙂`},
+		{name: "surrogate-pair", before: "\ud55c🙂", after: "\ud55c\\ud83d\\ude42"},
 		{name: "unescaped-html", before: `\u003c\u0026\u003e`, after: "<&>"},
 		{name: "uppercase-escape", before: `\u003c`, after: `\u003C`},
 		{name: "literal-line-separators", before: `\u2028\u2029`, after: "\u2028\u2029"},

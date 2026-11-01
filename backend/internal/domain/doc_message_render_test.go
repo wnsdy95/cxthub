@@ -12,10 +12,10 @@ import (
 )
 
 func TestDocMessageTextInputsUseIndependentMarkdownPlans(test *testing.T) {
-	raw := []byte(`{"kind":"message","blocks":[{"type":"text","text":"**left"},{"type":"text","text":"right**"},{"type":"text","text":"# **한글\uD83D\uDE42** [label](https://hidden.test)"},{"type":"image","name":"asset"}]}`)
+	raw := []byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"**left\"},{\"type\":\"text\",\"text\":\"right**\"},{\"type\":\"text\",\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42** [label](https://hidden.test)\"},{\"type\":\"image\",\"name\":\"asset\"}]}")
 	inputFixture := buildMessageInputFixture(test, raw)
 	inputs := messageFixtureInputs(test, inputFixture)
-	wants := []string{"**left", "right**", "한글🙂 label"}
+	wants := []string{"**left", "right**", "\ud55c\uae00🙂 label"}
 	for index, want := range wants {
 		source, err := inputs[index].TextSource()
 		if err != nil || source == nil {
@@ -53,7 +53,7 @@ func TestDocMessageTextInputsUseIndependentMarkdownPlans(test *testing.T) {
 
 func TestDocMessageTextLargePublicInputUsesPreparedRanges(test *testing.T) {
 	const lines = 12000
-	text := strings.Repeat("# **한글🙂**\n", lines)
+	text := strings.Repeat("# **\ud55c\uae00🙂**\n", lines)
 	raw, err := json.Marshal(map[string]any{"kind": "message", "blocks": []any{map[string]any{"type": "text", "text": text, "opaque": strings.Repeat("LOCKED_PRIVATE_BODY", 10000)}}})
 	if err != nil {
 		test.Fatal(err)
@@ -101,7 +101,7 @@ func TestDocMessageTextLargePublicInputUsesPreparedRanges(test *testing.T) {
 		cursor = fragment.Next()
 		fragments++
 	}
-	want := strings.TrimSuffix(strings.Repeat("한글🙂\n", lines), "\n")
+	want := strings.TrimSuffix(strings.Repeat("\ud55c\uae00🙂\n", lines), "\n")
 	if output.String() != want || fragments < 3 {
 		test.Fatal("large message display changed", output.Len(), len(want), fragments)
 	}
@@ -153,7 +153,7 @@ func TestDocMessagePlaceholderLiteralTextAndWholeBlockAnchor(test *testing.T) {
 		{`{"type":"","name":"asset"}`, "[: asset]"},
 		{`{"TYPE":"text","text":"not a visible field"}`, "[]"},
 		{`{"type":"Text","text":"not a visible text block"}`, "[Text]"},
-		{`{"type":"image","name":"**한글🙂** [asset](https://example.test)","text":"hidden","opaque":{"name":"locked"}}`, "[image: **한글🙂** [asset](https://example.test)]"},
+		{"{\"type\":\"image\",\"name\":\"**\ud55c\uae00🙂** [asset](https://example.test)\",\"text\":\"hidden\",\"opaque\":{\"name\":\"locked\"}}", "[image: **\ud55c\uae00🙂** [asset](https://example.test)]"},
 		{`{"type":"old","type":null,"name":"old","name":null}`, "[]"},
 	} {
 		raw := []byte(`{"kind":"message","blocks":[` + scenario.block + `]}`)
@@ -180,7 +180,7 @@ func TestDocMessagePlaceholderLiteralTextAndWholeBlockAnchor(test *testing.T) {
 }
 
 func TestDocMessagePlaceholderLargeNameReadsOnlySelectedPreparedPages(test *testing.T) {
-	name := strings.Repeat("**한글🙂** [asset](https://hidden.test)\n", 5000)
+	name := strings.Repeat("**\ud55c\uae00🙂** [asset](https://hidden.test)\n", 5000)
 	raw, err := json.Marshal(map[string]any{"kind": "message", "blocks": []any{map[string]any{"type": "image", "name": name, "text": "HIDDEN_NON_TEXT_BODY", "opaque": strings.Repeat("LOCKED_PRIVATE_BODY", 10000)}}})
 	if err != nil {
 		test.Fatal(err)
@@ -228,8 +228,8 @@ func TestDocMessagePlaceholderLargeNameReadsOnlySelectedPreparedPages(test *test
 }
 
 func TestDocMessagePlaceholderRejectsWrongOriginCorruptionAndCancelledRead(test *testing.T) {
-	first, objects := messagePlaceholderFixture(test, []byte(`{"kind":"message","blocks":[{"type":"image","name":"한글🙂"}]}`))
-	second, _ := messagePlaceholderFixture(test, []byte(`{"kind":"message","opaque":true,"blocks":[{"type":"image","name":"한글🙂"}]}`))
+	first, objects := messagePlaceholderFixture(test, []byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"image\",\"name\":\"\ud55c\uae00🙂\"}]}"))
+	second, _ := messagePlaceholderFixture(test, []byte("{\"kind\":\"message\",\"opaque\":true,\"blocks\":[{\"type\":\"image\",\"name\":\"\ud55c\uae00🙂\"}]}"))
 	cursor, err := NewDocMessagePlaceholderCursor(first)
 	if err != nil {
 		test.Fatal(err)

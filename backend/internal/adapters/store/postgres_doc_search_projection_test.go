@@ -81,12 +81,12 @@ func docSearchStageFixturePG(test *testing.T, items int) docSearchStageCasePG {
 		Events: []domain.CIREvent{
 			{Kind: domain.EventTurn, Seq: 3, Role: domain.RoleSystem, ID: string(repo)},
 			{Kind: domain.EventMessage, Seq: 7, Role: domain.RoleUser, Blocks: []domain.ContentBlock{
-				{Type: "text", Text: "Visible Needle 50%_\\ 한🙂 " + string(repo)},
+				{Type: "text", Text: "Visible Needle 50%_\\ \ud55c🙂 " + string(repo)},
 				{Type: "text", Text: ""}, {Type: "text", Text: "second\tline \"quoted\"\n<&>"},
 			}},
 			{Kind: domain.EventToolCall, Seq: 11, CallID: callID, ToolName: "synthetic", Input: input},
 			{Kind: domain.EventToolResult, Seq: 19, CallID: callID, Output: output},
-			{Kind: domain.EventReasoning, Seq: 29, ID: string(repo), RedactedSummary: "Reasoning Needle\n한🙂",
+			{Kind: domain.EventReasoning, Seq: 29, ID: string(repo), RedactedSummary: "Reasoning Needle\n\ud55c🙂",
 				Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "lockedonly"}},
 			{Kind: domain.EventCompaction, Seq: 37, ReplacementComplete: true, Replacement: []domain.CIREvent{
 				{Kind: domain.EventMessage, Seq: 2, Role: domain.RoleAssistant,
@@ -193,7 +193,7 @@ func docSearchStageAssertPG(test *testing.T, fixture docSearchStageCasePG) {
 		limit int
 	}{
 		{"", -1, 16}, {"needle", -1, 16}, {"needle", 1, 1}, {"needle", 4, 16},
-		{"50%_\\", -1, 16}, {"한🙂", -1, 16}, {"second\tline", -1, 16},
+		{"50%_\\", -1, 16}, {"\ud55c🙂", -1, 16}, {"second\tline", -1, 16},
 		{"reasoning", -1, 16}, {"toolpayloadonly", -1, 16}, {"replacementonly", -1, 16}, {"lockedonly", -1, 16},
 	}
 	for _, query := range queries {

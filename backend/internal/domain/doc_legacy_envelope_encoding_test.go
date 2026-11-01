@@ -99,7 +99,7 @@ func TestLegacyEnvelopeEncodingCanonicalTypedParity(test *testing.T) {
 		{ContextTokens: -1, OutputTokens: 1, CompactionCount: maximum},
 	}
 	for _, text := range []string{
-		"v2", "\"\\/\b\f\n\r\t\x00\x01\x1f<&>\u2028\u2029한국🙂\ufffd",
+		"v2", "\"\\/\b\f\n\r\t\x00\x01\x1f<&>\u2028\u2029\ud55c\uad6d🙂\ufffd",
 		"\xff\x80\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80", `\ufffd\\ufffd`,
 	} {
 		var envelope CIREnvelope

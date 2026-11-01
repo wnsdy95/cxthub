@@ -87,7 +87,7 @@ func newEffectiveMemorySourceTransportPG(t *testing.T, fragment bool) *effective
 	claim := domain.MemoryClaim{Kind: "code", Text: "Later typed code claim", Code: &domain.MemoryCodeScope{Commit: fixture.code, Paths: []string{"file"}}}
 	claims := []domain.MemoryClaim{{Kind: "rationale", Text: "Unchanged first item"}, claim}
 	if fragment {
-		claim.Text = strings.Repeat("한글\n\"", 900)
+		claim.Text = strings.Repeat("\ud55c\uae00\n\"", 900)
 		claims = []domain.MemoryClaim{claim, {Kind: "rationale", Text: "Retained explanation"}}
 	}
 	digest := domain.MemoryDigest{SnapshotID: fixture.current.ID, ClaimsVersion: domain.MemoryClaimsVersion,

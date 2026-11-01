@@ -20,14 +20,14 @@ func TestCanonicalRangeIndexPreservesGenericMetadataPages(test *testing.T) {
 		case 1:
 			events[ordinal] = CIREvent{Kind: EventReasoning, Seq: sequence, RedactedSummary: " \u2003\ufeff\t"}
 		case 2:
-			events[ordinal] = CIREvent{Kind: EventToolCall, Seq: sequence, ToolName: strings.Repeat("한🙂", 80), Input: map[string]any{"x": true}}
+			events[ordinal] = CIREvent{Kind: EventToolCall, Seq: sequence, ToolName: strings.Repeat("\ud55c🙂", 80), Input: map[string]any{"x": true}}
 		case 3:
 			events[ordinal] = CIREvent{Kind: EventToolResult, Seq: sequence, Output: "tool output"}
 		case 4:
 			events[ordinal] = CIREvent{Kind: EventMessage, Seq: sequence, Role: RoleAssistant, CompactSummary: true,
 				Blocks: []ContentBlock{{Type: "text", Text: "summary \"\\\n<&>"}}}
 		case 5:
-			events[ordinal] = CIREvent{Kind: EventTurn, Seq: sequence, Role: Role(strings.Repeat("한🙂", 80))}
+			events[ordinal] = CIREvent{Kind: EventTurn, Seq: sequence, Role: Role(strings.Repeat("\ud55c🙂", 80))}
 		}
 	}
 	events[DocRangePageEvents+1] = CIREvent{Kind: EventToolResult, Seq: events[DocRangePageEvents+1].Seq, Output: strings.Repeat("x", 1<<20)}

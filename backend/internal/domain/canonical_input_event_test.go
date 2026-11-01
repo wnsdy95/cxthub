@@ -113,7 +113,7 @@ func TestCanonicalInputEventGoPayloadParity(tests *testing.T) {
 			"exact-integers": []any{int64(math.MinInt64), int64(math.MaxInt64), uint64(math.MaxUint64), int64(9007199254740993)},
 			"floats":         []any{float64(9007199254740993), math.Copysign(0, -1), 1e-7, 1e21, math.SmallestNonzeroFloat64, math.MaxFloat64},
 			"nan":            math.NaN(), "positive-infinity": math.Inf(1), "negative-infinity": math.Inf(-1),
-			"plain":   []any{nil, true, 7, 1.25, EventMessage, RoleAssistant, ProviderKind("codex"), "한국🙂"},
+			"plain":   []any{nil, true, 7, 1.25, EventMessage, RoleAssistant, ProviderKind("codex"), "\ud55c\uad6d🙂"},
 			"maps":    []map[string]any{nil, {}, {"z": 1, "a": []any{false, nil}}},
 			"nil-map": map[string]any(nil), "empty-map": map[string]any{},
 			"nil-slice": []any(nil), "empty-slice": []any{}, "nil-maps": []map[string]any(nil),
@@ -207,7 +207,7 @@ func TestCanonicalInputEventNumberLexemes(tests *testing.T) {
 }
 
 func TestCanonicalInputEventUnicodeParity(tests *testing.T) {
-	for _, text := range []string{"<&>\u2028\u2029한국🙂", "\xff", "\x80", "\ufffd"} {
+	for _, text := range []string{"<&>\u2028\u2029\ud55c\uad6d🙂", "\xff", "\x80", "\ufffd"} {
 		fresh := func() []CIREvent {
 			locked := &LockedBlob{Provider: ProviderKind(text), Scheme: text, Blob: text}
 			return []CIREvent{
@@ -232,7 +232,7 @@ func TestCanonicalInputEventPreservesAliases(tests *testing.T) {
 	fresh := func() CIREvent {
 		shared := map[string]any{"z": json.Number("9007199254740993"), "a": nil}
 		slice := []any{shared, nil}
-		blocks := []ContentBlock{{Type: "text", Text: "<&>한국"}}
+		blocks := []ContentBlock{{Type: "text", Text: "<&>\ud55c\uad6d"}}
 		return CIREvent{Kind: EventCompaction, Replacement: []CIREvent{
 			{Kind: EventToolCall, Seq: 9, Input: shared},
 			{Kind: EventToolResult, Seq: 1, Output: []any{shared, slice, slice}},

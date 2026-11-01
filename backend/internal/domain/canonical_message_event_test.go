@@ -79,7 +79,7 @@ func TestCanonicalMessageEventAcceptedShapeParity(test *testing.T) {
 	for _, version := range []string{"", CIRVersionV1, CIRVersionV2} {
 		for _, role := range []Role{RoleUser, RoleAssistant, RoleSystem, RoleDeveloper} {
 			for _, sequence := range []int{minimum, -17, -1, 0, 1, 17, maximum} {
-				for _, text := range []string{"", "plain", `literal \uD55C`, "한🙂", "<>&", "\u2028\u2029", "\x00\b\f\n\r\t", "\"\\", `"}],"kind":"message","role":"user","seq":0}`} {
+				for _, text := range []string{"", "plain", `literal \uD55C`, "\ud55c🙂", "<>&", "\u2028\u2029", "\x00\b\f\n\r\t", "\"\\", `"}],"kind":"message","role":"user","seq":0}`} {
 					for _, block := range []bool{false, true} {
 						event := CIREvent{Kind: EventMessage, Role: role, Seq: sequence, Blocks: []ContentBlock{}}
 						if block {
@@ -174,7 +174,7 @@ func TestCanonicalMessageEventBoundariesAndMalformedMutations(test *testing.T) {
 }
 
 func FuzzCanonicalMessageEventParity(fuzzer *testing.F) {
-	for _, text := range []string{"", "plain", `literal \uD55C`, "한🙂<>&\u2028\u2029\n\"\\"} {
+	for _, text := range []string{"", "plain", `literal \uD55C`, "\ud55c🙂<>&\u2028\u2029\n\"\\"} {
 		fuzzer.Add(canonicalMessageEventRaw(fuzzer, CIREvent{Kind: EventMessage, Role: RoleUser, Seq: 17, Blocks: []ContentBlock{{Type: "text", Text: text}}}))
 	}
 	fuzzer.Add([]byte(`{"blocks":[],"kind":"message","role": "user","seq":17}`))

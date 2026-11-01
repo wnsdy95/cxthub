@@ -87,7 +87,7 @@ func assertDocFindHTTPNoLegacyReads(test *testing.T, backend *docVisibleHTTPBack
 
 func TestDocFindHTTPParserContract(test *testing.T) {
 	repo, hash := domain.HashContent([]byte("repo")), domain.HashContent([]byte("doc"))
-	for _, text := range []string{"x", " ", "a+b&c", "한글🙂", strings.Repeat("한", domain.MaxDocFindQueryRunes)} {
+	for _, text := range []string{"x", " ", "a+b&c", "\ud55c\uae00🙂", strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes)} {
 		test.Run(text, func(test *testing.T) {
 			initial := docFindHTTPInitialQuery(test, repo, hash, text)
 			for _, bounds := range [][2]int{{0, 12}, {0, 0}, {4, 7}, {12, 12}} {
@@ -374,7 +374,7 @@ func TestDocFindHTTPRejectsInvalidQueryBeforePort(test *testing.T) {
 		for _, extra := range []string{"&=value", "&view=chat", "&base=" + string(hash), "&limit=20", "&offset=0", "&q=%zz", "&%zz=value", "&ignored=%zz", "&ignored=value;other=value"} {
 			queries = append(queries, values.Encode()+extra)
 		}
-		for _, text := range []string{strings.Repeat("a", domain.MaxDocFindQueryRunes+1), strings.Repeat("한", domain.MaxDocFindQueryRunes+1), string([]byte{0xff}), "valid" + string([]byte{0xc3})} {
+		for _, text := range []string{strings.Repeat("a", domain.MaxDocFindQueryRunes+1), strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes+1), string([]byte{0xff}), "valid" + string([]byte{0xc3})} {
 			copy, err := url.ParseQuery(values.Encode())
 			if err != nil {
 				test.Fatal(err)

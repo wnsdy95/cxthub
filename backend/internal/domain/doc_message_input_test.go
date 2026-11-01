@@ -275,7 +275,7 @@ func TestDocMessageInputBadPublicTypesAndCancelledSteps(test *testing.T) {
 }
 
 func FuzzDocMessageInputSourceParity(fuzz *testing.F) {
-	for _, value := range []string{"", "한글🙂", "**first\n\nlast**", "\\\"\r\t", "\u0000\ufeff"} {
+	for _, value := range []string{"", "\ud55c\uae00🙂", "**first\n\nlast**", "\\\"\r\t", "\u0000\ufeff"} {
 		fuzz.Add(value, "image", "**asset**", false)
 		fuzz.Add(value, "Text", "", true)
 	}

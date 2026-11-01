@@ -105,7 +105,7 @@ func TestDocSummaryMarkdownCrossSlotConstructsAndProvenance(test *testing.T) {
 		`[{"text":"**first"},{"type":"image","text":"second**"}]`,
 		"[{\"text\":\"```\"},{\"text\":\"**literal**\"},{},{\"text\":\"```\"}]",
 		`[{"text":"first"},{},{"text":null},{"text":"last"}]`,
-		`[{"text":"# **한글\uD83D\uDE42**"},{"text":"[label](https://hidden.test)"}]`,
+		"[{\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42**\"},{\"text\":\"[label](https://hidden.test)\"}]",
 		`[{"text":"a\r"},{"text":"b\t"},{"text":"- **c**"}]`,
 		`[{"text":"[label](https://hidden"},{"text":".test)"}]`,
 		`[{"text":" "},{"text":""},{"text":null},{"text":"🙂"}]`,
@@ -120,7 +120,7 @@ func TestDocSummaryMarkdownCrossSlotConstructsAndProvenance(test *testing.T) {
 
 func TestDocSummaryMarkdownLargeInputReusesPreparedPages(test *testing.T) {
 	const lines = 5000
-	text := strings.Repeat("# **한글🙂**\n", lines)
+	text := strings.Repeat("# **\ud55c\uae00🙂**\n", lines)
 	raw, err := json.Marshal(map[string]any{"kind": "message", "compact_summary": true, "blocks": []any{map[string]any{"text": text, "opaque": strings.Repeat("LOCKED_PRIVATE_BODY", 10000)}, map[string]any{}, map[string]any{"text": "**tail**"}}})
 	if err != nil {
 		test.Fatal(err)
@@ -145,7 +145,7 @@ func TestDocSummaryMarkdownLargeInputReusesPreparedPages(test *testing.T) {
 		cursor = fragment.Next()
 		fragments++
 	}
-	want := strings.Repeat("한글🙂\n", lines) + "\ntail"
+	want := strings.Repeat("\ud55c\uae00🙂\n", lines) + "\ntail"
 	if output.String() != want || fragments < 3 {
 		test.Fatal("large joined summary changed", output.Len(), len(want), fragments)
 	}
@@ -170,7 +170,7 @@ func TestDocSummaryMarkdownCursorCannotSwitchOriginalMessage(test *testing.T) {
 }
 
 func FuzzDocSummaryMarkdownOriginalSourceParity(fuzz *testing.F) {
-	for _, value := range []string{"", "**first", "\u0000\r\t", "# 한글🙂", "[label](https://hidden)", "a\n\nb"} {
+	for _, value := range []string{"", "**first", "\u0000\r\t", "# \ud55c\uae00🙂", "[label](https://hidden)", "a\n\nb"} {
 		fuzz.Add(value, "last**")
 	}
 	fuzz.Fuzz(func(test *testing.T, first, last string) {

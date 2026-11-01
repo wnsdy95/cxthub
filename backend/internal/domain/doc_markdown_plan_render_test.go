@@ -64,7 +64,7 @@ func TestDocMarkdownPlanFragmentsMatchSharedTextAndCoordinates(test *testing.T) 
 
 func TestDocMarkdownPlanLargeFragmentsBoundSourceAndOutput(test *testing.T) {
 	for _, scenario := range []struct{ name, source, want string }{
-		{"large strong", "**" + strings.Repeat("한글🙂", 40000) + "**", strings.Repeat("한글🙂", 40000)},
+		{"large strong", "**" + strings.Repeat("\ud55c\uae00🙂", 40000) + "**", strings.Repeat("\ud55c\uae00🙂", 40000)},
 		{"escaped encoding budget", "```\n" + strings.Repeat("<>&\x01", 70000) + "\n```", strings.Repeat("<>&\x01", 70000)},
 		{"many blocks", strings.Repeat("# A **B** C\n", 20000), strings.TrimSuffix(strings.Repeat("A B C\n", 20000), "\n")},
 	} {

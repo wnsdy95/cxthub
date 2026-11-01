@@ -49,7 +49,7 @@ func discoverDocFields(test *testing.T, raw []byte, size int) (DocFieldDiscovery
 func TestDocFieldDiscoveryResumesLexicalAndContainerStates(test *testing.T) {
 	for _, body := range []string{
 		`{"kind":"reasoning","redacted_summary":"visible"}`,
-		`{"kind":"message","blocks":[{"text":"한글🙂","type":"text"}]}`,
+		"{\"kind\":\"message\",\"blocks\":[{\"text\":\"\ud55c\uae00🙂\",\"type\":\"text\"}]}",
 		`{"kind":"reasoning","unknown":[null,true,false,-0,0.5,1e+99,-4.2E-9,1e99999,{"nested":["\ud83d\ude42\ud800"]}],"redacted_summary":"last"}`,
 		`{"kind":"reasoning","redacted_summary":false,"redacted\u005fsummary":"last","blocks":false}`,
 		`{"kind":"message","blocks":{},"blocks":null,"blocks":[],"redacted_summary":false}`,
@@ -189,7 +189,7 @@ func TestDocFieldDiscoveryNativeSHAStateContract(test *testing.T) {
 }
 
 func FuzzDocFieldDiscoveryMatchesRawFields(test *testing.F) {
-	for _, raw := range []string{`{"kind":"message","blocks":[]}`, `{"kind":"reasoning","redacted_summary":"한글"}`, `{"kind":"reasoning","x":1e99999}`, `{"kind":"reasoning","redacted_summary":false,"redacted_summary":"last"}`} {
+	for _, raw := range []string{`{"kind":"message","blocks":[]}`, "{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c\uae00\"}", `{"kind":"reasoning","x":1e99999}`, `{"kind":"reasoning","redacted_summary":false,"redacted_summary":"last"}`} {
 		test.Add(raw)
 	}
 	test.Fuzz(func(test *testing.T, body string) {

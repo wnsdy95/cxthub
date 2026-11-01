@@ -122,7 +122,7 @@ func TestDocDisplayStringRejectsSkippedInitialProgress(test *testing.T) {
 }
 
 func TestDocDisplayEncodedBudgetCoversCanonicalSerializer(test *testing.T) {
-	characters := []rune{'<', '>', '&', '\u0085', '\u00a0', '\u2028', '\u2029', '\ufeff', '\ufffd', '한', '🙂', '\U0010ffff'}
+	characters := []rune{'<', '>', '&', '\u0085', '\u00a0', '\u2028', '\u2029', '\ufeff', '\ufffd', '\ud55c', '🙂', '\U0010ffff'}
 	for character := rune(0); character < 128; character++ {
 		characters = append(characters, character)
 	}

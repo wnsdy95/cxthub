@@ -83,7 +83,7 @@ func TestDocEventDisplayInvalidAndCanceledReturnNoPartial(test *testing.T) {
 }
 
 func TestDocEventDisplayCoordinatesRejectSplitRunes(test *testing.T) {
-	raw := []byte(`{"kind":"message","compact_summary":true,"blocks":[{"type":"text","text":"한글🙂"}]}`)
+	raw := []byte("{\"kind\":\"message\",\"compact_summary\":true,\"blocks\":[{\"type\":\"text\",\"text\":\"\ud55c\uae00🙂\"}]}")
 	display, err := BuildDocEventDisplay(context.Background(), raw)
 	if err != nil {
 		test.Fatal(err)
@@ -95,7 +95,7 @@ func TestDocEventDisplayCoordinatesRejectSplitRunes(test *testing.T) {
 		}
 	}
 	span, err := display.SourceRange(0, len(display.Text()))
-	if err != nil || string(raw[span.From:span.To]) != "한글🙂" {
+	if err != nil || string(raw[span.From:span.To]) != "\ud55c\uae00🙂" {
 		test.Fatal(span, err)
 	}
 }
@@ -126,7 +126,7 @@ func TestDocEventDisplayAggregateProvenanceAndConstructionBudget(test *testing.T
 }
 
 func FuzzDocEventDisplay(fuzz *testing.F) {
-	for _, raw := range []string{`null`, `{"kind":"message","blocks":[{"type":"text","text":"**한글🙂**"}]}`, `{"kind":"tool_call","tool_name":"Bash","input":{"command":"echo test"}}`, `{"kind":"tool_result","output":{"10":1,"2":"**label**"}}`} {
+	for _, raw := range []string{`null`, "{\"kind\":\"message\",\"blocks\":[{\"type\":\"text\",\"text\":\"**\ud55c\uae00🙂**\"}]}", `{"kind":"tool_call","tool_name":"Bash","input":{"command":"echo test"}}`, `{"kind":"tool_result","output":{"10":1,"2":"**label**"}}`} {
 		fuzz.Add(raw)
 	}
 	fuzz.Fuzz(func(test *testing.T, source string) {

@@ -338,14 +338,14 @@ func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture d
 				for ordinal := range children {
 					children[ordinal] = domain.CIREvent{Kind: domain.EventToolCall, Seq: (fields-1-ordinal)/2 - fields/4,
 						CallID: fmt.Sprintf("replacement-%05d", ordinal), ToolName: "replacement-pages",
-						Input: map[string]any{"z-last": fmt.Sprintf("child-%05d 한🙂\"\\\n<>&", ordinal), "a-first": "first", "m-middle": "middle"}}
+						Input: map[string]any{"z-last": fmt.Sprintf("child-%05d \ud55c🙂\"\\\n<>&", ordinal), "a-first": "first", "m-middle": "middle"}}
 				}
 				event = domain.CIREvent{Kind: domain.EventCompaction, Seq: 0, Replacement: children, ReplacementComplete: true}
 				preparationLimit += len(children)
 			} else {
 				input := make(map[string]any, fields)
 				for position := 0; position < fields; position++ {
-					input[fmt.Sprintf("field-%05d", position)] = []any{fmt.Sprintf("value-%05d", position), "한🙂\"\\\n<>&", position%2 == 0, nil}
+					input[fmt.Sprintf("field-%05d", position)] = []any{fmt.Sprintf("value-%05d", position), "\ud55c🙂\"\\\n<>&", position%2 == 0, nil}
 				}
 				event = domain.CIREvent{Kind: domain.EventToolCall, Seq: 0, CallID: "dense-pages", ToolName: "dense-pages", Input: input}
 			}

@@ -187,7 +187,7 @@ func newConversationFindFixture(test *testing.T) *conversationFindFixture {
 		identity: &conversationFindIdentity{IdentityService: identity, test: test}, runtime: &conversationFindRuntime{},
 		owner: owner, reader: reader, repository: repository, token: pair.AccessToken,
 		body: domain.ConversationFindPreparationRequest{Version: 1, RepoID: repo.ID, Hash: domain.HashContent([]byte("private document")),
-			Find: domain.ConversationFindRequest{Query: "private 검색", Cursor: "private-cursor"}, DocumentIdentities: []domain.DocumentIdentity{domain.DocumentIdentityRootV1}},
+			Find: domain.ConversationFindRequest{Query: "private \uac80\uc0c9", Cursor: "private-cursor"}, DocumentIdentities: []domain.DocumentIdentity{domain.DocumentIdentityRootV1}},
 	}
 }
 
@@ -352,14 +352,14 @@ func TestConversationFindPreparationStrictBody(test *testing.T) {
 		{"empty", ""}, {"malformed", `{"version":`}, {"null", `null`}, {"array", `[]`},
 		{"unknown field", strings.TrimSuffix(valid, "}") + `,"unexpected":true}`},
 		{"unknown find field", strings.Replace(valid, `"find":{`, `"find":{"unexpected":true,`, 1)},
-		{"wrong find type", strings.Replace(valid, `"query":"private 검색"`, `"query":12`, 1)},
-		{"null find", strings.Replace(valid, `"find":{"query":"private 검색","cursor":"private-cursor"}`, `"find":null`, 1)},
+		{"wrong find type", strings.Replace(valid, "\"query\":\"private \uac80\uc0c9\"", `"query":12`, 1)},
+		{"null find", strings.Replace(valid, "\"find\":{\"query\":\"private \uac80\uc0c9\",\"cursor\":\"private-cursor\"}", `"find":null`, 1)},
 		{"trailing object", valid + `{}`}, {"trailing null", valid + `null`}, {"trailing garbage", valid + `private-garbage`},
 		{"version", strings.Replace(valid, `"version":1`, `"version":2`, 1)},
 		{"repository", strings.Replace(valid, string(fixture.body.RepoID), "invalid", 1)},
 		{"document hash", strings.Replace(valid, string(fixture.body.Hash), "invalid", 1)},
-		{"empty query", strings.Replace(valid, "private 검색", "", 1)},
-		{"long query", strings.Replace(valid, "private 검색", strings.Repeat("한", domain.MaxDocFindQueryRunes+1), 1)},
+		{"empty query", strings.Replace(valid, "private \uac80\uc0c9", "", 1)},
+		{"long query", strings.Replace(valid, "private \uac80\uc0c9", strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes+1), 1)},
 		{"long cursor", strings.Replace(valid, "private-cursor", strings.Repeat("x", base64.RawURLEncoding.EncodedLen(domain.MaxDocFindSelectorBytes)+1), 1)},
 		{"unsupported identity", strings.Replace(valid, string(domain.DocumentIdentityRootV1), "future-identity", 1)},
 		{"duplicate identity", strings.Replace(valid, `"document_identities":[`, `"document_identities":["`+string(domain.DocumentIdentityRootV1)+`",`, 1)},
@@ -383,7 +383,7 @@ func TestConversationFindPreparationStrictBody(test *testing.T) {
 		})
 	}
 	for _, cursor := range []string{"", strings.Repeat("x", base64.RawURLEncoding.EncodedLen(domain.MaxDocFindSelectorBytes))} {
-		fixture.body.Find = domain.ConversationFindRequest{Query: strings.Repeat("한", domain.MaxDocFindQueryRunes), Cursor: cursor}
+		fixture.body.Find = domain.ConversationFindRequest{Query: strings.Repeat("\ud55c", domain.MaxDocFindQueryRunes), Cursor: cursor}
 		handler := fixture.handler(test, func(_ context.Context, _, _ domain.ContentHash, request domain.ConversationFindRequest) error {
 			if request != fixture.body.Find {
 				test.Fatal("bounded query/cursor changed before application validation")

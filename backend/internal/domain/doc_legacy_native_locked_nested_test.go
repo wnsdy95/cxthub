@@ -47,7 +47,7 @@ func legacyNativeLockedNestedString(test *testing.T, prefix string) string {
 		scalar.WriteString(boundary.token)
 	}
 	scalar.WriteString(`\"\\\/\b\f\n\r\t\u0000\u2028\u2029\uDC00`)
-	scalar.WriteString("한<&>")
+	scalar.WriteString("\ud55c<&>")
 	const ending = `\uD800`
 	padding := 5*ConversationManifestChunkBytes + 73 - scalar.Len() - len(ending)
 	if padding < 0 {
@@ -213,7 +213,7 @@ func TestLegacyNativeLockedNestedBlockViewsMatchTypedOracle(test *testing.T) {
 		{name: "missing"},
 		{name: "null", fields: `,"blocks":null`},
 		{name: "empty", fields: `,"blocks":[]`},
-		{name: "single", fields: `,"blocks":[{"type":"text","text":"visible 한🙂<&>\n"}]`},
+		{name: "single", fields: ",\"blocks\":[{\"type\":\"text\",\"text\":\"visible \ud55c🙂<&>\\n\"}]"},
 		{name: "inline", fields: `,"blocks":[{"type":"text","text":"first"},{"type":"text","text":"last"}]`},
 		{name: "paged", fields: `,"blocks":` + paged},
 		{name: "shortened-merge", fields: `,"blocks":` + paged + `,"BLOCKS":[{"text":"merged"}]`},
@@ -268,7 +268,7 @@ func TestLegacyNativeLockedNestedGiantStringsMatchTypedOracle(test *testing.T) {
 }
 
 func TestLegacyNativeLockedNestedDuplicateMergeAndNullMatchTypedOracle(test *testing.T) {
-	blob := strings.Repeat("b", 2*ConversationManifestChunkBytes+73) + "한🙂<&>\n"
+	blob := strings.Repeat("b", 2*ConversationManifestChunkBytes+73) + "\ud55c🙂<&>\n"
 	scheme := strings.Repeat("s", 2*ConversationManifestChunkBytes+91) + "\u2028\u2029\"\\"
 	blobJSON, err := json.Marshal(blob)
 	if err != nil {

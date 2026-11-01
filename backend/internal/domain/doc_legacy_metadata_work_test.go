@@ -149,7 +149,7 @@ func TestLegacyRangeMetadataPreparationParity(test *testing.T) {
 			case "byte-blocks":
 				proof, _ = legacyDocByteGenerationLargeFixture(test)
 			case "unicode", "escape":
-				marker := "한🙂"
+				marker := "\ud55c🙂"
 				if fixture.name == "escape" {
 					marker = "\\\"\n\t"
 				}
@@ -157,7 +157,7 @@ func TestLegacyRangeMetadataPreparationParity(test *testing.T) {
 			case "compaction":
 				proof, _ = legacyDocByteBackfillDocumentFixture(test, CIRDocument{Envelope: CIREnvelope{CIRVersion: "2"}, Events: []CIREvent{
 					{Kind: EventCompaction, Seq: 17, ReplacementComplete: true, Replacement: []CIREvent{
-						{Kind: EventMessage, Seq: 9, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "한🙂 \\\" }],{"}}},
+						{Kind: EventMessage, Seq: 9, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "\ud55c🙂 \\\" }],{"}}},
 						{Kind: EventTurn, Seq: 3, Role: RoleAssistant},
 					}},
 				}})

@@ -145,8 +145,8 @@ func TestPreparedMemoryFragmentsReplayAndPinnedSelection(test *testing.T) {
 	backend, repo, args := preparedMemoryTestSetup("main")
 	status := preparedMemoryTestStatus(repo.ID)
 	items := []domain.EffectiveMemoryItem{
-		{ID: pageHash(3), SourceSnapshot: pageHash(2), Kind: "code", Text: strings.Repeat("한글🙂\n\"<>&", 2200)},
-		{ID: pageHash(4), SourceSnapshot: pageHash(2), Kind: "rationale", Text: strings.Repeat("두 번째🙂", 1500)},
+		{ID: pageHash(3), SourceSnapshot: pageHash(2), Kind: "code", Text: strings.Repeat("\ud55c\uae00🙂\n\"<>&", 2200)},
+		{ID: pageHash(4), SourceSnapshot: pageHash(2), Kind: "rationale", Text: strings.Repeat("\ub450 \ubc88\uc9f8🙂", 1500)},
 	}
 	tokens := []string{"current-zero-" + strings.Repeat("a", 1800), "current-one-" + strings.Repeat("b", 1800)}
 	initialReads, calls := 0, 0
@@ -220,7 +220,7 @@ func TestPreparedMemoryCursorBounds(test *testing.T) {
 			query := preparedMemoryQueryFunc(func(_ context.Context, _ domain.ContentHash, request domain.EffectiveMemoryRequest) (domain.MemoryReadPage, error) {
 				return domain.MemoryReadPage{Cursor: strings.Repeat("a", size), Status: preparedMemoryTestStatus(repo.ID), Page: domain.EffectiveMemoryPage{
 					Selection: request.Selection, StateHash: pageHash(5), LineageHash: pageHash(6), Total: 1,
-					Items: []domain.EffectiveMemoryItem{{ID: pageHash(3), Text: strings.Repeat("한글\"", 5000)}}}}, nil
+					Items: []domain.EffectiveMemoryItem{{ID: pageHash(3), Text: strings.Repeat("\ud55c\uae00\"", 5000)}}}}, nil
 			})
 			server := &Server{context: backend, preparedMemory: preparedMemoryReader(preparedMemoryScopeFunc(func(ctx context.Context, _ domain.ContentHash, read func(context.Context) error) error {
 				return read(ctx)
@@ -274,7 +274,7 @@ func TestPreparedMemoryInvalidCursorsAndGenerationChanges(test *testing.T) {
 		calls++
 		return domain.MemoryReadPage{Cursor: "replay", Status: status, Page: domain.EffectiveMemoryPage{
 			Selection: request.Selection, StateHash: pageHash(5), LineageHash: pageHash(6), Total: 1,
-			Items: []domain.EffectiveMemoryItem{{ID: pageHash(3), Text: strings.Repeat("한글", 5000)}}}}, nil
+			Items: []domain.EffectiveMemoryItem{{ID: pageHash(3), Text: strings.Repeat("\ud55c\uae00", 5000)}}}}, nil
 	})
 	server := &Server{context: backend, preparedMemory: preparedMemoryReader(preparedMemoryScopeFunc(func(ctx context.Context, _ domain.ContentHash, read func(context.Context) error) error {
 		return read(ctx)
@@ -621,7 +621,7 @@ func TestPreparedMemoryRejectsInvalidServicePagesAndOffsets(test *testing.T) {
 	selection := domain.EffectiveMemorySelection{SnapshotID: pageHash(2), Branch: "main", CodeCommit: args.CodeCommit}
 	valid := domain.MemoryReadPage{Cursor: "replay", Status: preparedMemoryTestStatus(repo.ID), Page: domain.EffectiveMemoryPage{
 		Selection: selection, StateHash: pageHash(5), LineageHash: pageHash(6), Total: 1,
-		Items: []domain.EffectiveMemoryItem{{ID: pageHash(3), Text: strings.Repeat("한글", 5000)}}}}
+		Items: []domain.EffectiveMemoryItem{{ID: pageHash(3), Text: strings.Repeat("\ud55c\uae00", 5000)}}}}
 	for _, candidate := range []struct {
 		name   string
 		mutate func(*domain.MemoryReadPage)
@@ -665,7 +665,7 @@ func TestPreparedMemoryRejectsInvalidServicePagesAndOffsets(test *testing.T) {
 		test.Fatal(err)
 	}
 	raw, _ := json.Marshal(valid.Page.Items[0])
-	for _, offset := range []int{len(raw), len(raw) + 1, strings.Index(string(raw), "한글") + 1} {
+	for _, offset := range []int{len(raw), len(raw) + 1, strings.Index(string(raw), "\ud55c\uae00") + 1} {
 		cursor.Offset = offset
 		args.Cursor = encodeCursor(cursor)
 		if text, err := server.memoryPage(systemTestContext(), repo, args); text != "" || !errors.Is(err, domain.ErrValidation) {

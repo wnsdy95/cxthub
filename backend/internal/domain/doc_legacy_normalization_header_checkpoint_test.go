@@ -11,7 +11,7 @@ import (
 )
 
 func legacyHeaderCheckpointFixtures() []legacyDecoderCheckpointFixture {
-	unit := strings.Repeat("checkpoint/", 1024) + `한🙂<&>\"\\\n\u2028\u2029/`
+	unit := strings.Repeat("checkpoint/", 1024) + "\ud55c🙂<&>\\\"\\\\\\n\\u2028\\u2029/"
 	large := strings.Repeat(unit, ConversationManifestChunkBytes/len(unit)+1)
 	raw := `{"envelope":{"cir_version":"2","source_provider":"codex","fidelity":"full","cwd":"` + large +
 		`","source_models":["discarded","old-tail"],"source_models":["same","` + large +

@@ -8,7 +8,7 @@ import (
 
 func FuzzDocToolFieldDiscoverySelection(fuzz *testing.F) {
 	fuzz.Add("hello", true, uint8(0))
-	fuzz.Add("한글🙂\x00\n", false, uint8(1))
+	fuzz.Add("\ud55c\uae00🙂\x00\n", false, uint8(1))
 	fuzz.Add("provider_tool_name", true, uint8(7))
 	fuzz.Fuzz(func(test *testing.T, text string, call bool, selector uint8) {
 		if len(text) > 2048 {

@@ -165,7 +165,7 @@ func legacyByteRecoveryPGPreservedImage(test *testing.T, storage *PostgresStore,
 
 func legacyByteRecoveryPGPreservationFixture(test *testing.T, storage *PostgresStore, ctx context.Context, fixture legacyByteStagePGFixture) {
 	test.Helper()
-	digest := domain.MemoryDigest{SnapshotID: fixture.hash, Summary: "preserved memory 한🙂<>& " + string(fixture.repo),
+	digest := domain.MemoryDigest{SnapshotID: fixture.hash, Summary: "preserved memory \ud55c🙂<>& " + string(fixture.repo),
 		KeyFacts: []string{"source bytes and publication identity are immutable"}, OpenTasks: []string{}, Provider: domain.ProviderCodex}
 	memory, err := storage.PutMemory(ctx, fixture.repo, digest)
 	if err != nil {
@@ -295,12 +295,12 @@ func TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource(test *test
 			document := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "2", SourceProvider: domain.ProviderCodex,
 				SessionOriginID: string(repo), Fidelity: domain.FidelityFull}, Events: []domain.CIREvent{}}
 			if scenario.largeHeader {
-				document.Envelope.Cwd = strings.Repeat("header-", 24<<10) + "한🙂\"\\\n<>&"
+				document.Envelope.Cwd = strings.Repeat("header-", 24<<10) + "\ud55c🙂\"\\\n<>&"
 			}
 			if !scenario.empty {
 				document.Events = []domain.CIREvent{
 					{Kind: domain.EventMessage, Seq: 9, Role: domain.RoleAssistant,
-						Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", 768<<10) + "한🙂\"\\\n<>&"}}},
+						Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", 768<<10) + "\ud55c🙂\"\\\n<>&"}}},
 					{Kind: domain.EventMessage, Seq: 2, Role: domain.RoleUser,
 						Blocks: []domain.ContentBlock{{Type: "text", Text: string(repo)}}},
 				}

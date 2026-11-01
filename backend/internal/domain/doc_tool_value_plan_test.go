@@ -131,7 +131,7 @@ func newDocToolValuePlanFixture(test testing.TB, value string) docToolValuePlanF
 }
 
 func TestDocToolValueSourceCanonicalIdentity(test *testing.T) {
-	source, _ := docToolValuePlanSource(test, `{"nested":[true,"한글🙂",null]}`)
+	source, _ := docToolValuePlanSource(test, "{\"nested\":[true,\"\ud55c\uae00🙂\",null]}")
 	raw, err := source.Encode()
 	hash, hashErr := source.Hash()
 	decoded, decodeErr := DecodeDocToolValueSource(hash, raw)
@@ -211,7 +211,7 @@ func TestDocToolValuePageStagingSealedAndBoundaries(test *testing.T) {
 			}
 		})
 	}
-	valid := docToolValuePlanPage(source, "한🙂x")
+	valid := docToolValuePlanPage(source, "\ud55c🙂x")
 	for name, change := range map[string]func(*DocToolValuePage){
 		"version":        func(page *DocToolValuePage) { page.Version++ },
 		"old-page-codec": func(page *DocToolValuePage) { page.Display.Version = 5 },
@@ -317,7 +317,7 @@ func TestDocToolValueCodecsRejectNoncanonicalCorruption(test *testing.T) {
 			test.Fatal("value wrapper accepted an old display format", version)
 		}
 	}
-	unicode := docToolValuePlanPage(source, "한🙂x")
+	unicode := docToolValuePlanPage(source, "\ud55c🙂x")
 	for _, location := range [][2]int{{-1, 1}, {0, 0}, {0, -1}, {1, 1}, {0, 1}, {0, math.MaxInt}, {math.MaxInt, 1}} {
 		if _, err := unicode.SourceRange(location[0], location[1]); !errors.Is(err, ErrValidation) {
 			test.Fatal("invalid UTF-8 source lookup accepted", location, err)
@@ -456,7 +456,7 @@ func TestDocToolValueLateReadOnlySelectedDirectoryPath(test *testing.T) {
 
 func TestDocToolValueSharedAssemblyRestartAndSourceRangeParity(test *testing.T) {
 	for _, value := range []string{
-		`0`, `-0`, `1e99999`, `[]`, `{}`, `null`, `true`, `false`, `""`, `"한글🙂\uD800\n"`,
+		`0`, `-0`, `1e99999`, `[]`, `{}`, `null`, `true`, `false`, `""`, "\"\ud55c\uae00🙂\\uD800\\n\"",
 		`{"10":"first","2":[true,{"x":"\ud83d\ude42\uD800\n\t"}],"10":"last","z":1.2345678901234567e-8}`,
 		`{"2":"` + strings.Repeat(`PUBLIC_BODY_MARKER\uD800\n🙂\"`, 180) + `","1":[1e1000,false,null]}`,
 	} {
@@ -598,7 +598,7 @@ func TestDocToolValueReceiptRejectsInactiveSelectedChildTransplants(test *testin
 }
 
 func TestDocToolValueReceiptBindsWholeControlStateWithoutSourceCopies(test *testing.T) {
-	fixture := newDocToolValueFixture(test, `{"long":"`+strings.Repeat(`PUBLIC_BODY_MARKER한🙂\n\ud800`, 1800)+`"}`)
+	fixture := newDocToolValueFixture(test, `{"long":"`+strings.Repeat("PUBLIC_BODY_MARKER\ud55c🙂\\n\\ud800", 1800)+`"}`)
 	fixture.compile(test)
 	var saved DocToolValueState
 	for _, state := range fixture.states {
@@ -714,8 +714,8 @@ func TestDocToolValueFrameOperationBudgetIncludesMetadataBodies(test *testing.T)
 
 func TestDocToolValueCompiledAssemblyRestartAndProvenanceWithoutRawReads(test *testing.T) {
 	for name, value := range map[string]string{
-		"nested": `{"10":"first","2":[` + strings.TrimSuffix(strings.Repeat(`{"x":["한🙂\ud83d\ude42\ud800\n\t\"\\",true,null],"n":9007199254740993},`, 36), ",") + `],"10":"last","z":{"深":[[],{},false,1e1000]}}`,
-		"long":   `{"outer":{"payload":"` + strings.Repeat(`PUBLIC_BODY_MARKER한🙂\uD83D\uDE42\uD800\n\t\"\\`, 1800) + `","tail":["끝",false,1e1000]}}`,
+		"nested": `{"10":"first","2":[` + strings.TrimSuffix(strings.Repeat("{\"x\":[\"\ud55c🙂\\ud83d\\ude42\\ud800\\n\\t\\\"\\\\\",true,null],\"n\":9007199254740993},", 36), ",") + "],\"10\":\"last\",\"z\":{\"\u6df1\":[[],{},false,1e1000]}}",
+		"long":   `{"outer":{"payload":"` + strings.Repeat("PUBLIC_BODY_MARKER\ud55c🙂\\uD83D\\uDE42\\uD800\\n\\t\\\"\\\\", 1800) + "\",\"tail\":[\"\ub05d\",false,1e1000]}}",
 	} {
 		test.Run(name, func(test *testing.T) {
 			compiled := newDocToolValueFixture(test, value)
@@ -806,7 +806,7 @@ func TestDocToolValueCompiledAssemblyRestartAndProvenanceWithoutRawReads(test *t
 }
 
 func TestDocToolValueAssemblyCapturesImmutablePlanAndStringCursorBytes(test *testing.T) {
-	fixture := newDocToolValuePlanFixture(test, `{"x":[1,"한🙂",false]}`)
+	fixture := newDocToolValuePlanFixture(test, "{\"x\":[1,\"\ud55c🙂\",false]}")
 	plan := fixture.plan
 	input, err := NewDocToolValueAssemblyInput(plan)
 	if err != nil {
@@ -987,7 +987,7 @@ func TestDocToolValueReadAndAssemblyErrorsDiscardPartialOutputs(test *testing.T)
 }
 
 func TestDocPreparedPageAssemblyRejectsInvalidFactoryAndBudgets(test *testing.T) {
-	fixture := newDocToolValuePlanFixture(test, `"한🙂x"`)
+	fixture := newDocToolValuePlanFixture(test, "\"\ud55c🙂x\"")
 	input, _ := NewDocToolValueAssemblyInput(fixture.plan)
 	read := func(ctx context.Context, index int, load func(context.Context, ContentHash) ([]byte, error)) (DocDisplayPage, error) {
 		page, err := ReadDocToolValuePage(ctx, fixture.plan, index, load)

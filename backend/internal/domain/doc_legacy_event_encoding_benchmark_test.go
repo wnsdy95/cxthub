@@ -17,7 +17,7 @@ func BenchmarkLegacyEventEncoding(benchmark *testing.B) {
 	}{
 		{name: "turn", event: CIREvent{Kind: EventTurn, Role: RoleUser}},
 		{name: "ascii-2MiB", event: CIREvent{Kind: EventToolResult, Output: strings.Repeat("payload ", 1<<18)}},
-		{name: "escaped-unicode", event: CIREvent{Kind: EventToolResult, Output: strings.Repeat("<&>\n한🙂\u2028", 1<<15)}},
+		{name: "escaped-unicode", event: CIREvent{Kind: EventToolResult, Output: strings.Repeat("<&>\n\ud55c🙂\u2028", 1<<15)}},
 		{name: "wide-structured", event: CIREvent{Kind: EventToolResult, Output: legacyKeyOrderNestedFixture(257)}},
 		{name: "long-prefix", event: CIREvent{Kind: EventToolResult, Output: map[string]any{prefix + "z": true, prefix + "a": false, prefix + "m": nil}}},
 	}

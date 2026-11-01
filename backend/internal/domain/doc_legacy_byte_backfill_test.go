@@ -134,7 +134,7 @@ func TestLegacyByteBackfillCanonicalStreamBoundariesAndSeeking(test *testing.T) 
 		}},
 		{name: "large-event", build: legacyDocByteGenerationLargeFixture},
 		{name: "split-utf8", build: func(test testing.TB) (VerifiedSessionDoc, []byte) {
-			return legacyDocByteBackfillBoundaryFixture(test, "한🙂")
+			return legacyDocByteBackfillBoundaryFixture(test, "\ud55c🙂")
 		}},
 		{name: "split-escape", build: func(test testing.TB) (VerifiedSessionDoc, []byte) {
 			return legacyDocByteBackfillBoundaryFixture(test, "\"\\\n\t\x01<>&\u2028\u2029")
@@ -191,7 +191,7 @@ func TestLegacyByteBackfillRepresentationParity(test *testing.T) {
 		{name: "multiple-events", build: func(test testing.TB) (VerifiedSessionDoc, []byte) { return legacyDocRangeGenerationFixture(test, 9) }},
 		{name: "large-event", build: legacyDocByteGenerationLargeFixture},
 		{name: "split-utf8", build: func(test testing.TB) (VerifiedSessionDoc, []byte) {
-			return legacyDocByteBackfillBoundaryFixture(test, "한🙂")
+			return legacyDocByteBackfillBoundaryFixture(test, "\ud55c🙂")
 		}},
 		{name: "split-escape", build: func(test testing.TB) (VerifiedSessionDoc, []byte) {
 			return legacyDocByteBackfillBoundaryFixture(test, "\"\\\n\t")
@@ -400,7 +400,7 @@ func TestLegacyByteBackfillRejectsRootAndInvalidProofs(test *testing.T) {
 
 func TestLegacyByteBackfillOwnsReturnedValuesAndSourceBytes(test *testing.T) {
 	document := CIRDocument{Envelope: CIREnvelope{CIRVersion: "2", SourceModels: []string{"original-model"}}, Events: []CIREvent{
-		{Kind: EventMessage, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "immutable-message-한🙂\"\\\n"}}},
+		{Kind: EventMessage, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "immutable-message-\ud55c🙂\"\\\n"}}},
 	}}
 	materialized, original := legacyDocByteBackfillDocumentFixture(test, document)
 	envelope, stream := chunkVerifierParts(test, original)

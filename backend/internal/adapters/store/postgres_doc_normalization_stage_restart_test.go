@@ -84,10 +84,10 @@ func TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed(test
 					SessionOriginID: string(repo), Fidelity: domain.FidelityFull, Cwd: strings.Repeat("parser-progress🙂", 150000)},
 				Events: []domain.CIREvent{
 					{Kind: domain.EventToolCall, Seq: 1, CallID: "stage-restart-call", ToolName: "stage-restart",
-						Input: map[string]any{"payload": strings.Repeat("stage-input🙂", 100000) + "한🙂\"\\\n<>&",
+						Input: map[string]any{"payload": strings.Repeat("stage-input🙂", 100000) + "\ud55c🙂\"\\\n<>&",
 							"tail": []any{true, nil, "Input must remain staged"}}},
 					{Kind: domain.EventToolResult, Seq: 2, CallID: "stage-restart-call",
-						Output: map[string]any{"payload": strings.Repeat("stage-output🙂", 100000) + "한🙂\"\\\n<>&",
+						Output: map[string]any{"payload": strings.Repeat("stage-output🙂", 100000) + "\ud55c🙂\"\\\n<>&",
 							"tail": []any{false, nil, "Output must resume after its saved offset"}}},
 				},
 			}

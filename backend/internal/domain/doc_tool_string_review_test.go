@@ -118,7 +118,7 @@ func docToolStringReviewOracle(test *testing.T, fixture docToolStringReviewFixtu
 func TestDocToolStringReviewRestartTextAndProvenance(test *testing.T) {
 	tokens := []string{
 		`""`, `"plain"`, `"\n"`, `"\r\n\n"`, `"\uD800"`, `"\ud801\ufffd\udc00"`,
-		`"\uD800\uD800\uDC00"`, `"한🙂\uD83D\uDE00\"\\\/\b\f\n\r\t\u0000\u001f"`,
+		`"\uD800\uD800\uDC00"`, "\"\ud55c🙂\\uD83D\\uDE00\\\"\\\\\\/\\b\\f\\n\\r\\t\\u0000\\u001f\"",
 		"\"<>&\u2028\u2029\"",
 		`"` + strings.Repeat(`a\u0062\n\uD800x\uD83D\uDE00`, 600) + `"`,
 	}

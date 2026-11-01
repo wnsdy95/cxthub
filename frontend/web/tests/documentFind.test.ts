@@ -64,7 +64,7 @@ const findFields = 128 * 1024;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
 function match(change: Partial<DocFindMatch> = {}): DocFindMatch {
-  return { event_index: 2, field: 0, byte_offset: 4, byte_length: 6, raw: false, preview: '앞 NeedLE🙂 뒤',
+  return { event_index: 2, field: 0, byte_offset: 4, byte_length: 6, raw: false, preview: '\uc55e NeedLE🙂 \ub4a4',
     preview_byte_offset: 0, reveal_cursor: 'opaque_reveal-token', ...change };
 }
 
@@ -91,7 +91,7 @@ function invalidLegacy(value: unknown, previous?: DocumentFindPosition['frontier
 
 test('find parameters use only the actual initial and continuation wire keys and preserve opaque tokens', () => {
   const before = structuredClone(source);
-  const query = ' "Needle" + & ?\n한🙂 ';
+  const query = ' "Needle" + & ?\n\ud55c🙂 ';
   assert.deepEqual([...documentFindParameters(query, source)], [
     ['q', query], ['selection', source.replay], ['from', '2'], ['to', '30'],
   ]);
@@ -106,7 +106,7 @@ test('find parameters use only the actual initial and continuation wire keys and
 });
 
 test('find query validation counts Unicode scalars without trimming or normalizing them', () => {
-  for (const query of [' ', '\n', '\u0000', 'e\u0301', '🙂'.repeat(256), '한'.repeat(256)]) {
+  for (const query of [' ', '\n', '\u0000', 'e\u0301', '🙂'.repeat(256), '\ud55c'.repeat(256)]) {
     assert.equal(documentFindParameters(query, source).get('q'), query);
   }
   for (const query of ['', '🙂'.repeat(257), 'a'.repeat(257), '\ud800', '\udfff', 'a\ud800b', '\ud800\ud800', undefined, null, 7]) {
@@ -115,7 +115,7 @@ test('find query validation counts Unicode scalars without trimming or normalizi
 });
 
 test('find requests reject missing, oversized and non-base64url selectors without decoding valid-shaped tokens', () => {
-  for (const replay of ['', 'a'.repeat(2732), 'bad=', 'bad+', 'bad/', 'bad token', '\n', '한', null, undefined, 5]) {
+  for (const replay of ['', 'a'.repeat(2732), 'bad=', 'bad+', 'bad/', 'bad token', '\n', '\ud55c', null, undefined, 5]) {
     assert.throws(() => documentFindParameters('needle', { ...source, replay } as DocumentFindSource), DocumentProjectionError);
   }
   for (const cursor of ['', 'a'.repeat(5463), 'bad=', 'bad+', 'bad/', 'bad token', 'bad\n', '🙂', null, 5]) {
@@ -157,7 +157,7 @@ test('source admission requires an existing visible generation and the selected 
 
 test('find pages preserve the exact Go wire object including raw coordinates and Unicode previews', () => {
   const current = page({ matches: [Object.freeze(match()), Object.freeze(match({ event_index: 2, field: 1, raw: true,
-    byte_offset: 1007, preview_byte_offset: 1000, byte_length: 3, preview: '앞🙂K 뒤' }))] });
+    byte_offset: 1007, preview_byte_offset: 1000, byte_length: 3, preview: '\uc55e🙂K \ub4a4' }))] });
   Object.freeze(current.matches);
   Object.freeze(current);
   assert.equal(validateDocumentFindPage(current, source), current);
@@ -253,7 +253,7 @@ test('match lists are capped, strictly sorted and bounded by the inclusive prior
 });
 
 test('find and reveal cursors stay opaque, nonempty, base64url-shaped and separately bounded', () => {
-  for (const next_cursor of ['', undefined, 0, {}, 'a'.repeat(5463), 'bad=', 'bad+', 'bad/', 'bad token', 'bad\n', '한']) {
+  for (const next_cursor of ['', undefined, 0, {}, 'a'.repeat(5463), 'bad=', 'bad+', 'bad/', 'bad token', 'bad\n', '\ud55c']) {
     invalid({ ...page(), next_cursor });
   }
   for (const reveal_cursor of ['', undefined, null, 0, {}, 'a'.repeat(2732), 'bad=', 'bad+', 'bad/', 'bad token', 'bad\n', '🙂']) {
@@ -266,7 +266,7 @@ test('find and reveal cursors stay opaque, nonempty, base64url-shaped and separa
 });
 
 test('preview spans use UTF-8 byte boundaries rather than UTF-16 or character offsets', () => {
-  const preview = 'aé한🙂z';
+  const preview = 'aé\ud55c🙂z';
   for (const [byte_offset, byte_length] of [[0, 1], [1, 2], [3, 3], [6, 4], [10, 1], [1, 9]]) {
     const current = page({ matches: [match({ preview, byte_offset, byte_length })] });
     assert.equal(validateDocumentFindPage(current, source), current);
@@ -284,7 +284,7 @@ test('preview spans use UTF-8 byte boundaries rather than UTF-16 or character of
 
 test('preview and match budgets count runes with at most 32 context runes on each side', () => {
   const prefix = '🙂'.repeat(32);
-  const matched = '한'.repeat(256);
+  const matched = '\ud55c'.repeat(256);
   const suffix = 'é'.repeat(32);
   const preview = prefix + matched + suffix;
   const maximum = page({ matches: [match({ preview, byte_offset: bytes(prefix), byte_length: bytes(matched) })] });
@@ -306,7 +306,7 @@ test('preview and match budgets count runes with at most 32 context runes on eac
 
 test('legacy parameters contain exactly the admitted bounds and optional nonempty base without visible selectors', () => {
   const before = structuredClone(legacySource);
-  const query = ' "Needle" + & ?\n한🙂 ';
+  const query = ' "Needle" + & ?\n\ud55c🙂 ';
   const expected = [['q', query], ['legacy', '1'], ['from', '2'], ['to', '30'], ['total', '40'], ['inherited', '2'], ['base', 'base']];
   assert.deepEqual([...documentFindParameters(query, legacySource)], expected);
   assert.deepEqual([...documentFindParameters(query, legacySource, { source: 3 })], expected);
@@ -328,7 +328,7 @@ test('legacy parameters contain exactly the admitted bounds and optional nonempt
 });
 
 test('legacy queries preserve the same unnormalized 1 through 256 Unicode scalar contract', () => {
-  for (const query of [' ', '\n', '\u0000', 'e\u0301', '🙂'.repeat(256), '한'.repeat(256)]) {
+  for (const query of [' ', '\n', '\u0000', 'e\u0301', '🙂'.repeat(256), '\ud55c'.repeat(256)]) {
     assert.equal(documentFindParameters(query, legacySource).get('q'), query);
     assert.equal(documentFindParameters(query, legacySource, { source: 0, cursor: 'opaque' }).get('q'), query);
   }
@@ -420,7 +420,7 @@ test('legacy sources never borrow visible generations, rules or replay selectors
 
 test('legacy pages require their own projection and explicit empty generation and never cross root protocols', () => {
   const current = legacyPage({ matches: [Object.freeze(legacyMatch()), Object.freeze(legacyMatch({ field: 1, raw: true,
-    byte_offset: 1007, preview_byte_offset: 1000, byte_length: 3, preview: '앞🙂K 뒤' }))] });
+    byte_offset: 1007, preview_byte_offset: 1000, byte_length: 3, preview: '\uc55e🙂K \ub4a4' }))] });
   Object.freeze(current.matches);
   Object.freeze(current);
   assert.equal(validateDocumentFindPage(current, legacySource), current);
@@ -543,7 +543,7 @@ test('legacy matches retain the shared cap, ordering and prior-inclusive frontie
 });
 
 test('legacy previews retain shared UTF-8 boundaries, document byte limits and rune context budgets', () => {
-  const preview = 'aé한🙂z';
+  const preview = 'aé\ud55c🙂z';
   for (const [byte_offset, byte_length] of [[0, 1], [1, 2], [3, 3], [6, 4], [10, 1], [1, 9]]) {
     const current = legacyPage({ matches: [legacyMatch({ preview, byte_offset, byte_length })] });
     assert.equal(validateDocumentFindPage(current, legacySource), current);
@@ -558,7 +558,7 @@ test('legacy previews retain shared UTF-8 boundaries, document byte limits and r
   assert.equal(validateDocumentFindPage(shifted, legacySource), shifted);
   invalidLegacy(legacyPage({ matches: [legacyMatch({ preview: 'aa', preview_byte_offset: documentBytes - 1,
     byte_offset: documentBytes - 1, byte_length: 1 })] }));
-  const maximum = legacyPage({ matches: [legacyMatch({ preview: '🙂'.repeat(32) + '한'.repeat(256) + 'é'.repeat(32), byte_offset: 128, byte_length: 768 })] });
+  const maximum = legacyPage({ matches: [legacyMatch({ preview: '🙂'.repeat(32) + '\ud55c'.repeat(256) + 'é'.repeat(32), byte_offset: 128, byte_length: 768 })] });
   assert.equal(validateDocumentFindPage(maximum, legacySource), maximum);
   const astral = legacyPage({ matches: [legacyMatch({ preview: '🙂'.repeat(320), byte_offset: 128, byte_length: 1024 })] });
   assert.equal(validateDocumentFindPage(astral, legacySource), astral);
@@ -597,7 +597,7 @@ const displayFixtures = [
 ];
 
 test('display parameters append the representation to initial requests and every opaque continuation without changing source v1', () => {
-  const query = ' "Needle" + & ?\n한🙂 ';
+  const query = ' "Needle" + & ?\n\ud55c🙂 ';
   const positions: (DocumentFindPosition | undefined)[] = [undefined, { source: 0 },
     { source: 7, cursor: 'not_decoded-or-reencoded', frontier: { index: 5, field: 0, byte: 30 } },
     { source: 7, cursor: 'second_opaque-token', frontier: { index: 5, field: 0, byte: displayBytes } }];

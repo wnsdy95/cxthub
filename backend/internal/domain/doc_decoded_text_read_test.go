@@ -225,9 +225,9 @@ func TestDocDecodedTextReadLookupCodec(test *testing.T) {
 
 func TestDocDecodedTextReadBytesExactAndUnaligned(test *testing.T) {
 	for _, token := range []string{
-		`""`, `"  \n\t "`, `"A\n\u03b2\ud83d\ude42한\"Z"`,
+		`""`, `"  \n\t "`, "\"A\\n\\u03b2\\ud83d\\ude42\ud55c\\\"Z\"",
 		`"` + strings.Repeat(`\n`, 511) + `\u03b2` + strings.Repeat(`\n`, 1536) + `"`,
-		`"` + strings.Repeat("한🙂abc", 9000) + `"`,
+		`"` + strings.Repeat("\ud55c🙂abc", 9000) + `"`,
 	} {
 		fixture := newDecodedTextReadFixture(test, token)
 		for _, from := range []int{0, 1, 2, 511, 512, 513, 1023, 32767, 65535, len(fixture.text)} {
@@ -255,8 +255,8 @@ func TestDocDecodedTextReadBytesExactAndUnaligned(test *testing.T) {
 
 func TestDocDecodedTextReadPreparedGeneration(test *testing.T) {
 	for _, text := range []string{
-		"", " \n\t\r ", "한🙂\\\"\n",
-		strings.Repeat("한🙂x\n", 14000), strings.Repeat("\\\t\n\r\"", 15000),
+		"", " \n\t\r ", "\ud55c🙂\\\"\n",
+		strings.Repeat("\ud55c🙂x\n", 14000), strings.Repeat("\\\t\n\r\"", 15000),
 	} {
 		raw, err := json.Marshal(map[string]any{"kind": "reasoning", "redacted_summary": text, "opaque": "not public input"})
 		if err != nil {
@@ -383,7 +383,7 @@ func TestDocDecodedTextReadInitialNeighbor(test *testing.T) {
 }
 
 func TestDocDecodedTextReadSourceLiteralMapping(test *testing.T) {
-	fixture := newDecodedTextReadFixture(test, `"A\n\u03b2\ud83d\ude42한\"Z"`)
+	fixture := newDecodedTextReadFixture(test, "\"A\\n\\u03b2\\ud83d\\ude42\ud55c\\\"Z\"")
 	base := fixture.source.Token.From + 1
 	for _, scenario := range []struct {
 		from, length int

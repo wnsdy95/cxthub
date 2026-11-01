@@ -96,13 +96,13 @@ func TestCanonicalPayloadProjectionConcreteOracle(t *testing.T) {
 		"generic_number_string":   `{"create_time":"not-a-number","provider_metadata":{"create_time":"1e9999"}}`,
 		"decoded_control_order":   `{"\u0000":0,"\b":0,"\t":0,"\n":0,"\u000b":0,"\f":0,"\r":0," ":0}`,
 		"decoded_html_order":      `{"\"":0,"\u0026":0,"\u003c":0,"\u003e":0,"A":0,"\\":0,"a":0}`,
-		"decoded_utf8_order":      `{"z":0,"é":0,"한":0,"😀":0}`,
+		"decoded_utf8_order":      "{\"z\":0,\"é\":0,\"\ud55c\":0,\"😀\":0}",
 		"decoded_not_wire_order":  `{"\n":0," ":0,"\u003c":0,"A":0}`,
 		"unicode_not_utf16_order": "{\"\ue000\":0,\"😀\":0}",
 		"unsorted_keys":           `{"z":0,"a":0}`,
 		"unsorted_controls":       `{" ":0,"\n":0}`,
 		"unsorted_html":           `{"A":0,"\u003c":0}`,
-		"unsorted_utf8":           `{"😀":0,"한":0}`,
+		"unsorted_utf8":           "{\"😀\":0,\"\ud55c\":0}",
 		"unsorted_nested":         `{"a":[{"z":0,"a":0}],"z":0}`,
 		"duplicate_key":           `{"a":1,"a":2}`,
 		"duplicate_escaped_key":   `{"a":1,"\u0061":2}`,
@@ -113,7 +113,7 @@ func TestCanonicalPayloadProjectionConcreteOracle(t *testing.T) {
 		"raw_html":                `"<>&"`,
 		"escaped_html":            `"\u003c\u003e\u0026"`,
 		"uppercase_html_hex":      `"\u003C"`,
-		"raw_utf8":                `"한글😀"`,
+		"raw_utf8":                "\"\ud55c\uae00😀\"",
 		"escaped_utf8":            `"\ud55c\uae00"`,
 		"escaped_surrogate_pair":  `"\ud83d\ude00"`,
 		"lone_surrogate":          `"\ud800"`,
@@ -208,7 +208,7 @@ func TestCanonicalPayloadProjectionMalformedPrefixes(t *testing.T) {
 
 func TestCanonicalPayloadProjectionLongKeyOrdering(t *testing.T) {
 	common := strings.Repeat("key", canonicalCheckBytes)
-	for _, pair := range [][2]string{{"\x00", "\t"}, {"\n", " "}, {"<", "A"}, {"A", "\\"}, {"한", "😀"}, {"\ue000", "😀"}} {
+	for _, pair := range [][2]string{{"\x00", "\t"}, {"\n", " "}, {"<", "A"}, {"A", "\\"}, {"\ud55c", "😀"}, {"\ue000", "😀"}} {
 		t.Run(fmt.Sprintf("%q-before-%q", pair[0], pair[1]), func(t *testing.T) {
 			first := giantCanonicalString(t, common+pair[0])
 			second := giantCanonicalString(t, common+pair[1])
@@ -226,7 +226,7 @@ func TestCanonicalPayloadProjectionLongKeyOrdering(t *testing.T) {
 
 func TestCanonicalPayloadProjectionStringAndKeySeams(t *testing.T) {
 	for shift := -8; shift <= 8; shift++ {
-		text := strings.Repeat("a", canonicalCheckBytes+shift) + "\x00\b\t\n\f\r\"\\/<>&\u2028\u2029한😀�"
+		text := strings.Repeat("a", canonicalCheckBytes+shift) + "\x00\b\t\n\f\r\"\\/<>&\u2028\u2029\ud55c😀�"
 		quoted := giantCanonicalString(t, text)
 		assertCanonicalPayloadOracle(t, []byte(`[`+quoted+`]`))
 		assertCanonicalPayloadOracle(t, []byte(`{`+quoted+`:0}`))
@@ -559,7 +559,7 @@ func TestCanonicalPayloadProjectionVerifierCancellationAndProofOwnership(t *test
 }
 
 func FuzzCanonicalPayloadProjectionConcreteOracle(f *testing.F) {
-	for _, seed := range []string{`{}`, `[]`, `null`, `true`, `-0`, `9007199254740993`, `1e9999`, `{"a":["한😀\u003c",null],"z":false}`, `{"a":1,"a":2}`, `{"z":0,"a":1}`, `"\ud800"`} {
+	for _, seed := range []string{`{}`, `[]`, `null`, `true`, `-0`, `9007199254740993`, `1e9999`, "{\"a\":[\"\ud55c😀\\u003c\",null],\"z\":false}", `{"a":1,"a":2}`, `{"z":0,"a":1}`, `"\ud800"`} {
 		f.Add(seed, uint8(0), uint16(0))
 	}
 	f.Fuzz(func(t *testing.T, text string, mutation uint8, position uint16) {
@@ -575,7 +575,7 @@ func FuzzCanonicalPayloadProjectionConcreteOracle(f *testing.F) {
 }
 
 func FuzzCanonicalPayloadProjectionVerifierParity(f *testing.F) {
-	for _, text := range []string{"plain", "한😀<>&\u2028", "\x00\n\\\"", string([]byte{0xff})} {
+	for _, text := range []string{"plain", "\ud55c😀<>&\u2028", "\x00\n\\\"", string([]byte{0xff})} {
 		for variant := uint8(0); variant < 3; variant++ {
 			f.Add(text, variant, uint8(0), uint16(0))
 		}

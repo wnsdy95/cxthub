@@ -164,7 +164,7 @@ func TestDocMarkdownPlanSharedGoldens(test *testing.T) {
 func TestDocMarkdownPlanLargeRealInputAndRestart(test *testing.T) {
 	for _, scenario := range []struct{ name, source, want string }{
 		{"paragraph", strings.Repeat("long 🙂 paragraph\n", 14000), strings.TrimSuffix(strings.Repeat("long 🙂 paragraph\n", 14000), "\n")},
-		{"strong", "**" + strings.Repeat("한글🙂", 40000) + "**", strings.Repeat("한글🙂", 40000)},
+		{"strong", "**" + strings.Repeat("\ud55c\uae00🙂", 40000) + "**", strings.Repeat("\ud55c\uae00🙂", 40000)},
 		{"hidden URL", "[visible](https://example.test/" + strings.Repeat("x", 300000) + ")", "visible"},
 		{"unclosed code", "`" + strings.Repeat("x", 300000), "`" + strings.Repeat("x", 300000)},
 		{"fence", "```\n" + strings.Repeat("raw **🙂**\n", 20000) + "```", strings.TrimSuffix(strings.Repeat("raw **🙂**\n", 20000), "\n")},

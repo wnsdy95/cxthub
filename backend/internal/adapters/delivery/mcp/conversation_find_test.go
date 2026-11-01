@@ -29,7 +29,7 @@ func TestConversationFindFragmentsPinRefAndNativeReplay(test *testing.T) {
 	nextNative := "native-next"
 	page := domain.DocFindPage{Projection: domain.DocFindPreparedProjection, Hash: pageHash(2), Prepared: &domain.DocFindPreparedProgress{}, To: 1, Matches: []domain.DocFindMatch{}, NextCursor: &nextNative}
 	for index := 0; index < 20; index++ {
-		page.Matches = append(page.Matches, domain.DocFindMatch{Index: index, Preview: strings.Repeat("한글🙂\"<>needle", 110), RevealCursor: strings.Repeat("x", 160)})
+		page.Matches = append(page.Matches, domain.DocFindMatch{Index: index, Preview: strings.Repeat("\ud55c\uae00🙂\"<>needle", 110), RevealCursor: strings.Repeat("x", 160)})
 	}
 	server := &Server{context: backend}
 	calls := 0
