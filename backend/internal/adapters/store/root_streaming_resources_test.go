@@ -229,6 +229,7 @@ func TestStreamingRootResourcesCloseClearsMetadataAndPreservesErrors(t *testing.
 			prepared := preparedRootResourcesFixture(t, 1)
 			job := prepared.job
 			path := prepared.spool.file.Name()
+			reservedBytes := prepared.spool.quota.bytes
 			if mode == "close-error" {
 				if err := prepared.spool.file.Close(); err != nil {
 					t.Fatal(err)
@@ -238,6 +239,16 @@ func TestStreamingRootResourcesCloseClearsMetadataAndPreservesErrors(t *testing.
 				if err := os.Rename(path, path+".moved"); err != nil {
 					t.Fatal(err)
 				}
+				t.Cleanup(func() {
+					closeErr := prepared.spool.file.Close()
+					removeErr := os.RemoveAll(path)
+					retainedErr := os.Remove(path + ".moved")
+					if closeErr != nil && !errors.Is(closeErr, os.ErrClosed) || removeErr != nil || retainedErr != nil && !os.IsNotExist(retainedErr) {
+						t.Error("failed to reclaim retained spool fixture", closeErr, removeErr, retainedErr)
+						return
+					}
+					prepared.spool.quota.Close()
+				})
 				if err := os.Mkdir(path, 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -256,6 +267,19 @@ func TestStreamingRootResourcesCloseClearsMetadataAndPreservesErrors(t *testing.
 				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("close did not remove spool", err)
 				}
+				transientSpoolBudgetAssertUsage(t, 0, 0, 0)
+			} else {
+				retained, err := os.Stat(path + ".moved")
+				if err != nil || retained.Size() != reservedBytes || reservedBytes <= 0 {
+					t.Fatal("removal failure did not retain the reserved spool bytes", retained, err)
+				}
+				transientSpoolBudgetAssertUsage(t, 0, reservedBytes, 1)
+				if restore, err := configureTransientSpoolBudget(1); !errors.Is(err, domain.ErrConflict) || restore != nil {
+					if restore != nil {
+						t.Cleanup(func() { restore() })
+					}
+					t.Fatal("configuration ignored the retained spool owner", err)
+				}
 			}
 			if resources, err := prepared.RetainedResources(); err == nil || resources != (outbound.RootPublicationResources{}) {
 				t.Fatal("closed preparation yielded resources", resources, err)
@@ -264,7 +288,9 @@ func TestStreamingRootResourcesCloseClearsMetadataAndPreservesErrors(t *testing.
 				t.Fatal("closed preparation matched a job")
 			}
 		})
+		transientSpoolBudgetAssertUsage(t, 0, 0, 0)
 	}
+	transientSpoolBudgetConfigure(t, 1)
 }
 
 func TestStreamingRootResourceEstimateOverflow(t *testing.T) {
