@@ -1453,9 +1453,13 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if !ok {
 		return domain.DocChunkManifest{}, domain.ErrNotFound
 	}
-	return rawRepresentationTransaction(ctx, s, func(tx pgx.Tx, attempt *rawRepresentationAttempt) (domain.DocChunkManifest, error) {
+	manifest, err := rawRepresentationTransaction(ctx, s, func(tx pgx.Tx, attempt *rawRepresentationAttempt) (domain.DocChunkManifest, error) {
 		return s.getDocManifestInRawTransaction(ctx, tx, repoID, hash, current, plan, attempt)
 	})
+	if err == domain.ErrStorageLimit && ctx.Err() == nil && !s.InTransaction(ctx) {
+		return domain.DocChunkManifest{}, domain.ErrNotFound
+	}
+	return manifest, err
 }
 
 func (s *PostgresStore) getDocManifestInRawTransaction(ctx context.Context, tx pgx.Tx, repoID, hash domain.ContentHash, expected []byte, plan domain.DocChunkPlan, attempt *rawRepresentationAttempt) (domain.DocChunkManifest, error) {
