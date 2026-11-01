@@ -39,7 +39,7 @@ func (entry legacyNativeEventValuesCheckpointEntry) validate(kind uint8, sourceB
 			return ErrIntegrity
 		}
 		schema, err := legacyNativeCheckpointBlockSchema()
-		if err != nil || entry.Block.Schema != schema || entry.Block.Values.Nil || entry.Block.Values.Length != 2 || entry.Block.Values.Capacity != 2 {
+		if err != nil || entry.Block.Schema != schema || entry.Block.Inline != nil || entry.Block.Values.Nil || entry.Block.Values.Length != 2 || entry.Block.Values.Capacity != 2 {
 			return ErrIntegrity
 		}
 		return entry.Block.Values.validate(true)

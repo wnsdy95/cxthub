@@ -1,8 +1,14 @@
 package domain
 
 type legacyNativeCheckpointBlockRecord struct {
-	Schema ContentHash                   `json:"schema"`
-	Values legacyNativeCheckpointStrings `json:"values"`
+	Schema ContentHash                              `json:"schema"`
+	Values legacyNativeCheckpointStrings            `json:"values"`
+	Inline *legacyNativeCheckpointBlockInlineRecord `json:"inline,omitempty"`
+}
+
+type legacyNativeCheckpointBlockInlineRecord struct {
+	Values     [2][]byte `json:"values"`
+	Capacities [2]int    `json:"capacities"`
 }
 
 type legacyNativeCheckpointBlockArray struct {

@@ -178,6 +178,17 @@ func (work *legacyNativeBlockListCheckpoint) writeRows(ctx context.Context) erro
 		if err != nil {
 			return err
 		}
+		inline, packed, err := legacyNativeBlockInlineRecord(ctx, value, initialized)
+		if err != nil {
+			return err
+		}
+		if packed {
+			if err := work.rows.append(ctx, work.store, inline); err != nil {
+				return err
+			}
+			work.index++
+			return nil
+		}
 		work.record, err = newLegacyNativeCheckpointBlockRecordWriter(ctx, value, initialized, work.store, remaining)
 		return err
 	}
@@ -510,6 +521,23 @@ func (work *legacyNativeBlockListCheckpointRestore) readRows(ctx context.Context
 		if err != nil {
 			return err
 		}
+		if row.Inline != nil {
+			if work.stream == 2 {
+				bytes, err := work.list.data.records.appendBytes()
+				if err != nil {
+					return err
+				}
+				if int64(bytes) >= remaining {
+					return ErrDocumentResourceLimit
+				}
+				remaining -= int64(bytes)
+			}
+			value, err := legacyNativeBlockInlineRestore(ctx, row, work.source.Bytes, remaining)
+			if err != nil {
+				return err
+			}
+			return work.appendRow(value)
+		}
 		work.record, err = newLegacyNativeCheckpointBlockRecordRestore(ctx, row, work.store, work.source.Bytes, remaining)
 		return err
 	}
@@ -531,6 +559,10 @@ func (work *legacyNativeBlockListCheckpointRestore) readRows(ctx context.Context
 	if err != nil {
 		return err
 	}
+	return work.appendRow(row)
+}
+
+func (work *legacyNativeBlockListCheckpointRestore) appendRow(row legacyNativeBlockValue) error {
 	for _, heap := range row.heaps {
 		work.physical[work.stream].include(heap)
 	}

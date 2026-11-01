@@ -16,6 +16,36 @@ type legacyNativeCheckpointBlockRecordWriter struct {
 	failure    error
 }
 
+func legacyNativeBlockRecordCapacities(record legacyNativeBlockValue, initialized bool) ([2]int, error) {
+	values := [2]string{record.block.Type, record.block.Text}
+	var capacities [2]int
+	maximum := legacyNativeValueCheckpointPayloadLimit()
+	for ordinal, text := range values {
+		if uint64(len(text)) > maximum {
+			return [2]int{}, ErrIntegrity
+		}
+		capacity := int64(len(text))
+		if initialized {
+			excess := record.excess[ordinal]
+			if record.heaps[ordinal].err != nil || record.heaps[ordinal].bytes < 0 || excess < 0 || excess%2 != 0 ||
+				excess/2 > int64(2*maximum+64)-capacity {
+				return [2]int{}, ErrIntegrity
+			}
+			capacity += excess / 2
+			var expected docRangeHeaderHeapEstimate
+			expected.allocation(capacity, 1)
+			if expected.err != nil || record.heaps[ordinal].bytes != expected.bytes {
+				return [2]int{}, ErrIntegrity
+			}
+		}
+		if uint64(capacity) > uint64(int(^uint(0)>>1)) {
+			return [2]int{}, ErrIntegrity
+		}
+		capacities[ordinal] = int(capacity)
+	}
+	return capacities, nil
+}
+
 func newLegacyNativeCheckpointBlockRecordWriter(ctx context.Context, record legacyNativeBlockValue, initialized bool, store legacyNativeCheckpointIO, heapBudget int64) (*legacyNativeCheckpointBlockRecordWriter, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -27,31 +57,9 @@ func newLegacyNativeCheckpointBlockRecordWriter(ctx context.Context, record lega
 	if store.Put == nil || heapBudget <= 0 {
 		return nil, ErrIntegrity
 	}
-	values := [2]string{record.block.Type, record.block.Text}
-	var capacities [2]int
-	maximum := legacyNativeValueCheckpointPayloadLimit()
-	for ordinal, text := range values {
-		if uint64(len(text)) > maximum {
-			return nil, ErrIntegrity
-		}
-		capacity := int64(len(text))
-		if initialized {
-			excess := record.excess[ordinal]
-			if record.heaps[ordinal].err != nil || record.heaps[ordinal].bytes < 0 || excess < 0 || excess%2 != 0 ||
-				excess/2 > int64(2*maximum+64)-capacity {
-				return nil, ErrIntegrity
-			}
-			capacity += excess / 2
-			var expected docRangeHeaderHeapEstimate
-			expected.allocation(capacity, 1)
-			if expected.err != nil || record.heaps[ordinal].bytes != expected.bytes {
-				return nil, ErrIntegrity
-			}
-		}
-		if uint64(capacity) > uint64(int(^uint(0)>>1)) {
-			return nil, ErrIntegrity
-		}
-		capacities[ordinal] = int(capacity)
+	capacities, err := legacyNativeBlockRecordCapacities(record, initialized)
+	if err != nil {
+		return nil, err
 	}
 	var planned docRangeHeaderHeapEstimate
 	planned.allocation(1, int64(unsafe.Sizeof(legacyNativeCheckpointBlockRecordWriter{})))
@@ -62,7 +70,7 @@ func newLegacyNativeCheckpointBlockRecordWriter(ctx context.Context, record lega
 	if planned.bytes == heapBudget {
 		return nil, ErrDocumentResourceLimit
 	}
-	work := &legacyNativeCheckpointBlockRecordWriter{values: values, capacities: capacities, budget: heapBudget}
+	work := &legacyNativeCheckpointBlockRecordWriter{values: [2]string{record.block.Type, record.block.Text}, capacities: capacities, budget: heapBudget}
 	work.result.Schema = schema
 	work.strings, err = newLegacyNativeCheckpointStringValuesWriter(ctx, work.values[:], work.capacity, store, heapBudget-planned.bytes)
 	if err != nil {
@@ -203,7 +211,7 @@ func newLegacyNativeCheckpointBlockRecordRestore(ctx context.Context, saved lega
 		return nil, err
 	}
 	schema, err := legacyNativeCheckpointBlockSchema()
-	if err != nil || saved.Schema != schema {
+	if err != nil || saved.Schema != schema || saved.Inline != nil {
 		return nil, ErrIntegrity
 	}
 	if saved.Values.Nil || saved.Values.Length != 2 || saved.Values.Capacity != 2 ||
