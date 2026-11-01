@@ -29,7 +29,8 @@ func (ctx *docCanonicalPagesPGContext) Err() error {
 	frames := runtime.CallersFrames(callers[:runtime.Callers(2, callers[:])])
 	caller, _ := frames.Next()
 	consumer, _ := frames.Next()
-	if strings.HasSuffix(caller.Function, "domain.newLegacyCanonicalEncodingNative") {
+	if strings.HasSuffix(caller.Function, "domain.newLegacyCanonicalEncodingNative") ||
+		strings.HasSuffix(caller.Function, "domain.finishLegacyCanonicalEncodingNative") {
 		ctx.native.Store(true)
 	}
 	if strings.HasSuffix(caller.Function, "domain.(*legacyCanonicalPreparation).step") &&
@@ -305,6 +306,30 @@ func TestDocCanonicalPagesPGActiveNativePreparationRetainsFences(test *testing.T
 	}
 }
 
+func docCanonicalPagesPGDrainCheckpoint(test *testing.T, work *preparedLegacyCaptureWork, ctx context.Context, job domain.DocRangeIndexJob, remaining *int) bool {
+	test.Helper()
+	drained := false
+	var sequence int64
+	if work.checkpoint != nil {
+		sequence = work.checkpoint.state.sequence
+	}
+	for work.checkpoint.busy() {
+		if *remaining == 0 {
+			test.Fatal("native preparation exhausted its existing checkpoint processing budget")
+		}
+		*remaining--
+		if progress, err := work.Step(ctx, job); err != nil || progress != outbound.DocRangeWorkPending {
+			test.Fatal("native preparation checkpoint failed", progress, err, "sequence", work.checkpoint.state.sequence,
+				"position", work.checkpoint.position, "written", work.checkpoint.next.State.Written, "remaining", *remaining)
+		}
+		drained = true
+	}
+	if drained && (work.checkpoint.state.sequence <= sequence || !work.checkpoint.root.valid(work.checkpoint.state)) {
+		test.Fatal("checkpoint-only quanta did not acknowledge a valid durable continuation")
+	}
+	return drained
+}
+
 func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture docCanonicalPagesPGFixture) {
 	test.Helper()
 	for _, scenario := range []struct {
@@ -371,8 +396,12 @@ func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture d
 			public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
 			inspection := &docCanonicalPagesPGContext{Context: ctx}
 			witnessed := 0
+			checkpointSteps := normalizationCheckpointPGStepLimit
 			var originalReplacement reflect.Value
 			for quantum := 0; quantum < preparationLimit && witnessed < 2; quantum++ {
+				if docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps) {
+					private = legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1)
+				}
 				before := docCanonicalPagesPGScratch(test, work)
 				nativeBefore := docCanonicalPagesPGNativeSnapshot(test, work, replacement)
 				checks := inspection.inspectionChecks.Load()
@@ -436,6 +465,7 @@ func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture d
 				progress := outbound.DocRangeWorkPending
 				var err error
 				for quantum := 0; quantum < preparationLimit && work.work == nil; quantum++ {
+					docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps)
 					progress, err = work.Step(ctx, job)
 					if err != nil || progress != outbound.DocRangeWorkPending {
 						break

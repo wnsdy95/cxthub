@@ -103,6 +103,14 @@ func (work *legacyNormalizationCheckpointWork) begin(ctx context.Context, prepar
 	if err != nil {
 		return err
 	}
+	return work.beginCapture(ctx, capture)
+}
+
+func (work *legacyNormalizationCheckpointWork) beginCapture(ctx context.Context, capture *domain.LegacyNormalizationCheckpointCapture) error {
+	if work.busy() {
+		capture.Close()
+		return domain.ErrLegacyNormalizationBusy
+	}
 	control, err := capture.Control(ctx)
 	if err != nil {
 		capture.Close()

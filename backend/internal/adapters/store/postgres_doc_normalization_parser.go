@@ -13,6 +13,7 @@ import (
 
 const legacyNormalizationParserHeapBudget int64 = 64 << 20
 const legacyNormalizationParserCheckpointQuanta = 64
+const legacyNormalizationParserBatchHeap = 2 * domain.LegacyCanonicalEncodingBytes
 
 type legacyNormalizationParserCheckpoint struct {
 	Ref   legacyNormalizationBufferRef `json:"ref"`
@@ -135,7 +136,7 @@ func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) 
 	}()
 	for quantum := 0; quantum < domain.DocLegacyByteBackfillBatchBlocks; quantum++ {
 		if parser.Ref.Bytes == 0 {
-			ref, complete, err := work.capture.ParserStep(ctx, binding, store, legacyNormalizationParserHeapBudget)
+			ref, complete, err := work.capture.ParserStep(ctx, binding, store, legacyNormalizationParserHeapBudget-legacyNormalizationParserBatchHeap)
 			if err != nil {
 				return false, err
 			}
@@ -145,7 +146,7 @@ func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) 
 			continue
 		}
 		if work.next.State.Staging() && work.next.Encoder == nil {
-			ref, complete, err := work.capture.StageStep(ctx, binding, store, legacyNormalizationParserHeapBudget)
+			ref, complete, err := work.capture.StageStep(ctx, binding, store, legacyNormalizationParserHeapBudget-legacyNormalizationParserBatchHeap)
 			if err != nil {
 				return false, err
 			}
