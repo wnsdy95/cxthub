@@ -128,10 +128,17 @@ func TestNormalizationCheckpointPGBatchCanceledFinishClosesOwner(test *testing.T
 			trace := work.store.pool.Config().ConnConfig.Tracer.(*docCaptureWorkPGTrace)
 			selected, cancel := context.WithCancel(ctx)
 			defer cancel()
-			trace.commit.Store(&docCaptureCommitHook{run: cancel})
+			committed := false
+			trace.commit.Store(&docCaptureCommitHook{run: func() { committed = true; cancel() }})
 			progress, err := work.Step(selected, job)
+			for step := 1; mode == "capture" && err == nil && !committed && step < normalizationCheckpointPGStepLimit; step++ {
+				if progress != outbound.DocRangeWorkPending || work.checkpoint.capture == nil || work.checkpoint.position != 14 {
+					test.Fatal("capture passed its first actual I/O batch", step, progress)
+				}
+				progress, err = work.Step(selected, job)
+			}
 			trace.commit.Store(nil)
-			if progress != 0 || !errors.Is(err, context.Canceled) {
+			if !committed || progress != 0 || !errors.Is(err, context.Canceled) {
 				test.Fatal("batch ignored cancellation at commit", progress, err)
 			}
 			if mode == "capture" {
