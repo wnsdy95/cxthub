@@ -15,7 +15,7 @@ import (
 const legacyCanonicalNativeRejectionTarget = `{"kind":"tool_call","seq":91,"id":"private-inspect-target","input":{"value":[true,null,3]}}`
 
 const legacyCanonicalNativeRejectionSiblings = `{"kind":"turn","seq":7,"id":"tie-first"},` +
-	`{"kind":"message","seq":-9,"id":"earliest","role":"user","blocks":[{"type":"text","text":"<&>한🙂"}]},` +
+	"{\"kind\":\"message\",\"seq\":-9,\"id\":\"earliest\",\"role\":\"user\",\"blocks\":[{\"type\":\"text\",\"text\":\"<&>\ud55c🙂\"}]}," +
 	`{"kind":"turn","seq":7,"id":"tie-second"},` +
 	`{"kind":"tool_result","seq":0,"id":"middle","output":{"nested":[false,null,{"value":0.5}]}}`
 

@@ -185,7 +185,7 @@ func TestLegacyNativeEventOriginalFieldMerging(test *testing.T) {
 		event string
 	}{
 		{name: "scalar-null-keeps-native-value", event: `{"kind":"unknown","KIND":"turn","kind":null,"seq":8,"SEQ":null,"role":"old","ROLE":"user","id":"retained","ID":null,"ts":"retained-time","TS":null}`},
-		{name: "escaped-and-unicode-folded-tags", event: `{"\u006bind":"message","ſeq":4,"ROLE":"assistant","blocKſ":[{"TYPE":"text","te\u0078t":"한🙂"}],"compact_ſummary":true,"compact_summary":null}`},
+		{name: "escaped-and-unicode-folded-tags", event: "{\"\\u006bind\":\"message\",\"ſeq\":4,\"ROLE\":\"assistant\",\"blocKſ\":[{\"TYPE\":\"text\",\"te\\u0078t\":\"\ud55c🙂\"}],\"compact_ſummary\":true,\"compact_summary\":null}"},
 		{name: "metadata-object-merges", event: `{"kind":"turn","provider_metadata":{"turn_id":"retained","create_time":1787683260.123456789},"PROVIDER_METADATA":{"turn_id":"changed"},"provider_metadata":{"unknown":1e999}}`},
 		{name: "metadata-pointer-null-reset", event: `{"kind":"turn","provider_metadata":{"turn_id":"stale","create_time":1E+3},"provider_metadata":null,"PROVIDER_METADATA":{"turn_id":"fresh"}}`},
 		{name: "metadata-number-pointer-and-null", event: `{"kind":"turn","provider_metadata":{"turn_id":"retained","create_time":1E+3},"provider_metadata":{"create_time":null},"provider_metadata":{"create_time":2.500}}`},

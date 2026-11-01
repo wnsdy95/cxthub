@@ -253,7 +253,7 @@ func TestPGPreparedRootIndexesNativeMixedEventBranches(test *testing.T) {
 		{Kind: domain.EventReasoning},
 		{Kind: domain.EventTurn, Role: domain.RoleAssistant},
 		{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "[cxt seed] Branch-switch context: inherited"}}},
-		{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "native prompt 한 <&>"}}},
+		{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "native prompt \ud55c <&>"}}},
 		{Kind: domain.EventToolCall, CallID: "read", ToolName: "read", Input: map[string]any{"path": "native"}},
 		{Kind: domain.EventToolResult, CallID: "read", Output: "tool result"},
 		{Kind: domain.EventReasoning, RedactedSummary: " \t\n\u3000"},

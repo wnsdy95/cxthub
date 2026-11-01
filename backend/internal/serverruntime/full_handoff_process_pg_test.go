@@ -167,7 +167,7 @@ func (fixture *executionProcessFixture) enqueueFullHandoffDocument(test *testing
 	test.Helper()
 	ctx = executionProcessSystemContext(ctx)
 	recovery := *fixture
-	recovery.marker = "full worker useful publication after hard kill 한🙂"
+	recovery.marker = "full worker useful publication after hard kill \ud55c🙂"
 	document := domain.CIRDocument{
 		Envelope: domain.CIREnvelope{CIRVersion: "1", SessionOriginID: string(fixture.repo), SourceProvider: domain.ProviderCodex, Fidelity: domain.FidelityFull},
 		Events:   []domain.CIREvent{{Seq: 0, Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: recovery.marker}}}},

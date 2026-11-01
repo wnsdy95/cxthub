@@ -30,7 +30,7 @@ await import('/e2e/document-paging-harness.ts');
 
 function preparedMatch(legacy: boolean, change: Partial<DocFindMatch> = {}): DocFindMatch {
   return { prepared_page: 0, event_index: 1, field: 0, byte_offset: 4, byte_length: utf8('Needle🙂'), raw: false,
-    preview: '앞 Needle🙂 뒤', preview_byte_offset: 0, reveal_cursor: legacy ? '' : 'reveal_event_one',
+    preview: '\uc55e Needle🙂 \ub4a4', preview_byte_offset: 0, reveal_cursor: legacy ? '' : 'reveal_event_one',
     source_range: { from: sourceOffset, to: sourceOffset + utf8('Needle🙂') }, ...change };
 }
 
@@ -353,7 +353,7 @@ for (const legacy of [false, true]) {
       const capture = await readerRoutes(page, legacy, route => {
         attempts++;
         const next = preparedPage(legacy, { event_index: 1, prepared: { page: 2, generation: descriptor },
-          matches: [preparedMatch(legacy, { prepared_page: 1, preview: '앞 Needle🙂 corrupt response' })], next_cursor: 'opaque_page_two' });
+          matches: [preparedMatch(legacy, { prepared_page: 1, preview: '\uc55e Needle🙂 corrupt response' })], next_cursor: 'opaque_page_two' });
         return route.fulfill({ json: attempts === 1 ? matchingPage(legacy) : corruption.change(next) });
       });
       const errors = await harness(page);

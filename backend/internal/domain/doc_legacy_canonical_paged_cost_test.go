@@ -11,7 +11,7 @@ import (
 
 func legacyCanonicalPagedCostDepthSource(test testing.TB, depth int) *legacyCanonicalNativeCostFixture {
 	test.Helper()
-	var output any = "page-boundary <&> 한🙂"
+	var output any = "page-boundary <&> \ud55c🙂"
 	for level := 0; level < depth; level++ {
 		output = []any{output}
 	}

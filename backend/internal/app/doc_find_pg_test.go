@@ -42,10 +42,10 @@ func TestPGDocFindBoundedScanDoesNotReadWholeHistory(test *testing.T) {
 func TestPGDocFindDecodedAndOversizedFieldsResumeExactly(test *testing.T) {
 	fixture := newDocViewPGFixture(test)
 	document := domain.CIRDocument{Envelope: fixture.cir.Envelope, Events: []domain.CIREvent{
-		{Kind: domain.EventToolCall, ToolName: "Bash", Input: map[string]any{"command": "printf \"<NEEDLE>\"\n한글"}},
+		{Kind: domain.EventToolCall, ToolName: "Bash", Input: map[string]any{"command": "printf \"<NEEDLE>\"\n\ud55c\uae00"}},
 		{Kind: domain.EventToolResult, Output: strings.Repeat("needle ", 50)},
 		{Kind: domain.EventReasoning, RedactedSummary: "Visible explanation", Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: "needle opaque state"}},
-		{Kind: domain.EventToolResult, Output: strings.Repeat("한글", 100_000) + "needle" + strings.Repeat("x", 90_000)},
+		{Kind: domain.EventToolResult, Output: strings.Repeat("\ud55c\uae00", 100_000) + "needle" + strings.Repeat("x", 90_000)},
 	}}
 	for index := range document.Events {
 		document.Events[index].Seq = index

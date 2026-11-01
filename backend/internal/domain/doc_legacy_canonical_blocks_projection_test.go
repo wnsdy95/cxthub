@@ -118,7 +118,7 @@ func TestLegacyCanonicalBlocksProjectionMessageAndTypedOutput(test *testing.T) {
 		{name: "empty", blocks: []ContentBlock{}},
 		{name: "zero-fields", blocks: []ContentBlock{{}}},
 		{name: "sparse", blocks: []ContentBlock{{Type: "text"}, {Text: "text without type"}}},
-		{name: "escaping", blocks: []ContentBlock{{Type: "text<&>\u2028", Text: "\"\\\n\x00<&>\u2028\u2029한국🙂\xff"}}},
+		{name: "escaping", blocks: []ContentBlock{{Type: "text<&>\u2028", Text: "\"\\\n\x00<&>\u2028\u2029\ud55c\uad6d🙂\xff"}}},
 		{name: "spare-capacity", blocks: backing[:1]},
 	} {
 		for _, kind := range []EventKind{EventMessage, EventToolResult} {
@@ -182,7 +182,7 @@ func TestLegacyCanonicalBlocksProjectionSparsePresence(test *testing.T) {
 
 func legacyCanonicalBlocksProjectionReplacementFixture() CIREvent {
 	number := json.Number("1787683260.123456789")
-	blocks := []ContentBlock{{Type: "text", Text: "shared <&> 한국🙂"}, {}}
+	blocks := []ContentBlock{{Type: "text", Text: "shared <&> \ud55c\uad6d🙂"}, {}}
 	return CIREvent{Kind: EventCompaction, Seq: 41, ReplacementComplete: true, Replacement: []CIREvent{
 		{Kind: EventMessage, Seq: 9, ID: "late-first", Role: RoleAssistant, Blocks: blocks,
 			AgentMessage: true, AgentAuthor: "agent", ProviderMetadata: &ProviderMetadata{TurnID: "turn", CreateTime: &number},

@@ -242,7 +242,7 @@ func (codec *legacyCanonicalSourceKeysTestCodec) check(ctx context.Context, help
 }
 
 func TestLegacyCanonicalSourceKeysActualPreparingMapContinuation(test *testing.T) {
-	input := map[string]any{"": nil, "한🙂": nil, strings.Repeat("a", LegacyCanonicalEncodingBytes-1) + strings.Repeat("한🙂", LegacyCanonicalEncodingBytes/4): nil}
+	input := map[string]any{"": nil, "\ud55c🙂": nil, strings.Repeat("a", LegacyCanonicalEncodingBytes-1) + strings.Repeat("\ud55c🙂", LegacyCanonicalEncodingBytes/4): nil}
 	for index := 0; index < 1100; index++ {
 		input[fmt.Sprintf("member-%04d", index)] = nil
 	}
@@ -291,7 +291,7 @@ func TestLegacyCanonicalSourceKeysActualPreparingMapContinuation(test *testing.T
 			test.Fatal("unexpected raw map owner in continuation fixture")
 		}
 		codec.source, codec.members[reference.Text] = reference.Source, reference
-		large, empty, unicode = large || len(key) > LegacyCanonicalEncodingBytes, empty || key == "", unicode || key == "한🙂"
+		large, empty, unicode = large || len(key) > LegacyCanonicalEncodingBytes, empty || key == "", unicode || key == "\ud55c🙂"
 	}
 	if !large || !empty || !unicode || len(bindings) != len(input) {
 		test.Fatal("source key fixture missed segmented, empty, or Unicode keys")

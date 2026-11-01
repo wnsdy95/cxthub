@@ -150,7 +150,7 @@ func TestLegacyNativeScalarReviewGiantStringsMatchTypedOracle(test *testing.T) {
 				scalar.WriteString(boundary.token)
 			}
 			scalar.WriteString(`\"\\\/\b\f\n\r\t\u0000\u2028\u2029\uD800x\uDC00\uD800\uD801\uDC00`)
-			scalar.WriteString("한<&>\xff\xc0\x80\xf0\x9f")
+			scalar.WriteString("\ud55c<&>\xff\xc0\x80\xf0\x9f")
 			scalar.WriteString(`\uD800`)
 			raw := []byte(prefix + scalar.String() + `"},{"kind":"turn","seq":1,"id":"first"},{"kind":"turn","seq":7,"id":"tie-last"}]}`)
 			normalizer, input := legacyNativeScalarReviewStart(test, raw)

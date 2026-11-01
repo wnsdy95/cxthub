@@ -32,7 +32,7 @@ func graphProjectionTestState(repo ContentHash) GraphState {
 			{Parents: nil, ExtraParents: []string{}},
 		},
 		BranchContexts: map[string]BranchContext{
-			"main": {BranchID: "main-id", SnapshotID: second, CodeCommit: strings.Repeat("a", 40), Reason: "kept <verbatim> & 한글", Merges: []BranchContextMerge{
+			"main": {BranchID: "main-id", SnapshotID: second, CodeCommit: strings.Repeat("a", 40), Reason: "kept <verbatim> & \ud55c\uae00", Merges: []BranchContextMerge{
 				{DeliveryAcknowledged: true, DestinationBranchID: "main-id", EventID: "merge-event", Source: first, Before: second, MergeSHA: strings.Repeat("b", 40), PRNumber: 23, State: "included", Reason: "verified", Order: 2},
 				{EventID: "review", State: "review", Order: -1},
 			}, Roots: []ContentHash{first, second}, SnapshotIDs: []ContentHash{second, first}},

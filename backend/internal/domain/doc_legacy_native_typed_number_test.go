@@ -118,7 +118,7 @@ func TestLegacyNativeTypedNumberUnitRejectedRawDiagnostic(test *testing.T) {
 	for _, token := range []string{
 		`"\u002b` + padding + `"`,
 		`"1` + padding + `\u0000"`,
-		`"1` + padding + "한\u200b🙂" + `\"\\\n"`,
+		`"1` + padding + "\ud55c\u200b🙂" + `\"\\\n"`,
 		`"1` + padding + string([]byte{0xff, 0xc2}) + `"`,
 	} {
 		for _, diagnostics := range []legacyNativeNumberDiagnostics{legacyNativeNumberDiagnosticsFull, legacyNativeNumberDiagnosticsRejectOnly} {

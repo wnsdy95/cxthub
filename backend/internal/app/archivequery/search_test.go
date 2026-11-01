@@ -34,12 +34,12 @@ func TestArchiveSearchPreservesOldestAttributionEventOrdinalsAndWire(test *testi
 		test.Run(mode, func(test *testing.T) {
 			queries, ports, config := archiveFixture(test)
 			root := mode == "root"
-			inherited := archiveMessage("앞말 NEEDLE inherited", 0)
+			inherited := archiveMessage("\uc55e\ub9d0 NEEDLE inherited", 0)
 			parent := archiveDocument(test, ports, root, "origin", 0,
 				inherited,
 				domain.CIREvent{Kind: domain.EventToolCall, CallID: "lookup", ToolName: "synthetic", Input: map[string]any{"text": "needle hidden input"}},
 				domain.CIREvent{Kind: domain.EventToolResult, CallID: "lookup", Output: "needle hidden output"},
-				domain.CIREvent{Kind: domain.EventReasoning, Seq: 12, RedactedSummary: "needle 생각"}, inherited)
+				domain.CIREvent{Kind: domain.EventReasoning, Seq: 12, RedactedSummary: "needle \uc0dd\uac01"}, inherited)
 			childEvents := append([]domain.CIREvent{}, parent.CIR.Events...)
 			childEvents = append(childEvents, archiveMessage("needle child 🌿", 27))
 			child := archiveDocument(test, ports, root, "followup", 1, childEvents...)
@@ -218,17 +218,17 @@ func TestArchiveSearchRootUsesCurrentProofAndOwnedProjection(test *testing.T) {
 
 func TestArchiveSearchValidationEmptyWireAndSnippet(test *testing.T) {
 	queries, ports, _ := archiveFixture(test)
-	for _, query := range []string{"", "x", strings.Repeat("한", 257)} {
+	for _, query := range []string{"", "x", strings.Repeat("\ud55c", 257)} {
 		if _, err := queries.Search(context.Background(), inbound.SearchInput{RepoID: ports.repo, Query: query}); !errors.Is(err, domain.ErrValidation) || len(ports.calls) != 0 {
 			test.Fatal("invalid term reached metadata", err, ports.calls)
 		}
 	}
-	output, err := queries.Search(context.Background(), inbound.SearchInput{RepoID: ports.repo, Query: "없는"})
+	output, err := queries.Search(context.Background(), inbound.SearchInput{RepoID: ports.repo, Query: "\uc5c6\ub294"})
 	raw, marshalErr := json.Marshal(output)
 	if err != nil || marshalErr != nil || string(raw) != `{"hits":[],"truncated":false}` {
 		test.Fatal("empty search wire changed", string(raw), err, marshalErr)
 	}
-	text := strings.Repeat("가", 80) + "\nNEEDLE\t" + strings.Repeat("나", 180)
+	text := strings.Repeat("\uac00", 80) + "\nNEEDLE\t" + strings.Repeat("\ub098", 180)
 	snippet := archivequery.SearchSnippet(text, "needle")
 	if !strings.HasPrefix(snippet, "…") || !strings.HasSuffix(snippet, "…") || len([]rune(snippet)) != 122 || strings.ContainsAny(snippet, "\n\t") || !strings.Contains(snippet, "NEEDLE") {
 		test.Fatal("rune-safe normalized snippet contract changed", snippet)

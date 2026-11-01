@@ -502,7 +502,7 @@ func (*documentOwnershipPanicStore) GetChunk(context.Context, domain.ContentHash
 
 func TestDocumentQueriesRetainSuccessfulNativeResponseUntilOwnerRelease(test *testing.T) {
 	fixture := newDocumentNativeAuthorizationFixture(test)
-	document := seedLegacyFindDocument(test, fixture.storage, fixture.repo, []domain.CIREvent{historyMessage(domain.RoleUser, "retained needle 한🙂")})
+	document := seedLegacyFindDocument(test, fixture.storage, fixture.repo, []domain.CIREvent{historyMessage(domain.RoleUser, "retained needle \ud55c🙂")})
 	queries, err := NewService(fixture.storage, fixture.storage, nil, nil, nil).DocumentQueries()
 	if err != nil {
 		test.Fatal(err)
@@ -562,7 +562,7 @@ func TestDocumentQueriesRetainSuccessfulNativeResponseUntilOwnerRelease(test *te
 
 func TestDocumentQueriesFullNativeViewAndFindOwnOriginalDependencies(test *testing.T) {
 	fixture := newDocumentNativeAuthorizationFixture(test)
-	document := seedLegacyFindDocument(test, fixture.storage, fixture.repo, []domain.CIREvent{historyMessage(domain.RoleUser, "captured needle 한🙂")})
+	document := seedLegacyFindDocument(test, fixture.storage, fixture.repo, []domain.CIREvent{historyMessage(domain.RoleUser, "captured needle \ud55c🙂")})
 	if err := fixture.storage.PutSnapshot(systemTestContext(), domain.Snapshot{ID: document.Hash, RepoID: fixture.repo,
 		DocHash: document.Hash, Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
 		test.Fatal(err)

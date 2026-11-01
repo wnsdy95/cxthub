@@ -35,7 +35,7 @@ func TestPGDocFindFieldsPreparesDurablyAndNeverSearchesLockedState(test *testing
 		historyMessage(domain.RoleUser, "intro"),
 		{Kind: domain.EventReasoning, RedactedSummary: strings.Repeat("Needle ", 45), Locked: &domain.LockedBlob{
 			Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: string(fixture.repo) + strings.Repeat("needle secret ", 160_000)}},
-		{Kind: domain.EventReasoning, RedactedSummary: string(fixture.repo) + strings.Repeat("x", 270_000) + "needle🙂" + strings.Repeat("끝", 30_000) + "NEEDLE🙂"},
+		{Kind: domain.EventReasoning, RedactedSummary: string(fixture.repo) + strings.Repeat("x", 270_000) + "needle🙂" + strings.Repeat("\ub05d", 30_000) + "NEEDLE🙂"},
 		{Kind: domain.EventReasoning, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: strings.Repeat("needle ", 50_000)}},
 		{Kind: domain.EventToolResult, Output: "needle"},
 	}}
@@ -256,7 +256,7 @@ func TestPGDocFindFieldsAgentMessagePublicBlocksOnly(test *testing.T) {
 			Blocks: []domain.ContentBlock{{Type: "text", Text: "public Needle🙂"}},
 			Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: string(fixture.repo) + strings.Repeat("secret ", 40_000)}},
 		{Kind: domain.EventMessage, Role: domain.RoleAssistant, AgentMessage: true,
-			Blocks: []domain.ContentBlock{{Type: "text", Text: string(fixture.repo) + strings.Repeat("끝", 70_000) + "NEEDLE🙂"}},
+			Blocks: []domain.ContentBlock{{Type: "text", Text: string(fixture.repo) + strings.Repeat("\ub05d", 70_000) + "NEEDLE🙂"}},
 			Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: "secret needle🙂"}},
 	}}
 	document.Envelope.CIRVersion = "2"

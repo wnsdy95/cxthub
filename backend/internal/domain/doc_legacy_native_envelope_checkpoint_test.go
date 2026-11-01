@@ -31,7 +31,7 @@ type legacyNativeEnvelopeW80Fixture struct {
 
 func legacyNativeEnvelopeW80Fixtures() []legacyNativeEnvelopeW80Fixture {
 	width := LegacyNormalizationPartBytes
-	longText := strings.Repeat("한🙂", width/3) + `\n\uD83D\uDE42\uD800x\uDC00\"\\tail`
+	longText := strings.Repeat("\ud55c🙂", width/3) + `\n\uD83D\uDE42\uD800x\uDC00\"\\tail`
 	hidden := []string{"prior-first", "prior-second", "hidden-third", "hidden-fourth"}
 	growth := make([]string, 2048)
 	for index := range growth {

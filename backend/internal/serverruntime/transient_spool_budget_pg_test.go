@@ -137,7 +137,7 @@ func TestExecutionProfileSpoolActualRootsApplyRoleBudgetAndRestore(test *testing
 						test.Fatal("profile budget failure published a document", err)
 					}
 					executionProfileSpoolUsage(test, postgres, role.SpoolBytes)
-					doc := executionProfileSpoolDocument(test, test.Name()+"/small", "Small SearchNeedle 한🙂")
+					doc := executionProfileSpoolDocument(test, test.Name()+"/small", "Small SearchNeedle \ud55c🙂")
 					if created, err := storage.PutVerifiedDoc(ctx, repo, doc); err != nil || !created {
 						test.Fatal("actual root did not recover for a small document under its unchanged role cap", created, err)
 					}
@@ -150,7 +150,7 @@ func TestExecutionProfileSpoolActualRootsApplyRoleBudgetAndRestore(test *testing
 						test.Fatal("bounded root changed canonical document bytes", err)
 					}
 					hits, err := reads.SearchDocEvents(ctx, repo, doc.Hash(), "searchneedle", -1, 1)
-					if err != nil || len(hits) != 1 || hits[0].Text != "Small SearchNeedle 한🙂" {
+					if err != nil || len(hits) != 1 || hits[0].Text != "Small SearchNeedle \ud55c🙂" {
 						test.Fatal("bounded root did not publish complete searchable text", hits, err)
 					}
 					usage := executionProfileSpoolUsage(test, postgres, role.SpoolBytes)

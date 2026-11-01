@@ -33,13 +33,13 @@ func legacyCanonicalNativeCostEvent(shape string, count int) CIREvent {
 		event.Kind, event.Role = EventMessage, RoleAssistant
 		event.Blocks = make([]ContentBlock, count)
 		for position := range event.Blocks {
-			event.Blocks[position] = ContentBlock{Type: "text", Text: strconv.Itoa(position) + " <&>\n한🙂\u2028\u2029\"\\"}
+			event.Blocks[position] = ContentBlock{Type: "text", Text: strconv.Itoa(position) + " <&>\n\ud55c🙂\u2028\u2029\"\\"}
 		}
 	case "map":
 		event.Kind, event.CallID = EventToolResult, "native-constructor-cost"
 		output := make(map[string]any, count)
 		for position := 0; position < count; position++ {
-			output[fmt.Sprintf("key-%06d", count-position)] = strconv.Itoa(position) + " <&>\n한🙂\u2028\u2029\"\\"
+			output[fmt.Sprintf("key-%06d", count-position)] = strconv.Itoa(position) + " <&>\n\ud55c🙂\u2028\u2029\"\\"
 		}
 		event.Output = output
 	}

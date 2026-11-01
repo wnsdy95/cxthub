@@ -28,7 +28,7 @@ func assertLegacyCanonicalBlocksOwnershipReleased(test testing.TB, encoding *Leg
 }
 
 func TestLegacyCanonicalBlocksOwnershipLexicalMarshalParity(test *testing.T) {
-	escaped := "\"\\/\b\f\n\r\t\x00\x01\x1f<&>\u2028\u2029한국🙂\ufffd"
+	escaped := "\"\\/\b\f\n\r\t\x00\x01\x1f<&>\u2028\u2029\ud55c\uad6d🙂\ufffd"
 	invalid := "\xff\x80\xc0\xaf\xed\xa0\x80\xf0\x9f\x92"
 	for _, fixture := range []struct {
 		name  string

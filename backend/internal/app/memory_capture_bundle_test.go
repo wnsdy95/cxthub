@@ -29,7 +29,7 @@ func memoryBundleFixture(test *testing.T, branch bool) (*CapturedEffectiveMemory
 	entries[1].Value = bytes.Replace(entries[1].Value, []byte(`"git_remote_url_supported":true`), []byte(`"git_remote_url_supported":true,"git_remote_url":"https://github.com/example/frozen"`), 1)
 	snapshot := domain.Snapshot{ID: hh(test.Name()), RepoID: checkpoint.RepoID, Branch: "main"}
 	snapshot.DocHash = snapshot.ID
-	digest := domain.MemoryDigest{SnapshotID: snapshot.ID, Summary: strings.Repeat("memory 한글 <>&\n", 7000), KeyFacts: []string{"one", "two"}, OpenTasks: []string{"three"}}
+	digest := domain.MemoryDigest{SnapshotID: snapshot.ID, Summary: strings.Repeat("memory \ud55c\uae00 <>&\n", 7000), KeyFacts: []string{"one", "two"}, OpenTasks: []string{"three"}}
 	raw, err := json.Marshal(digest)
 	if err != nil {
 		test.Fatal(err)

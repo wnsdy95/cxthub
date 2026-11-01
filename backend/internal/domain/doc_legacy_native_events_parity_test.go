@@ -225,7 +225,7 @@ func TestLegacyNativeEventsParityCasefoldEscapesAndPresence(test *testing.T) {
 		},
 		{
 			name: "unicode-folded-tags-and-escaped-values", key: `"RePlAcEmEnT"`,
-			child: `{"KIND":"message","ſeq":-3,"ROLE":"assistant","agent_meſſage":false,"blocKſ":[{"TYPE":"text","te\u0078t":"한\ud83d\ude42\n\u0000\u2028\u2029<&>\\\"\/\ud800"}],"compact_ſummary":true}`,
+			child: "{\"KIND\":\"message\",\"ſeq\":-3,\"ROLE\":\"assistant\",\"agent_meſſage\":false,\"blocKſ\":[{\"TYPE\":\"text\",\"te\\u0078t\":\"\ud55c\\ud83d\\ude42\\n\\u0000\\u2028\\u2029<&>\\\\\\\"\\/\\ud800\"}],\"compact_ſummary\":true}",
 		},
 		{
 			name: "lookalikes-do-not-create-presence", key: `"replacement"`,

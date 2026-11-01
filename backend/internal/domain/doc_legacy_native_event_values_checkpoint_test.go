@@ -10,7 +10,7 @@ import (
 )
 
 func legacyEventValuesCheckpointFixtures() []legacyDecoderCheckpointFixture {
-	large := strings.Repeat("복구🙂", ConversationManifestChunkBytes/3)
+	large := strings.Repeat("\ubcf5\uad6c🙂", ConversationManifestChunkBytes/3)
 	message := `{"kind":"message","seq":1,"role":"user","blocks":[{"type":"text","text":"` + large + `"},{"type":"text","text":"hidden-second"},{"type":"text","text":"hidden-third"}],"blocks":[{"type":"text","text":"visible"}]}`
 	call := `{"kind":"tool_call","seq":2,"call_id":"call","tool_name":"test","input":{"hidden":["` + large + `",null,4]},"input":{"new":[true,"tail"]}}`
 	result := `{"kind":"tool_result","seq":3,"call_id":"call","output":{"hidden":"` + large + `"},"output":"visible-scalar","is_error":false}`

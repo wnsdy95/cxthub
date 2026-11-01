@@ -126,7 +126,7 @@ func TestLegacyNativeScalarCheckpointProcessContinuation(test *testing.T) {
 		{
 			name:      "ascii_then_escaped_unicode",
 			rawPrefix: bytes.Repeat([]byte("a"), cut), logicalText: strings.Repeat("a", cut),
-			suffix: `\n\uD83D\uDE42한\"\\tail`, suffixText: "\n🙂한\"\\tail",
+			suffix: "\\n\\uD83D\\uDE42\ud55c\\\"\\\\tail", suffixText: "\n🙂\ud55c\"\\tail",
 			prefixWidth: LegacyNormalizationPartBytes, prefixWork: 2 * cut,
 		},
 		{
@@ -138,7 +138,7 @@ func TestLegacyNativeScalarCheckpointProcessContinuation(test *testing.T) {
 		{
 			name:      "expanded_utf8_pending_suffix",
 			rawPrefix: bytes.Repeat([]byte{0xff}, cut), logicalText: strings.Repeat("�", cut),
-			suffix: `\u0041\n한\uD83D\uDE42` + "\xfftail", suffixText: "A\n한🙂�tail",
+			suffix: "\\u0041\\n\ud55c\\uD83D\\uDE42" + "\xfftail", suffixText: "A\n\ud55c🙂�tail",
 			prefixWidth: LegacyNormalizationPartBytes, prefixWork: 4*cut + 11, wantBuffered: 11,
 		},
 	}

@@ -147,7 +147,7 @@ func TestLegacyNativeStringListGiantStringsMatchJSONUnmarshal(test *testing.T) {
 	value.WriteString(strings.Repeat("x", LegacyCanonicalEncodingBytes-5))
 	value.WriteString(`\uD83D\uDE42\uD800x\uDC00\"\\\/\b\f\n\r\t\u0000`)
 	value.WriteString(strings.Repeat("y", 2*ConversationManifestChunkBytes))
-	value.WriteString("한🙂\xff\xc0\x80\xed\xa0\x80\xf0\x9f")
+	value.WriteString("\ud55c🙂\xff\xc0\x80\xed\xa0\x80\xf0\x9f")
 	value.WriteString(`\uD800`)
 	raw := `["` + value.String() + `",null,"",null]`
 	got := []string{"old", "kept", "replaced", "hidden-tail", "still-hidden"}[:2]

@@ -193,7 +193,7 @@ func TestLegacyNativeAnyMapCheckpointFullOrderAndParserReuse(test *testing.T) {
 		test.Run(fixture.name, func(test *testing.T) {
 			native := newLegacyNativeAnyMap()
 			canonical := strings.Clone("first-owned-key")
-			keys := []string{canonical, "한글🙂", strings.Repeat("huge-key-", ConversationManifestChunkBytes/4+19)}
+			keys := []string{canonical, "\ud55c\uae00🙂", strings.Repeat("huge-key-", ConversationManifestChunkBytes/4+19)}
 			keys = append(keys, "")
 			copy(keys[fixture.position+1:], keys[fixture.position:len(keys)-1])
 			keys[fixture.position] = ""

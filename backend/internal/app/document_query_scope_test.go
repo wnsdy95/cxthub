@@ -179,7 +179,7 @@ func newDocumentQueryScopeFixture(test *testing.T) documentQueryScopeFixture {
 		test.Fatal(err)
 	}
 	document := seedLegacyFindDocument(test, filesystem, repo, []domain.CIREvent{
-		historyMessage(domain.RoleUser, "first needle 한🙂"),
+		historyMessage(domain.RoleUser, "first needle \ud55c🙂"),
 		historyMessage(domain.RoleAssistant, "second needle"),
 	})
 	if err := filesystem.PutSnapshot(systemTestContext(), domain.Snapshot{ID: document.Hash, RepoID: repo,

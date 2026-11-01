@@ -696,7 +696,7 @@ func TestPGRepositoryAssetCommandsPartialAboutKeepsUnselectedFields(test *testin
 	fixture := repositoryAssetsPG(test)
 	commands := repositoryAssetCommandsPG(test, fixture.storage)
 	ctx := inbound.WithRepositoryActor(fixture.ctx, fixture.team.member.ID)
-	if err := commands.UpdateAbout(ctx, fixture.repo, "original", "https://original.example/path", []string{"first", "first", "한글"}); err != nil {
+	if err := commands.UpdateAbout(ctx, fixture.repo, "original", "https://original.example/path", []string{"first", "first", "\ud55c\uae00"}); err != nil {
 		test.Fatal(err)
 	}
 	description, website := " changed description ", "https://changed.example/path"

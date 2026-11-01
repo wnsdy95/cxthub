@@ -140,7 +140,7 @@ func TestLegacyNativeBlocksMemberMatchingMatchesJSONUnmarshal(test *testing.T) {
 		},
 		{
 			name: "ascii-folded-and-escaped-block-fields",
-			raw:  `{"blocks":[{"TYPE":"upper-type","Type":"title-type","ty\u0070e":"escaped-type","TEXT":"upper-text","Text":"title-text","te\u0078t":"한🙂\n\u0000"}]}`,
+			raw:  "{\"blocks\":[{\"TYPE\":\"upper-type\",\"Type\":\"title-type\",\"ty\\u0070e\":\"escaped-type\",\"TEXT\":\"upper-text\",\"Text\":\"title-text\",\"te\\u0078t\":\"\ud55c🙂\\n\\u0000\"}]}",
 		},
 		{
 			name: "folded-and-escaped-array-duplicates",

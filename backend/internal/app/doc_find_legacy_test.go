@@ -42,7 +42,7 @@ func TestDocFindLegacyPreservesIdentityAndExcludesProviderState(test *testing.T)
 			Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: strings.Repeat("secret needle ", 50_000)}},
 		{Kind: domain.EventReasoning, RedactedSummary: strings.Repeat(" \t", 90_000),
 			Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: "secret needle"}},
-		{Kind: domain.EventToolResult, Output: strings.Repeat("한글", 80_000) + "needle"},
+		{Kind: domain.EventToolResult, Output: strings.Repeat("\ud55c\uae00", 80_000) + "needle"},
 	})
 	spy := &countedReadStore{FSStore: storage}
 	service := NewService(storage, spy, nil, nil, nil)

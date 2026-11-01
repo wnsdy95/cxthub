@@ -114,7 +114,7 @@ func TestConversationFindOwnerColdQueryIsReadOnlyAndRetainsPendingCursor(test *t
 func TestConversationFindOwnerNativeReadReplayAndResponseLifetime(test *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		test.Run(fmt.Sprint(legacy), func(test *testing.T) {
-			queries, fixture := newConversationFindFixture(test, legacy, []domain.CIREvent{legacyFindGenerationMessage(domain.RoleUser, "visible NEEDLE 한글")})
+			queries, fixture := newConversationFindFixture(test, legacy, []domain.CIREvent{legacyFindGenerationMessage(domain.RoleUser, "visible NEEDLE \ud55c\uae00")})
 			var releases []func()
 			ctx := inbound.WithDocumentResponseRetainer(inbound.WithSystemActor(context.Background()), func(release func()) bool {
 				releases = append(releases, release)

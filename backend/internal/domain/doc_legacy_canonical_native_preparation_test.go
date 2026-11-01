@@ -287,7 +287,7 @@ func TestLegacyCanonicalNativePreparationDecodedInputOutputMaps(test *testing.T)
 }
 
 func TestLegacyCanonicalNativePreparationDecodedTypedBlocks4097(test *testing.T) {
-	raw := `{"kind":"message","seq":7,"role":"assistant","blocks":` + legacyCanonicalNativePreparationBlocks(4097, "text <&> 한국🙂") + `}`
+	raw := `{"kind":"message","seq":7,"role":"assistant","blocks":` + legacyCanonicalNativePreparationBlocks(4097, "text <&> \ud55c\uad6d🙂") + `}`
 	native, event, whole := legacyCanonicalNativePreparationDecode(test, raw)
 	if len(event.Blocks) != 4097 {
 		test.Fatal("native fixture lost its typed block list", len(event.Blocks))
@@ -317,7 +317,7 @@ func TestLegacyCanonicalNativePreparationDecodedScalarsAndNumbers(test *testing.
 			legacyCanonicalNativePreparationCheck(test, `{"kind":"turn","seq":7,"provider_metadata":{"turn_id":"turn","create_time":`+token+`}}`, 1)
 		})
 	}
-	legacyCanonicalNativePreparationCheck(test, `{"kind":"tool_result","seq":7,"output":[null,true,false,"<>&한국🙂",[-0,0.125],{"nested":9007199254740993}]}`, 1)
+	legacyCanonicalNativePreparationCheck(test, "{\"kind\":\"tool_result\",\"seq\":7,\"output\":[null,true,false,\"<>&\ud55c\uad6d🙂\",[-0,0.125],{\"nested\":9007199254740993}]}", 1)
 }
 
 func TestLegacyCanonicalNativePreparationRetainsCapacityTailsAndOmittedFields(test *testing.T) {

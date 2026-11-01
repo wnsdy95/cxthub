@@ -117,7 +117,7 @@ func TestLegacyNativeAnyIntegrationGiantMixedValues(test *testing.T) {
 		{
 			name:   "input-array-in-object",
 			prefix: `{"\u006bind":"tool_call","seq":7,"inpu\u0074":{"outer":{"mixed":[{"text":`,
-			suffix: `},` + legacyNativeAnyIntegrationNumbers + `,null,[],{},false]},"":{},"끝":[]}}`,
+			suffix: `},` + legacyNativeAnyIntegrationNumbers + ",null,[],{},false]},\"\":{},\"\ub05d\":[]}}",
 		},
 		{
 			name:   "output-object-in-array",
@@ -127,7 +127,7 @@ func TestLegacyNativeAnyIntegrationGiantMixedValues(test *testing.T) {
 		{
 			name:   "output-array-in-object",
 			prefix: `{"\u006bind":"tool_result","seq":7,"outp\u0075t":{"outer":{"mixed":[`,
-			suffix: `,` + legacyNativeAnyIntegrationNumbers + `,null,[],{},false]},"":null,"한🙂":{"empty":{}}}}`,
+			suffix: `,` + legacyNativeAnyIntegrationNumbers + ",null,[],{},false]},\"\":null,\"\ud55c🙂\":{\"empty\":{}}}}",
 		},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {
@@ -285,7 +285,7 @@ func TestLegacyNativeAnyIntegrationDeepMixedShapes(test *testing.T) {
 				}
 				for level := 0; level < depth; level++ {
 					if level%2 == 0 {
-						prefix.WriteString(`{"한🙂":`)
+						prefix.WriteString("{\"\ud55c🙂\":")
 					} else {
 						prefix.WriteString(`[0.1,null,{},[],`)
 					}

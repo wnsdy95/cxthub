@@ -78,13 +78,13 @@ func collectDocFind(test *testing.T, source docViewSource, selector domain.DocFi
 
 func TestDocFindRegularFieldsAndCursorResume(test *testing.T) {
 	events := []domain.CIREvent{
-		{Kind: domain.EventToolCall, ToolName: "shell", Input: map[string]any{"command": "안녕 <Needle>\nnext"}},
+		{Kind: domain.EventToolCall, ToolName: "shell", Input: map[string]any{"command": "\uc548\ub155 <Needle>\nnext"}},
 		{Kind: domain.EventToolResult, Output: strings.Repeat("banana ", 30)},
 		{Kind: domain.EventReasoning, RedactedSummary: "VISIBLE summary", Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted", Blob: "needle ciphertext"}},
 	}
 	source, selector, bytesRead, _ := docFindFixture(test, events)
 	matches := collectDocFind(test, source, selector, "needle", bytesRead)
-	if len(matches) != 1 || matches[0].Index != 0 || matches[0].Raw || matches[0].Offset != len("안녕 <") {
+	if len(matches) != 1 || matches[0].Index != 0 || matches[0].Raw || matches[0].Offset != len("\uc548\ub155 <") {
 		test.Fatal("decoded tool fields or locked-state exclusion failed", matches)
 	}
 	selector.QueryHash = domain.HashContent([]byte("ana"))
@@ -134,7 +134,7 @@ func TestDocFindLargeRawFieldsCrossFragmentBoundariesWithinBudget(test *testing.
 		test.Fatal(err)
 	}
 	payloadStart := strings.Index(string(prefix), `"output":"`) + len(`"output":"`)
-	output := strings.Repeat("x", docFindFragmentBytes-payloadStart-4) + "Needle🙂" + strings.Repeat("x", 200_000) + "NEEDLE🙂" + strings.Repeat("끝", 25_000)
+	output := strings.Repeat("x", docFindFragmentBytes-payloadStart-4) + "Needle🙂" + strings.Repeat("x", 200_000) + "NEEDLE🙂" + strings.Repeat("\ub05d", 25_000)
 	events := []domain.CIREvent{{Kind: domain.EventToolResult, Output: output}, {Kind: domain.EventToolResult, Output: strings.Repeat("x", 120_000)}}
 	source, selector, bytesRead, largestRead := docFindFixture(test, events)
 	matches := collectDocFind(test, source, selector, "needle🙂", bytesRead)
@@ -150,7 +150,7 @@ func TestDocFindLargeRawFieldsCrossFragmentBoundariesWithinBudget(test *testing.
 			test.Fatal("raw byte coordinates wrong", match, string(raw), err)
 		}
 	}
-	for _, query := range []string{"absent", " ", "<", "한"} {
+	for _, query := range []string{"absent", " ", "<", "\ud55c"} {
 		selector.QueryHash = domain.HashContent([]byte(query))
 		collectDocFind(test, source, selector, query, bytesRead)
 	}

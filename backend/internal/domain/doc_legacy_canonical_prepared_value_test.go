@@ -162,10 +162,10 @@ func TestLegacyCanonicalPreparedValueScalars(test *testing.T) {
 		{"negative-zero", math.Copysign(0, -1), math.Copysign(0, -1)},
 		{"smallest-float", math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64},
 		{"largest-float", math.MaxFloat64, math.MaxFloat64},
-		{"empty", "", ""}, {"bytes", "\x00\xff한국어", "\x00\xff한국어"},
+		{"empty", "", ""}, {"bytes", "\x00\xff\ud55c\uad6d\uc5b4", "\x00\xff\ud55c\uad6d\uc5b4"},
 		{"kind", EventKind("event"), "event"}, {"role", Role("role"), "role"},
 		{"provider", ProviderKind("provider"), "provider"}, {"tier", FidelityTier("tier"), "tier"},
-		{"block", ContentBlock{Type: "text", Text: "본문"}, ContentBlock{Type: "text", Text: "본문"}},
+		{"block", ContentBlock{Type: "text", Text: "\ubcf8\ubb38"}, ContentBlock{Type: "text", Text: "\ubcf8\ubb38"}},
 		{"nil-number", nilNumber, nil}, {"nil-replacement", nilReplacement, nil},
 		{"nil-blocks", nilBlocks, nil}, {"nil-pointer", nilPointer, nil},
 		{"nil-array", []any(nil), nil}, {"nil-maps", []map[string]any(nil), nil},
@@ -357,7 +357,7 @@ func TestLegacyCanonicalPreparedValuePagedAndDeep(test *testing.T) {
 func TestLegacyCanonicalPreparedValuePortableTextOwnership(test *testing.T) {
 	storage := legacyCanonicalPreparedValueTestStorage(test)
 	binding := HashContent([]byte("prepared-portable-text"))
-	text := strings.Repeat("한글\x00\xff", 500000)
+	text := strings.Repeat("\ud55c\uae00\x00\xff", 500000)
 	ref := legacyCanonicalPreparedValueTestWrite(test, text, nil, binding, storage, 2<<20)
 	other := legacyCanonicalPreparedValueTestStorage(test)
 	for hash, body := range storage.objects {

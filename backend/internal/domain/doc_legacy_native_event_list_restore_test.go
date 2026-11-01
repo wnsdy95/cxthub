@@ -9,7 +9,7 @@ import (
 
 func legacyEventListRestoreFixtures() []legacyDecoderCheckpointFixture {
 	fixtures := legacyEventValuesCheckpointFixtures()[:2]
-	large := strings.Repeat("중첩🙂", ConversationManifestChunkBytes/3)
+	large := strings.Repeat("\uc911\ucca9🙂", ConversationManifestChunkBytes/3)
 	fixtures = append(fixtures, legacyDecoderCheckpointFixture{name: "suspended-nested-child-cursor",
 		raw: string(legacyNativeEventDocument("2", `{"kind":"compaction","seq":0,"replacement_complete":true,"replacement":[{"kind":"compaction","seq":1,"replacement_complete":true,"replacement":[{"kind":"message","seq":2,"role":"user","blocks":[{"type":"text","text":"`+large+`"}]}]}]}`)),
 		cut: func(decoder *LegacyNormalizationDecoder) bool {

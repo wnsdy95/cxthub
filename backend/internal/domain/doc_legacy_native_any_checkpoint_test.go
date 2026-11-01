@@ -293,7 +293,7 @@ func legacyNativeAnyW78Fixtures() []legacyNativeAnyW78Fixture {
 		{name: "pending-empty-key", raw: pad(`{`, `""`, `:false`+bits), cut: "key"},
 		{name: "pending-null", raw: pad(`{"key":`, `null`, bits), cut: "null"},
 		{name: "open-map-array-frames", raw: pad(`{`, `"outer":[{`, `"child":null}],"end":true}`), cut: "frames"},
-		{name: "scalar-logical-prefix", raw: `{"text":"` + strings.Repeat("a", 2*width) + `\n\uD83D\uDE42한\"\\tail"` + bits, cut: "scalar"},
+		{name: "scalar-logical-prefix", raw: `{"text":"` + strings.Repeat("a", 2*width) + "\\n\\uD83D\\uDE42\ud55c\\\"\\\\tail\"" + bits, cut: "scalar"},
 		{name: "number-prefix-bound-source", raw: strings.Repeat(" ", width-128) + `[-0.` + strings.Repeat("0", 2*width) + `1,0.1,-0,5e-324]`, cut: "number"},
 		{name: "scanner-string-prefix", raw: `{"text":"` + strings.Repeat("b", 2*width) + `\u0041"` + bits, cut: "scanner"},
 		{name: "array-growth", raw: pad(`[null,`, `null`, `,{"new":[-0,true]},"tail"]`), cut: "growth"},

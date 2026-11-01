@@ -302,7 +302,7 @@ func TestLiveEffectiveItemIdentityAndPromptContracts(test *testing.T) {
 	digest := domain.MemoryDigest{SnapshotID: snapshot, ClaimsVersion: 1,
 		Fragments: []domain.MemoryFragment{
 			{SourceSnapshot: snapshot, Summary: strings.Repeat("older ", 200), Claims: []domain.MemoryClaim{claim, claim}},
-			{SourceSnapshot: snapshot, Summary: strings.Repeat("최신 ", 400)},
+			{SourceSnapshot: snapshot, Summary: strings.Repeat("\ucd5c\uc2e0 ", 400)},
 		}}
 	claims, err := EffectiveItems(digest, "claims")
 	if err != nil || len(claims) != 1 {

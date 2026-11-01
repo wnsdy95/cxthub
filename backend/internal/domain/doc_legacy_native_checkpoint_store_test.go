@@ -152,7 +152,7 @@ func TestLegacyNativeCheckpointStoreBoundedLists(test *testing.T) {
 func TestLegacyNativeCheckpointStoreScalarMigration(test *testing.T) {
 	ctx := context.Background()
 	store, _ := legacyNativeCheckpointStoreFixture(test)
-	prefix := strings.Repeat("복원🙂", 300000)
+	prefix := strings.Repeat("\ubcf5\uc6d0🙂", 300000)
 	previous, current := &strings.Builder{}, &strings.Builder{}
 	previous.Grow(len(prefix))
 	previous.WriteString(prefix)

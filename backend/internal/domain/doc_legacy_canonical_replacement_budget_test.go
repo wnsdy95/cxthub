@@ -23,12 +23,12 @@ func legacyCanonicalReplacementBudgetDense(count int) string {
 		switch position % 8 {
 		case 0:
 			fmt.Fprintf(&raw, `{"kind":"message","id":%q,"seq":%d,"role":"assistant","blocks":[{"type":"text","text":%q},{"type":"text","text":"tail"}]}`,
-				identifier, sequence, fmt.Sprintf("replacement-%05d <&> 한국🙂", position))
+				identifier, sequence, fmt.Sprintf("replacement-%05d <&> \ud55c\uad6d🙂", position))
 		case 1:
 			fmt.Fprintf(&raw, `{"kind":"tool_call","id":%q,"seq":%d,"call_id":%q,"tool_name":"tool","input":{"z":%d,"a":{"z":true,"a":[null,"<&>"]}}}`,
 				identifier, sequence, identifier, position)
 		case 2:
-			fmt.Fprintf(&raw, `{"kind":"tool_result","id":%q,"seq":%d,"call_id":%q,"output":{"z":%d,"a":["한국🙂",false]}}`,
+			fmt.Fprintf(&raw, "{\"kind\":\"tool_result\",\"id\":%q,\"seq\":%d,\"call_id\":%q,\"output\":{\"z\":%d,\"a\":[\"\ud55c\uad6d🙂\",false]}}",
 				identifier, sequence, identifier, position)
 		default:
 			fmt.Fprintf(&raw, `{"kind":"turn","id":%q,"seq":%d,"role":"user"}`, identifier, sequence)

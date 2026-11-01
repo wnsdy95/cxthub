@@ -863,7 +863,7 @@ func TestWave48PGFullRootDurableProcessingAcrossRestart(test *testing.T) {
 	fixture := newWave48PGFixture(test)
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
 	defer cancel()
-	firstMarker := "wave48 original full worker publication 한🙂"
+	firstMarker := "wave48 original full worker publication \ud55c🙂"
 	first := fixture.enqueue(test, firstMarker)
 	initial := fixture.start(test, ctx, outbound.ProcessWorker, fixture.budget)
 	if event := initial.expect(test, ctx, "opened"); event.Bindings != 17 {

@@ -171,7 +171,7 @@ func rootFixtureNew(test *testing.T) *rootFixtureState {
 	}
 	fixture.storage = store.NewFSStore(fixture.dir)
 	fixture.target, _ = rootFixtureSeedDoc(test, fixture,
-		rootFixtureMessage(domain.RoleUser, "requested needle 한글"), rootFixtureMessage(domain.RoleAssistant, "answer"))
+		rootFixtureMessage(domain.RoleUser, "requested needle \ud55c\uae00"), rootFixtureMessage(domain.RoleAssistant, "answer"))
 	fixture.base, _ = rootFixtureSeedDoc(test, fixture, fixture.target.CIR.Events[0])
 	fixture.other, _ = rootFixtureSeedDoc(test, fixture, rootFixtureMessage(domain.RoleUser, "other root"))
 	fixture.reader = &rootFixtureReader{

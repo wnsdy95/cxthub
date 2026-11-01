@@ -80,7 +80,7 @@ func legacyNativeInterfaceMetadataCheck(test *testing.T, fixture legacyNativeInt
 
 func TestLegacyNativeObjectInterfaceMetadataLargeStringParity(test *testing.T) {
 	value := `"` + strings.Repeat("x", LegacyCanonicalEncodingBytes+1) +
-		`\uD83D\uDE42\uD800x\uDC00\"\\\/\b\f\n\r\t\u0000` + "한🙂\xff\xc0\x80" + `"`
+		`\uD83D\uDE42\uD800x\uDC00\"\\\/\b\f\n\r\t\u0000` + "\ud55c🙂\xff\xc0\x80" + `"`
 	raw := `{"value":` + value + `}`
 	for _, fixture := range []legacyNativeInterfaceMetadataCase{
 		{name: "nil-empty-interface"},

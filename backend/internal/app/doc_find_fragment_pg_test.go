@@ -48,7 +48,7 @@ func TestPGDocFindFragmentRootAndLegacyBaseReadOnlyBoundedRanges(test *testing.T
 		fixture := newDocViewPGFixture(test)
 		document := domain.CIRDocument{Envelope: fixture.cir.Envelope, Events: []domain.CIREvent{
 			historyMessage(domain.RoleUser, "shared user"), historyMessage(domain.RoleAssistant, "shared assistant"),
-			{Kind: domain.EventToolResult, Output: strings.Repeat("한🙂needle ", 80_000)},
+			{Kind: domain.EventToolResult, Output: strings.Repeat("\ud55c🙂needle ", 80_000)},
 		}}
 		for index := range document.Events {
 			document.Events[index].Seq = index
@@ -124,7 +124,7 @@ func TestPGDocFindFragmentRechecksSelectedGenerationAuthorityAndOwnership(test *
 			fixture := newDocViewPGFixture(test)
 			document := domain.CIRDocument{Envelope: fixture.cir.Envelope, Events: []domain.CIREvent{
 				historyMessage(domain.RoleUser, "shared"),
-				{Kind: domain.EventToolResult, Seq: 1, Output: strings.Repeat("needle 한🙂 ", 100)},
+				{Kind: domain.EventToolResult, Seq: 1, Output: strings.Repeat("needle \ud55c🙂 ", 100)},
 			}}
 			var base domain.ContentHash
 			if changed == "legacy_base" {
@@ -212,7 +212,7 @@ func TestPGDocFindFragmentLegacyBoundedReadOnlyAndFreshSourceChecks(test *testin
 	fixture := newDocViewPGFixture(test)
 	doc := seedLegacyFindPGDocument(test, fixture, []domain.CIREvent{
 		{Kind: domain.EventToolResult, Output: strings.Repeat("unselected prefix ", 40_000)},
-		{Kind: domain.EventToolResult, Output: strings.Repeat("한🙂needle ", 80_000) + string(fixture.repo)},
+		{Kind: domain.EventToolResult, Output: strings.Repeat("\ud55c🙂needle ", 80_000) + string(fixture.repo)},
 		{Kind: domain.EventToolResult, Output: strings.Repeat("unselected suffix ", 40_000)},
 	})
 	index, err := fixture.storage.DocReadIndex(outbound.WithDocReadOnly(fixture.ctx), fixture.repo, doc.Hash)

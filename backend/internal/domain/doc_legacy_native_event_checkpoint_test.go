@@ -35,7 +35,7 @@ type legacyNativeEventW82Fixture struct {
 func legacyNativeEventW82Fixtures() []legacyNativeEventW82Fixture {
 	width := LegacyNormalizationPartBytes
 	keyPrefix := `{"blocks":[{"type":"text",`
-	longText := strings.Repeat("a", 2*width) + `\n\uD83D\uDE42\u0000한`
+	longText := strings.Repeat("a", 2*width) + "\\n\\uD83D\\uDE42\\u0000\ud55c"
 	pageSeed := legacyNativeBlockPagedSemanticsSeed(2*legacyCanonicalPageValues + 3)
 	fixtures := []legacyNativeEventW82Fixture{
 		{name: "pre-block-dispatch-hidden-backing", group: "dispatch", raw: `{"blocks":[null,null,null,null],"id":"after-dispatch"`, cut: "dispatch", prior: legacyNativeBlockListW81Prior(0, 4)},

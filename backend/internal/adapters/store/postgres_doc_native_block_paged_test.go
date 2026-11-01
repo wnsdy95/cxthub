@@ -39,7 +39,7 @@ type docNativeBlockPGState struct {
 }
 
 func docNativeBlockPGText(ordinal int) string {
-	return fmt.Sprintf("block-%05d:%s한🙂\"\\\n<>&", ordinal, strings.Repeat("x", 128))
+	return fmt.Sprintf("block-%05d:%s\ud55c🙂\"\\\n<>&", ordinal, strings.Repeat("x", 128))
 }
 
 func docNativeBlockPGSource(test *testing.T, storage *PostgresStore, ctx context.Context) (legacyByteStagePGFixture, []byte) {

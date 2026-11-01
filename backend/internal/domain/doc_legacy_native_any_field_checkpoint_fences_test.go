@@ -221,8 +221,8 @@ func TestLegacyNativeAnyFieldCheckpointW84IndependentValues(test *testing.T) {
 		{name: "maximum-finite", value: math.MaxFloat64},
 		{name: "fraction", value: float64(0.1)},
 		{name: "empty-string", value: ""},
-		{name: "opaque-string", value: "한🙂\x00\xff\"\\\n"},
-		{name: "paged-string", value: strings.Repeat("한🙂", LegacyCanonicalEncodingBytes/7+19)},
+		{name: "opaque-string", value: "\ud55c🙂\x00\xff\"\\\n"},
+		{name: "paged-string", value: strings.Repeat("\ud55c🙂", LegacyCanonicalEncodingBytes/7+19)},
 		{name: "typed-nil-map", value: map[string]any(nil)},
 		{name: "typed-nil-array", value: []any(nil)},
 	}

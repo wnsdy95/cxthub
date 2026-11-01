@@ -1071,7 +1071,7 @@ func TestWave58DocumentPublicationExplicitLegacyCompatibility(test *testing.T) {
 func wave58PublicationChunkInput(test *testing.T, repo domain.ContentHash, format string) (inbound.CommitInput, []byte) {
 	test.Helper()
 	document := wave58PublicationDocument(test, "chunked-"+format,
-		domain.CIREvent{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "한글 and escaped \"text\"\nfirst"}}},
+		domain.CIREvent{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "\ud55c\uae00 and escaped \"text\"\nfirst"}}},
 		domain.CIREvent{Kind: domain.EventMessage, Seq: 1, Role: domain.RoleAssistant, Blocks: []domain.ContentBlock{{Type: "text", Text: "second message and exact ordering"}}},
 	)
 	canonical := wave58PublicationBytes(test, document)
@@ -1088,7 +1088,7 @@ func wave58PublicationChunkInput(test *testing.T, repo domain.ContentHash, forma
 	}
 	if format == domain.ChunkFormatV2 {
 		stream := bytes.Join(bodies, []byte(","))
-		boundary := bytes.Index(stream, []byte("한글")) + 1
+		boundary := bytes.Index(stream, []byte("\ud55c\uae00")) + 1
 		if boundary <= 0 || boundary >= len(stream) {
 			test.Fatal("v2 fixture lacks a split inside a UTF-8 event")
 		}
