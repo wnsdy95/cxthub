@@ -1,0 +1,50 @@
+name: Normalization restart
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-event-restart:
+    runs-on: ubuntu-latest
+    env:
+      GOMAXPROCS: "2"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cxt
+          POSTGRES_PASSWORD: cxt
+          POSTGRES_DB: cxthub_restart_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cxt"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.26.10"
+          cache-dependency-path: backend/go.sum
+      - name: Verify the real-process regression is registered
+        run: >-
+          go test -tags postgres -p 1 -race ./internal/adapters/store
+          -list '^TestNormalizationCheckpointPGPreparingColdRestart$'
+          | grep -Fx 'TestNormalizationCheckpointPGPreparingColdRestart'
+      - name: Validate bounded source restart and capture fences
+        run: >-
+          go test -json -p 1 -parallel=1 -race -count=1 -timeout=0 ./internal/domain
+          -run '^(TestLegacyNormalizationPreparingRestart|TestLegacyNormalizationStageCheckpoint|TestLegacyNormalizationStageCapture|TestLegacyNativeEventLifecycle|TestLegacyNativeCanonicalOwnerReadyLifecycle)'
+      - name: Verify SIGKILL, fresh claim, and single publication
+        env:
+          CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_restart_test?sslmode=disable
+        run: >-
+          go test -json -tags postgres -p 1 -parallel=1 -race -count=1 -timeout=0 ./internal/adapters/store
+          -run '^(TestNormalizationCheckpointPGPreparingColdRestart|TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed|TestNormalizationCheckpointPGAutomaticOutputGenerationReset|TestNormalizationCheckpointPGRootCommitFailureAndLostResponse|TestDocNormalizationWorkPGFencesEachPhase|TestNormalizationCheckpointPGPreservesLocalDamageAndRejectsDerivedProof)$'
+      - name: Vet the changed backend packages
+        run: go vet -tags postgres -p 1 ./internal/domain ./internal/adapters/store
