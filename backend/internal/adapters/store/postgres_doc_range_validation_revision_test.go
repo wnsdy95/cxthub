@@ -118,7 +118,7 @@ func TestLegacyValidationPGCurrentCorruptionIsNotRetriedForever(test *testing.T)
 		test.Fatal(err)
 	}
 	for attempt := 0; attempt < 3; attempt++ {
-		if duplicate, err := storage.EnqueueDocRangeJob(ctx, repo, hash, time.Now().UTC()); err != nil || !reflect.DeepEqual(duplicate, job) {
+		if duplicate, err := storage.EnqueueDocRangeJob(ctx, repo, hash, time.Now().UTC()); err != nil || !reflect.DeepEqual(duplicate, docRangeJobPGReceipt(job)) {
 			test.Fatal("current corruption was automatically retried again", duplicate, err)
 		}
 	}
@@ -163,7 +163,7 @@ func TestLegacyValidationPGRecoveryExcludesOtherReasonsRevisionsAndOwners(tests 
 				if !errors.Is(err, domain.ErrNotFound) {
 					test.Fatal("recovery bypassed source ownership", duplicate, err)
 				}
-			} else if err != nil || !reflect.DeepEqual(duplicate, prior) {
+			} else if err != nil || !reflect.DeepEqual(duplicate, docRangeJobPGReceipt(prior)) {
 				test.Fatal("unrelated or current failure was retried", duplicate, prior, err)
 			}
 		})
@@ -222,7 +222,7 @@ func TestLegacyValidationPGByteAndBoundaryRejectionsRecoverThroughSameFence(test
 				if err := storage.FinishDocRangeJob(ctx, claimed, time.Now().UTC()); err != nil {
 					test.Fatal(err)
 				}
-				if duplicate, err := enqueue(); err != nil || !reflect.DeepEqual(duplicate, claimed) {
+				if duplicate, err := enqueue(); err != nil || !reflect.DeepEqual(duplicate, docRangeJobPGReceipt(claimed)) {
 					test.Fatal("current pair rejection did not remain durable", duplicate, err)
 				}
 			}
@@ -242,7 +242,7 @@ func TestLegacyValidationPGRecoveryHonorsExistingQueueCap(test *testing.T) {
 	if _, err := storage.EnqueueDocRangeJob(ctx, repo, hash, time.Now().UTC()); !errors.Is(err, domain.ErrResourceOverloaded) {
 		test.Fatal("validation recovery bypassed the queue cap", err)
 	}
-	if current := docRangeJobPGGet(test, storage, ctx, repo, hash); !reflect.DeepEqual(current, prior) {
+	if current := docRangeJobPGGet(test, storage, ctx, repo, hash); !reflect.DeepEqual(current, docRangeJobPGReceipt(prior)) {
 		test.Fatal("failed recovery altered the rejected receipt", current, prior)
 	}
 	var revision int
@@ -264,7 +264,7 @@ func TestLegacyValidationPGByteDemandCannotReopenCurrentMetadataFailure(tests *t
 			}
 			for attempt := 0; attempt < 3; attempt++ {
 				job, err := storage.EnqueueDocByteRangeJob(ctx, repo, hash, time.Now().UTC())
-				if err != nil || !reflect.DeepEqual(job, prior) {
+				if err != nil || !reflect.DeepEqual(job, docRangeJobPGReceipt(prior)) {
 					test.Fatal("byte promotion reopened a current/future invalid source", revision, job, prior, err)
 				}
 			}
@@ -417,7 +417,7 @@ func TestLegacyValidationPGFutureByteRejectionStaysTerminalAfterSourceRepair(tes
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		current, err := storage.EnqueueDocByteRangeJob(ctx, repo, hash, time.Now().UTC())
-		if err != nil || !reflect.DeepEqual(current, prior) {
+		if err != nil || !reflect.DeepEqual(current, docRangeJobPGReceipt(prior)) {
 			test.Fatal("physical source repair reinterpreted a future-rule rejection", current, prior, err)
 		}
 	}
