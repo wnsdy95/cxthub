@@ -21,12 +21,13 @@ import (
 )
 
 type docSpoolWorkPGTrace struct {
-	sourceReads   atomic.Int64
-	privateWrites atomic.Int64
-	writeMu       sync.Mutex
-	writeQueries  map[string]int
-	writeDocument domain.ContentHash
-	unboundWrites int
+	sourceReads     atomic.Int64
+	privateWrites   atomic.Int64
+	authorityChecks atomic.Int64
+	writeMu         sync.Mutex
+	writeQueries    map[string]int
+	writeDocument   domain.ContentHash
+	unboundWrites   int
 }
 
 type docSpoolWorkPGRead struct {
@@ -53,6 +54,10 @@ func (trace *docSpoolWorkPGTrace) TraceQueryStart(ctx context.Context, connectio
 		trace.sourceReads.Add(1)
 	}
 	statement := strings.ToUpper(strings.Join(strings.Fields(query.SQL), " "))
+	if strings.HasPrefix(statement, "WITH RETAINED_SOURCE AS MATERIALIZED") &&
+		strings.Contains(statement, "RETAINED_JOB AS MATERIALIZED") && !strings.Contains(statement, "RETAINED_STAGE AS MATERIALIZED") {
+		trace.authorityChecks.Add(1)
+	}
 	mutation := strings.HasPrefix(statement, "INSERT ") || strings.HasPrefix(statement, "UPDATE ") ||
 		strings.HasPrefix(statement, "DELETE ") || strings.HasPrefix(statement, "COPY ")
 	if mutation && strings.Contains(statement, "DOC_LEGACY_BYTE_STAGE") {
