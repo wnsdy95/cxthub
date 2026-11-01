@@ -79,6 +79,9 @@ func legacyEventValuesAdministrativeState(test *testing.T, work *legacyNativeEve
 			fmt.Fprintf(&state, "/graph=%d/%d/%t/%#v/%s", graph.phase, graph.position, graph.ready, graph.ref, body)
 			if layout := graph.layout; layout != nil {
 				fmt.Fprintf(&state, "/layout=%d/%d/%d/%d/%d/%d/%t", layout.phase, layout.rootIndex, layout.position, layout.nodes, layout.visits, layout.depth, layout.ready)
+				for frame := layout.frame; frame != nil; frame = frame.parent {
+					fmt.Fprintf(&state, "/layout-frame=%d", frame.position)
+				}
 			}
 		}
 	}
@@ -102,8 +105,6 @@ func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeE
 	var trace []legacyEventValuesAdministrativeTrace
 	consumed, maximum, cascades, handoffs := 0, 0, 0, 0
 	for range legacyNativeAnyW78StepLimit {
-		stop := work.current == nil || work.current.phase == 2 && work.fields != nil ||
-			work.current.phase == 5 && work.current.record.blocks != nil && work.current.blockIndex < work.current.record.blocks.records.length()
 		reads, writes := storage.reads, storage.writes
 		var ready bool
 		if original {
@@ -125,7 +126,7 @@ func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeE
 		if storage.writes-writes > 1 {
 			cascades++
 		}
-		entry := legacyEventValuesAdministrativeTrace{state: legacyEventValuesAdministrativeState(test, work), stop: stop || handoff || storage.reads != reads || storage.writes != writes,
+		entry := legacyEventValuesAdministrativeTrace{state: legacyEventValuesAdministrativeState(test, work), stop: handoff || storage.reads != reads || storage.writes != writes,
 			reads: storage.reads, writes: storage.writes, bytes: storage.transferred, retained: retained}
 		trace = append(trace, entry)
 		if expected != nil {
@@ -140,7 +141,7 @@ func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeE
 					break
 				}
 				if previous.stop {
-					test.Fatal("outer step crossed a child quantum, row flush, or sourceRecord handoff", consumed)
+					test.Fatal("outer step crossed an IO attempt or sourceRecord handoff", consumed)
 				}
 			}
 			if consumed == start || entry.state != expected[consumed-1].state {
@@ -182,7 +183,7 @@ func TestLegacyNativeEventValuesAdministrativeRawOracle(test *testing.T) {
 	if before != after || !reflect.DeepEqual(oldStore.objects, newStore.objects) || !reflect.DeepEqual(oldCalls, newCalls) {
 		test.Fatal("administrative coalescing changed exact wire, root hash, or ordered fresh CAS proofs")
 	}
-	if len(oldTrace) != 15*256+4 || len(newTrace) != 8*256+2 {
+	if len(oldTrace) != 15*256+4 || len(newTrace) != 802 {
 		test.Fatal("raw record step reduction changed", len(oldTrace), len(newTrace))
 	}
 	legacyNormalizationCaptureRQ87Idle(test, stage.mutation)
@@ -201,9 +202,10 @@ func TestLegacyNativeEventValuesAdministrativeNestedWire(test *testing.T) {
 }
 
 func TestLegacyNativeEventValuesAdministrativeLayoutBoundary(test *testing.T) {
-	record := legacyNativeEventValue{event: CIREvent{Output: make([]any, 1025)}, heap: docRangeHeaderHeapEstimate{bytes: 1 << 20}}
+	record := legacyNativeEventValue{event: CIREvent{Output: make([]any, 32_769)}, heap: docRangeHeaderHeapEstimate{bytes: 1 << 20}}
 	list := legacyNativeEventRecordFieldsTestList(test, record)
 	var states [2]string
+	var progressed [2]int
 	for index := range states {
 		storage := legacyNativeGoGraphSetW85Storage(test)
 		work, err := newLegacyNativeEventValuesCheckpoint(context.Background(), list, HashContent([]byte("layout-boundary")), 4096, storage.io, legacyDecoderCheckpointBudget)
@@ -219,8 +221,16 @@ func TestLegacyNativeEventValuesAdministrativeLayoutBoundary(test *testing.T) {
 		if work.fields == nil || work.fields.graph.layout == nil || work.fields.graph.layout.ready {
 			test.Fatal("fixture did not retain unfinished GoLayout traversal")
 		}
+		before := 0
+		if frame := work.fields.graph.layout.frame; frame != nil {
+			before = frame.position
+		}
 		if index == 0 {
-			_, err = legacyNativeGoGraphSetW85Step[legacyNativeCheckpointRef](test, legacyEventValuesAdministrativeOriginal{work}, storage)
+			for range 8 {
+				if _, err = legacyNativeGoGraphSetW85Step[legacyNativeCheckpointRef](test, legacyEventValuesAdministrativeOriginal{work}, storage); err != nil {
+					break
+				}
+			}
 		} else {
 			_, err = legacyNativeGoGraphSetW85Step[legacyNativeCheckpointRef](test, work, storage)
 		}
@@ -228,9 +238,14 @@ func TestLegacyNativeEventValuesAdministrativeLayoutBoundary(test *testing.T) {
 			test.Fatal("pure layout quantum crossed into subsequent work", err)
 		}
 		states[index] = legacyEventValuesAdministrativeState(test, work)
+		frame := work.fields.graph.layout.frame
+		if frame == nil {
+			test.Fatal("fixture did not advance into an active layout cursor")
+		}
+		progressed[index] = frame.position - before
 	}
-	if states[0] != states[1] {
-		test.Fatal("one zero-IO child quantum became multiple GoLayout quanta")
+	if states[0] != states[1] || progressed[0] <= 0 || progressed[0] != progressed[1] {
+		test.Fatal("zero-IO layout work differs from eight original quanta")
 	}
 }
 
@@ -279,5 +294,51 @@ func TestLegacyNativeEventValuesAdministrativePerTransitionFences(test *testing.
 				}
 			})
 		}
+	}
+}
+
+func TestLegacyNativeEventValuesBufferedIOBoundary(test *testing.T) {
+	for _, scenario := range []string{"buffered", "failure", "cancel"} {
+		test.Run(scenario, func(test *testing.T) {
+			list := legacyNativeEventRecordFieldsTestList(test, legacyNativeEventValue{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			attempts := 0
+			var wanted error
+			storage := legacyNativeCheckpointIO{Put: func(current context.Context, hash ContentHash, body []byte) error {
+				attempts++
+				if current != ctx || len(body) > LegacyCanonicalEncodingBytes || HashContent(body) != hash {
+					test.Fatal("buffered IO lost current context or bounded content")
+				}
+				if scenario == "failure" {
+					wanted = ErrPreparedDocRangeObject
+					return wanted
+				}
+				if scenario == "cancel" {
+					wanted = context.Canceled
+					cancel()
+				}
+				return nil
+			}}
+			work, err := newLegacyNativeEventValuesCheckpoint(ctx, list, HashContent([]byte("buffered-io")), 1024, storage, legacyDecoderCheckpointBudget)
+			if err != nil {
+				test.Fatal(err)
+			}
+			defer work.close()
+			if work.store.Read != nil {
+				test.Fatal("nil upstream reader became available")
+			}
+			ready, err := work.step(ctx)
+			if ready || attempts != 1 || !errors.Is(err, wanted) {
+				test.Fatal("capture crossed its first buffered or failed IO attempt", ready, attempts, err, wanted)
+			}
+			if wanted == nil {
+				if work.fields == nil || work.fields.graph == nil || !work.fields.graph.ready || !work.attemptedIO {
+					test.Fatal("buffered put consumed the graph-ready handoff")
+				}
+			} else if retained, failure := work.retainedBytes(); failure != nil || retained != 0 {
+				test.Fatal("failed IO retained capture ownership", retained, failure)
+			}
+		})
 	}
 }
