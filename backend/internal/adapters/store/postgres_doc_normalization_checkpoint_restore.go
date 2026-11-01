@@ -40,7 +40,7 @@ func (work *preparedLegacyCaptureWork) restoreNormalization(ctx context.Context)
 }
 
 func (work *legacyNormalizationCheckpointWork) readHeader(ctx context.Context, offset, length int) ([]byte, error) {
-	return work.store.readLegacyNormalizationPrefix(ctx, work.job, work.state, work.root.Header, offset, length)
+	return work.readPrefix(ctx, work.root.Header, offset, length)
 }
 
 func (work *legacyNormalizationCheckpointWork) readBuffer(ctx context.Context, slot int) ([]byte, error) {
@@ -51,7 +51,7 @@ func (work *legacyNormalizationCheckpointWork) readBuffer(ctx context.Context, s
 	if buffer.Bytes == 0 {
 		return nil, ctx.Err()
 	}
-	return work.store.readLegacyNormalizationCheckpointObject(ctx, work.job, work.state, buffer.Hash, buffer.Bytes)
+	return work.readParserObject(ctx, buffer.Hash, buffer.Bytes)
 }
 
 func (work *legacyNormalizationCheckpointWork) readParts(ctx context.Context, slot, first, count int) ([]domain.ConversationManifestChunk, error) {
@@ -59,7 +59,7 @@ func (work *legacyNormalizationCheckpointWork) readParts(ctx context.Context, sl
 		first > work.root.State.Files[slot].Parts || count > work.root.State.Files[slot].Parts-first {
 		return nil, domain.ErrIntegrity
 	}
-	body, err := work.store.readLegacyNormalizationPrefix(ctx, work.job, work.state, work.root.Files[slot].Parts,
+	body, err := work.readPrefix(ctx, work.root.Files[slot].Parts,
 		first*legacyNormalizationReceiptBytes, count*legacyNormalizationReceiptBytes)
 	if err != nil {
 		return nil, err
@@ -190,7 +190,7 @@ func (work *legacyNormalizationCheckpointWork) restoreStep(ctx context.Context, 
 		work.restore = restore
 		return false, nil
 	}
-	complete, err := work.restore.Step(ctx)
+	complete, err := work.restoreBatch(ctx)
 	if err != nil {
 		if errors.Is(err, domain.ErrLegacyNormalizationBusy) || errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrNotFound) || ctx.Err() != nil {
 			return false, err
@@ -217,4 +217,27 @@ func (work *legacyNormalizationCheckpointWork) restoreStep(ctx context.Context, 
 		}
 	}
 	return true, nil
+}
+
+func (work *legacyNormalizationCheckpointWork) restoreBatch(ctx context.Context) (ready bool, failure error) {
+	ctx, batch, err := work.beginBatch(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		failure = batch.finish(ctx, failure)
+		if failure != nil {
+			ready = false
+			work.restore.Close()
+		}
+	}()
+	complete := false
+	for quantum := 0; quantum < domain.DocLegacyByteBackfillBatchBlocks && !complete; quantum++ {
+		var err error
+		complete, err = work.restore.Step(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
+	return complete, nil
 }

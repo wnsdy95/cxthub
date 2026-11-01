@@ -1,0 +1,101 @@
+//go:build postgres
+
+package store
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+)
+
+type legacyNormalizationCheckpointBatchKey struct{}
+
+type legacyNormalizationCheckpointBatch struct {
+	owner       *legacyNormalizationCheckpointWork
+	state       legacyByteCheckpoint
+	transaction pgx.Tx
+	protocol    bool
+}
+
+func (work *legacyNormalizationCheckpointWork) beginBatch(ctx context.Context) (context.Context, *legacyNormalizationCheckpointBatch, error) {
+	transaction, state, err := work.store.openLegacyByteCheckpoint(ctx, work.job, work.state.stage, &work.state, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	batch := &legacyNormalizationCheckpointBatch{owner: work, state: state, transaction: transaction}
+	return context.WithValue(ctx, legacyNormalizationCheckpointBatchKey{}, batch), batch, nil
+}
+
+func (batch *legacyNormalizationCheckpointBatch) finish(ctx context.Context, failure error) error {
+	defer func() {
+		rollbackPG(batch.transaction)
+		batch.transaction = nil
+	}()
+	if failure != nil {
+		return failure
+	}
+	if err := liveLegacyByteJob(ctx, batch.transaction, batch.owner.job); err != nil {
+		return err
+	}
+	if err := batch.transaction.Commit(ctx); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (work *legacyNormalizationCheckpointWork) currentBatch(ctx context.Context) (*legacyNormalizationCheckpointBatch, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	batch, _ := ctx.Value(legacyNormalizationCheckpointBatchKey{}).(*legacyNormalizationCheckpointBatch)
+	if batch != nil {
+		if batch.owner != work || batch.transaction == nil || batch.state != work.state {
+			return nil, domain.ErrConflict
+		}
+	}
+	return batch, nil
+}
+
+func (work *legacyNormalizationCheckpointWork) stageParserObjects(ctx context.Context, objects []legacyByteCheckpointObject) error {
+	batch, err := work.currentBatch(ctx)
+	if err != nil {
+		return err
+	}
+	if batch == nil {
+		return work.store.stageLegacyNormalizationCheckpointObjects(ctx, work.job, work.state, objects)
+	}
+	owned, err := legacyByteCheckpointObjects(ctx, objects)
+	if err != nil {
+		return err
+	}
+	if !batch.protocol {
+		if err := legacyByteCheckpointProtocols(ctx, batch.transaction); err != nil {
+			return err
+		}
+		batch.protocol = true
+	}
+	return writeLegacyByteCheckpointObjects(ctx, batch.transaction, work.job, batch.state, owned)
+}
+
+func (work *legacyNormalizationCheckpointWork) readParserObject(ctx context.Context, hash domain.ContentHash, size int) ([]byte, error) {
+	batch, err := work.currentBatch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if batch == nil {
+		return work.store.readLegacyNormalizationCheckpointObject(ctx, work.job, work.state, hash, size)
+	}
+	return readLegacyNormalizationCheckpointObject(ctx, batch.transaction, work.job, batch.state, hash, size)
+}
+
+func (work *legacyNormalizationCheckpointWork) readPrefix(ctx context.Context, prefix legacyNormalizationPrefix, offset, length int) ([]byte, error) {
+	batch, err := work.currentBatch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if batch == nil {
+		return work.store.readLegacyNormalizationPrefix(ctx, work.job, work.state, prefix, offset, length)
+	}
+	return readLegacyNormalizationPrefix(ctx, batch.transaction, work.job, batch.state, prefix, offset, length)
+}

@@ -37,7 +37,7 @@ func (work *legacyNormalizationCheckpointWork) putParserObject(ctx context.Conte
 	if work.next.Parser == nil {
 		return domain.ErrIntegrity
 	}
-	if err := work.store.stageLegacyNormalizationParserObject(ctx, work.job, work.state, hash, body); err != nil {
+	if err := work.stageParserObjects(ctx, []legacyByteCheckpointObject{{hash: hash, data: body}}); err != nil {
 		return err
 	}
 	ref := legacyNormalizationBufferRef{Hash: hash, Bytes: len(body)}
@@ -69,7 +69,7 @@ func (work *legacyNormalizationCheckpointWork) parserPinNode(ctx context.Context
 		return legacyNormalizationBufferRef{}, err
 	}
 	pinHash := domain.HashContent(pins)
-	if err := work.store.stageLegacyNormalizationCheckpointObjects(ctx, work.job, work.state, []legacyByteCheckpointObject{{hash: pinHash, data: pins, structure: 1}}); err != nil {
+	if err := work.stageParserObjects(ctx, []legacyByteCheckpointObject{{hash: pinHash, data: pins, structure: 1}}); err != nil {
 		return legacyNormalizationBufferRef{}, err
 	}
 	return legacyNormalizationBufferRef{Hash: pinHash, Bytes: len(pins)}, nil
@@ -103,11 +103,11 @@ func (work *legacyNormalizationCheckpointWork) finishParserPins(ctx context.Cont
 func (work *legacyNormalizationCheckpointWork) parserIO() domain.LegacyNormalizationParserCheckpointIO {
 	return domain.LegacyNormalizationParserCheckpointIO{Put: work.putParserObject,
 		Read: func(ctx context.Context, hash domain.ContentHash, size int) ([]byte, error) {
-			return work.store.readLegacyNormalizationCheckpointObject(ctx, work.job, work.state, hash, size)
+			return work.readParserObject(ctx, hash, size)
 		}}
 }
 
-func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) (bool, error) {
+func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) (ready bool, failure error) {
 	parser := work.next.Parser
 	size, partBytes, err := work.capture.ParserInputGeometry(ctx)
 	if err != nil {
@@ -122,28 +122,48 @@ func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) 
 		return false, err
 	}
 	binding, store := work.parserBinding(), work.parserIO()
-	if parser.Ref.Bytes == 0 {
-		ref, ready, err := work.capture.ParserStep(ctx, binding, store, legacyNormalizationParserHeapBudget)
-		if err != nil || !ready {
-			return false, err
-		}
-		parser.Ref = legacyNormalizationBufferRef{Hash: ref.Hash, Bytes: ref.Bytes}
-	}
-	if work.next.State.Staging() && work.next.Encoder == nil {
-		ref, ready, err := work.capture.StageStep(ctx, binding, store, legacyNormalizationParserHeapBudget)
-		if err != nil || !ready {
-			return false, err
-		}
-		work.next.Encoder = &legacyNormalizationBufferRef{Hash: ref.Hash, Bytes: ref.Bytes}
-	}
-	if err := work.finishParserPins(ctx); err != nil {
+	ctx, batch, err := work.beginBatch(ctx)
+	if err != nil {
 		return false, err
 	}
-	return parser.valid(work.state), nil
+	defer func() {
+		failure = batch.finish(ctx, failure)
+		if failure != nil {
+			ready = false
+			work.capture.Close()
+		}
+	}()
+	for quantum := 0; quantum < domain.DocLegacyByteBackfillBatchBlocks; quantum++ {
+		if parser.Ref.Bytes == 0 {
+			ref, complete, err := work.capture.ParserStep(ctx, binding, store, legacyNormalizationParserHeapBudget)
+			if err != nil {
+				return false, err
+			}
+			if complete {
+				parser.Ref = legacyNormalizationBufferRef{Hash: ref.Hash, Bytes: ref.Bytes}
+			}
+			continue
+		}
+		if work.next.State.Staging() && work.next.Encoder == nil {
+			ref, complete, err := work.capture.StageStep(ctx, binding, store, legacyNormalizationParserHeapBudget)
+			if err != nil {
+				return false, err
+			}
+			if complete {
+				work.next.Encoder = &legacyNormalizationBufferRef{Hash: ref.Hash, Bytes: ref.Bytes}
+			}
+			continue
+		}
+		if err := work.finishParserPins(ctx); err != nil {
+			return false, err
+		}
+		return parser.valid(work.state), nil
+	}
+	return false, nil
 }
 
 func (work *legacyNormalizationCheckpointWork) readParserInput(ctx context.Context, offset, length int) ([]byte, error) {
-	return work.store.readLegacyNormalizationPrefix(ctx, work.job, work.state, work.root.Parser.Input, offset, length)
+	return work.readPrefix(ctx, work.root.Parser.Input, offset, length)
 }
 
 func (work *legacyNormalizationCheckpointWork) restoreParserParts(ctx context.Context) (bool, error) {

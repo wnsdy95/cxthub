@@ -72,9 +72,11 @@ func normalizationCheckpointPGColdReclaim(test *testing.T, storage *PostgresStor
 	if expectedParser != "" {
 		command.Env = append(command.Env, "CXT_NORMALIZATION_CHECKPOINT_EXPECTED_PARSER="+string(expectedParser))
 	}
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := command.CombinedOutput()
+	if err != nil {
 		test.Fatalf("processing checkpoint cold child failed: %v\n%s", err, output)
 	}
+	test.Logf("processing checkpoint cold child:\n%s", output)
 	legacyByteRecoveryPGAssertPublished(test, storage, ctx, fixture)
 	public := legacyByteRecoveryPGPublicationImage(test, storage, ctx, fixture)
 	if stale, err := work.store.PrepareDocRangeWork(ctx, job); stale != nil || !errors.Is(err, domain.ErrConflict) {
@@ -291,6 +293,7 @@ func TestNormalizationCheckpointPGColdChild(test *testing.T) {
 	if err := work.Publish(ctx, job); err != nil {
 		test.Fatal("new process could not atomically publish its reverified result", err)
 	}
+	test.Log("cold worker published", "elapsed", time.Since(started), "queries", trace.queries.Load())
 	fixture := legacyByteStagePGFixture{repo: job.RepoID, hash: job.DocHash}
 	public := legacyByteRecoveryPGPublicationImage(test, peer, base, fixture)
 	if err := work.Publish(ctx, job); !errors.Is(err, domain.ErrConflict) {
