@@ -42,8 +42,24 @@ func (work *legacyNormalizationCheckpointWork) putParserObject(ctx context.Conte
 		return err
 	}
 	ref := legacyNormalizationBufferRef{Hash: hash, Bytes: len(body)}
-	for level := range work.parserPins {
+	retained := work.parserPinCounts[0]
+	for _, pinned := range work.parserPins[0][:retained] {
+		if pinned == ref {
+			return nil
+		}
+	}
+	if retained < legacyNormalizationPrefixFanout {
+		work.parserPins[0][retained] = ref
+		work.parserPinCounts[0]++
+		return nil
+	}
+	for level := 1; level < len(work.parserPins); level++ {
 		count := work.parserPinCounts[level]
+		for _, retained := range work.parserPins[level][:count] {
+			if retained == ref {
+				return nil
+			}
+		}
 		work.parserPins[level][count] = ref
 		work.parserPinCounts[level]++
 		if work.parserPinCounts[level] < legacyNormalizationPrefixFanout {

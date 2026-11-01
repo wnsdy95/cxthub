@@ -22,6 +22,7 @@ const (
 	legacyCanonicalPreparedReplacementTag
 	legacyCanonicalPreparedArrayTag
 	legacyCanonicalPreparedBlock
+	legacyCanonicalPreparedInlineArray
 )
 
 type legacyCanonicalPreparedObject struct {
@@ -51,11 +52,12 @@ type legacyCanonicalPreparedValueRecord struct {
 	Number   int                           `json:"number"`
 	Texts    [2]legacyNativeCheckpointText `json:"texts"`
 	Children legacyNativeCheckpointTree    `json:"children"`
+	Inline   []byte                        `json:"inline,omitempty"`
 }
 
 func (record legacyCanonicalPreparedValueRecord) validate(binding ContentHash) error {
 	if record.Kind != legacyCanonicalPreparedValueKind || record.Version != legacyNativeCheckpointVersion || record.Binding != binding ||
-		record.Tag > legacyCanonicalPreparedBlock || record.Count < 0 || record.Number < 0 {
+		record.Tag > legacyCanonicalPreparedInlineArray || record.Count < 0 || record.Number < 0 {
 		return ErrIntegrity
 	}
 	if record.Tag != legacyCanonicalPreparedBool && record.Tag != legacyCanonicalPreparedInt && record.Tag != legacyCanonicalPreparedFloat && record.Bits != 0 ||
@@ -86,6 +88,13 @@ func (record legacyCanonicalPreparedValueRecord) validate(binding ContentHash) e
 			return ErrIntegrity
 		}
 	} else if record.Children != (legacyNativeCheckpointTree{}) {
+		return ErrIntegrity
+	}
+	if record.Tag == legacyCanonicalPreparedInlineArray {
+		if len(record.Inline) == 0 || len(record.Inline) > legacyCanonicalPreparedInlineBytes {
+			return ErrIntegrity
+		}
+	} else if record.Inline != nil {
 		return ErrIntegrity
 	}
 	return nil
@@ -246,7 +255,15 @@ func (work *legacyCanonicalPreparedValueWrite) push(input any) error {
 		frame.record.Tag, frame.record.Count = legacyCanonicalPreparedReplacementTag, value.count
 	case []any:
 		if value != nil {
-			frame.record.Tag, frame.record.Count, frame.values = legacyCanonicalPreparedArrayTag, len(value), value
+			var body []byte
+			if frame.skip == 0 {
+				body = legacyCanonicalPreparedPackArray(value)
+			}
+			if body != nil {
+				frame.record.Tag, frame.record.Inline = legacyCanonicalPreparedInlineArray, body
+			} else {
+				frame.record.Tag, frame.record.Count, frame.values = legacyCanonicalPreparedArrayTag, len(value), value
+			}
 		}
 	case []map[string]any:
 		if value != nil {
@@ -262,7 +279,18 @@ func (work *legacyCanonicalPreparedValueWrite) push(input any) error {
 		if !value.values.valid() {
 			return ErrIntegrity
 		}
-		frame.record.Tag, frame.record.Count, frame.prepared = legacyCanonicalPreparedArrayTag, value.values.length(), value
+		var inline [8]any
+		if count := value.values.length(); frame.skip == 0 && count <= len(inline) {
+			for position := range inline[:count] {
+				inline[position] = *value.values.at(position)
+			}
+			frame.record.Inline = legacyCanonicalPreparedPackArray(inline[:count])
+		}
+		if frame.record.Inline != nil {
+			frame.record.Tag = legacyCanonicalPreparedInlineArray
+		} else {
+			frame.record.Tag, frame.record.Count, frame.prepared = legacyCanonicalPreparedArrayTag, value.values.length(), value
+		}
 	case ContentBlock:
 		frame.record.Tag, frame.texts, frame.phase = legacyCanonicalPreparedBlock, [2]string{value.Text, value.Type}, legacyCanonicalPreparedWriteTextStart
 	default:
@@ -311,6 +339,7 @@ func (work *legacyCanonicalPreparedValueWrite) refresh(frame *legacyCanonicalPre
 	}
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(1, int64(unsafe.Sizeof(*frame)))
+	heap.allocation(int64(cap(frame.record.Inline)), 1)
 	for _, text := range frame.record.Texts {
 		heap.allocation(int64(len(text.Tree.Ref.Hash)), 1)
 	}
