@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -22,6 +23,10 @@ import (
 type docSpoolWorkPGTrace struct {
 	sourceReads   atomic.Int64
 	privateWrites atomic.Int64
+	writeMu       sync.Mutex
+	writeQueries  map[string]int
+	writeDocument domain.ContentHash
+	unboundWrites int
 }
 
 type docSpoolWorkPGRead struct {
@@ -43,20 +48,97 @@ func (source *docSpoolWorkPGSource) Read(ctx context.Context, offset, length int
 	return source.spool.Read(ctx, offset, length)
 }
 
-func (trace *docSpoolWorkPGTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
+func (trace *docSpoolWorkPGTrace) TraceQueryStart(ctx context.Context, connection *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
 	if strings.Contains(strings.ReplaceAll(query.SQL, "octet_length(source.bytes)", ""), "source.bytes") {
 		trace.sourceReads.Add(1)
 	}
 	statement := strings.ToUpper(strings.Join(strings.Fields(query.SQL), " "))
-	if strings.Contains(statement, "DOC_LEGACY_BYTE_STAGE") &&
-		(strings.HasPrefix(statement, "INSERT ") || strings.HasPrefix(statement, "UPDATE ") ||
-			strings.HasPrefix(statement, "DELETE ") || strings.HasPrefix(statement, "COPY ")) {
+	mutation := strings.HasPrefix(statement, "INSERT ") || strings.HasPrefix(statement, "UPDATE ") ||
+		strings.HasPrefix(statement, "DELETE ") || strings.HasPrefix(statement, "COPY ")
+	if mutation && strings.Contains(statement, "DOC_LEGACY_BYTE_STAGE") {
 		trace.privateWrites.Add(1)
+	}
+	if strings.HasPrefix(statement, "WITH ") {
+		unlocked := strings.ReplaceAll(statement, "FOR UPDATE", "FOR SHARE")
+		mutation = strings.Contains(unlocked, " INSERT ") || strings.Contains(unlocked, " UPDATE ") ||
+			strings.Contains(unlocked, " DELETE ") || strings.Contains(unlocked, " COPY ")
+	}
+	if mutation {
+		trace.writeMu.Lock()
+		if trace.writeQueries != nil {
+			trace.writeQueries[statement]++
+			if connection.PgConn().TxStatus() != 'T' || len(query.Args) == 0 || fmt.Sprint(query.Args[0]) != string(trace.writeDocument) {
+				trace.unboundWrites++
+			}
+		}
+		trace.writeMu.Unlock()
 	}
 	return ctx
 }
 
 func (*docSpoolWorkPGTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func docSpoolWorkPGCheckpointWrites(test *testing.T, trace *docSpoolWorkPGTrace) map[string]int {
+	test.Helper()
+	allowed := map[string]string{
+		`INSERT INTO doc_legacy_byte_stages_v1
+ (doc_hash,source_id,source_version,plan_hash,spec,blocks,next_block,complete)
+ VALUES($1,$2::uuid,$3,NULL,NULL,NULL,0,false) ON CONFLICT(doc_hash) DO NOTHING RETURNING stage_id::text`: "quarantine",
+		`INSERT INTO doc_legacy_byte_stage_checkpoint_objects_v1(doc_hash,stage_id,hash,bytes)
+ VALUES($1,$2::uuid,$3,$4) ON CONFLICT(doc_hash,stage_id,hash) DO NOTHING`: "checkpoint-object",
+		`INSERT INTO doc_legacy_checkpoint_structures_v1(doc_hash,stage_id,hash,kind)
+ VALUES($1,$2::uuid,$3,$4) ON CONFLICT(doc_hash,stage_id,hash) DO NOTHING`: "checkpoint-structure",
+		`UPDATE doc_legacy_byte_stages_v1 SET checkpoint_sequence=checkpoint_sequence+1,
+ checkpoint_hash=$2,checkpoint_bytes=$3 WHERE doc_hash=$1 AND stage_id=$4::uuid AND checkpoint_sequence=$5
+ AND checkpoint_hash IS NOT DISTINCT FROM NULLIF($6,'') RETURNING checkpoint_sequence`: "checkpoint-cas",
+		`WITH verified AS MATERIALIZED (
+ SELECT octet_length(bytes) AS stored_bytes,CASE WHEN octet_length(bytes)=$4
+ THEN 'sha256:'||encode(sha256(bytes),'hex') ELSE '' END AS stored_hash
+ FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3
+ ), touched AS (
+ INSERT INTO doc_legacy_checkpoint_staging_v1(doc_hash,stage_id,hash,last_sequence)
+ SELECT $1,$2::uuid,$3,$5 FROM verified WHERE stored_bytes=$4 AND stored_hash=$3
+ ON CONFLICT(doc_hash,stage_id,hash) DO UPDATE SET last_sequence=GREATEST(doc_legacy_checkpoint_staging_v1.last_sequence,EXCLUDED.last_sequence)
+ RETURNING 1
+ ) SELECT stored_bytes,stored_hash,EXISTS(SELECT 1 FROM touched) FROM verified`: "checkpoint-touch",
+	}
+	classes := make(map[string]string, len(allowed))
+	for statement, class := range allowed {
+		classes[strings.ToUpper(strings.Join(strings.Fields(statement), " "))] = class
+	}
+	trace.writeMu.Lock()
+	defer trace.writeMu.Unlock()
+	if trace.unboundWrites != 0 {
+		test.Fatal("provisional checkpoint write escaped its document or transaction", trace.unboundWrites)
+	}
+	counts := make(map[string]int)
+	for statement, count := range trace.writeQueries {
+		class, permitted := classes[statement]
+		if !permitted {
+			test.Fatal("unverified source attempted a non-checkpoint mutation", count, statement)
+		}
+		counts[class] += count
+	}
+	return counts
+}
+
+func docSpoolWorkPGQuarantineOnly(test *testing.T, storage *PostgresStore, ctx context.Context, fixture legacyByteStagePGFixture) {
+	test.Helper()
+	var provisional bool
+	err := storage.pool.QueryRow(ctx, `SELECT
+ NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stages_v1 stage
+ WHERE stage.doc_hash=$1 AND (stage.plan_hash IS NOT NULL OR stage.spec IS NOT NULL OR stage.blocks IS NOT NULL
+ OR stage.next_block<>0 OR stage.complete OR stage.header_version<>0 OR stage.header_bytes IS NOT NULL
+ OR stage.header_next<>0 OR stage.header_complete
+ OR NOT EXISTS(SELECT 1 FROM blobs source JOIN blob_source_incarnations incarnation ON incarnation.hash=source.hash
+ WHERE source.hash=stage.doc_hash AND source.doc_range_source_version=stage.source_version AND incarnation.incarnation=stage.source_id)))
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_objects_v1 WHERE doc_hash=$1)
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_parts_v1 WHERE doc_hash=$1)
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_headers_v1 WHERE doc_hash=$1)`, fixture.hash).Scan(&provisional)
+	if err != nil || !provisional {
+		test.Fatal("unverified source acquired a verified plan, byte/header data, or a stale source binding", provisional, err)
+	}
+}
 
 func docSpoolWorkPGSourceQuanta(storedBytes int) int64 {
 	return int64((storedBytes + (512 << 10) - 1) / (512 << 10))
@@ -479,9 +561,10 @@ func TestDocSpoolWorkPGPublicPrepareStillRejectsUnverifiedSource(test *testing.T
 	if _, err := storage.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, fixture.hash, damaged); err != nil {
 		test.Fatal(err)
 	}
-	private := legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1)
 	public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
 	peer, trace := docSpoolWorkPGStore(test, storage, ctx)
+	trace.writeQueries = make(map[string]int)
+	trace.writeDocument = fixture.hash
 	prepared, err := peer.PrepareDocRangeWork(ctx, job)
 	if err != nil || prepared == nil {
 		test.Fatal("public preparation did not defer full-source verification", prepared, err)
@@ -495,13 +578,31 @@ func TestDocSpoolWorkPGPublicPrepareStillRejectsUnverifiedSource(test *testing.T
 	if !ok || capture.work != nil || trace.sourceReads.Load() != 0 {
 		test.Fatal("public preparation consumed the unverified source", prepared, trace.sourceReads.Load())
 	}
-	progress, err := docCaptureWorkPGDrainPreparation(capture, ctx, job)
-	if err == nil && progress != outbound.DocRangeWorkPending {
-		test.Fatal("unverified source became publishable or entered compatibility", progress)
+	var failure error
+	for step := 0; step < docCaptureWorkPGPreparationStepLimit; step++ {
+		progress, stepErr := capture.Step(ctx, job)
+		if stepErr == nil && progress != outbound.DocRangeWorkPending || capture.work != nil || capture.canonicalProof.Valid() ||
+			capture.original || trace.sourceReads.Load() > docSpoolWorkPGSourceQuanta(len(damaged)) ||
+			reflect.ValueOf(&peer.docProofs.rootVerifier).Elem().FieldByName("events").Len() != 0 {
+			test.Fatal("unverified source exposed proof authority, fallback, or excess source reads", step, progress, stepErr)
+		}
+		docSpoolWorkPGCheckpointWrites(test, trace)
+		docSpoolWorkPGQuarantineOnly(test, storage, ctx, fixture)
+		if legacyByteStagePGPublicImage(test, storage, ctx, fixture) != public {
+			test.Fatal("provisional normalization changed public data or authority", step)
+		}
+		if err := capture.Publish(ctx, job); !errors.Is(err, domain.ErrDocRangeIndexPending) {
+			test.Fatal("unverified checkpoint accepted publication", step, err)
+		}
+		if stepErr != nil {
+			failure = stepErr
+			break
+		}
 	}
-	if !errors.Is(err, domain.ErrIntegrity) || capture.work != nil ||
-		trace.sourceReads.Load() != docSpoolWorkPGSourceQuanta(len(damaged)) || trace.privateWrites.Load() != 0 {
-		test.Fatal("capture skipped original full-source verification", capture.work, err, trace.sourceReads.Load(), trace.privateWrites.Load())
+	test.Log("provisional mutation classes", docSpoolWorkPGCheckpointWrites(test, trace), "legacy stage writes", trace.privateWrites.Load())
+	if !errors.Is(failure, domain.ErrIntegrity) || capture.work != nil ||
+		trace.sourceReads.Load() != docSpoolWorkPGSourceQuanta(len(damaged)) {
+		test.Fatal("capture skipped original full-source verification", capture.work, failure, trace.sourceReads.Load(), trace.privateWrites.Load())
 	}
 	if err := prepared.Close(); err != nil {
 		test.Fatal(err)
@@ -509,7 +610,8 @@ func TestDocSpoolWorkPGPublicPrepareStillRejectsUnverifiedSource(test *testing.T
 	if files, err := os.ReadDir(directory); err != nil || len(files) != 0 {
 		test.Fatal("failed original verification retained local spool files", files, err)
 	}
-	if legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1) != private || legacyByteStagePGPublicImage(test, storage, ctx, fixture) != public {
-		test.Fatal("failed original verification changed private or public state")
+	docSpoolWorkPGQuarantineOnly(test, storage, ctx, fixture)
+	if legacyByteStagePGPublicImage(test, storage, ctx, fixture) != public {
+		test.Fatal("failed original verification changed public state")
 	}
 }
