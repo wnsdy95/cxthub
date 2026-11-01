@@ -145,13 +145,15 @@ func TestPGDocMessageDenseDisplayDemandThenSearchLatePages(test *testing.T) {
 				missing, authorizations := false, 0
 				probe := &denseDocDisplayReadProbe{DocDisplayReader: fixture.storage, DocEventDisplayReader: fixture.storage, missing: func() { missing = true }}
 				fixture.service.ConfigureDocumentDisplayReads(probe)
-				revoked := inbound.WithDocumentReadAuthorizer(fixture.ctx, func(read context.Context, _ domain.ContentHash) (context.Context, error) {
+				authorize := func(read context.Context, _ domain.ContentHash) (context.Context, error) {
 					authorizations++
 					if missing {
 						return read, domain.ErrForbidden
 					}
 					return read, nil
-				})
+				}
+				revoked := inbound.WithDocumentReadAuthorizer(fixture.ctx, authorize)
+				revoked = inbound.WithDocumentSnapshotReadAuthorizer(revoked, authorize)
 				page, err := fixture.service.FindDocPage(revoked, fixture.repo, hash, initial)
 				if !errors.Is(err, domain.ErrForbidden) || !reflect.DeepEqual(page, domain.DocFindPage{}) || !missing || authorizations < 2 || denseDocDisplayPGJobs(test, fixture) != 0 {
 					test.Fatal("dense fallback queued with stale authority", err, missing, authorizations)

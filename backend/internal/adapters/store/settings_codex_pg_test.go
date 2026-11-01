@@ -34,21 +34,27 @@ type settingsCodexImagePG struct {
 	rows    string
 }
 
-func settingsCodexRequireCurrentPG(test *testing.T) {
+func settingsCodexRequireCurrentPG(test *testing.T) int {
 	test.Helper()
 	manifest, err := migrationManifest(test.Context(), migrationVerificationBundlePG)
 	if err != nil {
 		test.Fatal(err)
 	}
-	if len(manifest) != 152 || !manifestContains(manifest, settingsCodexMigrationPG) {
-		test.Fatal("requires the parent's complete 152-file bundle including 0152_settings_codex.sql", len(manifest))
+	historical := sha256.New()
+	count := 0
+	for _, migration := range manifest {
+		if migration.name <= settingsCodexMigrationPG {
+			_, _ = historical.Write([]byte(migration.name + "\x00" + migration.checksum + "\n"))
+			count++
+		}
 	}
-	if releasedMigrationCatalogSHA256 != settingsCodexCatalog152PG {
-		test.Fatal("requires the parent's compiled settings migration catalog 152")
+	if count != 152 || hex.EncodeToString(historical.Sum(nil)) != settingsCodexCatalog152PG {
+		test.Fatal("current bundle must preserve all released 152 settings migration files", count)
 	}
 	if err := verifyMigrationCatalog(manifest); err != nil {
 		test.Fatal("current public bundle does not match the compiled catalog", err)
 	}
+	return len(manifest)
 }
 
 func settingsCodexHistoricalPG(test *testing.T) (*processAdmissionPGFixture, *PostgresStore, string) {
@@ -87,10 +93,10 @@ func settingsCodexHistoricalPG(test *testing.T) (*processAdmissionPGFixture, *Po
 
 func settingsCodexCurrentPG(test *testing.T) (*processAdmissionPGFixture, *PostgresStore) {
 	test.Helper()
-	settingsCodexRequireCurrentPG(test)
+	migrations := settingsCodexRequireCurrentPG(test)
 	fixture, storage := migrationVerificationStorePG(test)
-	if applied, err := storage.ApplyPublicMigrations(fixture.ctx, migrationVerificationBundlePG); err != nil || applied != 152 {
-		test.Fatal("explicit public owner did not install the complete 152-file bundle", applied, err)
+	if applied, err := storage.ApplyPublicMigrations(fixture.ctx, migrationVerificationBundlePG); err != nil || applied != migrations {
+		test.Fatal("explicit public owner did not install the complete released bundle", applied, migrations, err)
 	}
 	return fixture, storage
 }
@@ -258,6 +264,7 @@ func settingsCodexVerifyPG(test *testing.T, fixture *processAdmissionPGFixture, 
 }
 
 func TestPGSettingsCodexHistorical151PublicUpgrade(test *testing.T) {
+	migrations := settingsCodexRequireCurrentPG(test)
 	fixture, storage, historical := settingsCodexHistoricalPG(test)
 	repo := settingsCodexRepositoryPG(test, fixture, storage)
 	legacy := settingsCodexLegacyPG(test, fixture, storage, repo)
@@ -276,8 +283,8 @@ func TestPGSettingsCodexHistorical151PublicUpgrade(test *testing.T) {
 		test.Fatal("public apply bypassed the current compiled catalog for a historical fixture", applied, err)
 	}
 	settingsCodexUnchangedPG(test, fixture, storage, before)
-	if applied, err := storage.ApplyPublicMigrations(fixture.ctx, migrationVerificationBundlePG); err != nil || applied != 1 {
-		test.Fatal("151 to 152 public upgrade must apply exactly one pending migration", applied, err)
+	if applied, err := storage.ApplyPublicMigrations(fixture.ctx, migrationVerificationBundlePG); err != nil || applied != migrations-151 {
+		test.Fatal("public upgrade must apply exactly the pending released migrations", applied, migrations-151, err)
 	}
 	after := settingsCodexImageReadPG(test, fixture)
 	if after.rows != before.rows || after.catalog[2] != before.catalog[2] {
@@ -301,8 +308,8 @@ func TestPGSettingsCodexHistorical151PublicUpgrade(test *testing.T) {
 		test.Fatal(err)
 	}
 	digest := sha256.Sum256(contents)
-	if receiptCount != 152 || checksum != hex.EncodeToString(digest[:]) {
-		test.Fatal("upgrade did not record exactly the real migration 152 bytes", receiptCount, checksum)
+	if receiptCount != migrations || checksum != hex.EncodeToString(digest[:]) {
+		test.Fatal("upgrade did not record the complete bundle and exact migration 152 bytes", receiptCount, migrations, checksum)
 	}
 	for _, bundle := range legacy {
 		settingsCodexReadPG(test, fixture.ctx, storage, repo, bundle, false)
@@ -554,6 +561,7 @@ func TestPGSettingsCodexCancelledWritesAndRepositoryRollback(test *testing.T) {
 }
 
 func TestPGSettingsCodexMigrationCancellationAndReceiptRollback(test *testing.T) {
+	migrations := settingsCodexRequireCurrentPG(test)
 	fixture, storage, _ := settingsCodexHistoricalPG(test)
 	repo := settingsCodexRepositoryPG(test, fixture, storage)
 	settingsCodexLegacyPG(test, fixture, storage, repo)
@@ -628,8 +636,8 @@ func TestPGSettingsCodexMigrationCancellationAndReceiptRollback(test *testing.T)
 		settingsCodexCheckErrorPG(test, storage.PutSettingsBundle(fixture.ctx, repo, codex), constraint)
 		settingsCodexUnchangedPG(test, fixture, storage, before)
 	})
-	if applied, err := storage.ApplyPublicMigrations(fixture.ctx, migrationVerificationBundlePG); err != nil || applied != 1 {
-		test.Fatal("restored fixture could not retry migration 152 exactly once", applied, err)
+	if applied, err := storage.ApplyPublicMigrations(fixture.ctx, migrationVerificationBundlePG); err != nil || applied != migrations-151 {
+		test.Fatal("restored fixture did not apply each pending migration exactly once", applied, migrations-151, err)
 	}
 	if err := storage.PutSettingsBundle(fixture.ctx, repo, codex); err != nil {
 		test.Fatal("committed retry did not unlock Codex settings", err)

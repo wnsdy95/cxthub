@@ -206,11 +206,17 @@ func checkStorageAccountingPG(t *testing.T, s *PostgresStore) {
 	if err := s.ConfigureStoragePolicy(ctx, ns2, "legacy-cap", 0, domain.StoragePolicy{Plan: "free", IncludedBytes: 1}, "test", "quota reduction"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetDocManifest(ctx, c, legacy.Hash); err != nil {
-		t.Fatal("quota blocked retained legacy read", err)
+	beforeLegacyRead := rootPGImage(t, ctx, s, c, ns2)
+	if _, err := s.GetDocManifest(ctx, c, legacy.Hash); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("quota-rejected repack did not retain the legacy body fallback", err)
 	}
-	if _, err := s.GetDoc(ctx, c, legacy.Hash); err != nil {
+	retained, err := s.GetDoc(ctx, c, legacy.Hash)
+	if err != nil {
 		t.Fatal(err)
+	}
+	retainedBytes, err := domain.CanonicalBytes(retained.CIR)
+	if err != nil || retained.Hash != legacy.Hash || string(retainedBytes) != string(raw) || rootPGImage(t, ctx, s, c, ns2) != beforeLegacyRead {
+		t.Fatal("quota fallback changed retained content, ownership, or accounting", err)
 	}
 	// A namespace transfer may not bypass the destination cap. Both the source
 	// credit and target charge roll back when the target cannot accept growth.
