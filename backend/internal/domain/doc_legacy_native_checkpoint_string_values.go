@@ -148,6 +148,22 @@ func (work *legacyNativeCheckpointStringValuesWriter) step(ctx context.Context) 
 		if uint64(length) > maximum || capacity < length || uint64(capacity) > 2*maximum+64 {
 			return work.fail(ErrIntegrity)
 		}
+		if length <= LegacyCanonicalEncodingBytes {
+			if err := work.checkBudget(legacyNativeCheckpointStringValuesWorkspace()); err != nil {
+				return work.fail(err)
+			}
+			var tree legacyNativeCheckpointTree
+			if length > 0 {
+				ref, err := legacyNativeCheckpointWrite(ctx, work.store, []byte(work.values[work.position]))
+				if err != nil {
+					return work.fail(err)
+				}
+				tree = legacyNativeCheckpointTree{Ref: ref, Count: uint64(length)}
+			}
+			work.row = legacyNativeCheckpointStringValueRow{Capacity: capacity, Text: legacyNativeCheckpointText{Bytes: length, Tree: tree}}
+			work.pending = true
+			return work.progress(ctx)
+		}
 		var planned docRangeHeaderHeapEstimate
 		planned.allocation(1, int64(unsafe.Sizeof(legacyNativeCheckpointTextWriter{})))
 		planned.allocation(1, int64(unsafe.Sizeof(legacyNativeCheckpointTreeBuilder{})))
