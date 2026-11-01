@@ -402,7 +402,7 @@ func TestLegacyNativeGoGraphSetW85SharedOwners(test *testing.T) {
 	binding := HashContent([]byte("W85 shared initial roots, not an Event completion claim"))
 	for count := 2; count <= 32; count++ {
 		test.Run("roots-"+strconv.Itoa(count), func(test *testing.T) {
-			leaf := map[string]any{"number": math.Float64frombits(0x8000000000000000), "text": "한🙂\x00\xff"}
+			leaf := map[string]any{"number": math.Float64frombits(0x8000000000000000), "text": "\ud55c\U0001f642\x00\xff"}
 			array := make([]any, 2, 7)
 			array[0], array[1] = leaf, leaf
 			branch := map[string]any{"array": array, "leaf": leaf}
@@ -414,7 +414,7 @@ func TestLegacyNativeGoGraphSetW85SharedOwners(test *testing.T) {
 			saved := legacyNativeGoGraphSetW85Capture(test, roots, binding, storage)
 			actual := legacyNativeGoGraphSetW85Restore(test, saved, binding, storage, 1)
 			legacyNativeGoGraphSetW85Values(test, roots, actual)
-			if len(leaf) != 2 || leaf["text"] != "한🙂\x00\xff" || math.Float64bits(leaf["number"].(float64)) != 0x8000000000000000 || len(array) != 2 || cap(array) != 7 || len(branch) != 2 {
+			if len(leaf) != 2 || leaf["text"] != "\ud55c\U0001f642\x00\xff" || math.Float64bits(leaf["number"].(float64)) != 0x8000000000000000 || len(array) != 2 || cap(array) != 7 || len(branch) != 2 {
 				test.Fatal("set preparation mutated borrowed source values or shapes")
 			}
 		})
@@ -429,7 +429,7 @@ func TestLegacyNativeGoGraphSetW85SharedOwners(test *testing.T) {
 			backing[:1:8], backing[:2:8], backing[:1:4], backing[:1:8], backing[1:2:8],
 			map[string]any(nil), map[string]any{}, []any(nil), []any{}, make([]any, 0, 5),
 			nil, false, true, float64(0), math.Copysign(0, -1), math.SmallestNonzeroFloat64, math.MaxFloat64,
-			"", "opaque\x00\xff한🙂", map[string]any{"nil-map": map[string]any(nil), "empty-array": make([]any, 0, 3)}}
+			"", "opaque\x00\xff\ud55c\U0001f642", map[string]any{"nil-map": map[string]any(nil), "empty-array": make([]any, 0, 3)}}
 		storage := legacyNativeGoGraphSetW85Storage(test)
 		saved := legacyNativeGoGraphSetW85Capture(test, roots, binding, storage)
 		legacyNativeGoGraphSetW85Values(test, roots, legacyNativeGoGraphSetW85Restore(test, saved, binding, storage, 1))
@@ -449,7 +449,7 @@ func TestLegacyNativeGoGraphSetW85SharedOwners(test *testing.T) {
 
 func TestLegacyNativeGoGraphSetW85BoundedPayloadAdmission(test *testing.T) {
 	binding := HashContent([]byte("W85 bounded root set admission"))
-	text := strings.Repeat("한🙂\x00\\\"", LegacyCanonicalEncodingBytes/9+37)
+	text := strings.Repeat("\ud55c\U0001f642\x00\\\"", LegacyCanonicalEncodingBytes/9+37)
 	array := make([]any, 4097, 8193)
 	for ordinal := range array {
 		array[ordinal] = float64(ordinal)
@@ -814,7 +814,7 @@ func legacyNativeGoGraphSetW85Lifecycle[Value any](test *testing.T, name string,
 
 func TestLegacyNativeGoGraphSetW85CurrentContextAndCleanup(test *testing.T) {
 	binding := HashContent([]byte("W85 current context and terminal registry cleanup"))
-	leaf := map[string]any{"text": strings.Repeat("한🙂", LegacyCanonicalEncodingBytes/7+13)}
+	leaf := map[string]any{"text": strings.Repeat("\ud55c\U0001f642", LegacyCanonicalEncodingBytes/7+13)}
 	roots := []any{leaf, []any{leaf, leaf}, leaf}
 	legacyNativeGoGraphSetW85Lifecycle[legacyNativeCheckpointRef](test, "capture", func(storage *legacyNativeGoGraphSetW85Store) func(context.Context) (legacyNativeGoGraphSetW85Work[legacyNativeCheckpointRef], error) {
 		return func(current context.Context) (legacyNativeGoGraphSetW85Work[legacyNativeCheckpointRef], error) {

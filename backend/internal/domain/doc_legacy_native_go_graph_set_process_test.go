@@ -159,8 +159,8 @@ func legacyGoGraphSetW85ProcessMetadataRead(test *testing.T, directory, name str
 
 func legacyGoGraphSetW85ProcessFixtures() []any {
 	negativeZero := math.Float64frombits(1 << 63)
-	sharedMap := map[string]any{"text": "native\x00\n한글🙂", "zero": negativeZero, "true": true}
-	separateMap := map[string]any{"text": "native\x00\n한글🙂", "zero": negativeZero, "true": true}
+	sharedMap := map[string]any{"text": "native\x00\n\ud55c\uae00\U0001f642", "zero": negativeZero, "true": true}
+	separateMap := map[string]any{"text": "native\x00\n\ud55c\uae00\U0001f642", "zero": negativeZero, "true": true}
 	sharedArray := make([]any, 3, 7)
 	sharedArray[0], sharedArray[1] = sharedMap, negativeZero
 	separateArray := make([]any, 3, 7)
@@ -178,7 +178,7 @@ func legacyGoGraphSetW85ProcessFixtures() []any {
 		nil, false, true, negativeZero, math.SmallestNonzeroFloat64, math.MaxFloat64,
 		map[string]any(nil), emptyMap, []any(nil), emptyArray, emptyCapacity,
 		strings.Repeat("large-native-text-", 8193), wrapper, float64(0), -math.SmallestNonzeroFloat64,
-		float64(0.1), "\x00\n\t\"\\한글🙂", sharedMap, deep, []any{sharedMap, sharedArray},
+		float64(0.1), "\x00\n\t\"\\\ud55c\uae00\U0001f642", sharedMap, deep, []any{sharedMap, sharedArray},
 		map[string]any{"deep": deep}, emptyMap, emptyCapacity, sharedArray[:2:7], sharedArray[:3:3],
 	}
 }

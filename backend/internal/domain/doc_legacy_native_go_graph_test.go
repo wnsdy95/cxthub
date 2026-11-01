@@ -347,7 +347,7 @@ func TestLegacyNativeCheckpointGoGraphW85Values(test *testing.T) {
 		{name: "maximum-finite", value: math.MaxFloat64},
 		{name: "exact-mantissa", value: math.Float64frombits(0x4340000000000001)},
 		{name: "empty-text", value: ""},
-		{name: "escaped-and-unicode-text", value: "\x00\"\\\n한글😀"},
+		{name: "escaped-and-unicode-text", value: "\x00\"\\\n\ud55c\uae00\U0001f600"},
 		{name: "typed-nil-map", value: map[string]any(nil)},
 		{name: "typed-nil-array", value: []any(nil)},
 		{name: "empty-map", value: map[string]any{}},
@@ -433,7 +433,7 @@ func TestLegacyNativeCheckpointGoGraphW85AliasesAndScale(test *testing.T) {
 		}
 	})
 	test.Run("large-text-array-map-and-source-backing", func(test *testing.T) {
-		text := strings.Repeat("한x", ConversationManifestChunkBytes+19)
+		text := strings.Repeat("\ud55cx", ConversationManifestChunkBytes+19)
 		array := make([]any, 8193, 8209)
 		for position := range array {
 			array[position] = float64(position)

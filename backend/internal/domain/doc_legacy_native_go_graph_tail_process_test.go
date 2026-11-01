@@ -25,15 +25,15 @@ type legacyGoGraphTailW86ProcessSourceState struct {
 
 func legacyGoGraphTailW86ProcessFixtures() []any {
 	negativeZero := math.Float64frombits(1 << 63)
-	sharedMap := map[string]any{"text": "tail\x00\n한글🙂", "zero": negativeZero, "bool": true}
-	separateMap := map[string]any{"text": "tail\x00\n한글🙂", "zero": negativeZero, "bool": true}
+	sharedMap := map[string]any{"text": "tail\x00\n\ud55c\uae00\U0001f642", "zero": negativeZero, "bool": true}
+	separateMap := map[string]any{"text": "tail\x00\n\ud55c\uae00\U0001f642", "zero": negativeZero, "bool": true}
 	emptyMap := map[string]any{}
 	emptyArray := make([]any, 0)
 	nestedArray := make([]any, 2, 6)
 	nestedBacking := nestedArray[:cap(nestedArray)]
 	nestedBacking[0], nestedBacking[1] = sharedMap, float64(9)
 	nestedBacking[2], nestedBacking[3] = negativeZero, emptyMap
-	nestedBacking[4], nestedBacking[5] = []any(nil), "nested-hidden\x00한글🙂"
+	nestedBacking[4], nestedBacking[5] = []any(nil), "nested-hidden\x00\ud55c\uae00\U0001f642"
 	separateArray := make([]any, len(nestedArray), cap(nestedArray))
 	copy(separateArray[:cap(separateArray)], nestedBacking)
 	nestedMap := map[string]any{"array": nestedArray, "shared": sharedMap, "empty": emptyArray}
@@ -47,8 +47,8 @@ func legacyGoGraphTailW86ProcessFixtures() []any {
 	backing[2], backing[3], backing[4] = negativeZero, map[string]any(nil), []any(nil)
 	backing[5], backing[6], backing[7], backing[8] = emptyMap, emptyArray, sharedMap, separateMap
 	backing[9], backing[10], backing[11] = nestedMap, nestedArray, separateArray
-	backing[12], backing[13], backing[14], backing[15] = true, false, "", "hidden\x00\n\t\"\\한글🙂"
-	backing[16], backing[17], backing[18], backing[19] = strings.Repeat("hidden-tail-한글🙂\x00\n", 8193), float64(0), emptyCapacity, nil
+	backing[12], backing[13], backing[14], backing[15] = true, false, "", "hidden\x00\n\t\"\\\ud55c\uae00\U0001f642"
+	backing[16], backing[17], backing[18], backing[19] = strings.Repeat("hidden-tail-\ud55c\uae00\U0001f642\x00\n", 8193), float64(0), emptyCapacity, nil
 	for position := 20; position < len(backing); position++ {
 		backing[position] = float64(position)
 	}
@@ -56,7 +56,7 @@ func legacyGoGraphTailW86ProcessFixtures() []any {
 	backing[63], backing[64], backing[69] = emptyArray, separateMap, "last-hidden-slot"
 	return []any{
 		array, array, emptyCapacity, nestedArray, separateArray, sharedMap, separateMap, emptyMap, emptyArray, nestedMap,
-		nil, negativeZero, map[string]any(nil), []any(nil), "root-text\x00한글🙂", float64(0), false, true,
+		nil, negativeZero, map[string]any(nil), []any(nil), "root-text\x00\ud55c\uae00\U0001f642", float64(0), false, true,
 		math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64, math.MaxFloat64, float64(0.1),
 		sharedMap, nestedArray, emptyCapacity, emptyMap, emptyArray, separateArray,
 		map[string]any{"hidden_owner": array, "nested_owner": nestedMap}, []any{sharedMap, nestedArray}, "last-root", float64(42),
