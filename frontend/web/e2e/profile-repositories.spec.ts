@@ -79,6 +79,49 @@ test('switching to another profile never renders the cached private membership l
   expect(fixture.unexpected).toEqual([]);
 });
 
+test('accepting an invitation replaces an in-flight pre-membership repository list', async ({ page }) => {
+  const fixture = await profileFixture(page, { repositories: [] });
+  let releaseInitial!: () => void;
+  const initialResponse = new Promise<void>(resolve => { releaseInitial = resolve; });
+  let requestedInitial!: () => void;
+  const initialRequest = new Promise<void>(resolve => { requestedInitial = resolve; });
+  let repositoryReads = 0;
+  await page.route('**/api/v1/repositories', async route => {
+    repositoryReads++;
+    if (repositoryReads === 1) {
+      requestedInitial();
+      await initialResponse;
+      await route.fulfill({ json: [] });
+      return;
+    }
+    await route.fulfill({ json: [invited] });
+  });
+  await page.route('**/api/v1/invites/member-invitation/accept', async route => {
+    await initialRequest;
+    fixture.state.repositories = [invited];
+    await route.fulfill({ json: invited });
+  });
+  await page.route('**/api/v1/repos?**', route => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/repositories/invited/members', route => route.fulfill({ json: [] }));
+  const accepted = page.waitForResponse(response => response.url().endsWith('/invites/member-invitation/accept'));
+  try {
+    await page.goto('/invite/member-invitation');
+    await (await accepted).finished();
+    await expect.poll(() => repositoryReads).toBe(2);
+    await expect(page).toHaveURL(/\/alice\/project$/);
+    const staleResponse = page.waitForResponse(response => response.url().endsWith('/api/v1/repositories'));
+    releaseInitial();
+    await (await staleResponse).finished();
+    await page.getByRole('button', { name: 'Profile menu', exact: true }).click();
+    await page.getByRole('link', { name: 'My profile', exact: true }).click();
+    await expect(page.locator('.repository-card-name')).toHaveText('alice/project');
+    expect(repositoryReads).toBe(2);
+    expect(fixture.unexpected).toEqual([]);
+  } finally {
+    releaseInitial();
+  }
+});
+
 test('repository loading is not displayed as an empty membership list', async ({ page }) => {
   await profileFixture(page, { repositories: [invited] });
   let release!: () => void;
