@@ -79,6 +79,9 @@ func TestLegacyNativeGoGraphSetInlineBatchEventPrefix(test *testing.T) {
 			}
 			graph := fields.graph
 			prefix := 16
+			if fixture.event.Input == nil && fixture.event.Output == nil {
+				prefix = legacyNativeEventRecordFieldRoots
+			}
 			if fields.state.HasCreateTime {
 				prefix = legacyCanonicalSourceNumberRoot
 			}

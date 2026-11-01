@@ -750,10 +750,20 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 			proofSourceObserved := false
 			nativeHandoffObserved := false
 			parkStep, resumedStep := 0, 0
+			checkpointSequence, checkpointPosition := int64(-1), int64(0)
 			probe.afterStep = func(bound context.Context, step int, complete bool) error {
 				state, err := docRangeNativePagesPGInspect(observed.work.handle, input.rawDecode)
 				if err != nil {
 					return err
+				}
+				checkpoint := reflect.ValueOf(observed.work.handle).Elem().FieldByName("checkpoint")
+				if !checkpoint.IsNil() {
+					sequence := checkpoint.Elem().FieldByName("state").FieldByName("sequence").Int()
+					checkpointPosition = checkpoint.Elem().FieldByName("position").Int()
+					if sequence != checkpointSequence {
+						checkpointSequence = sequence
+						test.Logf("checkpoint sequence=%d step=%d event_count=%d records=%d", sequence, step, state.eventCount, state.eventValues.records)
+					}
 				}
 				if input.rawDecode && state.source.manifest != 0 {
 					partBytes := domain.ConversationManifestChunkBytes
@@ -910,6 +920,12 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 				return nil
 			}
 			err = fixture.service.ProcessDocRangeJobs(ctx, 1)
+			if err != nil && observed.work != nil {
+				last := observed.work.before
+				test.Logf("normalization failure: steps=%d published=%d event_count=%d event_position=%d records=%d replacement_position=%d actions=%d checkpoint_sequence=%d checkpoint_position=%d error=%v",
+					probe.steps, probe.published, last.eventCount, last.eventPosition, last.eventValues.records,
+					last.replacementPosition, last.actions, checkpointSequence, checkpointPosition, err)
+			}
 			if parkStep == 0 {
 				test.Fatal("actual native preparation never remained active at a parkable quantum boundary", err)
 			}
