@@ -411,6 +411,36 @@ func (work *legacyNativeEventValuesCheckpoint) admit(extra int64) error {
 }
 
 func (work *legacyNativeEventValuesCheckpoint) step(ctx context.Context) (bool, error) {
+	for transitions := 0; transitions < 8; transitions++ {
+		administrative := work.administrative()
+		ready, err := work.stepOnce(ctx)
+		if err != nil || ready || !administrative || work.current != nil && work.current.phase == 7 {
+			return ready, err
+		}
+	}
+	return false, nil
+}
+
+func (work *legacyNativeEventValuesCheckpoint) administrative() bool {
+	if work == nil || work.current == nil {
+		return false
+	}
+	frame := work.current
+	switch frame.phase {
+	case 0, 3, 4:
+		return len(work.rows.values) < legacyNativeCheckpointPageItems-1
+	case 1, 6, 7:
+		return true
+	case 2:
+		return work.fields == nil
+	case 5:
+		return frame.record.blocks == nil || frame.blockIndex == frame.record.blocks.records.length()
+	default:
+		return false
+	}
+}
+
+func (work *legacyNativeEventValuesCheckpoint) stepOnce(ctx context.Context) (bool, error) {
 	if work == nil {
 		return false, ErrIntegrity
 	}
