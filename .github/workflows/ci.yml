@@ -53,19 +53,8 @@ jobs:
         if: github.event.repository.private == false
         run: bash scripts/public-preflight.sh full
 
-  backend:
+  backend-checks:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: cxt
-          POSTGRES_PASSWORD: cxt
-          POSTGRES_DB: cxthub_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U cxt"
-          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -93,11 +82,36 @@ jobs:
         run: |
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags postgres ./...
-      - name: test (PG contracts — real Postgres)
-        working-directory: backend
+
+  backend-contracts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [store, app, transports]
+    services:
+      postgres:
+        image: postgres:16
         env:
-          CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
-          CXT_ROOT_WRITER_COST: "1"
+          POSTGRES_USER: cxt
+          POSTGRES_PASSWORD: cxt
+          POSTGRES_DB: cxthub_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cxt"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
+      CXT_ROOT_WRITER_COST: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10"
+          cache-dependency-path: backend/go.sum
+      - name: test (PG store contracts)
+        if: matrix.lane == 'store'
+        working-directory: backend
         run: |
           python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres \
             --require-test TestLegacyByteRecoveryPGColdChild \
@@ -116,6 +130,10 @@ jobs:
             --allow-skip TestPGRootPublicationCostWriterBarrier \
             --allow-skip TestRootReaderLegacyClassificationCost \
             --allow-skip TestStoredConversationReferencePerformance
+      - name: test (PG app contracts)
+        if: matrix.lane == 'app'
+        working-directory: backend
+        run: |
           python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3 \
             --allow-skip TestPGMemoryPreparationCostD3ab \
             --allow-skip TestPGReadModelMixedProgress
@@ -124,6 +142,10 @@ jobs:
           python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race \
             --run '^TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads$' \
             --require-test TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads
+      - name: test (PG transport contracts)
+        if: matrix.lane == 'transports'
+        working-directory: backend
+        run: |
           go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/adapters/federation/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
@@ -132,6 +154,17 @@ jobs:
           go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip)$' -count=1 -timeout=120s -v
           python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --run '^TestPGMCPResourceCutover$'
           python3 ../scripts/test-go-batches.py ./cmd/cxt-admin/ --tags postgres --race --run '^TestIdentityKeyCommandRejectsSecretsWithoutEchoingConfiguration$'
+
+  backend:
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs: [backend-checks, backend-contracts]
+    steps:
+      - name: Require all backend jobs to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'keys == ["backend-checks", "backend-contracts"] and all(.[]; .result == "success")' <<< "$NEEDS_JSON"
 
   cli:
     runs-on: ubuntu-latest
