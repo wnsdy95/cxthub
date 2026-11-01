@@ -86,18 +86,14 @@ for (const legacy of [false, true]) test(`real prepared display find reaches lat
     expect(accepted.ok(), await accepted.text()).toBe(true);
     const responses: DocFindPage[] = [];
     const requests: URL[] = [];
-    const responseCaptures: Promise<void>[] = [];
-    const responseErrors: string[] = [];
     page.on('request', request => {
       const url = new URL(request.url());
       if (url.pathname.endsWith('/find') || url.pathname.endsWith('/find-fragments')) requests.push(url);
     });
-    page.on('requestfinished', request => {
-      if (!new URL(request.url()).pathname.endsWith('/find')) return;
-      responseCaptures.push((async () => {
-        const response = await request.response();
-        if (response?.ok()) responses.push(await response.json());
-      })().catch(error => { responseErrors.push(String(error)); }));
+    await page.route(url => url.pathname === `${base}/docs/${encodeURIComponent(documentHash)}/find`, async route => {
+      const response = await route.fetch();
+      if (response.ok()) responses.push(await response.json());
+      await route.fulfill({ response });
     });
     await page.goto(`/${ownerUser.username}/${metadata.slug}`);
     await expect(page.locator('.viewer')).toContainText('Prepared search finishes here', { timeout: 30_000 });
@@ -106,9 +102,7 @@ for (const legacy of [false, true]) test(`real prepared display find reaches lat
     await page.getByRole('textbox', { name: 'Find text' }).fill('needle🙂');
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(page.locator('.document-find-preview mark')).toHaveText('NEEDLE🙂', { timeout: 60_000 });
-    await expect.poll(() => responses.flatMap(response => response.matches).length).toBeGreaterThan(0);
-    await Promise.all(responseCaptures);
-    expect(responseErrors).toEqual([]);
+    expect(responses.flatMap(response => response.matches).length).toBeGreaterThan(0);
     const match = responses.flatMap(response => response.matches)[0];
     expect(match.event_index).toBe(1);
     expect(match.byte_offset).toBeGreaterThan(512 << 10);
@@ -126,8 +120,6 @@ for (const legacy of [false, true]) test(`real prepared display find reaches lat
     await expect(page.locator('.document-find-reveal [role="alert"]')).toBeVisible();
     await expect(page.locator('.document-find-source')).toHaveCount(0);
     expect(requests.filter(request => request.pathname.endsWith('/find')).every(request => request.searchParams.get('representation') === 'display-prepared-v1')).toBe(true);
-    await Promise.all(responseCaptures);
-    expect(responseErrors).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await owner.dispose();
