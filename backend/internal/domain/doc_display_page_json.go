@@ -7,32 +7,52 @@ import (
 	"unicode/utf8"
 )
 
-type docDisplayRunJSON struct {
-	Linear     bool `json:"linear"`
-	SourceFrom int  `json:"source_from"`
-	SourceTo   int  `json:"source_to"`
-	To         int  `json:"to"`
-}
-
 func marshalDocDisplayPage(page DocDisplayPage) ([]byte, error) {
-	if !utf8.ValidString(page.Text) || !utf8.ValidString(string(page.Source)) {
+	if len(page.Runs) > DocDisplayPageRuns || len(page.Text) > DocDisplayPageTextBytes || len(page.Source) > len(contentHashPrefix)+64 ||
+		!utf8.ValidString(page.Text) || !utf8.ValidString(string(page.Source)) {
 		return canonicalJSON(page)
 	}
-	var runs []docDisplayRunJSON
-	if page.Runs != nil {
-		runs = make([]docDisplayRunJSON, len(page.Runs))
+	source, err := json.Marshal(page.Source)
+	if err != nil {
+		return nil, err
 	}
-	for index, run := range page.Runs {
-		runs[index] = docDisplayRunJSON{Linear: run.Linear, SourceFrom: run.SourceFrom, SourceTo: run.SourceTo, To: run.To}
+	text, err := json.Marshal(page.Text)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(struct {
-		From    int                 `json:"from"`
-		Index   int                 `json:"index"`
-		Runs    []docDisplayRunJSON `json:"runs"`
-		Source  ContentHash         `json:"source"`
-		Text    string              `json:"text"`
-		Version int                 `json:"version"`
-	}{From: page.From, Index: page.Index, Runs: runs, Source: page.Source, Text: page.Text, Version: page.Version})
+	raw := make([]byte, 0, 128+len(source)+len(text)+len(page.Runs)*80)
+	raw = append(raw, `{"from":`...)
+	raw = strconv.AppendInt(raw, int64(page.From), 10)
+	raw = append(raw, `,"index":`...)
+	raw = strconv.AppendInt(raw, int64(page.Index), 10)
+	raw = append(raw, `,"runs":`...)
+	if page.Runs == nil {
+		raw = append(raw, "null"...)
+	} else {
+		raw = append(raw, '[')
+		for index, run := range page.Runs {
+			if index > 0 {
+				raw = append(raw, ',')
+			}
+			raw = append(raw, `{"linear":`...)
+			raw = strconv.AppendBool(raw, run.Linear)
+			raw = append(raw, `,"source_from":`...)
+			raw = strconv.AppendInt(raw, int64(run.SourceFrom), 10)
+			raw = append(raw, `,"source_to":`...)
+			raw = strconv.AppendInt(raw, int64(run.SourceTo), 10)
+			raw = append(raw, `,"to":`...)
+			raw = strconv.AppendInt(raw, int64(run.To), 10)
+			raw = append(raw, '}')
+		}
+		raw = append(raw, ']')
+	}
+	raw = append(raw, `,"source":`...)
+	raw = append(raw, source...)
+	raw = append(raw, `,"text":`...)
+	raw = append(raw, text...)
+	raw = append(raw, `,"version":`...)
+	raw = strconv.AppendInt(raw, int64(page.Version), 10)
+	return append(raw, '}'), nil
 }
 
 type docDisplayRunsJSON []DocDisplayRun
@@ -101,17 +121,62 @@ func readDocDisplayRunInteger(raw []byte, prefix string) ([]byte, int, bool) {
 }
 
 func unmarshalDocDisplayPage(raw []byte, page *DocDisplayPage) error {
-	var decoded struct {
-		From    int                `json:"from"`
-		Index   int                `json:"index"`
-		Runs    docDisplayRunsJSON `json:"runs"`
-		Source  ContentHash        `json:"source"`
-		Text    string             `json:"text"`
-		Version int                `json:"version"`
+	var decoded DocDisplayPage
+	var ok bool
+	raw, decoded.From, ok = readDocDisplayRunInteger(raw, `{"from":`)
+	if !ok {
+		return ErrIntegrity
 	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	raw, decoded.Index, ok = readDocDisplayRunInteger(raw, `,"index":`)
+	if !ok {
+		return ErrIntegrity
+	}
+	raw, ok = bytes.CutPrefix(raw, []byte(`,"runs":`))
+	if !ok {
+		return ErrIntegrity
+	}
+	end := bytes.IndexByte(raw, ']')
+	if end < 0 {
+		return ErrIntegrity
+	}
+	var runs docDisplayRunsJSON
+	if err := runs.UnmarshalJSON(raw[:end+1]); err != nil {
 		return err
 	}
-	*page = DocDisplayPage{From: decoded.From, Index: decoded.Index, Runs: []DocDisplayRun(decoded.Runs), Source: decoded.Source, Text: decoded.Text, Version: decoded.Version}
+	decoded.Runs = []DocDisplayRun(runs)
+	var source string
+	raw, source, ok = readDocDisplayPageString(raw[end+1:], `,"source":`)
+	if !ok {
+		return ErrIntegrity
+	}
+	decoded.Source = ContentHash(source)
+	raw, decoded.Text, ok = readDocDisplayPageString(raw, `,"text":`)
+	if !ok {
+		return ErrIntegrity
+	}
+	raw, decoded.Version, ok = readDocDisplayRunInteger(raw, `,"version":`)
+	if !ok || !bytes.Equal(raw, []byte("}")) {
+		return ErrIntegrity
+	}
+	*page = decoded
 	return nil
+}
+
+func readDocDisplayPageString(raw []byte, prefix string) ([]byte, string, bool) {
+	raw, ok := bytes.CutPrefix(raw, []byte(prefix))
+	if !ok || len(raw) == 0 || raw[0] != '"' {
+		return nil, "", false
+	}
+	for end := 1; end < len(raw); end++ {
+		if raw[end] == '\\' {
+			end++
+		} else if raw[end] == '"' {
+			var decoded string
+			if err := json.Unmarshal(raw[:end+1], &decoded); err != nil {
+				return nil, "", false
+			}
+			return raw[end+1:], decoded, true
+		}
+	}
+	return nil, "", false
 }
