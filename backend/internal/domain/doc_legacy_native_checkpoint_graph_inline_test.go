@@ -63,6 +63,47 @@ func TestLegacyNativeCheckpointGraphInlineLegacyOracle(test *testing.T) {
 	}
 }
 
+func TestLegacyNativeCheckpointGraphInlineKeepsLegacyMapKeys(test *testing.T) {
+	source := map[string]any{"": "empty-key-value", strings.Repeat("k", 64): "short-value", "\x00\xff\ud55c\U0001f642": "raw-key-value"}
+	registry := newLegacyNativeCheckpointGoGraphRegistry()
+	defer registry.close()
+	value, _ := legacyNativeGoGraphW85Import(test, source, registry)
+	before, original, _, oldIdentity := legacyNativeCheckpointGraphShortCapture(test, value, true)
+	after, optimized, _, newIdentity := legacyNativeCheckpointGraphShortCapture(test, value, false)
+	if !bytes.Equal(before.Wire, after.Wire) || oldIdentity != newIdentity || optimized.writes != original.writes-len(source) {
+		test.Fatal("map key fallback changed root identity or removed non-value writes")
+	}
+	var pages [2]legacyNativeCheckpointListPage[legacyNativeCheckpointMember]
+	for index, fixture := range []struct {
+		saved legacyNativeCheckpointValue
+		store *legacyNativeGoGraphSetW85Store
+	}{{before, original}, {after, optimized}} {
+		var owner legacyNativeCheckpointOwner
+		if err := json.Unmarshal(fixture.store.objects[fixture.saved.Body.Hash], &owner); err != nil || owner.Members.Height != 0 || owner.Members.Count != uint64(len(source)) {
+			test.Fatal("map oracle did not retain its bounded member page", owner, err)
+		}
+		if err := json.Unmarshal(fixture.store.objects[owner.Members.Ref.Hash], &pages[index]); err != nil || len(pages[index].Values) != len(source) {
+			test.Fatal("map oracle member page failed to decode", err)
+		}
+	}
+	for index, member := range pages[1].Values {
+		previous := pages[0].Values[index]
+		if !reflect.DeepEqual(member.Key, previous.Key) || member.Key.Inline != nil || !bytes.Equal(member.Value.Wire, previous.Value.Wire) {
+			test.Fatal("map key lost exact legacy wire, capacity, Text tree or hash")
+		}
+		key := string(optimized.objects[member.Key.Text.Tree.Ref.Hash])
+		if member.Key.Text.Bytes != len(key) || len(key) > 0 && (member.Key.Text.Tree.Ref.Hash != HashContent([]byte(key)) || !bytes.Equal(original.objects[previous.Key.Text.Tree.Ref.Hash], []byte(key))) {
+			test.Fatal("map key lost its original raw CAS payload")
+		}
+		if expected, ok := source[key]; !ok || string(member.Value.Inline) != expected || member.Value.Text != (legacyNativeCheckpointText{}) || member.Value.Body != (legacyNativeCheckpointRef{}) {
+			test.Fatal("ordinary map values no longer use exclusive inline text")
+		}
+	}
+	result := legacyNativeCheckpointGraphInlineRestore(test, after, optimized)
+	inspector := &legacyNativeGoGraphW85Inspector{}
+	inspector.check(test, source, result)
+}
+
 func TestLegacyNativeCheckpointGraphInlineMalformed(test *testing.T) {
 	value, err := legacyNativeAnyCheckpointString("raw", 8)
 	if err != nil {

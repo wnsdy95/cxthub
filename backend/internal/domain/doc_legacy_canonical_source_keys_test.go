@@ -472,6 +472,17 @@ func TestLegacyCanonicalSourceKeysBindingFences(test *testing.T) {
 		test.Fatal("key binding accepted a foreign graph", err)
 	}
 	frame := graph.read.frame
+	originalKey := frame.member.Key
+	frame.member.Key.Text = legacyNativeCheckpointText{}
+	frame.member.Key.Inline = []byte(key)
+	if _, err := legacyNativeCheckpointGraphRestoreDescriptor(context.Background(), frame.member.Key); err != nil {
+		test.Fatal("inline-key fence fixture is not a valid graph string descriptor", err)
+	}
+	_, _, found, err = restore.sourceKey(context.Background())
+	frame.member.Key = originalKey
+	if !errors.Is(err, ErrIntegrity) || found {
+		test.Fatal("source binding accepted an inline key without its Text witness", err)
+	}
 	frame.position++
 	_, _, found, err = restore.sourceKey(context.Background())
 	frame.position--

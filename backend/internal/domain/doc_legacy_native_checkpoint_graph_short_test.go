@@ -117,7 +117,7 @@ func TestLegacyNativeCheckpointGraphShortNestedOracle(test *testing.T) {
 	value, _ := legacyNativeGoGraphW85Import(test, source, registry)
 	expected, before, oldSteps, oldIdentity := legacyNativeCheckpointGraphShortCapture(test, value, true)
 	actual, after, newSteps, newIdentity := legacyNativeCheckpointGraphShortCapture(test, value, false)
-	if !bytes.Equal(actual.Wire, expected.Wire) || before.writes != 14 || after.writes != before.writes-8 || newIdentity != oldIdentity || newSteps >= oldSteps {
+	if !bytes.Equal(actual.Wire, expected.Wire) || before.writes != 14 || after.writes != before.writes-3 || newIdentity != oldIdentity || newSteps >= oldSteps {
 		test.Fatal("nested short snapshot changed owner/alias representation or failed to remove transitions", oldSteps, newSteps)
 	}
 	for _, fixture := range []struct {

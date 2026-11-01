@@ -645,7 +645,7 @@ func (work *legacyNativeCheckpointGraphWriter) stepFrame(ctx context.Context, fr
 			if err != nil {
 				return err
 			}
-			if len(body) > 0 && frame.state.Capacity <= 64 {
+			if len(body) > 0 && frame.state.Capacity <= 64 && (frame.parent == nil || frame.parent.phase != legacyNativeCheckpointGraphCaptureWaitingKey) {
 				frame.result.Inline = body
 			} else if len(body) > 0 {
 				ref, err := legacyNativeCheckpointWrite(ctx, work.store, body)

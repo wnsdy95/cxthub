@@ -107,7 +107,7 @@ func (work *legacyCanonicalInitialRestore) sourceKey(ctx context.Context) (legac
 		return reference, "", false, err
 	}
 	key, ok := frame.key.value.(string)
-	if !ok || keyState.Kind != legacyNativeCheckpointString || uint64(len(key)) != keyState.Length ||
+	if !ok || frame.member.Key.Inline != nil || keyState.Kind != legacyNativeCheckpointString || uint64(len(key)) != keyState.Length ||
 		uint64(frame.key.capacity) != keyState.Capacity && keyState.Capacity != keyState.Length {
 		return reference, "", false, ErrIntegrity
 	}
