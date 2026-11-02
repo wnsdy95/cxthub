@@ -251,11 +251,13 @@ func (storage *PostgresStore) stageLegacyByteSession(ctx context.Context, job do
 	return stage, nil
 }
 
+const liveLegacyByteJobQuery = `SELECT EXISTS(SELECT 1 FROM doc_range_jobs_v1 WHERE repo_id=$1 AND doc_hash=$2
+ AND base_hash='' AND state='running' AND version=$3 AND minimum_range_version=4 AND lease_until>clock_timestamp()
+ AND EXISTS(SELECT 1 FROM repository_catalog_state catalog WHERE catalog.repo_id=$1 AND catalog.epoch::text=$4))`
+
 func liveLegacyByteJob(ctx context.Context, transaction pgx.Tx, job domain.DocRangeIndexJob) error {
 	var live bool
-	if err := transaction.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM doc_range_jobs_v1 WHERE repo_id=$1 AND doc_hash=$2
- AND base_hash='' AND state='running' AND version=$3 AND minimum_range_version=4 AND lease_until>clock_timestamp()
- AND EXISTS(SELECT 1 FROM repository_catalog_state catalog WHERE catalog.repo_id=$1 AND catalog.epoch::text=$4))`,
+	if err := transaction.QueryRow(ctx, liveLegacyByteJobQuery,
 		job.RepoID, job.DocHash, job.Version, job.RepositoryEpoch).Scan(&live); err != nil {
 		return err
 	}

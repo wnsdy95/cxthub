@@ -27,7 +27,7 @@ type legacyByteCheckpointObject struct {
 }
 
 func legacyByteCheckpointProtocols(ctx context.Context, transaction pgx.Tx) error {
-	_, err := transaction.Exec(ctx, `SET LOCAL cxt.legacy_byte_stage_protocol='1'; SET LOCAL cxt.legacy_byte_checkpoint_protocol='1'`)
+	_, err := transaction.Exec(ctx, `SET LOCAL cxt.legacy_byte_stage_protocol='1'; SET LOCAL cxt.legacy_byte_checkpoint_protocol='1'; SET LOCAL enable_seqscan=off`)
 	return err
 }
 
@@ -53,8 +53,9 @@ func (storage *PostgresStore) openLegacyByteCheckpoint(ctx context.Context, job 
 	}()
 	if expected != nil && !create && source.sourceID != "" && source.incarnation != "" {
 		var current legacyByteStage
-		var locked bool
-		err := transaction.QueryRow(ctx, `WITH retained_source AS MATERIALIZED (
+		var locked, live bool
+		queries := &pgx.Batch{}
+		queries.Queue(`WITH retained_source AS MATERIALIZED (
  SELECT original.doc_range_source_version AS version,incarnation.incarnation::text AS id
  FROM snapshots snapshot
  JOIN repo_blobs owned ON owned.repo_id=snapshot.repo_id AND owned.kind='doc' AND owned.hash=snapshot.doc_hash
@@ -78,10 +79,16 @@ func (storage *PostgresStore) openLegacyByteCheckpoint(ctx context.Context, job 
  stage.next_block,stage.complete,stage.stage_id,stage.checkpoint_sequence,stage.checkpoint_hash,
  stage.checkpoint_bytes,EXISTS(SELECT 1 FROM retained_job) FROM retained_source source CROSS JOIN retained_stage stage`,
 			job.RepoID, job.DocHash, source.sourceVersion, source.sourceID, expected.stage.incarnation,
-			expected.sequence, expected.hash, expected.bytes, job.BaseHash).
-			Scan(&current.sourceVersion, &current.sourceID, &result.stage.sourceID, &result.stage.sourceVersion,
-				&result.stage.plan, &result.stage.blocks, &result.stage.next, &result.stage.complete,
-				&result.stage.incarnation, &result.sequence, &result.hash, &result.bytes, &locked)
+			expected.sequence, expected.hash, expected.bytes, job.BaseHash)
+		queries.Queue(liveLegacyByteJobQuery, job.RepoID, job.DocHash, job.Version, job.RepositoryEpoch)
+		results := transaction.SendBatch(ctx, queries)
+		err := results.QueryRow().Scan(&current.sourceVersion, &current.sourceID, &result.stage.sourceID, &result.stage.sourceVersion,
+			&result.stage.plan, &result.stage.blocks, &result.stage.next, &result.stage.complete,
+			&result.stage.incarnation, &result.sequence, &result.hash, &result.bytes, &locked)
+		if err == nil {
+			err = results.QueryRow().Scan(&live)
+		}
+		err = errors.Join(err, results.Close())
 		if errors.Is(err, pgx.ErrNoRows) {
 			rollbackPG(transaction)
 			if current := storage.confirmLegacyBytePreparation(ctx, job, source); current != nil {
@@ -96,10 +103,10 @@ func (storage *PostgresStore) openLegacyByteCheckpoint(ctx context.Context, job 
 			result.stage.sourceVersion != current.sourceVersion || result.stage.sourceID != current.sourceID ||
 			expected.stage.incarnation == "" || result.stage.incarnation != source.incarnation ||
 			result.stage.incarnation != expected.stage.incarnation || result.sequence != expected.sequence ||
-			result.hash != expected.hash || result.bytes != expected.bytes || !locked {
+			result.hash != expected.hash || result.bytes != expected.bytes || !locked || !live {
 			return nil, result, domain.ErrConflict
 		}
-		if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, result, err
 		}
 		retained = true

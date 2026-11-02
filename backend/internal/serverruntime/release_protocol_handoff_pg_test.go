@@ -353,8 +353,8 @@ func (fixture *executionProcessFixture) releaseProtocolCatalog(test *testing.T, 
 	var count int
 	var latest, history string
 	if err := fixture.observer.QueryRow(ctx, `SELECT count(*),max(version),jsonb_agg(to_jsonb(history) ORDER BY version)::text
- FROM public.schema_migrations history`).Scan(&count, &latest, &history); err != nil || count != 158 || latest != "0158_legacy_normalization_stage.sql" {
-		test.Fatal("paired releases require the identical completed 158-migration catalog; a cross-schema transition is not a same-catalog rollback", count, latest, err)
+ FROM public.schema_migrations history`).Scan(&count, &latest, &history); err != nil || count != 159 || latest != "0159_legacy_checkpoint_delete_accounting.sql" {
+		test.Fatal("paired releases require the identical completed 159-migration catalog; a cross-schema transition is not a same-catalog rollback", count, latest, err)
 	}
 	return history
 }
