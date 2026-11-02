@@ -208,6 +208,93 @@ class GoBatchesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([len(run["tests"]) for run in self.read_log("batches.jsonl")], [2] * 6)
 
+    def test_first_tests_preserve_selection_repetitions_and_batch_sizes(self):
+        selected = [f"TestPGCase{number:03d}" for number in range(1, 13)]
+        self.configure(names=list(reversed(selected)) + ["TestOutsideSelection"])
+        first = ["TestPGCase012", "TestPGCase006", "TestPGCase011"]
+        expected = first + [name for name in selected if name not in first]
+        arguments = [argument for name in first for argument in ("--first-test", name)]
+        for batch_size in (1, 2, 5):
+            with self.subTest(batch_size=batch_size):
+                for name in ("go.jsonl", "batches.jsonl"):
+                    (self.root / name).unlink(missing_ok=True)
+                result = self.run_fixture(*arguments, "--batch-size", str(batch_size))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = self.read_log("batches.jsonl")
+                expected_batches = [expected[start:start + batch_size] for start in range(0, len(expected), batch_size)]
+                self.assertEqual(len(runs), len(expected_batches))
+                for run, expected_batch in zip(runs, expected_batches):
+                    self.assertEqual(Counter(run["tests"]), Counter(expected_batch))
+                    self.assertIn("-test.run=^(" + "|".join(expected_batch) + ")$", run["args"])
+                    self.assertEqual(run["count"], 3)
+                    self.assertIn("-test.timeout=120s", run["args"])
+                    self.assertIn("-test.parallel=1", run["args"])
+                    self.assertIn("-test.v=test2json", run["args"])
+                for repetition in range(3):
+                    self.assertEqual(Counter(name for run in runs if repetition < run["count"] for name in run["tests"]), Counter(selected))
+                self.assertEqual(sum(call[:2] == ["test", "-c"] for call in self.read_log("go.jsonl")), 1)
+                self.assertIn("selected=12 expected=36 run=36 pass=36 fail=0 skip=0 missing=0 cancelled=0 unfinished=0 allowed_skip=0", result.stdout)
+
+    def test_first_tests_can_reorder_the_entire_selection_without_duplicates(self):
+        self.configure(names=["TestPGOne", "TestPGTwo", "TestPGThree"])
+        first = ["TestPGTwo", "TestPGThree", "TestPGOne"]
+        arguments = [argument for name in first for argument in ("--first-test", name)]
+        result = self.run_fixture(*arguments, "--batch-size", "1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = self.read_log("batches.jsonl")
+        self.assertEqual([run["tests"] for run in runs], [[name] for name in first])
+        self.assertTrue(all(run["count"] == 3 for run in runs))
+        self.assertIn("selected=3 expected=9 run=9 pass=9 fail=0 skip=0 missing=0", result.stdout)
+
+    def test_first_names_reject_duplicates_unknown_patterns_and_unselected_tests(self):
+        cases = (
+            (["TestPGOne", "TestPGTwo", "TestPGOne"], "duplicate --first-test"),
+            (["TestPGUnknown"], "not in discovered selection"),
+            (["TestOutsideSelection"], "not in discovered selection"),
+            (["TestPG.*"], "not in discovered selection"),
+            (["^TestPGOne$"], "not in discovered selection"),
+            (["TestPGOne/detail"], "not in discovered selection"),
+            (["TestPGOneSuffix"], "not in discovered selection"),
+            (["TestPGOn"], "not in discovered selection"),
+            ([""], "not in discovered selection"),
+        )
+        self.configure(names=["TestPGOne", "TestPGTwo", "TestOutsideSelection"])
+        for names, message in cases:
+            with self.subTest(names=names):
+                arguments = [argument for name in names for argument in ("--first-test", name)]
+                result = self.run_fixture(*arguments)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(self.read_log("batches.jsonl"), [])
+                self.assertNotIn("[go-batches] passed", result.stdout)
+
+    def test_first_tests_preserve_required_and_allowed_skip_outcomes(self):
+        self.configure(outcomes={"TestPGCase012": ["skip", "pass", "skip"]})
+        result = self.run_fixture(
+            "--first-test", "TestPGCase012", "--first-test", "TestPGCase006",
+            "--require-test", "TestPGCase006", "--allow-skip", "TestPGCase012", "--batch-size", "1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([run["tests"] for run in self.read_log("batches.jsonl")[:2]], [["TestPGCase012"], ["TestPGCase006"]])
+        self.assertIn("selected=12 expected=36 run=36 pass=34 fail=0 skip=2 missing=0 cancelled=0 unfinished=0 allowed_skip=2", result.stdout)
+
+    def test_first_tests_do_not_relax_required_or_result_contracts(self):
+        cases = (
+            ({}, ["--require-test", "TestPGUnknown"], "--require-test names not in discovered selection"),
+            ({}, ["--require-test", "TestPGTwo", "--allow-skip", "TestPGTwo"], "required tests cannot allow skips"),
+            ({"outcome": "skip"}, [], "unexpected top-level test skip"),
+            ({"actual_count": 2}, [], "missing test2json outcomes"),
+            ({"omit": ["TestPGTwo"]}, [], "missing test2json outcomes"),
+            ({"outcome": "fail"}, [], "reported failed tests"),
+        )
+        for changes, arguments, message in cases:
+            with self.subTest(changes=changes, arguments=arguments):
+                self.configure(names=["TestPGOne", "TestPGTwo"], **changes)
+                result = self.run_fixture("--first-test", "TestPGTwo", "--batch-size", "1", *arguments)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn("[go-batches] passed", result.stdout)
+
     def test_nested_skip_and_unframed_output_do_not_inflate_top_level_counts(self):
         self.configure(subtest_outcome="skip", spoof_output=True)
         result = self.run_fixture()

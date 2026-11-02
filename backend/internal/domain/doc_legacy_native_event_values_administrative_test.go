@@ -14,6 +14,53 @@ type legacyEventValuesAdministrativeOriginal struct {
 	*legacyNativeEventValuesCheckpoint
 }
 
+type legacyEventValuesAdministrativeMapOrder struct {
+	*legacyNativeEventValuesCheckpoint
+	test      *testing.T
+	storage   *legacyNativeGoGraphSetW85Store
+	original  bool
+	keys      []string
+	positions map[*legacyNativeCheckpointGoGraphFrame]int
+}
+
+func (ordered *legacyEventValuesAdministrativeMapOrder) step(ctx context.Context) (bool, error) {
+	current := &legacyNativeGoGraphSetTrivialBatchContext{Context: ctx, check: func() error {
+		fields := ordered.fields
+		if fields == nil || fields.graph == nil || fields.graph.prepare == nil {
+			return nil
+		}
+		frame := fields.graph.prepare.frame
+		if frame == nil || frame.phase != legacyNativeCheckpointGoGraphNext || frame.entry == nil || frame.entry.object == nil || frame.entry.length < 2 {
+			return nil
+		}
+		if position, found := ordered.positions[frame]; found && position == frame.position {
+			return nil
+		}
+		source := frame.entry.source.(map[string]any)
+		if len(source) != len(ordered.keys) || frame.position > len(ordered.keys) {
+			ordered.test.Fatal("map-order fixture changed its multi-key shape", len(source), frame.position)
+		}
+		next := make(map[string]any)
+		if frame.position < len(ordered.keys) {
+			key := ordered.keys[frame.position]
+			value, found := source[key]
+			if !found {
+				ordered.test.Fatal("map-order schedule selected a missing source key", key)
+			}
+			next[key] = value
+		}
+		frame.iterator = reflect.ValueOf(next).MapRange()
+		ordered.positions[frame] = frame.position
+		return nil
+	}}
+	ordered.storage.current = current
+	defer func() { ordered.storage.current = ctx }()
+	if ordered.original {
+		return (legacyEventValuesAdministrativeOriginal{ordered.legacyNativeEventValuesCheckpoint}).step(current)
+	}
+	return ordered.legacyNativeEventValuesCheckpoint.step(current)
+}
+
 func (original legacyEventValuesAdministrativeOriginal) step(ctx context.Context) (bool, error) {
 	work := original.legacyNativeEventValuesCheckpoint
 	if work == nil {
@@ -88,7 +135,7 @@ func legacyEventValuesAdministrativeState(test *testing.T, work *legacyNativeEve
 	return state.String()
 }
 
-func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeEventList, binding ContentHash, sourceBytes int, original bool, expected []legacyEventValuesAdministrativeTrace) (legacyNativeCheckpointRef, *legacyNativeGoGraphSetW85Store, []legacyEventValuesAdministrativeTrace, []legacyNativeCheckpointRef) {
+func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeEventList, binding ContentHash, sourceBytes int, original bool, expected []legacyEventValuesAdministrativeTrace, mapOrder []string) (legacyNativeCheckpointRef, *legacyNativeGoGraphSetW85Store, []legacyEventValuesAdministrativeTrace, []legacyNativeCheckpointRef) {
 	test.Helper()
 	storage := legacyNativeGoGraphSetW85Storage(test)
 	var calls []legacyNativeCheckpointRef
@@ -102,12 +149,16 @@ func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeE
 		test.Fatal(err)
 	}
 	defer work.close()
+	ordered := &legacyEventValuesAdministrativeMapOrder{legacyNativeEventValuesCheckpoint: work, test: test, storage: storage,
+		original: original, keys: mapOrder, positions: make(map[*legacyNativeCheckpointGoGraphFrame]int)}
 	var trace []legacyEventValuesAdministrativeTrace
 	consumed, maximum, cascades, handoffs := 0, 0, 0, 0
 	for range legacyNativeAnyW78StepLimit {
 		reads, writes := storage.reads, storage.writes
 		var ready bool
-		if original {
+		if mapOrder != nil {
+			ready, err = legacyNativeGoGraphSetW85Step[legacyNativeCheckpointRef](test, ordered, storage)
+		} else if original {
 			ready, err = legacyNativeGoGraphSetW85Step[legacyNativeCheckpointRef](test, legacyEventValuesAdministrativeOriginal{work}, storage)
 		} else {
 			ready, err = legacyNativeGoGraphSetW85Step[legacyNativeCheckpointRef](test, work, storage)
@@ -150,6 +201,9 @@ func legacyEventValuesAdministrativeCapture(test *testing.T, list *legacyNativeE
 			maximum = max(maximum, consumed-start)
 		}
 		if ready {
+			if mapOrder != nil && len(ordered.positions) == 0 {
+				test.Fatal("nested fixture did not exercise its multi-key map traversal")
+			}
 			if expected != nil && consumed != len(expected) {
 				test.Fatal("coalescing omitted original transitions")
 			}
@@ -178,8 +232,8 @@ func TestLegacyNativeEventValuesAdministrativeRawOracle(test *testing.T) {
 		test.Fatal("raw production-shape fixture lost its completed records")
 	}
 	binding := HashContent(buffer.body)
-	before, oldStore, oldTrace, oldCalls := legacyEventValuesAdministrativeCapture(test, list, binding, len(buffer.body), true, nil)
-	after, newStore, newTrace, newCalls := legacyEventValuesAdministrativeCapture(test, list, binding, len(buffer.body), false, oldTrace)
+	before, oldStore, oldTrace, oldCalls := legacyEventValuesAdministrativeCapture(test, list, binding, len(buffer.body), true, nil, nil)
+	after, newStore, newTrace, newCalls := legacyEventValuesAdministrativeCapture(test, list, binding, len(buffer.body), false, oldTrace, nil)
 	if before != after || !reflect.DeepEqual(oldStore.objects, newStore.objects) || !reflect.DeepEqual(oldCalls, newCalls) {
 		test.Fatal("administrative coalescing changed exact wire, root hash, or ordered fresh CAS proofs")
 	}
@@ -193,11 +247,37 @@ func TestLegacyNativeEventValuesAdministrativeNestedWire(test *testing.T) {
 	decoder, buffer := legacyDecoderCheckpointCut(test, legacyEventValuesCheckpointFixtures()[0])
 	list, _ := legacyEventValuesCheckpointList(test, decoder)
 	binding := HashContent(buffer.body)
-	before, oldStore, oldTrace, oldCalls := legacyEventValuesAdministrativeCapture(test, list, binding, decoder.source.Bytes, true, nil)
-	after, newStore, newTrace, newCalls := legacyEventValuesAdministrativeCapture(test, list, binding, decoder.source.Bytes, false, nil)
-	if before != after || !reflect.DeepEqual(oldStore.objects, newStore.objects) || !reflect.DeepEqual(oldCalls, newCalls) || len(newTrace) >= len(oldTrace) {
-		test.Fatal("nested, hidden or large block capture changed its original wire or failed to reduce steps")
+	var roots []legacyNativeCheckpointRef
+	for _, order := range [][]string{{"hidden", "new"}, {"new", "hidden"}} {
+		test.Run(strings.Join(order, "-"), func(test *testing.T) {
+			before, oldStore, oldTrace, oldCalls := legacyEventValuesAdministrativeCapture(test, list, binding, decoder.source.Bytes, true, nil, order)
+			after, newStore, newTrace, newCalls := legacyEventValuesAdministrativeCapture(test, list, binding, decoder.source.Bytes, false, nil, order)
+			if before != after || !reflect.DeepEqual(oldStore.objects, newStore.objects) || !reflect.DeepEqual(oldCalls, newCalls) {
+				test.Fatal("nested, hidden or large block capture changed exact wire under the same map traversal")
+			}
+			if len(newTrace) >= len(oldTrace) {
+				test.Fatal("nested capture did not reduce steps", len(oldTrace), len(newTrace))
+			}
+			for _, storage := range []*legacyNativeGoGraphSetW85Store{oldStore, newStore} {
+				restore, err := newLegacyNativeEventValuesCheckpointRestore(context.Background(), before, binding, decoder.source.Bytes, storage.io, legacyDecoderCheckpointBudget)
+				if err != nil {
+					test.Fatal(err)
+				}
+				defer restore.close()
+				legacyNativeGoGraphSetW85Ready[legacyNativeEventValuesRestored](test, restore, storage, legacyDecoderCheckpointBudget)
+				actual, err := restore.take(context.Background())
+				if err != nil {
+					test.Fatal(err)
+				}
+				legacyEventValuesCheckpointCompare(test, list.values, actual.Values)
+			}
+			roots = append(roots, before)
+		})
 	}
+	if len(roots) != 2 || roots[0] == roots[1] {
+		test.Fatal("opposite map traversals did not expose distinct original checkpoint wires")
+	}
+	test.Logf("original roots differ only by controlled map traversal: hidden-new=%s new-hidden=%s", roots[0].Hash, roots[1].Hash)
 	legacyNormalizationCaptureRQ87Idle(test, decoder.mutation)
 }
 

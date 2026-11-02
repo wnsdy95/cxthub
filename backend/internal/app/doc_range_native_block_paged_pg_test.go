@@ -278,6 +278,7 @@ type docRangeNativeBlockPagedPGWork struct {
 	afterResources  outbound.RootPublicationResources
 	failure         error
 	decode          bool
+	resumeObserved  bool
 }
 
 func (storage *docRangeNativeBlockPagedPGStore) PrepareDocRangeWork(ctx context.Context, job domain.DocRangeIndexJob) (outbound.PreparedDocRangeWork, error) {
@@ -303,8 +304,12 @@ func (work *docRangeNativeBlockPagedPGWork) Step(ctx context.Context, job domain
 	if err != nil {
 		return 0, err
 	}
-	work.inspection = &docRangeNativeBlockPagedPGContext{Context: ctx, decode: work.decode}
-	progress, stepErr := work.PreparedDocRangeWork.Step(work.inspection, job)
+	stepContext := ctx
+	if !work.resumeObserved {
+		work.inspection = &docRangeNativeBlockPagedPGContext{Context: ctx, decode: work.decode}
+		stepContext = work.inspection
+	}
+	progress, stepErr := work.PreparedDocRangeWork.Step(stepContext, job)
 	work.after, err = docRangeNativeBlockPagedPGInspect(work.handle)
 	if err != nil {
 		return 0, errors.Join(stepErr, err)
@@ -508,6 +513,7 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 					return errors.New("same d preparation did not resume its actual high-water block records")
 				}
 				resumedStep = step
+				observed.work.resumeObserved = true
 			}
 			return nil
 		}
