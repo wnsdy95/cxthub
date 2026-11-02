@@ -272,7 +272,7 @@ func TestNormalizationCheckpointPGBatchUniquePendingBounds(test *testing.T) {
 					test.Fatal("duplicates consumed retained capacity or caused early SQL", ordinal, batch.bytes, trace.snapshot())
 				}
 			}
-			if counts := trace.snapshot(); counts.hashReads != 2*limit || counts.objectInserts != limit || counts.bodyBytes != limit*size {
+			if counts := trace.snapshot(); counts.hashReads != 2*limit || counts.objectInserts != 1 || counts.bodyArguments != limit || counts.bodyBytes != limit*size {
 				test.Fatal("bounded flush did not verify every unique object before and after insertion", counts)
 			}
 			if err := batch.finish(bound, nil); err != nil {

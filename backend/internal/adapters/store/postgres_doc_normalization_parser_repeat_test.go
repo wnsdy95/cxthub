@@ -38,6 +38,16 @@ func (trace *normalizationParserRepeatPGTrace) TraceQueryStart(ctx context.Conte
 	if len(query.Args) < 3 {
 		return ctx
 	}
+	if hashes, ok := query.Args[2].([]string); ok && len(query.Args) > 3 {
+		if bodies, ok := query.Args[3].([][]byte); ok {
+			for ordinal, hash := range hashes {
+				if _, found := trace.input[domain.ContentHash(hash)]; found && ordinal < len(bodies) && len(bodies[ordinal]) != 0 {
+					trace.inputUploads.Add(1)
+				}
+			}
+		}
+		return ctx
+	}
 	var hash domain.ContentHash
 	switch value := query.Args[2].(type) {
 	case domain.ContentHash:
