@@ -205,6 +205,10 @@ func TestDocDisplayMaintenanceSelectionPGCursorAndCancellation(test *testing.T) 
 	if _, err := fixture.storage.StepDocDisplayMaintenance(cancelled); !errors.Is(err, context.Canceled) {
 		test.Fatal("collector swallowed cancellation", err)
 	}
+	if _, err := fixture.storage.selectDocDisplayMaintenance(cancelled); !errors.Is(err, context.Canceled) ||
+		!strings.HasPrefix(err.Error(), "document display maintenance selection begin: ") {
+		test.Fatal("picker lost begin phase or cancellation cause", err)
+	}
 	docMaintenanceSelectionCursorPG(test, fixture, candidate.source)
 	step, err := docMaintenanceSelectionReopenPG(test, fixture).StepDocDisplayMaintenance(fixture.ctx)
 	if err != nil || step.Source != candidate.source {
@@ -764,6 +768,9 @@ func TestDocDisplayMaintenanceSelectionPGRebuildWinnerBoundary(test *testing.T) 
 				if outcome == "cancel" && !errors.Is(observed.err, context.Canceled) || outcome == "timeout" && !deadline {
 					test.Fatal("cursor repair ignored cancellation/control deadline", outcome, observed)
 				}
+				if !strings.HasPrefix(observed.err.Error(), "document display maintenance selection initialize cursor: ") {
+					test.Fatal("cursor repair lost its failed operation", observed.err)
+				}
 			}
 			if outcome == "commit" {
 				if err := winner.Commit(fixture.ctx); err != nil {
@@ -806,6 +813,9 @@ func TestDocDisplayMaintenanceSelectionPGMissingSchemaIsNotRuntimeDDL(test *test
 	}
 	_, err := fixture.storage.StepDocDisplayMaintenance(fixture.ctx)
 	docCatalogWriterCodePG(test, err, "42P01")
+	if err == nil || !strings.HasPrefix(err.Error(), "document display maintenance selection read forward: ") {
+		test.Fatal("picker lost forward query phase", err)
+	}
 	var absent bool
 	if err := fixture.storage.pool.QueryRow(fixture.ctx, `SELECT to_regclass('doc_display_maintenance_cursor_v1') IS NULL`).Scan(&absent); err != nil || !absent {
 		test.Fatal("collector hid missing schema with runtime DDL", absent, err)

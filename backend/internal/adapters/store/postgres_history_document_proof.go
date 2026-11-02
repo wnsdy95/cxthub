@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -260,9 +261,13 @@ func (p *historyDocumentProofPG) versionBatches(ctx context.Context, expected ma
 				return err
 			}
 			index := sort.SearchStrings(wanted, key)
-			if index == len(wanted) || wanted[index] != key || seen[key] || version == "" || (pin && expected[key] != version) {
+			if index == len(wanted) || wanted[index] != key || seen[key] || version == "" {
 				rows.Close()
 				return domain.ErrConflict
+			}
+			if pin && expected[key] != version {
+				rows.Close()
+				return errHistoryDocumentProofVersionChanged
 			}
 			seen[key] = true
 			if !pin {
@@ -275,16 +280,25 @@ func (p *historyDocumentProofPG) versionBatches(ctx context.Context, expected ma
 			return historyDocumentProofErrorPG(err)
 		}
 		if len(seen) != len(wanted) {
-			return domain.ErrConflict
+			return errHistoryDocumentProofRowMissing
 		}
 	}
 	return ctx.Err()
 }
 
+var (
+	errHistoryDocumentProofVersionChanged = fmt.Errorf("%w: history document proof row version changed", domain.ErrConflict)
+	errHistoryDocumentProofRowMissing     = fmt.Errorf("%w: history document proof row missing", domain.ErrConflict)
+	errHistoryDocumentProofRowLocked      = fmt.Errorf("%w: history document proof row locked", domain.ErrConflict)
+)
+
 func historyDocumentProofErrorPG(err error) error {
+	if errors.Is(mapNoRows(err), domain.ErrNotFound) {
+		return errHistoryDocumentProofRowMissing
+	}
 	var pg *pgconn.PgError
-	if errors.Is(mapNoRows(err), domain.ErrNotFound) || (errors.As(err, &pg) && pg.Code == "55P03") {
-		return domain.ErrConflict
+	if errors.As(err, &pg) && pg.Code == "55P03" {
+		return errHistoryDocumentProofRowLocked
 	}
 	return err
 }
