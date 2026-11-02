@@ -37,7 +37,13 @@ func (source DocToolOrdersSource) Encode(tree DocToolTreeSource, keys DocToolKey
 	if source.Validate(tree, keys) != nil {
 		return nil, ErrIntegrity
 	}
-	return canonicalJSON(source)
+	return json.Marshal(struct {
+		Keys    ContentHash `json:"keys"`
+		Nodes   int         `json:"nodes"`
+		Profile string      `json:"profile"`
+		Tree    ContentHash `json:"tree"`
+		Version int         `json:"version"`
+	}{Keys: source.Keys, Nodes: source.Nodes, Profile: source.Profile, Tree: source.Tree, Version: source.Version})
 }
 
 func (source DocToolOrdersSource) Hash(tree DocToolTreeSource, keys DocToolKeyMapSource) (ContentHash, error) {

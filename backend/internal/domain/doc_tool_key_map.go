@@ -38,7 +38,12 @@ func (source DocToolKeyMapSource) Encode(tree DocToolTreeSource) ([]byte, error)
 	if source.Validate(tree) != nil {
 		return nil, ErrIntegrity
 	}
-	return canonicalJSON(source)
+	return json.Marshal(struct {
+		Nodes   int         `json:"nodes"`
+		Profile string      `json:"profile"`
+		Tree    ContentHash `json:"tree"`
+		Version int         `json:"version"`
+	}{Nodes: source.Nodes, Profile: source.Profile, Tree: source.Tree, Version: source.Version})
 }
 
 func (source DocToolKeyMapSource) Hash(tree DocToolTreeSource) (ContentHash, error) {
