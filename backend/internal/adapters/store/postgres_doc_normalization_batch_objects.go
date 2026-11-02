@@ -26,6 +26,10 @@ const legacyNormalizationBatchObjectRead = `WITH verified AS MATERIALIZED (
 )
  SELECT stored_bytes,stored_hash,EXISTS(SELECT 1 FROM retained) OR EXISTS(SELECT 1 FROM touched) FROM verified`
 
+const legacyNormalizationBatchObjectInsert = `INSERT INTO doc_legacy_byte_stage_checkpoint_objects_v1(doc_hash,stage_id,hash,bytes)
+ SELECT $1,$2::uuid,object.hash,object.bytes FROM unnest($3::text[],$4::bytea[]) AS object(hash,bytes)
+ ON CONFLICT(doc_hash,stage_id,hash) DO NOTHING`
+
 func (batch *legacyNormalizationCheckpointBatch) verify(ctx context.Context, objects []legacyByteCheckpointOwnedObject, allowMissing bool) (missing []legacyByteCheckpointOwnedObject, failure error) {
 	queries := &pgx.Batch{}
 	for _, object := range objects {
@@ -69,13 +73,14 @@ func (batch *legacyNormalizationCheckpointBatch) flush(ctx context.Context) erro
 		return err
 	}
 	if len(missing) != 0 {
-		inserts := &pgx.Batch{}
-		for _, object := range missing {
-			inserts.Queue(`INSERT INTO doc_legacy_byte_stage_checkpoint_objects_v1(doc_hash,stage_id,hash,bytes)
- VALUES($1,$2::uuid,$3,$4) ON CONFLICT(doc_hash,stage_id,hash) DO NOTHING`,
-				batch.owner.job.DocHash, batch.state.stage.incarnation, object.hash, object.data)
+		hashes := make([]string, len(missing))
+		bodies := make([][]byte, len(missing))
+		for ordinal, object := range missing {
+			hashes[ordinal] = string(object.hash)
+			bodies[ordinal] = object.data
 		}
-		if err := batch.transaction.SendBatch(ctx, inserts).Close(); err != nil {
+		if _, err := batch.transaction.Exec(ctx, legacyNormalizationBatchObjectInsert,
+			batch.owner.job.DocHash, batch.state.stage.incarnation, hashes, bodies); err != nil {
 			return err
 		}
 		if _, err := batch.verify(ctx, missing, false); err != nil {

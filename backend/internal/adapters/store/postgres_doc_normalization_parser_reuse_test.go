@@ -19,11 +19,13 @@ import (
 )
 
 type legacyNormalizationParserReusePGCounts struct {
-	queries       int
-	bodyArguments int
-	bodyBytes     int
-	objectInserts int
-	hashReads     int
+	queries          int
+	bodyArguments    int
+	bodyBytes        int
+	maxBodyArguments int
+	maxBodyBytes     int
+	objectInserts    int
+	hashReads        int
 }
 
 type legacyNormalizationParserReusePGTrace struct {
@@ -35,12 +37,23 @@ func (trace *legacyNormalizationParserReusePGTrace) TraceQueryStart(ctx context.
 	trace.mutex.Lock()
 	defer trace.mutex.Unlock()
 	trace.counts.queries++
+	arguments, size := 0, 0
 	for _, argument := range query.Args {
-		if body, ok := argument.([]byte); ok {
-			trace.counts.bodyArguments++
-			trace.counts.bodyBytes += len(body)
+		switch body := argument.(type) {
+		case []byte:
+			arguments++
+			size += len(body)
+		case [][]byte:
+			for _, payload := range body {
+				arguments++
+				size += len(payload)
+			}
 		}
 	}
+	trace.counts.bodyArguments += arguments
+	trace.counts.bodyBytes += size
+	trace.counts.maxBodyArguments = max(trace.counts.maxBodyArguments, arguments)
+	trace.counts.maxBodyBytes = max(trace.counts.maxBodyBytes, size)
 	if strings.HasPrefix(query.SQL, "INSERT INTO doc_legacy_byte_stage_checkpoint_objects_v1") {
 		trace.counts.objectInserts++
 	}
