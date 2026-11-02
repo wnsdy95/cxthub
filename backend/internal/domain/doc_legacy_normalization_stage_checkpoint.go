@@ -97,7 +97,10 @@ func (work *legacyNormalizationStageCheckpoint) step(ctx context.Context) (bool,
 	event := work.owner.pending[work.owner.next+work.index]
 	if event.Encoding.preparation != nil {
 		if work.initial == nil {
-			work.initial, err = newLegacyCanonicalInitialCheckpoint(ctx, event.Encoding, work.owner.mutation, work.state.Binding,
+			if work.index == 0 && work.owner.written != 0 || work.index != 0 && !legacyCanonicalInitialState(event.Encoding) {
+				return false, ErrIntegrity
+			}
+			work.initial, err = newLegacyCanonicalSourceCheckpoint(ctx, event.Encoding, work.owner.mutation, work.state.Binding,
 				work.owner.decoder.source.Bytes, work.store, work.budget-retained)
 			return false, err
 		}
@@ -453,6 +456,9 @@ func (restore *LegacyNormalizationRestore) restoreStage(ctx context.Context) (bo
 	}
 	if len(restore.stage.events) != restore.control.StagePending || len(restore.stage.events) == 0 ||
 		int64(restore.stage.events[0].Sequence) != restore.control.Active.Sequence {
+		return false, ErrIntegrity
+	}
+	if restore.control.Written != 0 && restore.stage.events[0].Encoding.preparation != nil {
 		return false, ErrIntegrity
 	}
 	restore.work.pending, restore.work.next = restore.stage.events, 0
