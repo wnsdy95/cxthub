@@ -163,13 +163,16 @@ func TestNormalizationCheckpointPGBatchBufferedDuplicatesPreserveFlushBounds(tes
 						test.Fatal(err)
 					}
 					borrowed.data[0] ^= 1
-					if ordinal < limit && (len(batch.objects) != ordinal || batch.bytes != ordinal*size ||
-						!bytes.Equal(batch.objects[0].data, body) || trace.snapshot().hashReads != before.hashReads) {
-						test.Fatal("duplicate changed owned bytes or the original flush boundary", ordinal, len(batch.objects), batch.bytes)
+					if len(batch.objects) != 1 || batch.bytes != size ||
+						!bytes.Equal(batch.objects[0].data, body) || trace.snapshot().hashReads != before.hashReads {
+						test.Fatal("pending duplicates changed owned bytes or triggered redundant proof", ordinal, len(batch.objects), batch.bytes)
 					}
 				}
+				if err := batch.flush(bound); err != nil {
+					test.Fatal(err)
+				}
 				if len(batch.objects) != 0 || batch.bytes != 0 {
-					test.Fatal("duplicate window did not flush at its original count/byte cap")
+					test.Fatal("flush retained pending payload or proof")
 				}
 				after := trace.snapshot()
 				proofs, inserts := 2, 1
@@ -187,6 +190,49 @@ func TestNormalizationCheckpointPGBatchBufferedDuplicatesPreserveFlushBounds(tes
 			actual, err := work.readParserObject(ctx, object.hash, size)
 			if err != nil || !bytes.Equal(actual, body) {
 				test.Fatal("duplicate admission borrowed caller bytes", err)
+			}
+		})
+	}
+}
+
+func TestNormalizationCheckpointPGBatchUniquePendingBounds(test *testing.T) {
+	for _, size := range []int{64, domain.LegacyCanonicalEncodingBytes / 2, domain.LegacyCanonicalEncodingBytes} {
+		test.Run(fmt.Sprint(size), func(test *testing.T) {
+			storage, ctx, _, job, state := legacyNormalizationParserReusePGStart(test)
+			peer, trace := normalizationBatchPGPeer(test, storage, ctx)
+			work := &legacyNormalizationCheckpointWork{store: peer, job: job, state: state}
+			bound, batch, err := work.beginBatch(ctx)
+			if err != nil {
+				test.Fatal(err)
+			}
+			defer rollbackPG(batch.transaction)
+			limit := min(domain.DocLegacyByteBackfillBatchBlocks, domain.LegacyCanonicalEncodingBytes/size)
+			for ordinal := 1; ordinal <= limit; ordinal++ {
+				body := bytes.Repeat([]byte{byte(ordinal)}, size)
+				object := legacyByteCheckpointObject{hash: domain.HashContent(body), data: body}
+				if err := work.stageParserObjects(bound, []legacyByteCheckpointObject{object}); err != nil {
+					test.Fatal(err)
+				}
+				if ordinal == limit {
+					if len(batch.objects) != 0 || batch.bytes != 0 {
+						test.Fatal("unique payload escaped the original count/byte flush limit")
+					}
+					break
+				}
+				for repeat := 0; repeat < 16; repeat++ {
+					if err := work.stageParserObjects(bound, []legacyByteCheckpointObject{object}); err != nil {
+						test.Fatal(err)
+					}
+				}
+				if len(batch.objects) != ordinal || batch.bytes != ordinal*size || trace.snapshot().hashReads != 0 {
+					test.Fatal("duplicates consumed retained capacity or caused early SQL", ordinal, batch.bytes, trace.snapshot())
+				}
+			}
+			if counts := trace.snapshot(); counts.hashReads != 2*limit || counts.objectInserts != limit || counts.bodyBytes != limit*size {
+				test.Fatal("bounded flush did not verify every unique object before and after insertion", counts)
+			}
+			if err := batch.finish(bound, nil); err != nil {
+				test.Fatal(err)
 			}
 		})
 	}
@@ -285,8 +331,8 @@ func TestNormalizationCheckpointPGBatchBufferedDuplicateCorruptionFailsFresh(tes
 					test.Fatal(err)
 				}
 			}
-			if len(batch.objects) != 3 || batch.bytes != 3*len(object.data) {
-				test.Fatal("fixture did not retain the original bounded duplicate window")
+			if len(batch.objects) != 1 || batch.bytes != len(object.data) {
+				test.Fatal("fixture did not coalesce only pending duplicates")
 			}
 			if err := batch.finish(bound, nil); !errors.Is(err, domain.ErrPreparedDocRangeObject) || batch.transaction != nil || batch.objects != nil {
 				test.Fatal("buffered duplicate accepted stored corruption", err)
