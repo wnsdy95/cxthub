@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func TestPGHistoryPublicationMessagePromotionCAS(test *testing.T) {
@@ -83,5 +85,62 @@ func TestPGHistoryPublicationMessagePromotionRollback(test *testing.T) {
 	var current, after string
 	if err := fixture.s.pool.QueryRow(fixture.ctx, `SELECT message,xmin::text||':'||ctid::text FROM snapshots WHERE repo_id=$1 AND id=$2`, fixture.repo, fixture.snap.ID).Scan(&current, &after); err != nil || current != message || after != before {
 		test.Fatalf("promotion escaped enclosing rollback: messageChanged=%v tupleChanged=%v err=%v", current != message, after != before, err)
+	}
+}
+
+func TestPGHistoryPublicationMessageReplaySharesProofPin(test *testing.T) {
+	for _, message := range []string{"first-source [git abc1234]", domain.HookMessagePrefix + "checkpoint"} {
+		for _, finish := range []string{"commit", "rollback"} {
+			test.Run(message+"/"+finish, func(test *testing.T) {
+				fixture := historyProofFixture(test)
+				if _, err := fixture.s.pool.Exec(fixture.ctx, `UPDATE snapshots SET message=$3 WHERE repo_id=$1 AND id=$2`, fixture.repo, fixture.snap.ID, message); err != nil {
+					test.Fatal(err)
+				}
+				fixture.snap.Message = message
+				replay, err := fixture.s.pool.Begin(fixture.ctx)
+				if err != nil {
+					test.Fatal(err)
+				}
+				defer rollbackPG(replay)
+				replayContext := context.WithValue(fixture.ctx, repositoryTxKey{}, &repositoryTx{Tx: replay, owner: fixture.s, repo: fixture.repo})
+				err = fixture.s.WithinHistoryDocumentProof(fixture.ctx, fixture.repo, func(ctx context.Context, proof outbound.HistoryDocumentProof) error {
+					if err := fixture.prepare(ctx, proof, nil); err != nil {
+						return err
+					}
+					if err := fixture.s.UpdateSnapshotMessage(replayContext, fixture.repo, fixture.snap.ID, message); err != nil {
+						return err
+					}
+					return fixture.s.WithinRepository(ctx, fixture.repo, proof.Pin)
+				})
+				if err != nil {
+					test.Fatalf("uncommitted exact replay blocked an unchanged proof: %v", err)
+				}
+				const writerLock = `SELECT 1 FROM snapshots WHERE repo_id=$1 AND id=$2 FOR NO KEY UPDATE NOWAIT`
+				_, err = fixture.s.pool.Exec(fixture.ctx, writerLock, fixture.repo, fixture.snap.ID)
+				var locked *pgconn.PgError
+				if !errors.As(err, &locked) || locked.Code != "55P03" {
+					test.Fatalf("replay did not exclude the message writer lock after proof commit: %v", err)
+				}
+				if finish == "commit" {
+					err = replay.Commit(fixture.ctx)
+				} else {
+					err = replay.Rollback(fixture.ctx)
+				}
+				if err != nil {
+					test.Fatal(err)
+				}
+				if _, err := fixture.s.pool.Exec(fixture.ctx, writerLock, fixture.repo, fixture.snap.ID); err != nil {
+					test.Fatal("replay lock outlived its transaction", err)
+				}
+				err = fixture.s.UpdateSnapshotMessage(fixture.ctx, fixture.repo, fixture.snap.ID, "next commit")
+				if message == "first-source [git abc1234]" {
+					if !errors.Is(err, domain.ErrConflict) {
+						test.Fatalf("different committed message was overwritten: %v", err)
+					}
+				} else if err != nil {
+					test.Fatal("real promotion failed after replay released its lock", err)
+				}
+			})
+		}
 	}
 }

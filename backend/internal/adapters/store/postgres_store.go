@@ -2326,7 +2326,7 @@ func (s *PostgresStore) UpdateSnapshotMessage(ctx context.Context, repoID, id do
 	if ct.RowsAffected() == 0 {
 		var current string
 		if qerr := s.db(ctx).QueryRow(ctx,
-			`SELECT message FROM snapshots WHERE repo_id=$1 AND id=$2 FOR UPDATE`,
+			`SELECT message FROM snapshots WHERE repo_id=$1 AND id=$2 FOR SHARE`,
 			string(repoID), string(id)).Scan(&current); qerr != nil {
 			return mapNoRows(qerr)
 		}
