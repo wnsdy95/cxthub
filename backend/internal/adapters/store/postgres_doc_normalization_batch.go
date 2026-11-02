@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/jackc/pgx/v5"
@@ -110,6 +111,16 @@ func (work *legacyNormalizationCheckpointWork) stageParserObjects(ctx context.Co
 		batch.protocol = true
 	}
 	for _, object := range owned {
+		duplicate := false
+		for _, pending := range batch.objects {
+			if pending.hash == object.hash && pending.structure == object.structure && bytes.Equal(pending.data, object.data) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
 		if batch.bytes+len(object.data) > domain.LegacyCanonicalEncodingBytes {
 			if err := batch.flush(ctx); err != nil {
 				return err
