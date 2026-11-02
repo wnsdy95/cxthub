@@ -109,6 +109,30 @@ func (work *legacyCanonicalPreparedFieldsWrite) inlineField(field *legacyCanonic
 }
 
 func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool, error) {
+	compact := false
+	if work != nil && !work.ready && work.source != nil && work.source.valid() && work.phase == 0 && work.position >= 0 && work.position < work.source.length() {
+		if field := work.source.at(work.position); field != nil && len(field.key) <= 64 {
+			if values, ok := field.value.([]any); ok {
+				compact = legacyCanonicalPreparedInlineArrayValid(values)
+			}
+		}
+	}
+	for transitions := 0; transitions < 3; transitions++ {
+		ready, err := work.stepOnce(ctx)
+		if err == nil && compact {
+			retained, retainedErr := work.retainedBytes()
+			if retainedErr != nil || retained+legacyNativeAnyCheckpointScratch > work.budget {
+				return false, ErrDocumentResourceLimit
+			}
+		}
+		if err != nil || ready || !compact || work.phase == 4 {
+			return ready, err
+		}
+	}
+	return false, nil
+}
+
+func (work *legacyCanonicalPreparedFieldsWrite) stepOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}

@@ -221,7 +221,7 @@ func (work *legacyNativeEventListCheckpoint) advance(ctx context.Context) error 
 			work.values, err = newLegacyNativeEventValuesCheckpoint(ctx, frame.list, work.binding, work.source.Bytes, work.store, remaining+heap.bytes)
 			return err
 		}
-		ready, err := work.values.step(ctx)
+		ready, err := work.values.parserStep(ctx)
 		if err != nil || !ready {
 			return err
 		}

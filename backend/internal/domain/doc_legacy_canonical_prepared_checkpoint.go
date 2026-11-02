@@ -245,19 +245,21 @@ func (work *legacyCanonicalPreparedFrameWrite) close() {
 }
 
 type legacyCanonicalPreparedCheckpoint struct {
-	source  *LegacyCanonicalEncoding
-	state   legacyCanonicalPreparedState
-	store   legacyNativeCheckpointIO
-	budget  int64
-	numbers *legacyCanonicalPreparedNumbersCheckpoint
-	keys    legacyNativeCheckpointListWriter[legacyCanonicalPreparedKeysState]
-	frames  legacyNativeCheckpointListWriter[legacyCanonicalPreparedFrameState]
-	fields  *legacyCanonicalPreparedFieldsWrite
-	frame   *legacyCanonicalPreparedFrameWrite
-	index   int
-	phase   uint8
-	ref     legacyNativeCheckpointRef
-	ready   bool
+	source      *LegacyCanonicalEncoding
+	state       legacyCanonicalPreparedState
+	store       legacyNativeCheckpointIO
+	upstream    legacyNativeCheckpointIO
+	attemptedIO bool
+	budget      int64
+	numbers     *legacyCanonicalPreparedNumbersCheckpoint
+	keys        legacyNativeCheckpointListWriter[legacyCanonicalPreparedKeysState]
+	frames      legacyNativeCheckpointListWriter[legacyCanonicalPreparedFrameState]
+	fields      *legacyCanonicalPreparedFieldsWrite
+	frame       *legacyCanonicalPreparedFrameWrite
+	index       int
+	phase       uint8
+	ref         legacyNativeCheckpointRef
+	ready       bool
 }
 
 func newLegacyCanonicalPreparedCheckpoint(ctx context.Context, source *LegacyCanonicalEncoding, binding ContentHash, store legacyNativeCheckpointIO, budget int64) (*legacyCanonicalPreparedCheckpoint, error) {
@@ -272,7 +274,12 @@ func newLegacyCanonicalPreparedCheckpoint(ctx context.Context, source *LegacyCan
 	state := legacyCanonicalPreparedState{Kind: "legacy-canonical-prepared", Version: 1, Binding: ContentHash(strings.Clone(string(binding))),
 		Order: legacyCanonicalPreparedOrder(source.order), Ordering: source.ordering, KeyWork: source.keyWork,
 		InspectWork: source.inspectWork, EagerNumbers: source.eagerNumbers}
-	return &legacyCanonicalPreparedCheckpoint{source: source, state: state, store: store, budget: budget}, nil
+	work := &legacyCanonicalPreparedCheckpoint{source: source, state: state, upstream: store, budget: budget}
+	work.store = legacyNativeCheckpointIO{Put: work.put}
+	if store.Read != nil {
+		work.store.Read = work.read
+	}
+	return work, nil
 }
 
 func (work *legacyCanonicalPreparedCheckpoint) retainedBytes() (int64, error) {
@@ -281,6 +288,7 @@ func (work *legacyCanonicalPreparedCheckpoint) retainedBytes() (int64, error) {
 	}
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(1, int64(unsafe.Sizeof(*work)))
+	heap.allocation(2, int64(2*unsafe.Sizeof(uintptr(0))))
 	heap.allocation(int64(len(work.state.Binding)+len(work.state.Numbers.Pending.Ref.Hash)+len(work.state.Keys.Ref.Hash)+len(work.state.Frames.Ref.Hash)+len(work.ref.Hash)), 1)
 	for _, list := range []interface{ retainedBytes() (int64, error) }{&work.keys, &work.frames} {
 		retained, err := list.retainedBytes()
@@ -302,6 +310,49 @@ func (work *legacyCanonicalPreparedCheckpoint) retainedBytes() (int64, error) {
 }
 
 func (work *legacyCanonicalPreparedCheckpoint) step(ctx context.Context) (bool, error) {
+	if work == nil {
+		return false, ErrIntegrity
+	}
+	work.attemptedIO = false
+	for transitions := 0; transitions < 8; transitions++ {
+		ready, err := work.stepOnce(ctx)
+		if err != nil || ready || work.attemptedIO || work.emissionPending() {
+			return ready, err
+		}
+	}
+	return false, nil
+}
+
+func (work *legacyCanonicalPreparedCheckpoint) emissionPending() bool {
+	var values [3]*legacyCanonicalPreparedValueWrite
+	if work.fields != nil {
+		values[0] = work.fields.value
+	}
+	if work.frame != nil {
+		values[1] = work.frame.value
+		if work.frame.fields != nil {
+			values[2] = work.frame.fields.value
+		}
+	}
+	for _, value := range values {
+		if value != nil && value.frame != nil && value.frame.phase == legacyCanonicalPreparedWriteEmit {
+			return true
+		}
+	}
+	return false
+}
+
+func (work *legacyCanonicalPreparedCheckpoint) put(ctx context.Context, hash ContentHash, body []byte) error {
+	work.attemptedIO = true
+	return work.upstream.Put(ctx, hash, body)
+}
+
+func (work *legacyCanonicalPreparedCheckpoint) read(ctx context.Context, hash ContentHash, size int) ([]byte, error) {
+	work.attemptedIO = true
+	return work.upstream.Read(ctx, hash, size)
+}
+
+func (work *legacyCanonicalPreparedCheckpoint) stepOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
