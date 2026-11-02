@@ -279,6 +279,7 @@ type docRangeNativeBlockPagedPGWork struct {
 	failure         error
 	decode          bool
 	resumeObserved  bool
+	afterObserved   bool
 }
 
 func (storage *docRangeNativeBlockPagedPGStore) PrepareDocRangeWork(ctx context.Context, job domain.DocRangeIndexJob) (outbound.PreparedDocRangeWork, error) {
@@ -295,6 +296,8 @@ func (storage *docRangeNativeBlockPagedPGStore) PrepareDocRangeWork(ctx context.
 }
 
 func (work *docRangeNativeBlockPagedPGWork) Step(ctx context.Context, job domain.DocRangeIndexJob) (outbound.DocRangeWorkProgress, error) {
+	resumedBeforeStep := work.resumeObserved
+	work.afterObserved = false
 	var err error
 	work.before, err = docRangeNativeBlockPagedPGInspect(work.handle)
 	if err != nil {
@@ -310,13 +313,62 @@ func (work *docRangeNativeBlockPagedPGWork) Step(ctx context.Context, job domain
 		stepContext = work.inspection
 	}
 	progress, stepErr := work.PreparedDocRangeWork.Step(stepContext, job)
-	work.after, err = docRangeNativeBlockPagedPGInspect(work.handle)
-	if err != nil {
-		return 0, errors.Join(stepErr, err)
+	if !resumedBeforeStep || stepErr != nil || !work.afterObserved {
+		work.after, err = docRangeNativeBlockPagedPGInspect(work.handle)
+		if err != nil {
+			return 0, errors.Join(stepErr, err)
+		}
 	}
 	work.afterResources, err = work.handle.RetainedResources()
 	work.failure = errors.Join(stepErr, err)
 	return progress, work.failure
+}
+
+func TestPGDocRangeNativeBlockPostInspectionReuse(test *testing.T) {
+	for _, input := range []struct {
+		name      string
+		resumed   bool
+		observed  bool
+		failure   error
+		wantReuse bool
+	}{
+		{name: "before resume"},
+		{name: "first resume", observed: true},
+		{name: "resumed", resumed: true, observed: true, wantReuse: true},
+		{name: "missing callback", resumed: true},
+		{name: "callback failure", resumed: true, observed: true, failure: domain.ErrConflict},
+		{name: "step failure", resumed: true, failure: domain.ErrConflict},
+		{name: "fenced", failure: domain.ErrConflict},
+	} {
+		test.Run(input.name, func(test *testing.T) {
+			handle := &docRangeNativePagesPGPostInspectionHandle{preparedDocRangeWorkStub: &preparedDocRangeWorkStub{}}
+			stale := docRangeNativeBlockPagedPGInspection{count: 7}
+			observed := docRangeNativeBlockPagedPGInspection{count: 11}
+			work := &docRangeNativeBlockPagedPGWork{
+				PreparedDocRangeWork: handle, handle: handle, before: stale, after: stale,
+				resumeObserved: input.resumed, afterObserved: true,
+			}
+			handle.step = func(context.Context, domain.DocRangeIndexJob) (outbound.DocRangeWorkProgress, error) {
+				if input.observed {
+					work.after, work.afterObserved, work.resumeObserved = observed, true, true
+				}
+				return outbound.DocRangeWorkPending, input.failure
+			}
+			progress, err := work.Step(context.Background(), domain.DocRangeIndexJob{})
+			var expected docRangeNativeBlockPagedPGInspection
+			if input.wantReuse {
+				expected = observed
+			}
+			if progress != outbound.DocRangeWorkPending || !errors.Is(err, input.failure) || !errors.Is(work.failure, input.failure) ||
+				work.before != (docRangeNativeBlockPagedPGInspection{}) || work.after != expected || work.afterObserved != input.observed {
+				test.Fatal("block observer reused stale, first-resume, or failed post-state, or lost its full before inspection", progress, err, work)
+			}
+			resources := outbound.RootPublicationResources{HeapBytes: 4096, SpoolBytes: 128}
+			if handle.resourceChecks != 2 || work.beforeResources != resources || work.afterResources != resources {
+				test.Fatal("block post-state reuse changed retained-resource observations", handle.resourceChecks, work)
+			}
+		})
+	}
 }
 
 func docRangeNativeBlockPagedPGText(prefix string, position int) string {
@@ -514,6 +566,9 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 				}
 				resumedStep = step
 				observed.work.resumeObserved = true
+			} else {
+				observed.work.after = state
+				observed.work.afterObserved = true
 			}
 			return nil
 		}
