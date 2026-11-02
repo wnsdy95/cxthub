@@ -58,16 +58,23 @@ func newPublishedReuseFixturePG(test *testing.T) publishedReuseFixturePG {
 
 func newPublishedReuseSourcesPG(test *testing.T, leftLegacy, rightLegacy bool) publishedReuseFixturePG {
 	test.Helper()
+	result := newPublishedReusePeerPG(test, leftLegacy)
+	result.right = newDocDisplayPGFixture(test)
+	result.rightJob = claimPublishedReuseSourcePG(test, result.right, result.event, rightLegacy)
+	return result
+}
+
+func newPublishedReusePeerPG(test *testing.T, legacy bool) publishedReuseFixturePG {
+	test.Helper()
 	isolatedDSN := a11IsolatedPGDSN(test, context.Background())
 	test.Setenv("CXT_TEST_DSN", isolatedDSN)
-	result := publishedReuseFixturePG{left: newDocDisplayPGFixture(test), right: newDocDisplayPGFixture(test), isolatedDSN: isolatedDSN}
+	result := publishedReuseFixturePG{left: newDocDisplayPGFixture(test), isolatedDSN: isolatedDSN}
 	rows := make([]any, 32)
 	for index := range rows {
 		rows[index] = map[string]any{"ordinal": index, "text": "shared", "nested": []any{true, nil, "value"}}
 	}
 	result.event = domain.CIREvent{Kind: domain.EventToolCall, ToolName: "generic", CallID: "published-reuse", Input: map[string]any{"rows": rows}}
-	result.leftJob = claimPublishedReuseSourcePG(test, result.left, result.event, leftLegacy)
-	result.rightJob = claimPublishedReuseSourcePG(test, result.right, result.event, rightLegacy)
+	result.leftJob = claimPublishedReuseSourcePG(test, result.left, result.event, legacy)
 	return result
 }
 
@@ -262,12 +269,24 @@ func TestPGDocPublishedReuseMissingOrCorruptEvidence(test *testing.T) {
 }
 
 func TestPGDocPublishedReuseOwnSourceAndLeaseFences(test *testing.T) {
+	peer := newPublishedReusePeerPG(test, false)
+	finishPublishedReusePeerPG(test, peer)
+	peerImage := publishedReuseJobImagePG(test, peer.left, peer.leftJob)
+	peerReceipt := readDocDisplayCatalogReceiptPG(test, peer.left, peer.leftJob.Target)
+	seen := map[domain.ContentHash]bool{peer.leftJob.DocHash: true}
 	for _, atComplete := range []bool{false, true} {
 		for _, change := range []string{"source", "membership", "lease"} {
 			test.Run(fmt.Sprintf("%s/at_complete=%t", change, atComplete), func(test *testing.T) {
-				fixture := newPublishedReuseFixturePG(test)
-				finishPublishedReusePeerPG(test, fixture)
+				fixture := peer
+				fixture.right = newDocDisplayPGFixture(test)
+				fixture.rightJob = claimPublishedReusePG(test, fixture.right, fixture.event)
 				right := fixture.right
+				if right.repo == peer.left.repo || seen[fixture.rightJob.DocHash] ||
+					fixture.rightJob.Target.Event.Hash != peer.leftJob.Target.Event.Hash ||
+					fixture.rightJob.Target.DisplayProfile() != peer.leftJob.Target.DisplayProfile() {
+					test.Fatal("fence case must have its own source and the same reusable event")
+				}
+				seen[fixture.rightJob.DocHash] = true
 				var checkpoint domain.ContentHash
 				if atComplete {
 					reused, err := right.storage.LoadDocEventDisplay(right.ctx, fixture.rightJob)
@@ -306,6 +325,10 @@ func TestPGDocPublishedReuseOwnSourceAndLeaseFences(test *testing.T) {
 				}
 				if before != publishedReuseJobImagePG(test, right, fixture.rightJob) {
 					test.Fatal("failed own fence changed checkpoint")
+				}
+				if peerImage != publishedReuseJobImagePG(test, peer.left, peer.leftJob) ||
+					!reflect.DeepEqual(peerReceipt, readDocDisplayCatalogReceiptPG(test, peer.left, peer.leftJob.Target)) {
+					test.Fatal("own fence mutation changed the independently published peer")
 				}
 			})
 		}
