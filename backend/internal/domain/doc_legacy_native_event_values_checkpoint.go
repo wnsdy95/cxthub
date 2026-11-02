@@ -90,24 +90,25 @@ func legacyNativeEventValuesCheckpointFrameHeap() docRangeHeaderHeapEstimate {
 }
 
 type legacyNativeEventValuesCheckpoint struct {
-	source      *legacyNativeEventValues
-	sourceHeap  docRangeHeaderHeapEstimate
-	current     *legacyNativeEventValuesCheckpointFrame
-	capture     *legacyNormalizationCapture
-	store       legacyNativeCheckpointIO
-	upstream    legacyNativeCheckpointIO
-	attemptedIO bool
-	state       legacyNativeEventValuesCheckpointRoot
-	rows        legacyNativeCheckpointListWriter[legacyNativeEventValuesCheckpointEntry]
-	fields      *legacyNativeEventRecordFieldsCheckpoint
-	block       *legacyNativeCheckpointBlockRecordWriter
-	root        legacyNativeCheckpointRef
-	frames      int
-	budget      int64
-	finished    bool
-	ready       bool
-	closed      bool
-	failure     error
+	source         *legacyNativeEventValues
+	sourceHeap     docRangeHeaderHeapEstimate
+	current        *legacyNativeEventValuesCheckpointFrame
+	capture        *legacyNormalizationCapture
+	store          legacyNativeCheckpointIO
+	upstream       legacyNativeCheckpointIO
+	attemptedIO    bool
+	state          legacyNativeEventValuesCheckpointRoot
+	rows           legacyNativeCheckpointListWriter[legacyNativeEventValuesCheckpointEntry]
+	fields         *legacyNativeEventRecordFieldsCheckpoint
+	block          *legacyNativeCheckpointBlockRecordWriter
+	root           legacyNativeCheckpointRef
+	frames         int
+	budget         int64
+	scalarPairHeap int64
+	finished       bool
+	ready          bool
+	closed         bool
+	failure        error
 }
 
 func newLegacyNativeEventValuesCheckpoint(ctx context.Context, list *legacyNativeEventList, binding ContentHash, sourceBytes int, store legacyNativeCheckpointIO, budget int64) (*legacyNativeEventValuesCheckpoint, error) {
@@ -369,6 +370,7 @@ func (work *legacyNativeEventValuesCheckpoint) retainedBytes() (int64, error) {
 	heap.allocation(1, int64(unsafe.Sizeof(legacyNormalizationCapture{})))
 	heap.allocation(2, int64(2*unsafe.Sizeof(uintptr(0))))
 	heap.include(work.sourceHeap)
+	heap.include(docRangeHeaderHeapEstimate{bytes: work.scalarPairHeap})
 	if work.frames < 0 || work.frames > 10000 {
 		return 0, ErrIntegrity
 	}
@@ -419,12 +421,20 @@ func (work *legacyNativeEventValuesCheckpoint) admit(extra int64) error {
 }
 
 func (work *legacyNativeEventValuesCheckpoint) step(ctx context.Context) (bool, error) {
+	return work.stepWithScalarPairs(ctx, false)
+}
+
+func (work *legacyNativeEventValuesCheckpoint) parserStep(ctx context.Context) (bool, error) {
+	return work.stepWithScalarPairs(ctx, true)
+}
+
+func (work *legacyNativeEventValuesCheckpoint) stepWithScalarPairs(ctx context.Context, scalarPairs bool) (bool, error) {
 	if work == nil {
 		return false, ErrIntegrity
 	}
 	work.attemptedIO = false
 	for transitions := 0; transitions < 8; transitions++ {
-		ready, err := work.stepOnce(ctx)
+		ready, err := work.stepRecord(ctx, scalarPairs)
 		if err != nil || ready || work.attemptedIO || work.current != nil && work.current.phase == 7 {
 			return ready, err
 		}
@@ -443,6 +453,10 @@ func (work *legacyNativeEventValuesCheckpoint) read(ctx context.Context, hash Co
 }
 
 func (work *legacyNativeEventValuesCheckpoint) stepOnce(ctx context.Context) (bool, error) {
+	return work.stepRecord(ctx, false)
+}
+
+func (work *legacyNativeEventValuesCheckpoint) stepRecord(ctx context.Context, scalarPairs bool) (bool, error) {
 	if work == nil {
 		return false, ErrIntegrity
 	}
@@ -464,8 +478,18 @@ func (work *legacyNativeEventValuesCheckpoint) stepOnce(ctx context.Context) (bo
 	if err := work.admit(4 * LegacyCanonicalEncodingBytes); err != nil {
 		return work.fail(err)
 	}
-	if err := work.advance(ctx); err != nil {
-		return work.fail(err)
+	handled := false
+	if scalarPairs && work.current != nil && work.current.phase == 2 && work.fields == nil {
+		var err error
+		handled, err = work.scalarRecordPair(ctx)
+		if err != nil {
+			return work.fail(err)
+		}
+	}
+	if !handled {
+		if err := work.advance(ctx); err != nil {
+			return work.fail(err)
+		}
 	}
 	if err := work.checkSource(); err != nil {
 		return work.fail(err)
