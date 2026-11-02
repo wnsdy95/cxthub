@@ -82,21 +82,8 @@ func (batch *legacyNormalizationCheckpointBatch) flush(ctx context.Context) erro
 			return err
 		}
 	}
-	structures := &pgx.Batch{}
-	for _, object := range batch.objects {
-		if object.structure != 0 {
-			structures.Queue(`INSERT INTO doc_legacy_checkpoint_structures_v1(doc_hash,stage_id,hash,kind)
- VALUES($1,$2::uuid,$3,$4) ON CONFLICT(doc_hash,stage_id,hash) DO NOTHING`,
-				batch.owner.job.DocHash, batch.state.stage.incarnation, object.hash, object.structure)
-		}
-	}
-	if structures.Len() != 0 {
-		if err := batch.transaction.SendBatch(ctx, structures).Close(); err != nil {
-			return err
-		}
-		if err := batch.verifyStructures(ctx); err != nil {
-			return err
-		}
+	if err := batch.verifyStructures(ctx); err != nil {
+		return err
 	}
 	clear(batch.objects)
 	batch.objects = batch.objects[:0]
@@ -108,9 +95,19 @@ func (batch *legacyNormalizationCheckpointBatch) verifyStructures(ctx context.Co
 	queries := &pgx.Batch{}
 	for _, object := range batch.objects {
 		if object.structure != 0 {
-			queries.Queue(`SELECT kind FROM doc_legacy_checkpoint_structures_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3`,
-				batch.owner.job.DocHash, batch.state.stage.incarnation, object.hash)
+			queries.Queue(`WITH existing AS MATERIALIZED (
+ SELECT kind FROM doc_legacy_checkpoint_structures_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3
+), inserted AS (
+ INSERT INTO doc_legacy_checkpoint_structures_v1(doc_hash,stage_id,hash,kind)
+ VALUES($1,$2::uuid,$3,$4)
+ ON CONFLICT(doc_hash,stage_id,hash) DO NOTHING RETURNING kind
+)
+ SELECT kind FROM existing UNION ALL SELECT kind FROM inserted`,
+				batch.owner.job.DocHash, batch.state.stage.incarnation, object.hash, object.structure)
 		}
+	}
+	if queries.Len() == 0 {
+		return nil
 	}
 	results := batch.transaction.SendBatch(ctx, queries)
 	defer func() { failure = errors.Join(failure, results.Close()) }()

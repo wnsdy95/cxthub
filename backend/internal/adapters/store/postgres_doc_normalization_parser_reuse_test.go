@@ -54,6 +54,19 @@ func (trace *legacyNormalizationParserReusePGTrace) TraceQueryStart(ctx context.
 func (*legacyNormalizationParserReusePGTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
 }
 
+func (trace *legacyNormalizationParserReusePGTrace) TraceBatchStart(ctx context.Context, connection *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
+	for _, query := range data.Batch.QueuedQueries {
+		trace.TraceQueryStart(ctx, connection, pgx.TraceQueryStartData{SQL: query.SQL, Args: query.Arguments})
+	}
+	return ctx
+}
+
+func (*legacyNormalizationParserReusePGTrace) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {
+}
+
+func (*legacyNormalizationParserReusePGTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {
+}
+
 func (trace *legacyNormalizationParserReusePGTrace) snapshot() legacyNormalizationParserReusePGCounts {
 	trace.mutex.Lock()
 	defer trace.mutex.Unlock()

@@ -140,6 +140,50 @@ func TestNormalizationCheckpointPGBatchDeferredCorruptionFailsClosed(test *testi
 	}
 }
 
+func TestNormalizationCheckpointPGBatchStructureProofKeepsTriggerAndKind(test *testing.T) {
+	storage, ctx, _, job, state := legacyNormalizationParserReusePGStart(test)
+	peer, trace := normalizationBatchPGPeer(test, storage, ctx)
+	work := &legacyNormalizationCheckpointWork{store: peer, job: job, state: state}
+	child := legacyCheckpointPGObject("bounded-structure-child")
+	if err := storage.stageLegacyNormalizationParserObject(ctx, job, state, child.hash, child.data); err != nil {
+		test.Fatal(err)
+	}
+	refs := []legacyNormalizationBufferRef{{Hash: child.hash, Bytes: len(child.data)}}
+	parent, err := work.parserPinNode(ctx, refs)
+	if err != nil {
+		test.Fatal(err)
+	}
+	body, err := work.readParserObject(ctx, parent.Hash, parent.Bytes)
+	if err != nil {
+		test.Fatal(err)
+	}
+	bound, batch, err := work.beginBatch(ctx)
+	if err != nil {
+		test.Fatal(err)
+	}
+	defer rollbackPG(batch.transaction)
+	if err := work.stageParserObjects(bound, []legacyByteCheckpointObject{{hash: parent.Hash, data: body, structure: 1}}); err != nil {
+		test.Fatal(err)
+	}
+	before := trace.snapshot()
+	if err := batch.flush(bound); err != nil {
+		test.Fatal(err)
+	}
+	after := trace.snapshot()
+	if after.queries-before.queries != 2 || after.hashReads-before.hashReads != 1 || after.bodyArguments != before.bodyArguments {
+		test.Fatal("structure reuse must freshly verify bytes and validate classification in two statements", before, after)
+	}
+	if err := batch.finish(bound, nil); err != nil {
+		test.Fatal(err)
+	}
+	var edges int
+	if err := storage.pool.QueryRow(ctx, `SELECT count(*) FROM doc_legacy_checkpoint_edges_v1
+ WHERE doc_hash=$1 AND stage_id=$2::uuid AND parent_hash=$3 AND child_hash=$4`,
+		job.DocHash, state.stage.incarnation, parent.Hash, child.hash).Scan(&edges); err != nil || edges != 1 {
+		test.Fatal("structure reuse changed retained child edges", edges, err)
+	}
+}
+
 func TestNormalizationCheckpointPGBatchBufferedDuplicatesPreserveFlushBounds(test *testing.T) {
 	for _, size := range []int{64, domain.LegacyCanonicalEncodingBytes / 2} {
 		test.Run(fmt.Sprint(size), func(test *testing.T) {
