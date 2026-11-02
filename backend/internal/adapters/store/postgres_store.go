@@ -2310,30 +2310,29 @@ func (s *PostgresStore) ApplyJoin(ctx context.Context, m domain.JoinMutation) er
 }
 
 // UpdateSnapshotMessage is a meta update for committing hook labels — exclusive commit message promotion.
-// Conditional UPDATE(CAS): updates only if hook prefix or same message (idempotent retry) —
-// blocks concurrent promotions in the storage layer (reliability P1).
+// Conditional UPDATE(CAS) promotes hook labels; exact replays only lock/read.
+// Concurrent conflicting promotions remain blocked in the storage layer.
 func (s *PostgresStore) UpdateSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error {
 	if err := validateHashes(repoID, id); err != nil {
 		return err
 	}
 	ct, err := s.db(ctx).Exec(ctx,
 		`UPDATE snapshots SET message=$3 WHERE repo_id=$1 AND id=$2
-		   AND (message LIKE $4 || '%' OR message=$3)`,
+		   AND message LIKE $4 || '%' AND message IS DISTINCT FROM $3`,
 		string(repoID), string(id), message, domain.HookMessagePrefix)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		var exists bool
+		var current string
 		if qerr := s.db(ctx).QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM snapshots WHERE repo_id=$1 AND id=$2)`,
-			string(repoID), string(id)).Scan(&exists); qerr != nil {
-			return qerr
+			`SELECT message FROM snapshots WHERE repo_id=$1 AND id=$2 FOR UPDATE`,
+			string(repoID), string(id)).Scan(&current); qerr != nil {
+			return mapNoRows(qerr)
 		}
-		if !exists {
-			return domain.ErrNotFound
+		if current != message {
+			return fmt.Errorf("%w: snapshot message already promoted", domain.ErrConflict)
 		}
-		return fmt.Errorf("%w: snapshot message already promoted", domain.ErrConflict)
 	}
 	return nil
 }
