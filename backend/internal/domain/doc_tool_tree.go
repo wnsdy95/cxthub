@@ -54,7 +54,16 @@ func (source DocToolTreeSource) Encode() ([]byte, error) {
 	if source.Validate() != nil {
 		return nil, ErrIntegrity
 	}
-	return canonicalJSON(source)
+	return json.Marshal(struct {
+		EventBytes int              `json:"event_bytes"`
+		EventHash  ContentHash      `json:"event_hash"`
+		Evidence   ContentHash      `json:"evidence"`
+		Profile    string           `json:"profile"`
+		Root       DocFindSpan      `json:"root"`
+		Type       DocToolValueType `json:"type"`
+		Version    int              `json:"version"`
+	}{EventBytes: source.EventBytes, EventHash: source.EventHash, Evidence: source.Evidence,
+		Profile: source.Profile, Root: source.Root, Type: source.Type, Version: source.Version})
 }
 
 func (source DocToolTreeSource) Hash() (ContentHash, error) {
@@ -152,7 +161,16 @@ func (node DocToolTreeNode) Encode(source DocToolTreeSource) ([]byte, error) {
 	if node.Validate(source) != nil {
 		return nil, ErrIntegrity
 	}
-	raw, err := canonicalJSON(node)
+	raw, err := json.Marshal(struct {
+		Children int              `json:"children"`
+		Depth    int              `json:"depth"`
+		Key      *DocFindSpan     `json:"key,omitempty"`
+		Ordinal  int              `json:"ordinal"`
+		Parent   int              `json:"parent"`
+		Type     DocToolValueType `json:"type"`
+		Value    DocFindSpan      `json:"value"`
+	}{Children: node.Children, Depth: node.Depth, Key: node.Key, Ordinal: node.Ordinal,
+		Parent: node.Parent, Type: node.Type, Value: node.Value})
 	if err != nil || len(raw) > MaxDocToolTreeNodeBytes {
 		return nil, ErrIntegrity
 	}

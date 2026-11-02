@@ -11,7 +11,7 @@ import (
 func TestLegacyCanonicalPreparedFieldsArraySameWire(test *testing.T) {
 	var fields legacyCanonicalPages[legacyCanonicalKeyField]
 	for position := 0; position < 257; position++ {
-		if err := fields.append(legacyCanonicalKeyField{key: fmt.Sprintf("field-%05d", position), value: []any{fmt.Sprintf("value-%05d", position), "한🙂\"\\\n<>&", true, nil}, childKeys: position}); err != nil {
+		if err := fields.append(legacyCanonicalKeyField{key: fmt.Sprintf("field-%05d", position), value: []any{fmt.Sprintf("value-%05d", position), "\ud55c🙂\"\\\n<>&", true, nil}, childKeys: position}); err != nil {
 			test.Fatal(err)
 		}
 	}
