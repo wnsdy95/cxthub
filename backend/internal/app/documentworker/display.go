@@ -60,12 +60,13 @@ func (worker *DisplayWorker) Build(ctx context.Context, job domain.DocDisplayJob
 			return false, err
 		}
 	}
-	for processed := 0; processed < DisplayJobSteps; processed++ {
+	for processed := 0; processed < DisplayJobSteps; {
 		if progress.Source == nil {
 			progress, err = worker.AdvanceDiscovery(ctx, job, progress)
 			if err != nil {
 				return false, err
 			}
+			processed++
 			continue
 		}
 		if progress.Source.EventHash != job.Target.Event.Hash || progress.Source.EventBytes != job.Target.Event.Length || progress.Checkpoint == "" || progress.Discovery != nil || progress.DiscoveryCheckpoint != "" {
@@ -74,26 +75,47 @@ func (worker *DisplayWorker) Build(ctx context.Context, job domain.DocDisplayJob
 		if progress.State.Done {
 			break
 		}
-		var step domain.DocDisplayStringStep
+		var steps [DisplayJobSteps]domain.DocDisplayStringStep
+		prepared := 0
+		var preparationError error
 		err := worker.scope.WithinRepositoryRead(ctx, job.RepoID, func(read context.Context) error {
 			opened, err := worker.Source(read, job.Target)
 			if err != nil {
 				return err
 			}
-			step, err = domain.StepDocDisplayString(read, *progress.Source, progress.State, func(read context.Context, offset, length int) ([]byte, error) {
-				if err := read.Err(); err != nil {
-					return nil, err
+			state := progress.State
+			for prepared < DisplayJobSteps-processed && !state.Done {
+				step, err := domain.StepDocDisplayString(read, *progress.Source, state, func(read context.Context, offset, length int) ([]byte, error) {
+					if err := read.Err(); err != nil {
+						return nil, err
+					}
+					return opened.Read(job.Target.Event.Offset+offset, length)
+				})
+				if err != nil {
+					preparationError = err
+					return nil
 				}
-				return opened.Read(job.Target.Event.Offset+offset, length)
-			})
-			return err
+				steps[prepared], state = step, step.State
+				prepared++
+			}
+			return nil
 		})
 		if err != nil {
 			return false, err
 		}
-		progress, err = worker.storage.SaveDocDisplayStep(ctx, job, progress.Checkpoint, step)
-		if err != nil {
-			return false, err
+		for index := 0; index < prepared; index++ {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			progress, err = worker.storage.SaveDocDisplayStep(ctx, job, progress.Checkpoint, steps[index])
+			steps[index] = domain.DocDisplayStringStep{}
+			if err != nil {
+				return false, err
+			}
+			processed++
+		}
+		if preparationError != nil {
+			return false, preparationError
 		}
 	}
 	if progress.Source == nil || !progress.State.Done {

@@ -208,7 +208,7 @@ func (work *legacyCanonicalSourceCheckpoint) stepOnce(ctx context.Context) (bool
 		return work.fail(childBudget.err)
 	}
 	work.child.budget = childBudget.bytes
-	ready, err := work.child.step(ctx)
+	ready, err := work.child.stepOnce(ctx)
 	if err != nil {
 		return work.fail(err)
 	}

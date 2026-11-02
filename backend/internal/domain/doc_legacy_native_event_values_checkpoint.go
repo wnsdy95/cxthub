@@ -90,22 +90,24 @@ func legacyNativeEventValuesCheckpointFrameHeap() docRangeHeaderHeapEstimate {
 }
 
 type legacyNativeEventValuesCheckpoint struct {
-	source     *legacyNativeEventValues
-	sourceHeap docRangeHeaderHeapEstimate
-	current    *legacyNativeEventValuesCheckpointFrame
-	capture    *legacyNormalizationCapture
-	store      legacyNativeCheckpointIO
-	state      legacyNativeEventValuesCheckpointRoot
-	rows       legacyNativeCheckpointListWriter[legacyNativeEventValuesCheckpointEntry]
-	fields     *legacyNativeEventRecordFieldsCheckpoint
-	block      *legacyNativeCheckpointBlockRecordWriter
-	root       legacyNativeCheckpointRef
-	frames     int
-	budget     int64
-	finished   bool
-	ready      bool
-	closed     bool
-	failure    error
+	source      *legacyNativeEventValues
+	sourceHeap  docRangeHeaderHeapEstimate
+	current     *legacyNativeEventValuesCheckpointFrame
+	capture     *legacyNormalizationCapture
+	store       legacyNativeCheckpointIO
+	upstream    legacyNativeCheckpointIO
+	attemptedIO bool
+	state       legacyNativeEventValuesCheckpointRoot
+	rows        legacyNativeCheckpointListWriter[legacyNativeEventValuesCheckpointEntry]
+	fields      *legacyNativeEventRecordFieldsCheckpoint
+	block       *legacyNativeCheckpointBlockRecordWriter
+	root        legacyNativeCheckpointRef
+	frames      int
+	budget      int64
+	finished    bool
+	ready       bool
+	closed      bool
+	failure     error
 }
 
 func newLegacyNativeEventValuesCheckpoint(ctx context.Context, list *legacyNativeEventList, binding ContentHash, sourceBytes int, store legacyNativeCheckpointIO, budget int64) (*legacyNativeEventValuesCheckpoint, error) {
@@ -118,6 +120,7 @@ func newLegacyNativeEventValuesCheckpoint(ctx context.Context, list *legacyNativ
 	var planned docRangeHeaderHeapEstimate
 	planned.allocation(1, int64(unsafe.Sizeof(legacyNativeEventValuesCheckpoint{})))
 	planned.allocation(1, int64(unsafe.Sizeof(legacyNormalizationCapture{})))
+	planned.allocation(2, int64(2*unsafe.Sizeof(uintptr(0))))
 	planned.include(legacyNativeEventValuesCheckpointFrameHeap())
 	planned.include(docRangeHeaderHeapEstimate{bytes: 4 * LegacyCanonicalEncodingBytes})
 	if planned.err != nil || planned.bytes > budget {
@@ -145,9 +148,13 @@ func newLegacyNativeEventValuesCheckpoint(ctx context.Context, list *legacyNativ
 		capture.release()
 		return nil, err
 	}
-	work := &legacyNativeEventValuesCheckpoint{source: list.values, sourceHeap: heap, capture: capture, store: store, budget: budget, frames: 1,
+	work := &legacyNativeEventValuesCheckpoint{source: list.values, sourceHeap: heap, capture: capture, upstream: store, budget: budget, frames: 1,
 		state:   legacyNativeEventValuesCheckpointRoot{Version: 1, Schema: schema, Binding: binding, SourceBytes: sourceBytes},
 		current: &legacyNativeEventValuesCheckpointFrame{source: list.values}}
+	work.store = legacyNativeCheckpointIO{Put: work.put}
+	if store.Read != nil {
+		work.store.Read = work.read
+	}
 	if err := work.admit(4 * LegacyCanonicalEncodingBytes); err != nil {
 		work.close()
 		return nil, err
@@ -360,6 +367,7 @@ func (work *legacyNativeEventValuesCheckpoint) retainedBytes() (int64, error) {
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(1, int64(unsafe.Sizeof(*work)))
 	heap.allocation(1, int64(unsafe.Sizeof(legacyNormalizationCapture{})))
+	heap.allocation(2, int64(2*unsafe.Sizeof(uintptr(0))))
 	heap.include(work.sourceHeap)
 	if work.frames < 0 || work.frames > 10000 {
 		return 0, ErrIntegrity
@@ -411,6 +419,30 @@ func (work *legacyNativeEventValuesCheckpoint) admit(extra int64) error {
 }
 
 func (work *legacyNativeEventValuesCheckpoint) step(ctx context.Context) (bool, error) {
+	if work == nil {
+		return false, ErrIntegrity
+	}
+	work.attemptedIO = false
+	for transitions := 0; transitions < 8; transitions++ {
+		ready, err := work.stepOnce(ctx)
+		if err != nil || ready || work.attemptedIO || work.current != nil && work.current.phase == 7 {
+			return ready, err
+		}
+	}
+	return false, nil
+}
+
+func (work *legacyNativeEventValuesCheckpoint) put(ctx context.Context, hash ContentHash, body []byte) error {
+	work.attemptedIO = true
+	return work.upstream.Put(ctx, hash, body)
+}
+
+func (work *legacyNativeEventValuesCheckpoint) read(ctx context.Context, hash ContentHash, size int) ([]byte, error) {
+	work.attemptedIO = true
+	return work.upstream.Read(ctx, hash, size)
+}
+
+func (work *legacyNativeEventValuesCheckpoint) stepOnce(ctx context.Context) (bool, error) {
 	if work == nil {
 		return false, ErrIntegrity
 	}

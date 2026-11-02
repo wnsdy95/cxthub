@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 
@@ -64,6 +65,21 @@ func (batch *legacyNormalizationCheckpointBatch) flush(ctx context.Context) erro
 	if len(batch.objects) == 0 {
 		return nil
 	}
+	pending := batch.objects
+	batch.objects = pending[:0]
+	for _, object := range pending {
+		duplicate := false
+		for _, retained := range batch.objects {
+			if retained.hash == object.hash && retained.structure == object.structure && bytes.Equal(retained.data, object.data) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			batch.objects = append(batch.objects, object)
+		}
+	}
+	clear(pending[len(batch.objects):])
 	missing, err := batch.verify(ctx, batch.objects, true)
 	if err != nil {
 		return err
