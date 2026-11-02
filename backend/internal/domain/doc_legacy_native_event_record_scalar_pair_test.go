@@ -37,12 +37,19 @@ func legacyNativeEventScalarPairCaptureList(test *testing.T, list *legacyNativeE
 	storage := legacyNativeGoGraphSetW85Storage(test)
 	var work *legacyNativeEventValuesCheckpoint
 	var result legacyNativeEventScalarPairCapture
+	var pairFrame *legacyNativeEventValuesCheckpointFrame
+	pairIndex := -1
 	put := storage.io.Put
 	storage.io.Put = func(ctx context.Context, hash ContentHash, body []byte) error {
 		result.objects = append(result.objects, legacyNativeEventScalarPairObject{Hash: hash, Body: bytes.Clone(body)})
 		result.bytes += len(body)
 		if work.scalarPairHeap != 0 {
 			result.pairWrites++
+			if result.pairWrites%2 == 1 {
+				pairFrame, pairIndex = work.current, work.current.index
+			} else if work.current != pairFrame || work.current.index != pairIndex {
+				test.Fatal("scalar pair changed its source record between fresh puts")
+			}
 			retained, err := work.retainedBytes()
 			if err != nil || work.scalarPairHeap != legacyNativeEventRecordScalarPairWorkspace().bytes || retained > work.budget || retained < work.scalarPairHeap {
 				test.Fatal("scalar pair omitted its bounded live workspace", retained, work.scalarPairHeap, err)
@@ -70,9 +77,8 @@ func legacyNativeEventScalarPairCaptureList(test *testing.T, list *legacyNativeE
 		if err != nil || work.scalarPairHeap != 0 {
 			test.Fatal("scalar pair failed or retained ephemeral scratch", err, work.scalarPairHeap)
 		}
-		if result.pairWrites != pairWrites && (result.pairWrites-pairWrites != 2 || storage.writes-writes != 2 ||
-			work.current == nil || work.current.phase != 3 || work.fields != nil) {
-			test.Fatal("scalar pair crossed into another record or omitted a fresh put")
+		if result.pairWrites != pairWrites && (result.pairWrites-pairWrites != 2 || storage.writes-writes != 2 || work.fields != nil) {
+			test.Fatal("scalar pair attempted another I/O group or omitted a fresh put")
 		}
 		retained, err := work.retainedBytes()
 		if err != nil || retained <= 0 || retained > work.budget {
@@ -124,7 +130,7 @@ func TestLegacyNativeEventRecordScalarPairRawWire(test *testing.T) {
 	if before.root != after.root || !reflect.DeepEqual(before.objects, after.objects) || before.bytes != after.bytes {
 		test.Fatal("scalar pair changed ordered object bytes, hashes, or the root")
 	}
-	if before.steps != 3844 || after.steps >= 802 || len(after.objects) != 549 || after.bytes != 1038470 || after.pairWrites != 512 {
+	if before.steps != 3844 || after.steps >= 400 || len(after.objects) != 549 || after.bytes != 1038470 || after.pairWrites != 512 {
 		test.Fatal("scalar pair lost fresh per-record puts or the bounded step improvement", before.steps, after.steps, len(after.objects), after.bytes, after.pairWrites)
 	}
 	test.Logf("original_steps=%d parser_steps=%d puts=%d pair_puts=%d bytes=%d", before.steps, after.steps, len(after.objects), after.pairWrites, after.bytes)
