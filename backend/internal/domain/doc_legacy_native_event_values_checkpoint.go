@@ -435,11 +435,41 @@ func (work *legacyNativeEventValuesCheckpoint) stepWithScalarPairs(ctx context.C
 	work.attemptedIO = false
 	for transitions := 0; transitions < 8; transitions++ {
 		ready, err := work.stepRecord(ctx, scalarPairs)
-		if err != nil || ready || work.attemptedIO || work.current != nil && work.current.phase == 7 {
+		if err != nil || ready || !scalarPairs && work.current != nil && work.current.phase == 7 ||
+			work.attemptedIO && (!scalarPairs || !work.nextWithoutIO()) {
 			return ready, err
 		}
 	}
 	return false, nil
+}
+
+func (work *legacyNativeEventValuesCheckpoint) nextWithoutIO() bool {
+	frame := work.current
+	if frame == nil || work.fields != nil || work.block != nil {
+		return false
+	}
+	switch frame.phase {
+	case 0, 3, 4:
+		return len(work.rows.values) < legacyNativeCheckpointPageItems-1
+	case 1, 6, 7:
+		return true
+	case 5:
+		blocks := frame.record.blocks
+		if blocks == nil || frame.blockIndex == blocks.records.length() {
+			return true
+		}
+		if len(work.rows.values) >= legacyNativeCheckpointPageItems-1 {
+			return false
+		}
+		record := blocks.records.at(frame.blockIndex)
+		if record == nil {
+			return false
+		}
+		capacities, err := legacyNativeBlockRecordCapacities(*record, true)
+		return err == nil && capacities[0] <= legacyNativeBlockInlineCapacity && capacities[1] <= legacyNativeBlockInlineCapacity-capacities[0]
+	default:
+		return false
+	}
 }
 
 func (work *legacyNativeEventValuesCheckpoint) put(ctx context.Context, hash ContentHash, body []byte) error {

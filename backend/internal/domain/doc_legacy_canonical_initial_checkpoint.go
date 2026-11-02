@@ -167,7 +167,7 @@ func (work *legacyCanonicalSourceCheckpoint) step(ctx context.Context) (bool, er
 	work.wrote = false
 	for transitions := 0; transitions < legacyCanonicalSourceCheckpointTransitions; transitions++ {
 		ready, err := work.stepOnce(ctx)
-		if err != nil || ready || work.wrote || work.sourceGraph() != nil || work.sourceRecord() != nil {
+		if err != nil || ready || work.sourceGraph() != nil || work.sourceRecord() != nil || work.wrote && !work.child.nextWithoutIO() {
 			return ready, err
 		}
 	}
