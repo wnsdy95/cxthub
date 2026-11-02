@@ -13,7 +13,8 @@ export function SessionArchiveActions({ repoId, snapshotId, docHash, archive, ro
 }) {
   const t = useT();
   const mutation = useSessionArchive();
-  const [confirming, setConfirming] = useState(false);
+  const [confirmation, setConfirmation] = useState<{repoId: string; snapshotId: string; archived: boolean} | null>(null);
+  const confirming = confirmation !== null;
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState('');
   const trigger = useRef<HTMLButtonElement>(null);
@@ -34,14 +35,15 @@ export function SessionArchiveActions({ repoId, snapshotId, docHash, archive, ro
     finally { setDownloading(false); }
   }
   const action = t(archive ? 'sessionArchive.restore' : 'sessionArchive.archive');
+  const confirmationAction = t(confirmation?.archived ? 'sessionArchive.archive' : 'sessionArchive.restore');
   return <>
     <button type="button" className="dl-btn" title={t('context.rawTitle')} disabled={downloading} onClick={() => void download()}>↓ raw</button>
     {atLeast(role, 'maintainer') && <button ref={trigger} type="button" className="dl-btn" disabled={mutation.isPending}
-      onClick={() => { mutation.reset(); setConfirming(true); }}>{action}</button>}
+      onClick={() => { mutation.reset(); setConfirmation({repoId, snapshotId: archive?.snapshot_id ?? snapshotId, archived: !archive}); }}>{action}</button>}
     {downloadError && <span role="alert" className="err">{downloadError}</span>}
-    {confirming && createPortal(<div className="modal-back">
-      <div ref={dialog} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-label={action} onKeyDown={event => {
-        if (event.key === 'Escape' && !mutation.isPending) { event.preventDefault(); setConfirming(false); }
+    {confirmation && createPortal(<div className="modal-back">
+      <div ref={dialog} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-label={confirmationAction} onKeyDown={event => {
+        if (event.key === 'Escape' && !mutation.isPending) { event.preventDefault(); setConfirmation(null); }
         if (event.key === 'Tab') {
           const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
           const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -50,15 +52,14 @@ export function SessionArchiveActions({ repoId, snapshotId, docHash, archive, ro
           else buttons[(current + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
         }
       }}>
-        <h3>{action}</h3>
-        <p>{t(archive ? 'sessionArchive.restoreWarning' : 'sessionArchive.warning')}</p>
+        <h3>{confirmationAction}</h3>
+        <p>{t(confirmation.archived ? 'sessionArchive.warning' : 'sessionArchive.restoreWarning')}</p>
         {mutation.isError && <p role="alert" className="err">{mutation.error.message}</p>}
         {mutation.isPending && <p role="status">{t('sessionArchive.saving')}</p>}
         <div className="modal-actions">
-          <button type="button" disabled={mutation.isPending} onClick={() => setConfirming(false)}>{t('common.cancel')}</button>
-          <button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate({
-            repoId, snapshotId: archive?.snapshot_id ?? snapshotId, archived: !archive,
-          }, {onSuccess: () => setConfirming(false)})}>{action}</button>
+          <button type="button" disabled={mutation.isPending} onClick={() => setConfirmation(null)}>{t('common.cancel')}</button>
+          <button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate(confirmation,
+            {onSuccess: () => setConfirmation(null)})}>{confirmationAction}</button>
         </div>
       </div>
     </div>, document.body)}

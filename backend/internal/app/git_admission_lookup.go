@@ -20,13 +20,13 @@ func historicalGitAdmissionLookup(admission domain.GitContributionAdmission) git
 	return gitAdmissionLookup{publicationID: admission.PublicationID, sourceHead: admission.SourceHead, ordinaryIDs: admission.OrdinaryObservationIDs, carryIDs: admission.CarryObservationIDs}
 }
 
-func (s *Service) readGitAdmissionEvidence(ctx context.Context, repo domain.ContentHash, lookups []gitAdmissionLookup) (*gitAdmissionSnapshot, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(read context.Context) (*gitAdmissionSnapshot, error) {
-		storage, supported := s.meta.(outbound.GitPublicationLookupStore)
-		_, generations := s.meta.(outbound.RepositoryMetadataGenerationStore)
-		transactions, known := s.meta.(outbound.RepositoryTransactionState)
+func (workers *GitIntegrationWorkers) readGitAdmissionEvidence(ctx context.Context, repo domain.ContentHash, lookups []gitAdmissionLookup) (*gitAdmissionSnapshot, error) {
+	return repositoryReadForRepoWithWork(ctx, workers.work, repo, func(read context.Context) (*gitAdmissionSnapshot, error) {
+		storage, supported := workers.work.meta.(outbound.GitPublicationLookupStore)
+		_, generations := workers.work.meta.(outbound.RepositoryMetadataGenerationStore)
+		transactions, known := workers.work.meta.(outbound.RepositoryTransactionState)
 		if !supported || !generations || !known || !transactions.InReadOnlyTransaction(read) {
-			return s.readGitAdmissionSnapshotInRead(read, repo)
+			return workers.readGitAdmissionSnapshotInRead(read, repo)
 		}
 		if len(lookups) > gitAdmissionBatchLimit {
 			return nil, domain.ErrValidation
@@ -64,11 +64,11 @@ func (s *Service) readGitAdmissionEvidence(ctx context.Context, repo domain.Cont
 				}
 			}
 		}
-		snapshot, err := s.readGitAdmissionSnapshotWithHistory(read, repo, gitAdmissionEvidenceEvents(events))
+		snapshot, err := workers.readGitAdmissionSnapshotWithHistory(read, repo, gitAdmissionEvidenceEvents(events))
 		if err != nil {
 			return nil, err
 		}
-		if err := s.captureGitAdmissionGeneration(read, repo, snapshot); err != nil {
+		if err := workers.captureGitAdmissionGeneration(read, repo, snapshot); err != nil {
 			return nil, err
 		}
 		snapshot.targeted = true
@@ -139,14 +139,14 @@ func loadGitAdmissionCarry(ctx context.Context, storage outbound.GitPublicationL
 	}
 }
 
-func (s *Service) hydrateGitAdmissionEvidence(ctx context.Context, frozen *gitAdmissionSnapshot, publications []domain.HistoryEvent, receipt domain.GitHeadReceipt) (*gitAdmissionSnapshot, error) {
+func (workers *GitIntegrationWorkers) hydrateGitAdmissionEvidence(ctx context.Context, frozen *gitAdmissionSnapshot, publications []domain.HistoryEvent, receipt domain.GitHeadReceipt) (*gitAdmissionSnapshot, error) {
 	if frozen == nil || !frozen.targeted {
 		return frozen, nil
 	}
-	if _, err := s.reuseGitAdmissionSnapshot(ctx, receipt.RepoID, frozen); err != nil {
+	if _, err := workers.reuseGitAdmissionSnapshot(ctx, receipt.RepoID, frozen); err != nil {
 		return nil, err
 	}
-	storage, supported := s.meta.(outbound.GitPublicationLookupStore)
+	storage, supported := workers.work.meta.(outbound.GitPublicationLookupStore)
 	if !supported || frozen.generation == nil || len(publications) > gitAdmissionBatchLimit {
 		return nil, domain.ErrIntegrity
 	}

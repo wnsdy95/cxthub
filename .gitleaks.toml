@@ -2,3 +2,17 @@ title = "cxthub secret scanning"
 
 [extend]
 useDefault = true
+
+[[allowlists]]
+description = "Synthetic repository-epoch mutation in the cache-key regression"
+condition = "AND"
+paths = ['''(^|/)backend/internal/app/repositoryquery/legacy_cache_test\.go$''']
+regexTarget = "match"
+regexes = ['''key\.Source\.Epoch = "22345678-abcd-4321-9876-123456789abc"''']
+
+[[allowlists]]
+description = "Numeric midpoint expression, not an authentication token"
+condition = "AND"
+paths = ['''(^|/)backend/internal/domain/doc_legacy_native_float64_integration_test\.go$''']
+regexTarget = "match"
+regexes = ['''token:\s+Float64IntegrationMidpoint''']

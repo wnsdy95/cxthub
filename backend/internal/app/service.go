@@ -1,10 +1,7 @@
 package app
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +9,11 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/repositoryquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -23,19 +21,37 @@ import (
 
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
-	rootPublication bool // configured before serving; cannot override release readiness
-	branchCache     branchProjectionCache
-	graphCache      graphProjectionCache
-	segmentCache    contextSegmentCache
-	deliveryCache   effectiveMemoryDeliveryCache
-	docVerifier     domain.CanonicalDocVerifier
-	meta            outbound.MetadataStore
-	blobs           outbound.BlobStore
-	auth            outbound.AuthProvider
-	engine          outbound.GitEngine
+	pendingProjectionRepos  map[domain.ContentHash]bool
+	graphProjectionRepos    map[domain.ContentHash]bool
+	graphReadRepos          map[domain.ContentHash]bool
+	graphQualificationRepos []domain.ContentHash
+	graphQualificationNext  atomic.Uint64
+	memoryReadRepos         []domain.ContentHash
+	preparedMemoryRepos     map[domain.ContentHash]bool
+	preparedMemoryDemands   map[domain.ContentHash]bool
+	rootPublication         bool // configured before serving; cannot override release readiness
+	branchCache             repositoryquery.BranchCache
+	graphCache              repositoryquery.GraphCache
+	segmentCache            repositoryquery.SegmentCache
+	memoryReadOwner         atomic.Pointer[memoryReadOwner]
+	deliveryCache           effectiveMemoryDeliveryCache
+	docVerifier             domain.CanonicalDocVerifier
+	projectionEvidence      outbound.GraphEvidenceReader
+	projectionMemory        outbound.MemoryQueryReader
+	docFindFields           outbound.DocFindFieldsStore
+	docDisplay              outbound.DocDisplayStore
+	docDisplayRead          outbound.DocDisplayReader
+	docDisplayMaintenance   outbound.DocDisplayMaintenanceStore
+	projectionMemorySource  *domain.RepositoryMemorySourceGeneration
+	requireCompleteMemory   bool
+	meta                    outbound.MetadataStore
+	blobs                   outbound.BlobStore
+	auth                    outbound.AuthProvider
+	engine                  outbound.GitEngine
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
-	repositories outbound.RepositoryStore
+	repositories       outbound.RepositoryStore
+	notificationSender outbound.NotificationSender
 }
 
 // NewService creates a Service with an outbound port injected.
@@ -100,26 +116,7 @@ func validateOptionalHashes(hashes ...domain.ContentHash) error {
 }
 
 func validateSnapshotHashes(snap domain.Snapshot) error {
-	if err := validateHashes(snap.RepoID, snap.ID, snap.DocHash); err != nil {
-		return err
-	}
-	if snap.ID != snap.DocHash {
-		return fmt.Errorf("%w: snapshot id must equal doc_hash", domain.ErrIntegrity)
-	}
-	if err := validateOptionalHashes(snap.MemoryHash, snap.ClaudeSettings, snap.AgentsSettings, snap.CodexSettings); err != nil {
-		return err
-	}
-	for _, p := range snap.Parents {
-		if err := domain.ValidateContentHash(p); err != nil {
-			return err
-		}
-	}
-	for _, p := range snap.GraftParents {
-		if err := domain.ValidateContentHash(p); err != nil {
-			return err
-		}
-	}
-	return nil
+	return domain.ValidateSnapshotHashes(snap)
 }
 
 func equalHashList(left, right []domain.ContentHash) bool {
@@ -132,86 +129,6 @@ func equalHashList(left, right []domain.ContentHash) bool {
 		}
 	}
 	return true
-}
-
-// validateSnapshotGraph verifies S3/S4 ownership in the pre-save virtual graph (existing + incoming). New graft edges can only use appendDiverged, and clients are allowed to echo the received overlay from the server onto the existing snapshot.
-func validateSnapshotGraph(existing, incoming []domain.Snapshot) error {
-	graph := make(map[domain.ContentHash]domain.Snapshot, len(existing)+len(incoming))
-	for _, snap := range existing {
-		graph[snap.ID] = snap
-	}
-	incomingIDs := make(map[domain.ContentHash]bool, len(incoming))
-	for _, snap := range incoming {
-		if incomingIDs[snap.ID] {
-			return fmt.Errorf("%w: duplicate snapshot %s in commit batch", domain.ErrIntegrity, snap.ID)
-		}
-		incomingIDs[snap.ID] = true
-		if current, ok := graph[snap.ID]; ok {
-			if !equalHashList(current.Parents, snap.Parents) {
-				return fmt.Errorf("%w: snapshot %s parent metadata disagrees with stored object", domain.ErrIntegrity, snap.ID)
-			}
-			allowedGrafts := make(map[domain.ContentHash]bool, len(current.GraftParents))
-			for _, parent := range current.GraftParents {
-				allowedGrafts[parent] = true
-			}
-			for _, parent := range snap.GraftParents {
-				if !allowedGrafts[parent] {
-					return fmt.Errorf("%w: client cannot add graft parent to snapshot %s", domain.ErrIntegrity, snap.ID)
-				}
-			}
-			if snap.Grafted && !current.Grafted {
-				return fmt.Errorf("%w: client cannot mark snapshot %s as grafted", domain.ErrIntegrity, snap.ID)
-			}
-			if snap.GraftSeq > current.GraftSeq {
-				return fmt.Errorf("%w: client cannot advance graft sequence for snapshot %s", domain.ErrIntegrity, snap.ID)
-			}
-			continue
-		}
-		if snap.Grafted || len(snap.GraftParents) > 0 || snap.GraftSeq != 0 {
-			return fmt.Errorf("%w: new snapshot %s contains server-owned graft metadata", domain.ErrIntegrity, snap.ID)
-		}
-		graph[snap.ID] = snap
-	}
-
-	state := make(map[domain.ContentHash]uint8, len(graph))
-	var visit func(domain.ContentHash) error
-	visit = func(id domain.ContentHash) error {
-		switch state[id] {
-		case 1:
-			return fmt.Errorf("%w: snapshot graph contains a cycle at %s", domain.ErrIntegrity, id)
-		case 2:
-			return nil
-		}
-		snap, ok := graph[id]
-		if !ok {
-			return fmt.Errorf("%w: missing snapshot parent %s", domain.ErrIntegrity, id)
-		}
-		state[id] = 1
-		seenParents := map[domain.ContentHash]bool{}
-		for _, parent := range snap.ReachabilityParents() {
-			if parent == id {
-				return fmt.Errorf("%w: snapshot %s cannot parent itself", domain.ErrIntegrity, id)
-			}
-			if seenParents[parent] {
-				return fmt.Errorf("%w: snapshot %s contains duplicate parent %s", domain.ErrIntegrity, id, parent)
-			}
-			seenParents[parent] = true
-			if _, ok := graph[parent]; !ok {
-				return fmt.Errorf("%w: snapshot %s references missing parent %s", domain.ErrIntegrity, id, parent)
-			}
-			if err := visit(parent); err != nil {
-				return err
-			}
-		}
-		state[id] = 2
-		return nil
-	}
-	for id := range incomingIDs {
-		if err := visit(id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func settingsObjectHash(bundle domain.SettingsBundle) (domain.ContentHash, error) {
@@ -269,49 +186,6 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 	})
 }
 
-// StoreChunks is the content-addressed staging phase before a complete doc commit. It limits the sum of each request's raw content, ensuring it stays within the operational proxy body limit even with JSON base64 overhead.
-func (s *Service) storeChunksCommand(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
-	if err := domain.ValidateContentHash(in.RepoID); err != nil {
-		return inbound.StoreChunksOutput{}, err
-	}
-	if len(in.Chunks) == 0 || len(in.Chunks) > inbound.MaxChunkWireObjects {
-		return inbound.StoreChunksOutput{}, fmt.Errorf("%w: chunk batch count must be 1..%d", domain.ErrValidation, inbound.MaxChunkWireObjects)
-	}
-	repo, err := s.meta.GetRepo(ctx, in.RepoID)
-	if err != nil {
-		return inbound.StoreChunksOutput{}, err
-	}
-	if repo.RepositoryID == "" {
-		return inbound.StoreChunksOutput{}, fmt.Errorf("%w: repo is not bound to a repository", domain.ErrForbidden)
-	}
-	bodies := make(map[domain.ContentHash][]byte, len(in.Chunks))
-	total := 0
-	for _, chunk := range in.Chunks {
-		if err := domain.ValidateContentHash(chunk.Hash); err != nil {
-			return inbound.StoreChunksOutput{}, err
-		}
-		if len(chunk.Data) == 0 || len(chunk.Data) > inbound.MaxChunkWireRawBytes {
-			return inbound.StoreChunksOutput{}, fmt.Errorf("%w: chunk %s exceeds bounded transport size", domain.ErrValidation, chunk.Hash)
-		}
-		if domain.HashContent(chunk.Data) != chunk.Hash {
-			return inbound.StoreChunksOutput{}, fmt.Errorf("%w: chunk %s body hash mismatch", domain.ErrIntegrity, chunk.Hash)
-		}
-		if previous, exists := bodies[chunk.Hash]; exists {
-			if !bytes.Equal(previous, chunk.Data) {
-				return inbound.StoreChunksOutput{}, fmt.Errorf("%w: duplicate chunk %s disagrees", domain.ErrIntegrity, chunk.Hash)
-			}
-			continue
-		}
-		total += len(chunk.Data)
-		if total > inbound.MaxChunkWireRawBytes {
-			return inbound.StoreChunksOutput{}, fmt.Errorf("%w: chunk batch exceeds bounded transport size", domain.ErrValidation)
-		}
-		bodies[chunk.Hash] = chunk.Data
-	}
-	stored, deduped, err := s.blobs.PutChunks(ctx, in.RepoID, bodies)
-	return inbound.StoreChunksOutput{Stored: stored, Deduped: deduped}, err
-}
-
 // PullChunks returns the request prefix up to the raw upper bound. If the first chunk exceeds the upper bound, it stops with an explicit validation error to preserve the cause instead of the proxy's ambiguous 413.
 func (s *Service) PullChunks(ctx context.Context, in inbound.PullChunksInput) (inbound.PullChunksOutput, error) {
 	return resourceReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullChunksOutput, error) {
@@ -351,234 +225,11 @@ func (s *Service) PullChunks(ctx context.Context, in inbound.PullChunksInput) (i
 
 // Commit: stores docs in the order of blobs → snapshots (W1). Full integrity verification followed by content-addressed deduplication.
 func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
-	if err := ctx.Err(); err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	if err := domain.ValidateContentHash(in.RepoID); err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	// The staged discriminator is not an advertised publication capability.
-	// Reject a mixed batch before reassembly, body reads or any object writes,
-	// including snapshots whose legacy body is supplied in this same request.
-	for _, doc := range in.Docs {
-		if doc.Identity != domain.DocumentIdentityLegacy {
-			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
-		}
-	}
-	for _, doc := range in.ChunkedDocs {
-		if doc.Identity != domain.DocumentIdentityLegacy {
-			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
-		}
-	}
-	for _, snap := range in.Snapshots {
-		if err := snap.DocIdentity.Validate(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if snap.DocIdentity == domain.DocumentIdentityRootV1 {
-			if !hasDocumentIdentity(s.DocumentIdentitiesSupported(), snap.DocIdentity) {
-				return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
-			}
-			// This route attaches metadata to an already-owned, verified root.
-			// New root admission belongs to the durable finalization endpoint;
-			// disabling it must not freeze existing snapshots or memory archives.
-			bound := outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
-			if err := requireRootDocumentRepository(bound, s.meta, in.RepoID); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-		}
-	}
-	// Reassemble a chunked wire document from chunks received in this request plus repository-owned stored chunks. Verify the canonical document hash, then pass the complete document through the ordinary validation and storage path.
-	docs := in.Docs
-	if len(in.ChunkedDocs) > 0 {
-		bodies := make(map[domain.ContentHash][]byte, len(in.ChunkObjects))
-		for _, co := range in.ChunkObjects {
-			if err := ctx.Err(); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			if err := domain.ValidateContentHash(co.Hash); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			if domain.HashContent(co.Data) != co.Hash {
-				return inbound.CommitOutput{}, fmt.Errorf("%w: chunk %s body hash mismatch", domain.ErrIntegrity, co.Hash)
-			}
-			bodies[co.Hash] = co.Data
-		}
-		for _, cd := range in.ChunkedDocs {
-			if err := ctx.Err(); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			if err := domain.ValidateContentHash(cd.Hash); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			format := cd.Format
-			if format == "" {
-				format = domain.ChunkFormatV1
-			}
-			if !domain.SupportedChunkFormat(format) {
-				return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s uses unsupported format %q", domain.ErrValidation, cd.Hash, cd.Format)
-			}
-			chunks := make([][]byte, 0, len(cd.Chunks))
-			for _, ch := range cd.Chunks {
-				if err := ctx.Err(); err != nil {
-					return inbound.CommitOutput{}, err
-				}
-				if err := domain.ValidateContentHash(ch); err != nil {
-					return inbound.CommitOutput{}, err
-				}
-				b, ok := bodies[ch]
-				if !ok {
-					var gerr error
-					if b, gerr = s.blobs.GetChunk(ctx, in.RepoID, ch); gerr != nil {
-						if err := ctx.Err(); err != nil {
-							return inbound.CommitOutput{}, err
-						}
-						return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s references unknown chunk %s", domain.ErrIntegrity, cd.Hash, ch)
-					}
-				}
-				chunks = append(chunks, b)
-			}
-			if err := ctx.Err(); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			cb, aerr := domain.AssembleDocChunks(domain.DocChunkManifest{Format: format, Envelope: cd.Envelope, Chunks: cd.Chunks}, chunks, cd.Hash)
-			if aerr != nil {
-				return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s reassembly mismatch", domain.ErrIntegrity, cd.Hash)
-			}
-			if err := ctx.Err(); err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			var cir domain.CIRDocument
-			if err := json.Unmarshal(cb, &cir); err != nil {
-				return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s undecodable", domain.ErrIntegrity, cd.Hash)
-			}
-			docs = append(docs, domain.SessionDoc{Hash: cd.Hash, CIR: cir})
-		}
-	}
-	docByHash := make(map[domain.ContentHash]domain.VerifiedSessionDoc, len(docs))
-	verifiedDocs := make([]domain.VerifiedSessionDoc, 0, len(docs))
-	for _, d := range docs {
-		if err := ctx.Err(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		verified, err := domain.VerifySessionDoc(d)
-		if err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		// Validate every submitted body, even a duplicate claimed hash.
-		docByHash[d.Hash] = verified
-		verifiedDocs = append(verifiedDocs, verified)
-	}
-	verifiedSettings := make(map[domain.ContentHash]bool)
-	normalizedSnaps := make([]domain.Snapshot, 0, len(in.Snapshots))
-	for _, snap := range in.Snapshots {
-		if err := ctx.Err(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		snap.RepoID = in.RepoID
-		// Branches is a response-specific projection calculated from the branch reflog. If the client stores the sent value, it can introduce fake membership in the next response through the FS adapter.
-		snap.Branches = nil
-		if err := validateSnapshotHashes(snap); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if d, ok := docByHash[snap.DocHash]; ok {
-			if !d.Reference().Matches(snap) {
-				return inbound.CommitOutput{}, domain.ErrIntegrity
-			}
-		} else {
-			err := s.verifyStoredSnapshotDoc(ctx, in.RepoID, snap)
-			if err != nil {
-				if errors.Is(err, domain.ErrNotFound) {
-					return inbound.CommitOutput{}, fmt.Errorf("%w: snapshot %s references an absent doc %s (send doc first via push/objects)", domain.ErrIntegrity, snap.ID, snap.DocHash)
-				}
-				return inbound.CommitOutput{}, err
-			}
-		}
-		for _, hash := range []domain.ContentHash{snap.ClaudeSettings, snap.AgentsSettings, snap.CodexSettings} {
-			if hash == "" || verifiedSettings[hash] {
-				continue
-			}
-			if _, err := s.meta.GetSettingsObject(ctx, in.RepoID, hash); err != nil {
-				if errors.Is(err, domain.ErrNotFound) {
-					return inbound.CommitOutput{}, fmt.Errorf("%w: snapshot %s references missing settings object %s", domain.ErrIntegrity, snap.ID, hash)
-				}
-				return inbound.CommitOutput{}, err
-			}
-			verifiedSettings[hash] = true
-		}
-		// MemoryHash is derived metadata. Only PutMemoryDigest may attach it after
-		// validating the digest hash, snapshot ownership, and repo-scoped blob grant.
-		snap.MemoryHash = ""
-		normalizedSnaps = append(normalizedSnaps, snap)
-	}
-	if err := ctx.Err(); err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	repo, err := s.meta.GetRepo(ctx, in.RepoID)
+	commands, err := s.documentPublications(DocumentPublicationCompatibility)
 	if err != nil {
 		return inbound.CommitOutput{}, err
 	}
-	if repo.RepositoryID == "" {
-		return inbound.CommitOutput{}, fmt.Errorf("%w: repo is not bound to a repository", domain.ErrForbidden)
-	}
-	existingSnaps, err := s.meta.ListSnapshots(ctx, in.RepoID, "")
-	if err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	if err := validateSnapshotGraph(existingSnaps, normalizedSnaps); err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	var out inbound.CommitOutput
-	for i, d := range docs {
-		if err := ctx.Err(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		var stored bool
-		var err error
-		if writer, ok := s.blobs.(outbound.VerifiedDocStore); ok {
-			stored, err = writer.PutVerifiedDoc(ctx, in.RepoID, verifiedDocs[i])
-		} else {
-			stored, err = s.blobs.PutDoc(ctx, in.RepoID, d)
-		}
-		if err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if stored {
-			out.StoredDocs++
-		} else {
-			out.DedupedDocs++
-		}
-	}
-	for _, snap := range normalizedSnaps {
-		if err := ctx.Err(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		before, priorErr := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID)
-		if err := priorErr; err == nil {
-			out.DedupedSnapshots++
-		} else if errors.Is(err, domain.ErrNotFound) {
-			out.StoredSnapshots++
-		} else {
-			return inbound.CommitOutput{}, err
-		}
-		if err := s.meta.PutSnapshot(ctx, snap); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if priorErr == nil {
-			after, err := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID)
-			if err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			if !reflect.DeepEqual(before, after) {
-				if err := revisionWrite(context.WithValue(ctx, revisionScopeKey{}, "graph"), s, in.RepoID); err != nil {
-					return inbound.CommitOutput{}, err
-				}
-			}
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	return out, nil
+	return commands.commit(ctx, in)
 }
 
 // UpdateRef: Update the reference based on the current target and CAS (sync protocol).
@@ -587,245 +238,18 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 // any other move (non-fast-forward/diverged) is rejected with ErrNonFastForward — except for Force.
 // Tags are immutable: Moving to another target is rejected without Force.
 func (s *Service) updateRefWithPending(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
-	out, err := s.updateRef(ctx, in)
-	if err == nil {
-		_, lifecycle, _ := domain.ParseBranchLifecycleRef(in.Ref)
-		if in.Ref.Kind == domain.RefBranch || lifecycle {
-			err = s.reconcileSharedPendingPointers(ctx, in.RepoID)
-		}
-	}
-	return out, err
+	return s.repositoryRefs().updateRefWithPending(ctx, in)
 }
 
 // UpdateRefs keeps CAS checks and pending reconciliation inside the enclosing
 // repository transaction on PostgreSQL. An empty retry is intentional: it repairs a server
 // crash that occurred after the last ref write but before metadata cleanup.
-func (s *Service) updateRefs(ctx context.Context, in inbound.UpdateRefsInput) (out inbound.UpdateRefsOutput, err error) {
-	if err := domain.ValidateContentHash(in.RepoID); err != nil {
-		return out, err
-	}
-	if len(in.Updates) > inbound.MaxRefBatchUpdates {
-		return out, fmt.Errorf("%w: at most %d ref updates per batch", domain.ErrValidation, inbound.MaxRefBatchUpdates)
-	}
-	defer func() {
-		if err == nil {
-			err = s.reconcileSharedPendingPointers(ctx, in.RepoID)
-		}
-	}()
-	var rejected []string
-	for _, update := range in.Updates {
-		update.RepoID = in.RepoID
-		if _, updateErr := s.updateRef(ctx, update); updateErr != nil {
-			if errors.Is(updateErr, domain.ErrNonFastForward) {
-				rejected = append(rejected, string(update.Ref.Kind)+"/"+update.Ref.Name)
-				continue
-			}
-			return out, updateErr
-		}
-		out.Applied++
-	}
-	if len(rejected) > 0 {
-		return out, fmt.Errorf("%w: %s", domain.ErrNonFastForward, strings.Join(rejected, ", "))
-	}
-	return out, nil
+func (s *Service) updateRefs(ctx context.Context, in inbound.UpdateRefsInput) (inbound.UpdateRefsOutput, error) {
+	return s.repositoryRefs().updateRefs(ctx, in)
 }
 
 func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
-	if err := domain.ValidateOptionalContentHash(in.ExpectedTarget); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	if err := domain.ValidateContentHash(in.RepoID); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	in.Ref.RepoID = in.RepoID
-	if err := domain.ValidateRef(in.Ref); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	if err := s.checkContextWrite(ctx, in.RepoID, in.Ref); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	if in.ExpectedRevision != nil {
-		if !in.Append || in.Force || in.Ref.Kind != domain.RefBranch || in.Ref.BranchID == "" {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: conditional append requires an identified branch and cannot force", domain.ErrValidation)
-		}
-		if err := domain.ValidateContentHash(in.ExpectedTarget); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		if _, ok := s.meta.(outbound.RepositoryTransactions); !ok {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: conditional append requires repository transactions", domain.ErrConflict)
-		}
-		revisions, ok := s.meta.(outbound.RepositoryRevisions)
-		if !ok {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: conditional append requires repository revisions", domain.ErrConflict)
-		}
-		revision, err := revisions.RepositoryRevision(ctx, in.RepoID)
-		if err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		if revision.Graph != in.ExpectedRevision.Graph || revision.Evidence != in.ExpectedRevision.Evidence {
-			return inbound.UpdateRefOutput{}, domain.ErrRefConflict
-		}
-	}
-	if in.Ref.Kind == domain.RefTag && strings.HasPrefix(in.Ref.Name, "cxt/history/v1/") {
-		current, err := s.meta.GetRef(ctx, in.RepoID, in.Ref.Kind, in.Ref.Name)
-		if err == nil && current.Target == in.Ref.Target {
-			return inbound.UpdateRefOutput{Ref: in.Ref, ServerTarget: current.Target, RequestedTarget: in.Ref.Target, Result: inbound.RefUpToDate}, nil
-		}
-		return inbound.UpdateRefOutput{}, fmt.Errorf("%w: history retention roots are managed by history operations", domain.ErrForbidden)
-	}
-	if in.Ref.Kind == domain.RefHead && in.Ref.Symbolic != "" {
-		branch := strings.TrimPrefix(in.Ref.Symbolic, "refs/heads/")
-		if _, err := s.meta.GetRef(ctx, in.RepoID, domain.RefBranch, branch); err != nil {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: symbolic HEAD branch %q does not exist", domain.ErrIntegrity, branch)
-		}
-	} else if _, err := s.meta.GetSnapshot(ctx, in.RepoID, in.Ref.Target); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: ref target snapshot %s does not exist", domain.ErrIntegrity, in.Ref.Target)
-		}
-		return inbound.UpdateRefOutput{}, err
-	}
-	if event, lifecycle, err := domain.ParseBranchLifecycleRef(in.Ref); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	} else if lifecycle {
-		if in.Force || in.Append {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: branch lifecycle events are immutable", domain.ErrValidation)
-		}
-		if event.State == domain.BranchArchived {
-			if repo, repoErr := s.meta.GetRepo(ctx, in.RepoID); repoErr == nil &&
-				repo.ProtectDefault && event.Branch == repo.DefaultBranch {
-				return inbound.UpdateRefOutput{}, fmt.Errorf("%w: archiving protected branch %q is forbidden", domain.ErrForbidden, event.Branch)
-			} else if repoErr != nil && !errors.Is(repoErr, domain.ErrNotFound) {
-				return inbound.UpdateRefOutput{}, repoErr
-			}
-		}
-		_, currentErr := s.meta.GetRef(ctx, in.RepoID, domain.RefTag, in.Ref.Name)
-		if currentErr != nil && !errors.Is(currentErr, domain.ErrNotFound) {
-			return inbound.UpdateRefOutput{}, currentErr
-		}
-		if err := s.meta.ApplyBranchLifecycleRef(ctx, in.RepoID, in.Ref); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		result := inbound.RefFastForward
-		if currentErr == nil {
-			result = inbound.RefUpToDate
-		}
-		return inbound.UpdateRefOutput{
-			Ref: in.Ref, RequestedTarget: in.Ref.Target, ServerTarget: in.Ref.Target, Result: result,
-		}, nil
-	}
-	cur, err := s.meta.GetRef(ctx, in.RepoID, in.Ref.Kind, in.Ref.Name)
-	serverTarget := domain.ContentHash("")
-	if err == nil {
-		serverTarget = cur.Target
-	} else if !errors.Is(err, domain.ErrNotFound) {
-		return inbound.UpdateRefOutput{}, err
-	}
-	out := inbound.UpdateRefOutput{Ref: in.Ref, RequestedTarget: in.Ref.Target, ServerTarget: serverTarget}
-	if in.ExpectedRevision != nil {
-		branchID := cur.BranchID
-		if branchID == "" {
-			branchID = domain.LegacyContextBranchID(string(in.RepoID), in.Ref.Name)
-		}
-		if serverTarget != in.ExpectedTarget || branchID != in.Ref.BranchID {
-			return inbound.UpdateRefOutput{}, domain.ErrRefConflict
-		}
-	}
-	// Honor the caller's observation, including force requests. Retrying an
-	// already-applied target is safe; a stale client cannot replace newer work.
-	if in.ExpectedTarget != "" && serverTarget != in.ExpectedTarget && serverTarget != in.Ref.Target {
-		return inbound.UpdateRefOutput{}, domain.ErrRefConflict
-	}
-
-	if in.Ref.Kind == domain.RefHead {
-		if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		out.Result = inbound.RefFastForward
-		out.ServerTarget = in.Ref.Target
-		return out, nil
-	}
-
-	// session ref is a server internal pointer proving the git-branch scope left by a partial join. If created or moved in the general ref API, the client can spoof the scope to bypass cross-branch join restrictions. Only the same pointer echo after pull followed by push is allowed.
-	if in.Ref.Kind == domain.RefSession {
-		if err == nil && serverTarget == in.Ref.Target {
-			out.Result = inbound.RefUpToDate
-			return out, nil
-		}
-		return inbound.UpdateRefOutput{}, fmt.Errorf("%w: session refs are managed by join", domain.ErrForbidden)
-	}
-
-	// --force: move without ancestry classification, while still using CAS against the observed current value.
-	if in.Force {
-		// Protected branch: Basic branch rejects --force moves (record is P1 immutable —
-		// this is a separate policy to block pointer force moves, akin to GitHub's protected branch handling).
-		if in.Ref.Kind == domain.RefBranch {
-			repo, rerr := s.meta.GetRepo(ctx, in.RepoID)
-			if rerr != nil {
-				return inbound.UpdateRefOutput{}, rerr
-			}
-			if repo.ProtectDefault && in.Ref.Name == repo.DefaultBranch {
-				return inbound.UpdateRefOutput{}, fmt.Errorf("%w: --force move is forbidden on protected branch %q", domain.ErrForbidden, in.Ref.Name)
-			}
-		}
-		if serverTarget == in.Ref.Target {
-			out.Result = inbound.RefUpToDate
-			return out, nil
-		}
-		if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		out.Result = inbound.RefForced
-		out.ServerTarget = in.Ref.Target
-		if err := s.notifyRefUpdate(ctx, in.RepoID, in.Ref, true, serverTarget == ""); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		return out, nil
-	}
-
-	// Tag immutability rule (same as git): Reject if it already exists and the target is different.
-	if in.Ref.Kind == domain.RefTag {
-		switch serverTarget {
-		case "":
-			if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, in.Ref, ""); err != nil {
-				return inbound.UpdateRefOutput{}, err
-			}
-			out.Result = inbound.RefFastForward
-			out.ServerTarget = in.Ref.Target
-			return out, nil
-		case in.Ref.Target:
-			out.Result = inbound.RefUpToDate
-			return out, nil
-		default:
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: tag %q already points to another snapshot (--force required)", domain.ErrNonFastForward, in.Ref.Name)
-		}
-	}
-
-	class, err := s.engine.ClassifyRefMove(ctx, in.RepoID, serverTarget, in.Ref.Target)
-	if err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	switch class {
-	case outbound.MoveUpToDate:
-		out.Result = inbound.RefUpToDate
-		return out, nil
-	case outbound.MoveFastForward:
-		if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		out.Result = inbound.RefFastForward
-		out.ServerTarget = in.Ref.Target
-		if err := s.notifyRefUpdate(ctx, in.RepoID, in.Ref, false, serverTarget == ""); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-		return out, nil
-	case outbound.MoveDiverged:
-		if in.Append {
-			return s.appendDiverged(ctx, in, serverTarget, out)
-		}
-		return inbound.UpdateRefOutput{}, fmt.Errorf("%w: %s (must include previous commit — use --append to rebase head without loss, or retry after pull)", domain.ErrNonFastForward, in.Ref.Name)
-	default: // MoveNonFastForward (behind) → like git, reject (prohibited overwrite)
-		return inbound.UpdateRefOutput{}, fmt.Errorf("%w: %s (must include previous commit — retry after pull or use --force)", domain.ErrNonFastForward, in.Ref.Name)
-	}
+	return s.repositoryRefs().updateRef(ctx, in)
 }
 
 // appendDiverged appends a diverged push as an unaltered overlay to the current head.
@@ -836,21 +260,7 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 // Unlike Force, there is no loss, making it non-target of protected branch policies.
 // Unlike code, context does not force convergence ("pull is user's responsibility"), so push must always succeed on any divergence — the server DB continues to be updated.
 func (s *Service) appendDiverged(ctx context.Context, in inbound.UpdateRefInput, serverTarget domain.ContentHash, out inbound.UpdateRefOutput) (inbound.UpdateRefOutput, error) {
-	atomic, ok := s.meta.(interface {
-		AppendRef(context.Context, domain.ContentHash, domain.Ref, domain.ContentHash) error
-	})
-	if !ok {
-		return inbound.UpdateRefOutput{}, fmt.Errorf("atomic append storage unavailable")
-	}
-	if err := atomic.AppendRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	out.Result = inbound.RefAppended
-	out.ServerTarget = in.Ref.Target
-	if err := s.notifyRefUpdate(ctx, in.RepoID, in.Ref, false, false); err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	return out, nil
+	return s.repositoryRefs().appendDiverged(ctx, in, serverTarget, out)
 }
 
 // Send: reply to pull request with missing objects (snapshot meta + doc) (read-only).
@@ -1053,36 +463,6 @@ func (s *Service) promoteSnapshotMessageCommand(ctx context.Context, repoID, id 
 	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.meta.UpdateSnapshotMessage(ctx, repoID, id, message) })
 }
 
-// GraftSnapshotParents adds reachability overlay edges to snapshots (Parents immutable, idempotent).
-// Path to propagate reachability preservation of client sibling advances (multi-session commits) to server replicas —
-// inventory-only push does not resend metadata updates of existing objects. Each graft parent must be a real snapshot in the repo (to prevent reachability pollution with arbitrary hashes).
-func (s *Service) graftSnapshotParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash, expectedSeq uint64) error {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return err
-	}
-	if err := domain.ValidateContentHash(id); err != nil {
-		return err
-	}
-	if len(parents) == 0 || len(parents) > 16 {
-		return fmt.Errorf("%w: graft parents must be 1..16", domain.ErrValidation)
-	}
-	if _, err := s.meta.GetSnapshot(ctx, repoID, id); err != nil {
-		return err
-	}
-	for _, p := range parents {
-		if err := domain.ValidateContentHash(p); err != nil {
-			return err
-		}
-		if p == id {
-			return fmt.Errorf("%w: self graft", domain.ErrValidation)
-		}
-		if _, err := s.meta.GetSnapshot(ctx, repoID, p); err != nil {
-			return fmt.Errorf("%w: graft parent %s not found", domain.ErrNotFound, p)
-		}
-	}
-	return s.meta.AddGraftParentsCAS(ctx, repoID, id, parents, expectedSeq)
-}
-
 // List: branch-specific snapshot metadata list.
 func (s *Service) list(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
@@ -1112,31 +492,11 @@ func (s *Service) list(ctx context.Context, in inbound.ListSnapshotsInput) ([]do
 
 // snapshotBranchMemberships complements hash-outside scalar Branch's first-writer limitation with branch reflog. A snapshot belongs to a git branch if it was the old/new target of that branch ref at some point. Legacy before reflog uses Snapshot.Branch as a seed.
 func (s *Service) snapshotBranchMemberships(ctx context.Context, repoID domain.ContentHash, snaps []domain.Snapshot) (map[domain.ContentHash]map[string]bool, error) {
-	members := make(map[domain.ContentHash]map[string]bool, len(snaps))
-	add := func(id domain.ContentHash, branch string) {
-		if id == "" || branch == "" || branch == "HEAD" {
-			return
-		}
-		if members[id] == nil {
-			members[id] = map[string]bool{}
-		}
-		members[id][branch] = true
-	}
-	for _, snap := range snaps {
-		add(snap.ID, snap.Branch)
-	}
 	logs, err := s.meta.ReadReflog(ctx, repoID)
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range logs {
-		if entry.Kind != domain.RefBranch {
-			continue
-		}
-		add(entry.Old, entry.Name)
-		add(entry.New, entry.Name)
-	}
-	return members, nil
+	return domain.ProjectSnapshotBranchMemberships(ctx, snaps, logs)
 }
 
 // Fsck: reference reachability audit (read-only, git fsck equivalent). Creates a reachability set by following parents from all refs and pending sessions, then reports unreferenced snapshots, missing parent references (corruption), and parentless roots. Unreferenced snapshots remain stored and are not necessarily corrupt. Does not fix anything — parentless roots are treated as normal roots (not artificially attaching parents).
@@ -1310,6 +670,22 @@ func (s *Service) resolveRepoRegistrationIdentity(ctx context.Context, actorID s
 	if repo.ID != expectedID {
 		return domain.Repo{}, fmt.Errorf("%w: repo id does not match cxthub remote URL", domain.ErrIntegrity)
 	}
+	if _, transactional := s.meta.(outbound.RepositoryTransactions); transactional {
+		locker, ok := s.repositories.(outbound.RepositoryAccessLocker)
+		if !ok {
+			return domain.Repo{}, domain.ErrForbidden
+		}
+		if err := locker.LockRepositoryAccess(ctx, repositoryID, actorID); err != nil {
+			return domain.Repo{}, err
+		}
+		current, err := s.repositoryForURL(ctx, repo.RemoteURL)
+		if err != nil {
+			return domain.Repo{}, err
+		}
+		if current != repositoryID {
+			return domain.Repo{}, domain.ErrConflict
+		}
+	}
 
 	// Registration itself creates the state of the target repository. To prevent URL takeover by others before login, context write permissions (member level or above) are required for both initial registration and re-registration.
 	record, err := s.repositories.GetRepository(ctx, repositoryID)
@@ -1331,22 +707,8 @@ func (s *Service) repositoryRole(ctx context.Context, repositoryID, userID strin
 	return repositoryRole(ctx, s.repositories, repositoryID, userID)
 }
 
-// normalizeGitURL is for normalizing git origin URLs (same rules as CLI gitctx.NormalizeRemoteURL:
-// absorbs ssh/scp formats, removes scheme/trailing .git/slash, and lowercases). The backend cannot import the CLI package,
-// so this logic is duplicated here — maintaining both ensures validation integrity if rules diverge.
 func normalizeGitURL(raw string) string {
-	u := domain.SanitizeRemoteURL(raw)
-	if u == "" {
-		return ""
-	}
-	if strings.HasPrefix(u, "git@") { // git@github.com:org/repo.git
-		u = strings.Replace(strings.TrimPrefix(u, "git@"), ":", "/", 1)
-	} else if parsed, err := url.Parse(u); err == nil && parsed.Host != "" {
-		u = parsed.Host + parsed.EscapedPath()
-	}
-	u = strings.TrimSuffix(u, ".git")
-	u = strings.TrimRight(u, "/")
-	return strings.ToLower(u)
+	return domain.NormalizeGitRemoteURL(raw)
 }
 
 // gitOriginLabel is a label for validation failure messages (empty means "(none)").
@@ -1357,179 +719,17 @@ func gitOriginLabel(raw string) string {
 	return raw
 }
 
-// PutMemoryDigest is the rolling-upgrade endpoint for legacy clients. It may
-// create an empty attachment or retry the exact current digest, but it cannot
-// replace a non-empty pointer because old clients provide no causal parent.
-func (s *Service) putMemoryDigestCommand(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
-	if d.ClaimsVersion != 0 || d.HasMemoryClaims() {
-		return "", fmt.Errorf("%w: typed memory requires the typed attachment endpoint", domain.ErrValidation)
-	}
-	if d.PreviousMemoryHash != "" {
-		return "", fmt.Errorf("%w: causal memory requires the attachment endpoint", domain.ErrValidation)
-	}
-	return s.putMemoryDigest(ctx, repoID, d, "", false)
-}
-
-// PutMemoryDigestCAS advances Snapshot.MemoryHash only from the digest's
-// PreviousMemoryHash. The immutable blob is retained even when the pointer CAS
-// loses, so neither concurrent memory is destroyed.
-func (s *Service) putMemoryDigestCASCommand(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
-	return s.putMemoryDigest(ctx, repoID, d, d.PreviousMemoryHash, true)
-}
-
-func validateMemoryDigest(repoID domain.ContentHash, d domain.MemoryDigest) error {
-	if err := d.ValidateMemoryClaims(); err != nil {
-		return fmt.Errorf("%w: %v", domain.ErrValidation, err)
-	}
-	if err := validateHashes(repoID, d.SnapshotID); err != nil {
-		return err
-	}
-	if err := domain.ValidateOptionalContentHash(d.PreviousMemoryHash); err != nil {
-		return err
-	}
-	for _, fragment := range d.Fragments {
-		if err := domain.ValidateContentHash(fragment.SourceSnapshot); err != nil {
-			return err
-		}
-	}
-	if coverage := d.GraftCoverage; coverage != nil {
-		if coverage.ProjectionVersion == 0 || coverage.GraftSeq > domain.MaxGraftSeq {
-			return fmt.Errorf("%w: invalid memory graft coverage version or sequence", domain.ErrIntegrity)
-		}
-		if coverage.ProjectionComplete && coverage.LineageFingerprint == "" {
-			return fmt.Errorf("%w: complete memory projection is missing its lineage fingerprint", domain.ErrIntegrity)
-		}
-		if coverage.LineageFingerprint != "" {
-			if err := domain.ValidateContentHash(coverage.LineageFingerprint); err != nil {
-				return err
-			}
-		}
-		for _, parent := range coverage.GraftParents {
-			if err := domain.ValidateContentHash(parent); err != nil {
-				return err
-			}
-		}
-		for _, source := range coverage.PinnedSources {
-			if err := domain.ValidateContentHash(source); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest, expected domain.ContentHash, causal bool) (domain.ContentHash, error) {
-	if err := validateMemoryDigest(repoID, d); err != nil {
-		return "", err
-	}
-	if _, err := s.meta.GetSnapshot(ctx, repoID, d.SnapshotID); err != nil {
-		return "", err // ErrNotFound → 404
-	}
-	if causal && expected != "" {
-		previous, err := s.blobs.GetMemory(ctx, repoID, expected)
-		if err != nil {
-			return "", err
-		}
-		if previous.SnapshotID != d.SnapshotID {
-			return "", fmt.Errorf("%w: memory parent belongs to another snapshot", domain.ErrIntegrity)
-		}
-		if previous.ClaimsVersion > d.ClaimsVersion {
-			return "", fmt.Errorf("%w: memory claims cannot be downgraded; upgrade the client and pull before retrying", domain.ErrValidation)
-		}
-	}
-	hash, err := repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repoID, func(ctx context.Context) (domain.ContentHash, error) { return s.blobs.PutMemory(ctx, repoID, d) })
-	if err != nil {
-		return "", err
-	}
-	// Attaches a derivative pointer to the snapshot metadata — after push, the memorize also holds raw+memory (E clause).
-	// Without this, pull/web cannot recognize memory existence.
-	if err := repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error {
-		return s.meta.CompareAndSwapSnapshotMemory(ctx, repoID, d.SnapshotID, expected, hash)
-	}); err != nil {
-		return "", err
-	}
-	return hash, nil
-}
-
 // GetMemoryObject reads one immutable attachment object by its own hash. Pull
 // uses this to prove ancestry before moving a local memory ref.
 func (s *Service) GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.MemoryDigest, error) {
-		if err := validateHashes(repoID, hash); err != nil {
-			return domain.MemoryDigest{}, err
-		}
-		return s.blobs.GetMemory(ctx, repoID, hash)
-	})
-}
-
-// GetMemoryDigest resolves the authoritative MemoryHash pointer. Metadata-only
-// fallback is intentionally limited to legacy snapshots with no pointer: once
-// a pointer exists, hiding a missing/corrupt blob behind stale metadata would
-// turn an integrity failure into a silent rollback.
-func (s *Service) getMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error) {
-	if err := validateHashes(repoID, snapshotID); err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	snapshot, err := s.meta.GetSnapshot(ctx, repoID, snapshotID)
+	queries, err := s.MemorySnapshotQueries()
 	if err != nil {
 		return domain.MemoryDigest{}, err
 	}
-	if snapshot.MemoryHash == "" {
-		return s.meta.GetMemoryMeta(ctx, repoID, snapshotID)
-	}
-	digest, err := s.blobs.GetMemory(ctx, repoID, snapshot.MemoryHash)
-	if err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	if digest.SnapshotID != snapshotID {
-		return domain.MemoryDigest{}, fmt.Errorf("%w: memory %s targets snapshot %s, want %s", domain.ErrIntegrity, snapshot.MemoryHash, digest.SnapshotID, snapshotID)
-	}
-	return digest, nil
+	return queries.GetMemoryObject(ctx, repoID, hash)
 }
 
-// updateAboutCommand runs behind the application management permission gate.
-func (s *Service) updateAboutCommand(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return err
-	}
-	normalizedWebsite, err := normalizeAboutWebsite(website)
-	if err != nil {
-		return err
-	}
-	if len(topics) > 20 {
-		topics = topics[:20]
-	}
-	return s.meta.UpdateRepoAbout(ctx, repoID, strings.TrimSpace(description), normalizedWebsite, topics)
-}
-
-// UpdateRepoConfig updates the repo structure settings (default branch, protected branch).
-func (s *Service) updateRepoConfigCommand(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return err
-	}
-	if defaultBranch != nil && *defaultBranch != "" {
-		if err := domain.ValidateBranchName(*defaultBranch); err != nil {
-			return err
-		}
-	}
-	return s.meta.UpdateRepoConfig(ctx, repoID, defaultBranch, protectDefault)
-}
-
-// settingsKindOK validates the settings bundle type.
 func settingsKindOK(kind string) bool { return domain.ValidSettingsKind(kind) }
-
-// PutSettings stores team default settings bundles. It validates path safety (no relative/parent directory traversal) and
-// total size (2MB) — these files are directly unpacked into team members' local .claude/.agents/.codex directories.
-func (s *Service) putSettingsCommand(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return err
-	}
-	if err := domain.ValidateSettingsBundle(bundle.Kind, "", bundle); err != nil {
-		return err
-	}
-	bundle.UpdatedAt = time.Now().UTC()
-	return s.meta.PutSettingsBundle(ctx, repoID, bundle)
-}
 
 // PutPending upserts the session-specific context pointer (CLI hook capture mirror). The sessionID is authoritative — the body's session/repo is overwritten (push's RepoID normalization equivalent).
 // The previous hook leaf is collected only if the replacement verifiably contains its complete event prefix.
@@ -1697,56 +897,7 @@ func (s *Service) compareAndDeletePending(ctx context.Context, repoID domain.Con
 // it through natural or graft parents. Compare-and-delete protects a newer
 // capture that arrives during the reachability walk.
 func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID domain.ContentHash) error {
-	pendings, err := s.meta.ListPendings(ctx, repoID)
-	if err != nil {
-		return err
-	}
-	if len(pendings) == 0 {
-		return nil
-	}
-	refs, err := s.meta.ListRefs(ctx, repoID)
-	if err != nil {
-		return err
-	}
-	roots := make([]domain.ContentHash, 0, len(refs))
-	for _, ref := range refs {
-		if sharedTimelineRef(ref) {
-			roots = append(roots, ref.Target)
-		}
-	}
-	if len(roots) == 0 {
-		return nil
-	}
-	snaps, err := s.meta.ListSnapshots(ctx, repoID, "")
-	if err != nil {
-		return err
-	}
-	parentsOf := make(map[domain.ContentHash][]domain.ContentHash, len(snaps))
-	for _, snap := range snaps {
-		parentsOf[snap.ID] = snap.ReachabilityParents()
-	}
-	shared := make(map[domain.ContentHash]bool, len(snaps))
-	stack := append([]domain.ContentHash(nil), roots...)
-	for len(stack) > 0 {
-		id := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if id == "" || shared[id] {
-			continue
-		}
-		shared[id] = true
-		stack = append(stack, parentsOf[id]...)
-	}
-	for _, p := range pendings {
-		if !shared[p.Target] {
-			continue
-		}
-		// The target is already ref-reachable, so no hook-leaf GC is needed (or
-		// allowed): immutable history remains and only the mutable pointer leaves.
-		if _, err := s.meta.CompareAndDeletePending(ctx, repoID, p.SessionID, p.Target); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.repositoryRefs().reconcileSharedPendingPointers(ctx, repoID)
 }
 
 func sharedTimelineRef(ref domain.Ref) bool {
@@ -1987,17 +1138,6 @@ func (s *Service) GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]
 	})
 }
 
-// PutSettingsObject stores a commit attachment settings object (path/size validation, content-addressed idempotency).
-func (s *Service) putSettingsObjectCommand(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error {
-	if err := validateHashes(repoID, hash); err != nil {
-		return err
-	}
-	if err := domain.ValidateSettingsBundle(bundle.Kind, hash, bundle); err != nil {
-		return err
-	}
-	return s.meta.PutSettingsObject(ctx, repoID, hash, bundle)
-}
-
 // GetSettingsObjectByHash retrieves a commit attachment settings object by hash.
 func (s *Service) GetSettingsObjectByHash(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error) {
 	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.SettingsBundle, error) {
@@ -2080,44 +1220,6 @@ func (s *Service) repositoryForURL(ctx context.Context, remoteURL string) (strin
 	return repositoryRecord.ID, nil
 }
 
-// normalizeAboutWebsite ensures that the About website href is stored as an XSS-safe absolute URL.
-func normalizeAboutWebsite(raw string) (string, error) {
-	v := strings.TrimSpace(raw)
-	if v == "" {
-		return "", nil
-	}
-	if len(v) > 2048 {
-		return "", fmt.Errorf("%w: website URL is too long", domain.ErrValidation)
-	}
-	for _, r := range v {
-		if r <= 0x1f || r == 0x7f || unicode.IsSpace(r) || r == '\\' {
-			return "", fmt.Errorf("%w: website must be a single-line URL", domain.ErrValidation)
-		}
-	}
-	if !strings.Contains(v, "://") {
-		v = "https://" + v
-	}
-	u, err := url.Parse(v)
-	if err != nil || u.Host == "" || u.Hostname() == "" || u.Opaque != "" {
-		return "", fmt.Errorf("%w: website must be a valid URL", domain.ErrValidation)
-	}
-	u.Scheme = strings.ToLower(u.Scheme)
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("%w: website scheme must be http or https", domain.ErrValidation)
-	}
-	if u.User != nil {
-		return "", fmt.Errorf("%w: website URL must not contain credentials", domain.ErrValidation)
-	}
-	u.Host = strings.ToLower(u.Host)
-	if u.Path == "/" && u.RawQuery == "" && u.Fragment == "" {
-		u.Path = ""
-	}
-	normalized := u.String()
-	if len(normalized) > 2048 {
-		return "", fmt.Errorf("%w: website URL is too long", domain.ErrValidation)
-	}
-	return normalized, nil
-}
 func (s *Service) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
 	return repositoryRead(ctx, s, func(ctx context.Context) ([]domain.Repo, error) {
 		repos, err := s.meta.ListRepos(ctx, team)
@@ -2308,127 +1410,38 @@ func (s *Service) listRefs(ctx context.Context, repoID domain.ContentHash) ([]do
 
 // Fork creates a new branch ref with tip FromSnapshot (O(1), original unchanged F1).
 func (s *Service) fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
-	if err := validateHashes(in.RepoID, in.FromSnapshot); err != nil {
+	commands := s.branchOperations()
+	if err := commands.ready(); err != nil {
 		return inbound.ForkOutput{}, err
 	}
-	if err := domain.ValidateBranchName(in.NewBranch); err != nil {
-		return inbound.ForkOutput{}, err
-	}
-	if _, err := s.meta.GetSnapshot(ctx, in.RepoID, in.FromSnapshot); err != nil {
-		return inbound.ForkOutput{}, err // parent snapshot pre-exists (REF1)
-	}
-	repo, err := s.meta.GetRepo(ctx, in.RepoID)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return inbound.ForkOutput{}, err
-	}
-	if repo.ContextProtocol == 1 {
-		events, err := s.ListHistory(ctx, in.RepoID)
-		if err != nil {
-			return inbound.ForkOutput{}, err
-		}
-		bindings, err := domain.ProjectContextBranches(events)
-		if err != nil {
-			return inbound.ForkOutput{}, err
-		}
-		key := make([]byte, 16)
-		if _, err := rand.Read(key); err != nil {
-			return inbound.ForkOutput{}, err
-		}
-		id := hex.EncodeToString(key)
-		event := domain.HistoryEvent{ID: id, RepoID: string(in.RepoID), BranchID: id, Branch: in.NewBranch, Kind: "birth", Source: in.FromSnapshot, Target: in.FromSnapshot, BindingParent: bindings.Released[in.NewBranch], CreatedAt: time.Now().UTC()}
-		if err := s.RecordHistory(ctx, event); err != nil {
-			return inbound.ForkOutput{}, err
-		}
-		return inbound.ForkOutput{Branch: in.NewBranch, Head: in.FromSnapshot}, nil
-	}
-	ref := domain.Ref{Kind: domain.RefBranch, Name: in.NewBranch, RepoID: in.RepoID, Target: in.FromSnapshot}
-	if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, ref, ""); err != nil {
-		return inbound.ForkOutput{}, err // already exists, ErrRefConflict (F2)
-	}
-	return inbound.ForkOutput{Branch: in.NewBranch, Head: in.FromSnapshot}, nil
+	return commands.fork(ctx, in)
 }
 
 // join loads the repository graph inside the write boundary and executes the
 // domain plan. Ref allocation and persistence stay in the application/adapters.
 func (s *Service) join(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error) {
-	graph, err := s.loadJoinGraph(ctx, in.RepoID)
-	if err != nil {
+	commands := s.branchOperations()
+	if err := commands.ready(); err != nil {
 		return inbound.JoinOutput{}, err
 	}
-	plan, err := domain.PlanJoin(graph, domain.JoinRequest{RepoID: in.RepoID, Branch: in.TargetBranch,
-		BranchID: in.BranchID, Source: in.Snapshot, IncludeDescendants: in.IncludeDescendants})
-	if err != nil {
-		if in.PlanRevision != "" && (errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrValidation)) {
-			return inbound.JoinOutput{}, domain.ErrJoinPreviewChanged
-		}
-		return inbound.JoinOutput{}, err
-	}
-	if in.PlanRevision != "" && (plan.Revision() != in.PlanRevision || plan.ExpectedHead != in.ExpectedHead || plan.BranchID != in.BranchID) {
-		return inbound.JoinOutput{}, domain.ErrJoinPreviewChanged
-	}
-	var forkName string
-	if plan.RemainingTip != "" {
-		forkName, err = s.joinForkRefName(ctx, in.RepoID, in.TargetBranch, plan.RemainingTip)
-		if err != nil {
-			return inbound.JoinOutput{}, err
-		}
-	}
-	mutation, err := plan.Mutation(forkName)
-	if err != nil {
-		return inbound.JoinOutput{}, err
-	}
-	if err := s.meta.ApplyJoin(ctx, mutation); err != nil {
-		return inbound.JoinOutput{}, err
-	}
-	return inbound.JoinOutput{Branch: plan.Branch, Head: plan.NewHead, ForkBranch: forkName}, s.reconcileSharedPendingPointers(ctx, in.RepoID)
+	return commands.join(ctx, in)
 }
 
 func (s *Service) loadJoinGraph(ctx context.Context, repo domain.ContentHash) (domain.JoinGraph, error) {
-	if err := domain.ValidateContentHash(repo); err != nil {
+	commands := s.branchOperations()
+	if err := commands.ready(); err != nil {
 		return domain.JoinGraph{}, err
 	}
-	snaps, err := s.meta.ListSnapshots(ctx, repo, "")
-	if err != nil {
-		return domain.JoinGraph{}, err
-	}
-	refs, err := s.meta.ListRefs(ctx, repo)
-	if err != nil {
-		return domain.JoinGraph{}, err
-	}
-	pendings, err := s.meta.ListPendings(ctx, repo)
-	if err != nil {
-		return domain.JoinGraph{}, err
-	}
-	members, err := s.snapshotBranchMemberships(ctx, repo, snaps)
-	if err != nil {
-		return domain.JoinGraph{}, err
-	}
-	return domain.JoinGraph{Snapshots: snaps, Refs: refs, Pendings: pendings, Memberships: members}, nil
+	return commands.loadJoinGraph(ctx, repo)
 }
 
 // joinForkRefName selects a session ref name to preserve natural descendants after partial join. The session ref itself is not a real git branch membership, but the branch scope in the name participates in join ownership determination. Actual creation and conflict final determination is performed in the ApplyJoin atomic boundary.
 func (s *Service) joinForkRefName(ctx context.Context, repoID domain.ContentHash, branch string, tip domain.ContentHash) (string, error) {
-	short := strings.TrimPrefix(string(tip), "sha256:")
-	if len(short) > 10 {
-		short = short[:10]
+	commands := s.branchOperations()
+	if err := commands.ready(); err != nil {
+		return "", err
 	}
-	base := domain.SessionRefPrefix(branch) + short
-	for i := 0; i < 10; i++ {
-		name := base
-		if i > 0 {
-			name = fmt.Sprintf("%s-%d", base, i+1)
-		}
-		if existing, err := s.meta.GetRef(ctx, repoID, domain.RefSession, name); err == nil {
-			if existing.Target == tip {
-				return name, nil
-			}
-			continue
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			return "", fmt.Errorf("lookup join session ref %q: %w", name, err)
-		}
-		return name, nil
-	}
-	return "", fmt.Errorf("%w: fork branch name exhausted for %s", domain.ErrConflict, tip)
+	return commands.joinForkRefName(ctx, repoID, branch, tip)
 }
 
 // Diff calculates the CIR event delta (add/remove) between two snapshots based on content keys.

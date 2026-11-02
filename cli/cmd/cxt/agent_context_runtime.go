@@ -137,13 +137,14 @@ func runtimeAgentLoader(cfg config) (runtimeAgentPreparer, *app.LoadSessionServi
 	loader := app.NewLoadSessionService(store, codecs, materializers, nil, nil, nil).WithAgentContext(p).WithAgentCodePosition(gitctx.NewGitContextAdapter())
 	return p, loader
 }
-func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
+func providerLaunchHooks(base config, sessions outbound.ProviderSessionInventory) delivcli.ProviderLaunchHooks {
 	// Each preparation rebinds --cd and branch transitions to their own worktree.
 	// Lifecycle records use that exact root; native input records retain their
 	// own immutable root while a replacement runtime is prepared.
 	receiptRoot := base.RepoRoot
 	var receiptMu sync.Mutex
 	return delivcli.ProviderLaunchHooks{
+		SessionInventory: sessions,
 		PrepareDeferred: func(ctx context.Context, req delivcli.ProviderLaunchRequest) (delivcli.DeferredProviderLaunch, error) {
 			cfg, err := runtimeConfigAt(ctx, base, req.Cwd)
 			if err != nil {

@@ -6,6 +6,12 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ graphRead: {
+  pending: '그래프를 준비하고 있습니다. 아직 완성된 그래프가 없습니다.',
+  lagging: '새 변경 사항을 처리하는 동안 마지막으로 완성된 그래프를 표시합니다.',
+  failed: '그래프 처리 상태를 확인해야 합니다. 자동 재시도는 중단되었습니다.',
+  failedRetained: '마지막으로 완성된 그래프를 표시합니다. 새 변경 사항의 처리 상태를 확인해야 하며 자동 재시도는 중단되었습니다.',
+ },
  sessionArchive: {
   archive: '세션 보관',
   restore: '세션 복원',
@@ -416,8 +422,31 @@ export const ko = {
     expand: '펼치기',
     collapse: '접기',
   },
+  documentFind: {
+    title: '문서 내 찾기',
+    query: '찾을 내용',
+    representation: '검색 기준',
+    sourceText: '원문 내용',
+    displayText: '표시 내용',
+    displayScope: '불러온 범위에서 서식이 적용된 대화와 펼친 도구 데이터를 찾으며, 버튼 문구는 제외합니다. 큰 기록은 서버에서 준비하므로 다시 시도해야 할 수 있습니다. 원문 검색으로 대신하지 않으며 읽던 위치는 유지됩니다.',
+    search: '검색',
+    previous: '이전 결과',
+    next: '다음 결과',
+    scope: '불러온 범위의 원문에서 찾습니다. 접힌 세부 기록도 포함하며, 읽던 본문 위치는 바꾸지 않습니다.',
+    changed: '검색하던 기록이 변경되었거나 닫혔습니다. 다시 검색해 주세요.',
+    unsupported: '이 기록 또는 서버는 아직 문서 내 찾기를 지원하지 않습니다. 전체 원문을 대신 내려받지 않습니다.',
+    scanning: '불러온 범위를 검색하는 중…',
+    range: '현재 검색 범위: 기록 {records}개 · 이벤트 {events}개.',
+    newContent: '새로 불러온 내용까지 포함하려면 다시 검색하세요.',
+    match: '{number}번째 결과',
+    noMatch: '이 범위에 더 일치하는 내용이 없습니다.',
+    event: '이벤트 {index}',
+    raw: '원본 JSON 기준',
+    reveal: '같은 시점의 대화 보기',
+  },
   context: {
     retryRead: '다시 불러오기',
+    restartDocument: '문서 처음부터 다시 불러오기',
     loadingEvents: '대화 불러오는 중…',
     loadMoreEvents: '이벤트 더 읽기',
     eventFragment: '이벤트 원본 JSON — 전체 {total}바이트 중 {start}–{end}바이트. 현재 조각만 불러왔습니다.',
@@ -429,6 +458,8 @@ export const ko = {
     searchPlaceholder: '검색 — 커밋 메시지·대화 내용',
     searchAria: '컨텍스트 검색',
     searchFailed: '검색 실패 — {msg}',
+    searchPosition: '검색한 대화 위치를 보고 있습니다.',
+    showFromStart: '대화 처음부터 보기',
     hitCommit: '커밋',
     hitConvo: '대화',
     noResults: '검색 결과 없음',
@@ -754,6 +785,8 @@ export const ko = {
     inviteHint: '링크는 회수 전까지 재사용 가능(합류는 멱등). 이메일을 지정하면 그 계정만 수락할 수 있습니다.',
   },
   onhold: {
+    needsAttention: 'On Hold 서버 상태를 점검해야 합니다. 표시된 이전 결과는 실시간 정보가 아닙니다.',
+    refreshing: 'On Hold를 새로 확인하고 있습니다. 표시된 내용은 이전 결과일 수 있습니다.',
     liveSection: '실시간 미커밋 세션',
     liveHint: '최근 2분 안에 대화 갱신이 감지된 세션입니다. 새 기록을 묶어 저장하며, 서버의 변경 알림에 따라 최신 캡처를 표시합니다. 큰 세션은 처리에 시간이 더 걸릴 수 있습니다.',
     followingSession: '이 세션의 최신 캡처를 자동으로 표시합니다.',

@@ -41,6 +41,214 @@ await import('/e2e/document-paging-harness.ts');
   return errors;
 }
 
+async function showLegacyEvent(page: Page, index: number) {
+  await expect.poll(async () => {
+    const event = page.locator(`[data-event-index="${index}"]`);
+    if (await event.count()) return 1;
+    await page.locator('[data-document-page]').evaluateAll((nodes, target) => {
+      const candidates = nodes.map(node => ({ node, index: Number(node.getAttribute('data-document-page')?.replace('units:', '')) }))
+        .filter(candidate => Number.isSafeInteger(candidate.index) && candidate.index <= target)
+        .sort((left, right) => right.index - left.index);
+      candidates[0]?.node.scrollIntoView({ block: 'start' });
+    }, index);
+    return event.count();
+  }).toBe(1);
+}
+
+async function documentRetryClock(page: Page) {
+  await page.clock.install({ time: new Date('2026-10-18T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-10-18T00:00:01Z'));
+  await page.addInitScript(() => { Math.random = () => 0; });
+}
+
+async function waitForDocumentFailure(page: Page, count: number) {
+  await expect.poll(async () => {
+    await page.clock.runFor(1);
+    return page.evaluate(() => {
+      const client = (window as unknown as { documentQueryClient: {
+        getQueryCache(): { getAll(): { state: { fetchStatus: string; fetchFailureCount: number } }[] };
+      } }).documentQueryClient;
+      return client?.getQueryCache().getAll().find(query => query.state.fetchStatus === 'fetching')?.state.fetchFailureCount;
+    });
+  }).toBe(count);
+  await page.clock.runFor(1);
+}
+
+async function settleDocumentReads(page: Page) {
+  await expect.poll(async () => {
+    await page.clock.runFor(1);
+    return page.evaluate(() => {
+      const client = (window as unknown as { documentQueryClient: { isFetching(): number } }).documentQueryClient;
+      return client?.isFetching();
+    });
+  }).toBe(0);
+  await page.clock.runFor(1);
+}
+
+const documentPending = {
+  status: 503, headers: { 'Retry-After': '3' },
+  json: { error: { code: 'doc_range_index_pending', message: 'Preparing document' } },
+};
+
+for (const kind of ['initial', 'next', 'detail', 'fragment'] as const) {
+  test(`durable pending ${kind} read recovers automatically at the same document range`, async ({ page }) => {
+    await documentRetryClock(page);
+    const requests: string[] = [];
+    const pendingReads: string[] = [];
+    await page.route('**/api/v1/**', async route => {
+      const url = new URL(route.request().url());
+      requests.push(url.pathname + url.search);
+      const offset = Number(url.searchParams.get('offset'));
+      const fragment = url.pathname.endsWith('/event-fragments');
+      const detail = url.searchParams.get('view') === 'raw';
+      const target = kind === 'initial' || (kind === 'next' && offset === 1) ||
+        (kind === 'detail' && detail) || (kind === 'fragment' && fragment && offset === 65536);
+      if (target) {
+        pendingReads.push(url.pathname + url.search);
+        if (pendingReads.length <= 2) return route.fulfill(documentPending);
+      }
+      if (fragment) return route.fulfill({ json: {
+        event_index: 7, byte_offset: offset, total_bytes: 65538, next: offset === 0 ? 65536 : -1,
+        json_fragment: offset === 0 ? 'x'.repeat(65536) : '{}',
+      } });
+      const events = detail ? [message(7, 'Ready detail')]
+        : kind === 'detail' || kind === 'fragment' ? [tool(7, kind === 'fragment' ? 512 * 1024 * 1024 : 800)]
+        : [message(Math.max(0, offset), offset === 1 ? 'Ready next page' : 'Ready document')];
+      return route.fulfill({ json: eventPage(events, kind === 'detail' || kind === 'fragment' ? 7 : Math.max(0, offset),
+        kind === 'detail' || kind === 'fragment' ? 8 : kind === 'next' ? 2 : 1) });
+    });
+    const errors = await harness(page, kind === 'detail' || kind === 'fragment' ? '?mode=all&start=7' : '');
+    if (kind === 'detail' || kind === 'fragment') {
+      await expect.poll(async () => {
+        await page.clock.runFor(20);
+        return page.locator('[data-deferred-event="7"] summary').count();
+      }).toBe(1);
+      await page.locator('[data-deferred-event="7"] summary').click();
+    }
+    if (kind === 'fragment') {
+      await expect.poll(async () => {
+        await page.clock.runFor(1);
+        return page.locator('.event-fragment pre').isVisible();
+      }).toBe(true);
+      await page.getByRole('button', { name: 'Next fragment', exact: true }).click();
+    }
+    await waitForDocumentFailure(page, 1);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    if (kind === 'next') await expect(page.getByText('Ready document', { exact: true })).toBeVisible();
+    await page.clock.runFor(2900);
+    expect(pendingReads).toHaveLength(1);
+    await page.clock.runFor(100);
+    await waitForDocumentFailure(page, 2);
+    expect(pendingReads).toHaveLength(2);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await page.clock.runFor(3000);
+    await settleDocumentReads(page);
+    if (kind === 'fragment') await expect(page.locator('.event-fragment pre')).toHaveText('{}');
+    else await expect(page.getByText(kind === 'next' ? 'Ready next page' : kind === 'detail' ? 'Ready detail' : 'Ready document', { exact: true })).toBeVisible();
+    expect(pendingReads).toHaveLength(3);
+    expect(new Set(pendingReads).size).toBe(1);
+    if (kind === 'initial') expect(pendingReads[0]).toContain('view=chat&offset=-1&limit=20&base=base');
+    if (kind === 'next') {
+      expect(pendingReads[0]).toContain('view=chat&offset=1&limit=20');
+      expect(pendingReads[0]).not.toContain('base=');
+      expect(requests.filter(request => request.includes('offset=-1'))).toHaveLength(1);
+    }
+    if (kind === 'detail') expect(pendingReads[0]).toContain('view=raw&offset=7&limit=1');
+    if (kind === 'fragment') expect(pendingReads[0]).toContain('index=7&offset=65536&budget=65536');
+    const completed = requests.length;
+    await page.clock.runFor(120_000);
+    expect(requests).toHaveLength(completed);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('durable pending stops after ten attempts and at most ninety seconds of backoff', async ({ page }) => {
+  await documentRetryClock(page);
+  let requests = 0;
+  let ready = false;
+  await page.route('**/api/v1/**', route => {
+    requests++;
+    return route.fulfill(ready ? { json: eventPage([message(0, 'Ready after manual retry')]) }
+      : { ...documentPending, headers: { 'Retry-After': '10' } });
+  });
+  const errors = await harness(page);
+  await waitForDocumentFailure(page, 1);
+  const started = await page.evaluate(() => Date.now());
+  for (let failureCount = 1; failureCount <= 9; failureCount++) {
+    await waitForDocumentFailure(page, failureCount);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await page.clock.runFor(9900);
+    expect(requests).toBe(failureCount);
+    await page.clock.runFor(100);
+  }
+  await settleDocumentReads(page);
+  await expect(page.getByRole('alert')).toContainText('Preparing document');
+  expect(requests).toBe(10);
+  expect(await page.evaluate(() => Date.now()) - started).toBeLessThan(90_100);
+  await page.clock.runFor(120_000);
+  expect(requests).toBe(10);
+  ready = true;
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await settleDocumentReads(page);
+  await expect(page.getByText('Ready after manual retry', { exact: true })).toBeVisible();
+  expect(requests).toBe(11);
+  expect(errors).toEqual([]);
+});
+
+for (const kind of ['initial', 'detail', 'fragment'] as const) {
+  test(`changing document mode cancels a delayed pending ${kind} retry`, async ({ page }) => {
+    await documentRetryClock(page);
+    let pendingReads = 0;
+    await page.route('**/api/v1/**', route => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('view') === 'prompts') return route.fulfill({ json: eventPage([message(0, 'Changed mode')]) });
+      if (kind === 'initial' || url.searchParams.get('view') === 'raw' || url.pathname.endsWith('/event-fragments')) {
+        pendingReads++;
+        return route.fulfill(documentPending);
+      }
+      return route.fulfill({ json: eventPage([tool(0, kind === 'fragment' ? 512 * 1024 * 1024 : 800)]) });
+    });
+    const errors = await harness(page, '?mode=all');
+    if (kind !== 'initial') {
+      await settleDocumentReads(page);
+      await page.locator('[data-deferred-event="0"] summary').click();
+    }
+    await waitForDocumentFailure(page, 1);
+    await page.getByLabel('View mode').selectOption('prompts');
+    await settleDocumentReads(page);
+    await expect(page.getByText('Changed mode', { exact: true })).toBeVisible();
+    await page.clock.runFor(120_000);
+    expect(pendingReads).toBe(1);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const failure of [
+  { status: 503, code: 'doc_range_index_unavailable' },
+  { status: 422, code: 'integrity' },
+  ...[401, 403, 404].map(status => ({ status, code: 'doc_range_index_pending' })),
+]) {
+  test(`terminal document ${failure.status}/${failure.code} never retries automatically`, async ({ page }) => {
+    await documentRetryClock(page);
+    let requests = 0;
+    await page.route('**/api/v1/**', route => {
+      requests++;
+      return route.fulfill({ status: failure.status, headers: { 'Retry-After': '3' },
+        json: { error: { code: failure.code, message: 'Terminal read failure' } } });
+    });
+    const errors = await harness(page);
+    await expect.poll(() => requests).toBe(1);
+    await settleDocumentReads(page);
+    await expect(page.getByRole('alert')).toContainText('Terminal read failure');
+    await page.clock.runFor(120_000);
+    expect(requests).toBe(1);
+    await expect(page.getByRole('alert')).toContainText('Terminal read failure');
+    expect(errors).toEqual([]);
+  });
+}
+
 test('chat and prompts retain absolute turns while details use only exact raw ranges', async ({ page }) => {
   const requests: string[] = [];
   await page.route('**/api/v1/**', async route => {
@@ -58,7 +266,7 @@ test('chat and prompts retain absolute turns while details use only exact raw ra
   await expect(page.getByText('Visible answer', { exact: true })).toBeVisible();
   expect(requests).toHaveLength(1);
   await expect(page.locator('[data-event-index="99"]')).toHaveClass('doc-inherited');
-  await page.locator('.turn-head').click();
+  await page.locator('.turn-lead').click();
   expect(requests).toHaveLength(1);
   await page.locator('[data-deferred-event="100"] summary').click();
   await expect(page.getByText('Detail at 100', { exact: true })).toBeVisible();
@@ -85,7 +293,7 @@ test('near-bottom prefetch stays hidden until the bottom and continuation waits 
     await route.fulfill({ json: eventPage(events, offset, hash === 'tail' ? 1 : 40, 0, hash) });
   });
   const errors = await harness(page, '?tail');
-  await expect(page.getByText('Message 19', { exact: false })).toBeAttached();
+  await expect(page.locator('[data-event-index="0"]')).toBeVisible();
   expect(requests).toEqual(['document:-1']);
   const scroll = page.getByTestId('document-scroll');
   await scroll.evaluate(element => { element.scrollTop = element.scrollHeight - element.clientHeight - 200; });
@@ -123,12 +331,12 @@ for (const start of [-1, 0, 13]) {
       const pageOffset = offset < 0 ? 40 : offset;
       const events = Array.from({ length: 20 }, (_, index) => message(pageOffset + index,
         `Message ${pageOffset + index}\n\n` + 'A visible paragraph.\n\n'.repeat(3)));
-      await route.fulfill({ json: eventPage(events, pageOffset, 120, base ? 40 : 0) });
+      await route.fulfill({ json: eventPage(events, pageOffset, start === 0 ? 60 : 120, base ? 40 : 0) });
     });
     const errors = await harness(page, `?start=${start}`);
     await expect(page.getByRole('alert')).toContainText('Page unavailable');
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
-    await expect(page.locator(`[data-event-index="${initialOffset + 19}"]`)).toBeAttached();
+    await showLegacyEvent(page, initialOffset);
     expect(reads).toEqual([
       { mode: 'chat', offset: start, base: 'base' },
       { mode: 'chat', offset: start, base: 'base' },
@@ -137,21 +345,28 @@ for (const start of [-1, 0, 13]) {
     await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
     await expect(page.getByRole('alert')).toContainText('Page unavailable');
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
-    await expect(page.locator(`[data-event-index="${nextOffset + 19}"]`)).toBeAttached();
+    await showLegacyEvent(page, nextOffset);
     expect(reads.slice(2)).toEqual([
       { mode: 'chat', offset: nextOffset, base: null },
       { mode: 'chat', offset: nextOffset, base: null },
     ]);
-    if (start >= 0) await expect(page.locator('[data-event-index="39"]')).toHaveClass('doc-inherited');
-    if (start === 13) await expect(page.locator('[data-event-index="40"]')).not.toHaveClass('doc-inherited');
+    if (start >= 0) {
+      await showLegacyEvent(page, 39);
+      await expect(page.locator('[data-event-index="39"]')).toHaveClass('doc-inherited');
+    }
+    if (start === 13) {
+      await showLegacyEvent(page, 40);
+      await expect(page.locator('[data-event-index="40"]')).not.toHaveClass('doc-inherited');
+    }
     if (start === 0) {
       await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
-      await expect(page.locator('[data-event-index="59"]')).toBeAttached();
+      await showLegacyEvent(page, 40);
       await expect(page.locator('[data-event-index="40"]')).not.toHaveClass('doc-inherited');
       expect(reads.at(-1)).toEqual({ mode: 'chat', offset: 40, base: null });
     }
+    await scroll.evaluate(element => { element.scrollTop = 0; });
     await page.getByLabel('View mode').selectOption('prompts');
-    await expect(page.locator(`[data-event-index="${initialOffset + 19}"]`)).toBeAttached();
+    await showLegacyEvent(page, initialOffset);
     await expect(page.locator(`[data-event-index="${nextOffset}"]`)).toHaveCount(0);
     expect(reads.at(-1)).toEqual({ mode: 'prompts', offset: start, base: 'base' });
     expect(errors).toEqual([]);
@@ -176,7 +391,7 @@ test('root view HTTP metadata stays compact with a large envelope, tool-heavy pr
     await route.fulfill({ contentType: 'application/json', body });
   });
   const errors = await harness(page);
-  await expect(page.getByText('Screenful 399', { exact: true })).toBeAttached();
+  await showLegacyEvent(page, 0);
   expect(requests).toEqual([{ mode: 'chat', offset: -1 }]);
   expect(Buffer.byteLength(bodies[0])).toBeGreaterThan(256 * 1024);
   expect(Buffer.byteLength(bodies[0])).toBeLessThan(1024 * 1024);
@@ -191,9 +406,10 @@ test('root view HTTP metadata stays compact with a large envelope, tool-heavy pr
   await expect.poll(() => requests.length).toBe(2);
   await expect(page.locator('[data-event-index="420"]')).toHaveCount(0);
   await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
-  await expect(page.locator('[data-event-index="819"]')).toBeAttached();
+  await showLegacyEvent(page, 420);
+  await scroll.evaluate(element => { element.scrollTop = 0; });
   await page.getByLabel('View mode').selectOption('prompts');
-  await expect(page.locator('[data-event-index="399"]')).toBeAttached();
+  await showLegacyEvent(page, 0);
   await expect(page.locator('[data-event-index="420"]')).toHaveCount(0);
   expect(requests).toEqual([{ mode: 'chat', offset: -1 }, { mode: 'chat', offset: 420 }, { mode: 'prompts', offset: -1 }]);
   expect(errors).toEqual([]);
@@ -218,14 +434,29 @@ test('hidden placeholder pages preserve turns and a failed next page retries onl
   await expect(page.getByRole('alert')).toContainText('Page unavailable');
   await expect(page.getByText('Retained prompt', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '▸ AI 511', exact: true }).click();
-  await expect(page.locator('[data-deferred-event]')).toHaveCount(511);
+  const visited = new Set<number>();
+  const windowed = process.env.CXT_DOCUMENT_WINDOW === '1' || process.env.CXT_DOCUMENT_BASELINE === '1';
+  for (let index = 1; index < 512; index += 64) {
+    await showLegacyEvent(page, index);
+    await expect(page.locator(`[data-deferred-event="${Math.min(index + 63, 511)}"]`)).toBeAttached();
+    const mounted = await page.locator('[data-deferred-event]').evaluateAll(nodes =>
+      nodes.map(node => Number(node.getAttribute('data-deferred-event'))));
+    mounted.forEach(value => visited.add(value));
+    expect(mounted.length).toBeLessThanOrEqual(windowed ? 3 * 64 : 511);
+  }
+  expect([...visited].sort((left, right) => left - right)).toEqual(Array.from({ length: 511 }, (_, index) => index + 1));
   await page.waitForTimeout(350);
   expect(reads).toEqual([-1, 512]);
   fail = false;
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await page.getByTestId('document-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
   await expect(page.getByText('After hidden tools', { exact: true })).toBeAttached();
-  await expect(page.locator('[data-deferred-event]')).toHaveCount(511);
+  await showLegacyEvent(page, 511);
+  await expect(page.locator('[data-deferred-event="511"]')).toBeAttached();
+  await page.getByTestId('document-scroll').evaluate(element => { element.scrollTop = 0; });
+  await showLegacyEvent(page, 1);
+  await expect(page.getByRole('button', { name: '▾ AI 511', exact: true })).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('[data-deferred-event="1"]')).toBeAttached();
   expect(reads).toEqual([-1, 512, 512]);
   expect(errors).toEqual([]);
 });
@@ -305,7 +536,7 @@ test('cached hidden pages obey the scan limit after returning to a mode', async 
   expect(errors).toEqual([]);
 });
 
-test('a deferred 512 MiB event loads one 64 KiB JSON fragment at a time without retaining prior chunks', async ({ page }) => {
+test('a deferred 512 MiB event renders one 64 KiB fragment at a time within the shared body cache budget', async ({ page }) => {
   const bytes = 512 * 1024 * 1024;
   const requests: string[] = [];
   let fragmentFails = true;
@@ -339,10 +570,20 @@ test('a deferred 512 MiB event loads one 64 KiB JSON fragment at a time without 
   await expect(page.locator('.event-fragment pre')).toContainText('SECOND');
   await expect(page.locator('.event-fragment pre')).not.toContainText('FIRST');
   expect(await page.locator('.event-fragment pre').textContent()).toHaveLength(65536);
-  await expect.poll(() => page.evaluate(() => {
-    const client = (window as unknown as { documentQueryClient: { getQueryCache(): { findAll(filter: unknown): unknown[] } } }).documentQueryClient;
-    return client.getQueryCache().findAll({ queryKey: ['doc-event-fragment'] }).length;
-  })).toBe(1);
+  const cache = await page.evaluate(() => {
+    const client = (window as unknown as { documentQueryClient: { getQueryCache(): { getAll(): {
+      queryKey: readonly unknown[]; meta?: { documentBody?: boolean }; state: { data?: unknown }; getObserversCount(): number;
+    }[] } } }).documentQueryClient;
+    const bodies = client.getQueryCache().getAll().filter(query => query.meta?.documentBody && query.state.data !== undefined);
+    const fragments = bodies.filter(query => query.queryKey.includes('fragment'));
+    const inactive = bodies.filter(query => query.getObserversCount() === 0);
+    return { fragments: fragments.length, scoped: fragments.every(query => query.queryKey.includes('body')),
+      inactive: inactive.length, bytes: inactive.reduce((total, query) => total + new TextEncoder().encode(JSON.stringify(query.state.data)).byteLength, 0) };
+  });
+  expect(cache.fragments).toBe(2);
+  expect(cache.scoped).toBe(true);
+  expect(cache.inactive).toBeLessThanOrEqual(8);
+  expect(cache.bytes).toBeLessThanOrEqual(8 * 1024 * 1024);
   await page.getByRole('button', { name: 'Previous fragment', exact: true }).click();
   await expect(page.locator('.event-fragment pre')).toContainText('FIRST');
   expect(requests.filter(url => url.includes('view=raw'))).toHaveLength(0);

@@ -830,7 +830,7 @@ func TestFrozenCaptureDriverSelectionDiscoveryAndOwnedFailures(t *testing.T) {
 				t.Setenv("CXT_WRAPPER_PID", strconv.Itoa(os.Getppid()))
 				t.Setenv("CXT_WRAPPED_SESSION_ID", owned)
 			}
-			selected, err := commandCapture(context.Background(), f.cwd, domain.ProviderClaude)
+			selected, err := f.c.commandCapture(context.Background(), f.cwd, domain.ProviderClaude)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -37,7 +37,7 @@ func assertResourcesReleased(t *testing.T, gate *resourceAdmission) {
 	t.Helper()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
-	if gate.active != 0 || gate.bulk != 0 || len(gate.waiters[0])+len(gate.waiters[1]) != 0 {
+	if gate.active != 0 || gate.bulk != 0 || gate.retained != nil || len(gate.waiters[0])+len(gate.waiters[1]) != 0 {
 		t.Fatalf("resources leaked: active=%d bulk=%d queued=%d/%d", gate.active, gate.bulk, len(gate.waiters[0]), len(gate.waiters[1]))
 	}
 }
@@ -107,6 +107,42 @@ func TestResourceAdmissionReserveQueueCancellation(t *testing.T) {
 		}
 	}
 	releaseBulk()
+	assertResourcesReleased(t, gate)
+}
+
+func TestResourceAdmissionRecordsGrantedQueueWait(t *testing.T) {
+	ctx, gate := admissionTestContext(time.Second)
+	_, release, err := AcquireResources(ctx, ResourceBulk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	result := make(chan *resourcePermit, 1)
+	failure := make(chan error, 1)
+	go func() {
+		bound, done, err := AcquireResources(ctx, ResourceBulk)
+		if err != nil {
+			failure <- err
+			return
+		}
+		defer done()
+		permit := bound.Value(resourcePermitKey{}).(*resourcePermit)
+		done()
+		result <- permit
+	}()
+	waitResourceQueue(t, gate, ResourceBulk, 1)
+	time.Sleep(10 * time.Millisecond)
+	release()
+	select {
+	case permit := <-result:
+		if permit.wait < 10*time.Millisecond || permit.wait >= time.Second {
+			t.Fatal("queue wait not captured at grant", permit.wait)
+		}
+	case err := <-failure:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued admission did not complete")
+	}
 	assertResourcesReleased(t, gate)
 }
 
@@ -302,7 +338,7 @@ func TestResourceAdmissionWholeDocumentReadsShareBulkBeforeStorage(t *testing.T)
 		t.Fatal(err)
 	}
 	defer release()
-	service := &Service{}
+	service, _ := newFsckSvc(t)
 	repo, hash := hh("read repo"), hh("read doc")
 	reads := map[string]func() error{
 		"events":             func() error { _, err := service.ReadDocEvents(ctx, repo, hash, "", 0, 1); return err },

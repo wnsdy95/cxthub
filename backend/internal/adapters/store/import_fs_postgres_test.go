@@ -179,6 +179,63 @@ func TestPGFrozenImportAtomicityAndQueries(t *testing.T) {
 	}
 }
 
+func TestPGFrozenImportMaintenanceCursorGuard(test *testing.T) {
+	for _, scenario := range []string{"pristine", "advanced", "unrelated-table"} {
+		test.Run(scenario, func(test *testing.T) {
+			storage := importTestStore(test)
+			ctx := context.Background()
+			source := NewFSStore(test.TempDir())
+			user := domain.User{ID: "cursor-import-user", Username: "cursor-import-user", Name: "Cursor import", CreatedAt: time.Now().UTC()}
+			if err := source.UpsertUser(ctx, user); err != nil {
+				test.Fatal(err)
+			}
+			cursor := ""
+			if scenario == "advanced" {
+				cursor = string(domain.HashContent([]byte("previous maintenance source")))
+				if _, err := storage.pool.Exec(ctx, `UPDATE doc_display_maintenance_cursor_v1 SET after_source=$1 WHERE singleton`, cursor); err != nil {
+					test.Fatal(err)
+				}
+			}
+			if scenario == "unrelated-table" {
+				if _, err := storage.pool.Exec(ctx, `CREATE TABLE import_guard_unrelated(value text NOT NULL);
+INSERT INTO import_guard_unrelated VALUES('retained')`); err != nil {
+					test.Fatal(err)
+				}
+			}
+			accepted := scenario == "pristine"
+			if err := storage.CheckImportTargetEmpty(ctx); (err == nil) != accepted {
+				test.Fatal("preflight confused the pristine cursor with occupied runtime state", err)
+			}
+			for _, apply := range []bool{false, true} {
+				report, err := storage.ImportFrozenFS(ctx, source.dataDir, apply)
+				if (err == nil) != accepted || report.Applied != (accepted && apply) {
+					test.Fatal("locked import disagreed with the empty-target guard", apply, report, err)
+				}
+				var count int
+				if err := storage.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE id=$1`, user.ID).Scan(&count); err != nil {
+					test.Fatal(err)
+				}
+				expected := 0
+				if accepted && apply {
+					expected = 1
+				}
+				if count != expected {
+					test.Fatal("empty-target decision leaked or lost imported data", apply, count, expected)
+				}
+				var retained string
+				if err := storage.pool.QueryRow(ctx, `SELECT after_source FROM doc_display_maintenance_cursor_v1 WHERE singleton`).Scan(&retained); err != nil || retained != cursor {
+					test.Fatal("import changed the existing maintenance cursor", apply, retained, cursor, err)
+				}
+				if scenario == "unrelated-table" {
+					if err := storage.pool.QueryRow(ctx, `SELECT value FROM import_guard_unrelated`).Scan(&retained); err != nil || retained != "retained" {
+						test.Fatal("rejected import changed unrelated runtime data", retained, err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestFrozenImportRejectsUnknownAndSymlink(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "unknown.json"), []byte("{}"), 0600); err != nil {

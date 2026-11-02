@@ -34,6 +34,12 @@ func (b *pausedWriteBody) Read(p []byte) (int, error) {
 }
 func (b *pausedWriteBody) Close() error { return nil }
 
+type snapshotGraftPGPoisonBackend struct{ *repositoryRefPGPoisonBackend }
+
+func (*snapshotGraftPGPoisonBackend) GraftSnapshotParents(context.Context, domain.ContentHash, domain.ContentHash, []domain.ContentHash, uint64) error {
+	panic("graft reached the broad PostgreSQL HTTP backend")
+}
+
 func TestPGRepositoryWriteRevocation(t *testing.T) {
 	ctx := context.Background()
 	dsn := os.Getenv("CXT_TEST_DSN")
@@ -56,10 +62,32 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 	ids := app.NewIdentityService(auth.NewDevVerifier(), st)
 	revoker := app.NewIdentityService(auth.NewDevVerifier(), other)
 	svc := app.NewService(st, st, nil, gitengine.NewEngine(st), st)
-	handler := NewServer(svc, ids).Handler()
+	commands, err := svc.RepositoryAssetCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&snapshotGraftPGPoisonBackend{&repositoryRefPGPoisonBackend{repositoryAssetPGPoisonFacade: &repositoryAssetPGPoisonFacade{Service: svc}}}, ids)
+	if err := server.SetRepositoryAssetCommands(commands); err != nil {
+		t.Fatal(err)
+	}
+	refCommands, err := svc.RepositoryRefCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetRepositoryRefCommands(refCommands); err != nil {
+		t.Fatal(err)
+	}
+	graftCommands, err := svc.SnapshotGraftCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetSnapshotGraftCommands(graftCommands); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Handler()
 	var scenarios []string
 	for _, cause := range []string{"direct", "organization", "team", "archive", "base"} {
-		for _, command := range []string{"ref", "refs", "settings", "about", "config", "memory", "memory-cas", "typed-memory", "memory-reuse", "pending", "unsync", "promote", "objects", "chunks", "session-archive", "session-restore"} {
+		for _, command := range []string{"ref", "refs", "graft", "settings", "about", "config", "memory", "memory-cas", "typed-memory", "memory-reuse", "pending", "unsync", "promote", "objects", "chunks", "session-archive", "session-restore"} {
 			scenarios = append(scenarios, cause+"/"+command)
 		}
 	}
@@ -146,6 +174,23 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 				t.Fatal(err)
 			}
 			method, suffix, value := revocationRequest(kind, target, doc)
+			var graftParent domain.ContentHash
+			if kind == "graft" {
+				parentDoc := domain.SessionDoc{CIR: domain.CIRDocument{Events: []domain.CIREvent{{Seq: 1, Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "graft parent " + record.ID}}}}}}
+				parentBytes, err := domain.CanonicalBytes(parentDoc.CIR)
+				if err != nil {
+					t.Fatal(err)
+				}
+				parentDoc.Hash = domain.HashContent(parentBytes)
+				if _, err := st.PutDoc(ctx, repo.ID, parentDoc); err != nil {
+					t.Fatal(err)
+				}
+				graftParent = parentDoc.Hash
+				if err := st.PutSnapshot(ctx, domain.Snapshot{ID: graftParent, DocHash: graftParent, RepoID: repo.ID, CreatedAt: time.Now().UTC(), Provider: domain.ProviderUnknown, Fidelity: domain.FidelityFull}); err != nil {
+					t.Fatal(err)
+				}
+				value = map[string]any{"parents": []domain.ContentHash{graftParent}, "expected_seq": uint64(0)}
+			}
 			if kind == "session-restore" {
 				if err := svc.SetSessionArchived(inbound.WithRepositoryActor(ctx, owner.ID), repo.ID, target, true); err != nil {
 					t.Fatal(err)
@@ -271,6 +316,12 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 			if accepted.Code < 200 || accepted.Code >= 300 {
 				t.Fatalf("authorized control rejected: %d %s", accepted.Code, accepted.Body.String())
 			}
+			if kind == "graft" {
+				actual, err := st.GetSnapshot(ctx, repo.ID, target)
+				if err != nil || actual.GraftSeq != 1 || !reflect.DeepEqual(actual.GraftParents, []domain.ContentHash{graftParent}) || len(actual.Parents) != 0 {
+					t.Fatal("authorized graft control did not commit the exact overlay", actual, err)
+				}
+			}
 		})
 	}
 }
@@ -279,6 +330,8 @@ func revocationRequest(kind string, target domain.ContentHash, doc domain.Sessio
 	switch kind {
 	case "ref":
 		return "PUT", "/refs/tag/review-race", map[string]any{"target": target}
+	case "graft":
+		return "POST", "/snapshots/" + string(target) + "/graft", nil
 	case "session-archive", "session-restore":
 		return "POST", "/snapshots/" + string(target) + "/archive", map[string]any{"archived": kind == "session-archive"}
 	case "refs":

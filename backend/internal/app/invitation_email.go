@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"html"
 	"net"
@@ -58,124 +57,13 @@ func (s *IdentityService) enqueueInvitationEmail(ctx context.Context, i domain.C
 	return s.repositories.(outbound.InvitationEmailStore).PutInvitationEmail(ctx, domain.InvitationEmail{InvitationID: i.ID, State: "queued", NextAttempt: i.CreatedAt, Message: domain.EmailMessage{From: s.invitationEmail.from, To: []string{i.Email}, Subject: "CXTHub invitation", Text: text, HTML: body}})
 }
 
-// claimInvitationEmail checks current invitation authority under the same lock
-// as revocation. A later revoke may race with already in-flight email, but can
-// never make its link valid again: acceptance always rechecks current authority.
 func (s *IdentityService) claimInvitationEmail(ctx context.Context) (domain.InvitationEmail, error) {
-	return identityResult(ctx, s, func(ctx context.Context) (domain.InvitationEmail, error) {
-		st := s.repositories.(outbound.InvitationEmailStore)
-		j, now, err := st.NextInvitationEmail(ctx)
-		if err != nil {
-			return j, err
-		}
-		invites, err := s.invitationStore()
-		if err != nil {
-			return j, err
-		}
-		i, err := invites.GetCollaborationInvite(ctx, j.InvitationID)
-		if err != nil {
-			return j, err
-		}
-		authorityErr := s.authorizeInvitation(ctx, i.CreatedBy, i.Kind, i.SpaceID, i.Role)
-		if authorityErr != nil && !errors.Is(authorityErr, domain.ErrForbidden) {
-			return j, authorityErr
-		}
-		switch {
-		case i.Status != "pending" || !now.Before(i.ExpiresAt):
-			j.State, j.Reason = "cancelled", "invitation_inactive"
-		case authorityErr != nil:
-			j.State, j.Reason = "cancelled", "issuer_not_authorized"
-		case !j.FirstAttempt.IsZero() && !now.Before(j.FirstAttempt.Add(23*time.Hour)):
-			j.State, j.Reason = "attention", "retry_window_expired"
-		case j.Attempts >= 12:
-			j.State, j.Reason = "attention", "attempts_exhausted"
-		default:
-			j.State, j.Reason = "sending", ""
-			j.Attempts++
-			if j.FirstAttempt.IsZero() {
-				j.FirstAttempt = now
-			}
-			j.NextAttempt = now.Add(2 * time.Minute)
-		}
-		if err := st.PutInvitationEmail(ctx, j); err != nil {
-			return j, err
-		}
-		return j, nil
-	})
+	return s.invitationEmailWorker().claimInvitationEmail(ctx)
 }
 
 func (s *IdentityService) ProcessInvitationEmail(ctx context.Context) (bool, error) {
-	if s.invitationEmail == nil {
-		return false, nil
-	}
-	j, err := s.claimInvitationEmail(ctx)
-	if errors.Is(err, domain.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if j.State != "sending" {
-		return true, nil
-	}
-	// Never hold the identity transaction across the provider request.
-	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	providerID, sendErr := s.invitationEmail.sender.Send(sendCtx, "collaboration-invite/"+j.InvitationID, j.Message)
-	cancel()
-	err = s.withIdentity(ctx, func(ctx context.Context) error {
-		st := s.repositories.(outbound.InvitationEmailStore)
-		current, err := st.GetInvitationEmail(ctx, j.InvitationID)
-		if err != nil {
-			return err
-		}
-		if current.State != "sending" || current.Attempts != j.Attempts {
-			return domain.ErrConflict
-		}
-		current.State, current.Reason, current.ProviderID = "accepted", "", providerID
-		if sendErr != nil {
-			failure := &outbound.EmailDeliveryError{Reason: "transport_failed", Retryable: true}
-			var classified *outbound.EmailDeliveryError
-			if errors.As(sendErr, &classified) {
-				failure = classified
-			}
-			current.State, current.Reason, current.ProviderID = "attention", failure.Reason, ""
-			if failure.Retryable && j.Attempts < 12 {
-				delay := min(time.Duration(1<<min(j.Attempts, 10))*30*time.Second, time.Hour)
-				if failure.RetryAfter > delay {
-					delay = failure.RetryAfter
-				}
-				// The lease's start is the storage clock. Add the bounded request time so
-				// Retry-After is respected even when wall clocks differ between replicas.
-				current.NextAttempt = j.NextAttempt.Add(-2*time.Minute + 10*time.Second + delay)
-				if current.NextAttempt.Before(j.FirstAttempt.Add(23 * time.Hour)) {
-					current.State = "retrying"
-				} else {
-					current.Reason = "retry_window_expired"
-				}
-			}
-		}
-		return st.PutInvitationEmail(ctx, current)
-	})
-	return true, err
+	return s.invitationEmailWorker().ProcessInvitationEmail(ctx)
 }
 func (s *IdentityService) RunInvitationEmailWorker(ctx context.Context) {
-	if s.invitationEmail == nil {
-		return
-	}
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			for n := 0; n < 10; n++ {
-				worked, err := s.ProcessInvitationEmail(ctx)
-				if err != nil || !worked {
-					break
-				}
-			}
-			timer.Reset(3 * time.Second)
-		}
-	}
+	s.invitationEmailWorker().RunInvitationEmailWorker(ctx)
 }

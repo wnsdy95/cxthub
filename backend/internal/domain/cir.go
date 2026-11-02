@@ -255,22 +255,33 @@ const eventV2PresenceMask = eventFieldProviderMetadata |
 	eventFieldReplacement |
 	eventFieldReplacementComplete
 
-func eventPresence(fields map[string]json.RawMessage) eventFieldPresence {
+func eventPresence[Value any](fields map[string]Value) eventFieldPresence {
 	var present eventFieldPresence
-	for name, bit := range map[string]eventFieldPresence{
-		"provider_metadata":    eventFieldProviderMetadata,
-		"agent_message":        eventFieldAgentMessage,
-		"agent_author":         eventFieldAgentAuthor,
-		"agent_recipient":      eventFieldAgentRecipient,
-		"replacement":          eventFieldReplacement,
-		"replacement_complete": eventFieldReplacementComplete,
-		"locked":               eventFieldLocked,
-	} {
-		if _, ok := fields[name]; ok {
-			present |= bit
-		}
+	for name := range fields {
+		present |= eventPresenceName(name)
 	}
 	return present
+}
+
+func eventPresenceName(name string) eventFieldPresence {
+	switch name {
+	case "provider_metadata":
+		return eventFieldProviderMetadata
+	case "agent_message":
+		return eventFieldAgentMessage
+	case "agent_author":
+		return eventFieldAgentAuthor
+	case "agent_recipient":
+		return eventFieldAgentRecipient
+	case "replacement":
+		return eventFieldReplacement
+	case "replacement_complete":
+		return eventFieldReplacementComplete
+	case "locked":
+		return eventFieldLocked
+	default:
+		return 0
+	}
 }
 
 func (e CIREvent) validateKindFieldPresence() error {
@@ -299,11 +310,12 @@ func (e CIREvent) validateKindFieldPresence() error {
 	return nil
 }
 
+type wire CIREvent
+
 // UnmarshalJSON retains presence for optional zero values. Without this, a v1
 // document could smuggle v2-only fields such as agent_message:false and have
 // them silently disappear during canonicalization.
 func (e *CIREvent) UnmarshalJSON(data []byte) error {
-	type wire CIREvent
 	var decoded wire
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err

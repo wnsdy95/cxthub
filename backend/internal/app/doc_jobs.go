@@ -2,22 +2,21 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/documentworker"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-const docJobLease = 2 * time.Minute
+const docJobLease = documentworker.Lease
 
 // This bound is for background work, independent of the 30s HTTP deadline. It
 // prevents a pathological body from holding a worker indefinitely.
-const docJobWorkLimit = 10 * time.Minute
+const docJobWorkLimit = documentworker.WorkLimit
 
 func (s *Service) docJobs() (outbound.DocJobStore, error) {
 	st, ok := s.blobs.(outbound.DocJobStore)
@@ -109,184 +108,38 @@ func (s *Service) GetDocFinalization(ctx context.Context, repo domain.ContentHas
 	})
 }
 func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob) (domain.VerifiedSessionDoc, error) {
-	if err := j.Validate(); err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	representation, err := j.Representation()
+	finalizer, err := s.documentFinalizer(nil)
 	if err != nil {
 		return domain.VerifiedSessionDoc{}, err
 	}
-	if representation.Identity == domain.DocumentIdentityRootV1 {
-		manifest, err := representation.ConversationManifest()
-		if err != nil {
-			return domain.VerifiedSessionDoc{}, err
-		}
-		reader, ok := s.blobs.(outbound.ConversationChunkReader)
-		if !ok {
-			return domain.VerifiedSessionDoc{}, domain.ErrUnsupportedDocumentIdentity
-		}
-		lengths := make(map[domain.ContentHash]int64, len(manifest.Chunks))
-		for _, chunk := range manifest.Chunks {
-			if old, seen := lengths[chunk.Hash]; seen && old != chunk.Bytes {
-				return domain.VerifiedSessionDoc{}, domain.ErrIntegrity
-			}
-			lengths[chunk.Hash] = chunk.Bytes
-		}
-		return s.docVerifier.VerifyConversationManifestDoc(ctx, j.DocHash, manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
-			return reader.ReadConversationChunk(ctx, j.RepoID, hash, lengths[hash])
-		})
-	}
-	return s.docVerifier.VerifyChunks(ctx, j.DocHash, j.Manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
-		// A semantic proof never authorizes another repository's chunk. Read
-		// the current owned bytes even when the verifier has seen their events.
-		return s.blobs.GetChunk(ctx, j.RepoID, hash)
-	})
+	return finalizer.Verify(ctx, j)
 }
 func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j domain.DocFinalizationJob) error {
-	started := time.Now()
-	log.Printf("document finalization started: job=%s identity=%s format=%s attempt=%d", j.ID, j.DocIdentity, j.Manifest.Format, j.Attempts)
-	defer func() {
-		log.Printf("document finalization exited: job=%s elapsed=%s", j.ID, time.Since(started).Round(time.Millisecond))
-	}()
-	work, cancel := context.WithTimeout(ctx, docJobWorkLimit)
-	defer cancel()
-	// Renew using an independent short operation. A lost lease cancels validation;
-	// Complete also fences it transactionally, including after a process pause.
-	done := make(chan struct{})
-	var once sync.Once
-	stop := func() { once.Do(func() { close(done) }) }
-	defer stop()
-	renewed := make(chan struct{})
-	go func() {
-		defer close(renewed)
-		ticker := time.NewTicker(docJobLease / 3)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-work.Done():
-				return
-			case <-ticker.C:
-				renew, finish := context.WithTimeout(work, 5*time.Second)
-				err := st.RenewDocJob(renew, j, time.Now().UTC(), docJobLease)
-				finish()
-				if err != nil {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-	var publication outbound.PreparedDocPublication
-	var err error
-	if streaming, ok := st.(outbound.StreamingRootJobStore); ok && j.DocIdentity == domain.DocumentIdentityRootV1 {
-		var prepared outbound.PreparedRootDocPublication
-		_, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (struct{}, error) {
-			var prepareErr error
-			prepared, prepareErr = streaming.PrepareRootDocJob(read, j)
-			return struct{}{}, prepareErr
-		})
-		if prepared != nil {
-			defer prepared.Close()
-		}
-		publication = prepared
-	} else if streaming, ok := st.(outbound.StreamingLegacyJobStore); ok && j.DocIdentity == domain.DocumentIdentityLegacy && j.Manifest.Format == domain.ChunkFormatV2 {
-		var prepared outbound.PreparedRootDocPublication
-		_, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (struct{}, error) {
-			var prepareErr error
-			prepared, prepareErr = streaming.PrepareLegacyDocJob(read, j)
-			return struct{}{}, prepareErr
-		})
-		if prepared != nil {
-			defer prepared.Close()
-		}
-		publication = prepared
-	} else {
-		var verified domain.VerifiedSessionDoc
-		verified, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (domain.VerifiedSessionDoc, error) { return s.verifyDocJob(read, j) })
-		if err == nil {
-			publication, err = st.PrepareDocJob(work, verified)
-		}
-	}
-	stop()
-	<-renewed
-	// Preparation may succeed before an in-flight renewal cancels the work.
-	if err == nil {
-		err = work.Err()
-	}
-	if staged, ok := publication.(outbound.StagedDocPublication); err == nil && ok {
-		err = staged.Stage(work, j, docJobLease)
-	}
-	if err == nil {
-		err = publication.Complete(work, j, time.Now().UTC())
-	}
-	if err == nil {
-		return nil
-	}
-	if ctx.Err() != nil {
-		return err
-	} // shutdown leaves the durable lease for recovery
-	now := time.Now().UTC()
-	j.State = "retrying"
-	j.Reason = "temporary_failure"
-	j.UpdatedAt = now
-	j.LeaseUntil = time.Time{}
-	j.NextAttempt = now.Add(time.Second << min(j.Attempts, 8))
-	if errors.Is(err, domain.ErrDocumentResourceLimit) {
-		j.Reason = "resource_limit"
-	}
-	if errors.Is(err, domain.ErrIntegrity) || errors.Is(err, domain.ErrValidation) || errors.Is(err, domain.ErrUnsupportedCIRVersion) || errors.Is(err, domain.ErrConversationManifest) || errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
-		j.State = "rejected"
-		j.Reason = "invalid_document"
-	}
-	finish, c := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer c()
-	return errors.Join(err, st.FinishDocJob(finish, j, now))
-}
-func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error {
-	ctx = s.DocumentIdentityWorkerContext(inbound.WithSystemActor(ctx))
-	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
-	st, err := s.docJobs()
+	finalizer, err := s.documentFinalizer(st)
 	if err != nil {
 		return err
 	}
-	for i := 0; i < limit; i++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		claimed := false
-		err := admittedJob(ctx, func(bound context.Context) (domain.DocFinalizationJob, error) {
-			return st.ClaimDocJob(bound, "", time.Now().UTC(), docJobLease)
-		}, func(bound context.Context, job domain.DocFinalizationJob) error {
-			claimed = true
-			return s.runDocJob(bound, st, job)
-		})
-		if !claimed && errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+	return finalizer.RunJob(ctx, j)
+}
+func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error {
+	storage, _ := s.blobs.(outbound.DocJobStore)
+	finalizer, err := s.documentFinalizer(storage)
+	if err != nil {
+		return err
 	}
-	return nil
+	return finalizer.Process(ctx, limit)
 }
 
 // One worker per process bounds resident large bodies. Database claims also
 // serialize a repository across instances; no request spawns its own worker.
 func (s *Service) RunDocFinalizationWorker(ctx context.Context) {
-	for {
-		if err := s.ProcessDocFinalizations(ctx, 1); err != nil && ctx.Err() == nil {
-			log.Printf("document finalization: %v", err)
-		}
-		timer := time.NewTimer(time.Second)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
+	storage, _ := s.blobs.(outbound.DocJobStore)
+	finalizer, err := s.documentFinalizer(storage)
+	if err != nil {
+		log.Printf("document finalization: %v", err)
+		return
 	}
+	finalizer.Run(ctx)
 }
 
 func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {

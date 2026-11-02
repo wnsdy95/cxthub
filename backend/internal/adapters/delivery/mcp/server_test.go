@@ -59,6 +59,25 @@ func (f fakeContextBackend) GetMemoryObject(_ context.Context, _ domain.ContentH
 	}
 	return domain.MemoryDigest{}, domain.ErrNotFound
 }
+
+func (f fakeContextBackend) GetMemoryDigest(ctx context.Context, repo, snapshot domain.ContentHash) (domain.MemoryDigest, error) {
+	selected, err := f.GetSnapshot(ctx, repo, snapshot)
+	if err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	return f.GetMemoryObject(ctx, repo, selected.MemoryHash)
+}
+
+func (fakeContextBackend) WithMemoryReadResources(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
+	if authorize := inbound.DocumentReadAuthorizer(ctx); authorize != nil {
+		var err error
+		ctx, err = authorize(ctx, repo)
+		if err != nil {
+			return err
+		}
+	}
+	return read(ctx)
+}
 func (fakeContextBackend) ListRefs(context.Context, domain.ContentHash) ([]domain.Ref, error) {
 	return nil, nil
 }
@@ -505,8 +524,8 @@ func webSessionCookie(token string) string { return sessionCookieName + "=" + to
 
 func TestRemoteMCPToolsAreReadOnly(t *testing.T) {
 	tools := toolDefinitions()
-	if len(tools) != 10 {
-		t.Fatalf("tool count = %d, want 10 read-only tools", len(tools))
+	if len(tools) != 11 {
+		t.Fatalf("tool count = %d, want 11 read-only tools", len(tools))
 	}
 	for _, tool := range tools {
 		annotations := tool["annotations"].(map[string]any)
@@ -564,7 +583,7 @@ func TestRemoteMemoryOutputIsBounded(t *testing.T) {
 			memoryHash: {SnapshotID: snapshotID, Summary: "bounded", KeyFacts: facts},
 		},
 	}
-	s := &Server{context: backend}
+	s := &Server{context: backend, memorySnapshots: backend}
 	got, err := s.toolMemoryLoad(systemTestContext(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
 	if err != nil {
 		t.Fatal(err)

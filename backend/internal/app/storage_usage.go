@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"log"
@@ -66,32 +67,14 @@ func (s *IdentityService) ReconcileStorageUsage(ctx context.Context, actor, ns s
 	return st.ReconcileStorageUsage(ctx, n.ID)
 }
 
-func (s *IdentityService) RunStorageMaintenance(ctx context.Context) {
-	st, ok := s.repositories.(interface {
-		ReconcileNextStorageUsage(context.Context) (bool, error)
+func (service *IdentityService) RunStorageMaintenance(ctx context.Context) {
+	storage, _ := service.repositories.(systemmaintenance.StorageStore)
+	worker, err := systemmaintenance.NewStorage(systemmaintenance.StorageConfig{
+		Profile: systemmaintenance.Compatibility, Store: storage,
 	})
-	if !ok {
+	if err != nil {
+		log.Printf("storage maintenance: %v", err)
 		return
 	}
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			for i := 0; i < 8; i++ {
-				call, cancel := context.WithTimeout(ctx, 30*time.Second)
-				did, err := st.ReconcileNextStorageUsage(call)
-				cancel()
-				if err != nil {
-					log.Printf("storage reconciliation failed: %v", err)
-					break
-				}
-				if !did {
-					break
-				}
-			}
-		}
-	}
+	worker.Run(ctx)
 }

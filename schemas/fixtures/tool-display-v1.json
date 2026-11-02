@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "fallback tool name and no control labels",
+      "source": "{\"call_id\":\"c\",\"input\":{},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"\"}",
+      "text": "tool",
+      "ranges": [{ "text": "tool", "source": "\"tool_call\"" }]
+    },
+    {
+      "name": "provider name wins and Edit preserves CR and trailing lines",
+      "source": "{\"call_id\":\"c\",\"input\":{\"file_path\":\"/repo/src/folder/file.go\",\"new_string\":\"new\\n\",\"old_string\":\"old\\r\\n**literal**\"},\"kind\":\"tool_call\",\"provider_tool_name\":\"Edit\",\"seq\":0,\"tool_name\":\"edit_file\"}",
+      "text": "Edit(…/src/folder/file.go)\n− old\r\n− **literal**\n+ new\n+ ",
+      "ranges": [
+        { "text": "Edit", "source": "Edit" },
+        { "text": "src/folder/file.go", "source": "src/folder/file.go" },
+        { "text": "old\r", "source": "old\\r" },
+        { "text": "**literal**", "source": "**literal**" },
+        { "text": "new", "source": "new" }
+      ]
+    },
+    {
+      "name": "Write complete lines and four segment path remains unchanged",
+      "source": "{\"call_id\":\"c\",\"input\":{\"content\":\"# title\\n\\nlast\\r\",\"file_path\":\"a/b/c/d\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Write\"}",
+      "text": "Write(a/b/c/d)\n+ # title\n+ \n+ last\r",
+      "ranges": [{ "text": "# title", "source": "# title" }, { "text": "last\r", "source": "last\\r" }]
+    },
+    {
+      "name": "short path preserves empty slash segments",
+      "source": "{\"call_id\":\"c\",\"input\":{\"file_path\":\"/a/b/c/\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Read\"}",
+      "text": "Read(…/b/c/)\n{\n  \"file_path\": \"/a/b/c/\"\n}"
+    },
+    {
+      "name": "Bash header is adjacent and body is PRE not Markdown",
+      "source": "{\"call_id\":\"c\",\"input\":{\"command\":\"printf '**x**'\\r\\necho ok\",\"pattern\":\"not the header\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Bash\"}",
+      "text": "Bash(printf '**x**'\r\necho ok)\n$ printf '**x**'\r\necho ok",
+      "ranges": [{ "text": "$ ", "source": "\"" }, { "text": "**x**", "source": "**x**" }]
+    },
+    {
+      "name": "Codex generic input is expanded pretty JSON",
+      "source": "{\"call_id\":\"c\",\"input\":{\"cmd\":\"echo **literal**\",\"workdir\":\"/tmp\",\"yield_time_ms\":1000},\"kind\":\"tool_call\",\"provider_tool_name\":\"functions.exec_command\",\"seq\":2,\"tool_name\":\"shell\"}",
+      "text": "functions.exec_command\n{\n  \"cmd\": \"echo **literal**\",\n  \"workdir\": \"/tmp\",\n  \"yield_time_ms\": 1000\n}",
+      "ranges": [{ "text": "\"cmd\": \"echo **literal**\"", "source": "\"cmd\":\"echo **literal**\"" }]
+    },
+    {
+      "name": "generic header falls through nonstrings and empty command",
+      "source": "{\"call_id\":\"c\",\"input\":{\"command\":\"\",\"file_path\":false,\"pattern\":\"a.*b\",\"url\":\"https://unused.test\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Grep\"}",
+      "text": "Grep(a.*b)\n{\n  \"command\": \"\",\n  \"file_path\": false,\n  \"pattern\": \"a.*b\",\n  \"url\": \"https://unused.test\"\n}"
+    },
+    {
+      "name": "URL header fallback",
+      "source": "{\"call_id\":\"c\",\"input\":{\"url\":\"https://example.test/a?x=1\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Fetch\"}",
+      "text": "Fetch(https://example.test/a?x=1)\n{\n  \"url\": \"https://example.test/a?x=1\"\n}"
+    },
+    {
+      "name": "nested integer index keys reorder but retain original source spans",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"10\":\"ten\",\"2\":\"two\",\"a\":[{\"10\":10,\"2\":2,\"z\":false},null,[]]},\"seq\":1}",
+      "text": "{\n  \"2\": \"two\",\n  \"10\": \"ten\",\n  \"a\": [\n    {\n      \"2\": 2,\n      \"10\": 10,\n      \"z\": false\n    },\n    null,\n    []\n  ]\n}",
+      "ranges": [
+        { "text": "\"2\": \"two\"", "source": "\"2\":\"two\"" },
+        { "text": "\"2\": \"two\",\n  \"10\": \"ten\"", "source": "\"10\":\"ten\",\"2\":\"two\"," },
+        { "text": "false", "source": "false" }
+      ]
+    },
+    {
+      "name": "integer index boundaries exclude padded signed and uint32 maximum keys",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"-0\":0,\"0\":0,\"00\":0,\"01\":1,\"10\":10,\"2\":2,\"4294967294\":4,\"4294967295\":5,\"a\":6},\"seq\":1}",
+      "text": "{\n  \"0\": 0,\n  \"2\": 2,\n  \"10\": 10,\n  \"4294967294\": 4,\n  \"-0\": 0,\n  \"00\": 0,\n  \"01\": 1,\n  \"4294967295\": 5,\n  \"a\": 6\n}"
+    },
+    {
+      "name": "HTML separators control escapes and Unicode match JS stringify",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"text\":\"\\u003c\\u0026\\u003e\\u2028\\u2029\\u0000\\u000b\\b\\f\\n\\r\\t\\\"\\\\\\/\\ufffd\"},\"seq\":1}",
+      "text": "{\n  \"text\": \"<&>\u2028\u2029\\u0000\\u000b\\b\\f\\n\\r\\t\\\"\\\\/�\"\n}",
+      "ranges": [
+        { "text": "<&>", "source": "\\u003c\\u0026\\u003e" },
+        { "text": "\u2028\u2029", "source": "\\u2028\\u2029" },
+        { "text": "�", "source": "\\ufffd" }
+      ]
+    },
+    {
+      "name": "escaped Unicode names paths and strings preserve canonical byte provenance",
+      "source": "{\"call_id\":\"c\",\"input\":{\"content\":\"\\ud83d\\ude42\\n\\uac00\\r\",\"file_path\":\"\\ud55c/one/two/three/four\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"\\u0057rite\"}",
+      "text": "Write(…/two/three/four)\n+ 🙂\n+ \uac00\r",
+      "ranges": [{ "text": "W", "source": "\\u0057" }, { "text": "🙂", "source": "\\ud83d\\ude42" }, { "text": "\uac00\r", "source": "\\uac00\\r" }]
+    },
+    {
+      "name": "raw Unicode shortened path anchors remain valid UTF8",
+      "source": "{\"call_id\":\"c\",\"input\":{\"file_path\":\"\ud55c/one/two/three/four\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Read\"}",
+      "text": "Read(…/two/three/four)\n{\n  \"file_path\": \"\ud55c/one/two/three/four\"\n}"
+    },
+    {
+      "name": "tool result is full literal PRE content including leading and trailing whitespace",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\"  # title\\r\\n**literal** [label](https://example.test)\\n  \",\"seq\":1}",
+      "text": "  # title\r\n**literal** [label](https://example.test)\n  ",
+      "ranges": [{ "text": "title\r\n**literal**", "source": "title\\r\\n**literal**" }]
+    },
+    {
+      "name": "escaped tool result string is decoded without pretty JSON quotes",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\"\\uac80\\uc0c9 \\ud83d\\ude42 \\u003craw\\u003e\\u2028end\",\"seq\":1}",
+      "text": "\uac80\uc0c9 🙂 <raw>\u2028end",
+      "ranges": [{ "text": "\uac80\uc0c9 🙂", "source": "\\uac80\\uc0c9 \\ud83d\\ude42" }, { "text": "<raw>", "source": "\\u003craw\\u003e" }]
+    },
+    {
+      "name": "JS number rendering thresholds precision and negative zero",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":[-0,0.000001,1e-7,100000000000000000000,1e+21,9007199254740993,1.0,1e-324],\"seq\":1}",
+      "text": "[\n  0,\n  0.000001,\n  1e-7,\n  100000000000000000000,\n  1e+21,\n  9007199254740992,\n  1,\n  0\n]",
+      "ranges": [{ "text": "9007199254740992", "source": "9007199254740993" }]
+    },
+    { "name": "empty result string has no tool_result control", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\"\",\"seq\":1}", "text": "" },
+    { "name": "JS whitespace only result has no display", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\" \\t\\r\\n\\u00a0\\ufeff\\u2028\\u3000\",\"seq\":1}", "text": "" },
+    { "name": "U0085 is not JS trim whitespace", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\"\\u0085\",\"seq\":1}", "text": "\u0085" },
+    { "name": "nil output has no display", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":null,\"seq\":1}", "text": "" },
+    { "name": "empty output object remains data", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{},\"seq\":1}", "text": "{}" },
+    { "name": "empty output array remains data", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":[],\"seq\":1}", "text": "[]" },
+    { "name": "false output remains data", "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":false,\"seq\":1}", "text": "false" },
+    { "name": "truthy nonstring Edit fields suppress generic JSON like the renderer", "source": "{\"call_id\":\"c\",\"input\":{\"new_string\":\"\",\"old_string\":{}},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Edit\"}", "text": "Edit" },
+    { "name": "truthy nonstring Write content yields an empty added line", "source": "{\"call_id\":\"c\",\"input\":{\"content\":true},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Write\"}", "text": "Write\n+ " },
+    { "name": "truthy nonstring Bash command yields an empty prompt", "source": "{\"call_id\":\"c\",\"input\":{\"command\":{},\"pattern\":\"fallback\"},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"Bash\"}", "text": "Bash(fallback)\n$ " },
+    {
+      "name": "escaped integer key and ordinary Go order",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"10\":10,\"\\u0032\":2,\"z\":{},\"é\":[]},\"seq\":1}",
+      "text": "{\n  \"2\": 2,\n  \"10\": 10,\n  \"z\": {},\n  \"é\": []\n}",
+      "ranges": [{ "text": "\"2\": 2", "source": "\"\\u0032\":2" }]
+    }
+  ]
+}

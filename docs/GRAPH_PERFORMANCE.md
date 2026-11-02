@@ -198,8 +198,13 @@ only immediately when bulk capacity is free and no bulk caller is queued;
 otherwise it returns overload, never waits while holding the interactive slot.
 An upgrade remains charged until the outer release. Workers acquire before
 claiming durable work, so admission rejection does not increase job attempts.
-The existing durable retry/lease policies are unchanged. A missing document
-range index also maps to retryable HTTP 503, `doc_range_index_unavailable`.
+Existing workers retain their retry/lease policies. PostgreSQL viewer requests
+enqueue missing document range indexes and return `doc_range_index_pending`
+(503, `Retry-After: 3`). The bounded bulk worker verifies and publishes them;
+it does not hold a foreground read transaction while waiting for capacity.
+Read-only callers cannot enqueue and retain `doc_range_index_unavailable`.
+Only the explicit pending state extends automatic document retries; neither
+error changes graph retry policy or bypasses verification.
 
 Graph-state, full-view and pending-view reuse the same immutable graph result
 only after fresh coherent metadata/compatibility reads. Keys include repository,
@@ -253,3 +258,42 @@ race-instrumented run with the same memory target hit this synthetic test's
 30-second deadline; race overhead is not represented by the RSS figure above.
 The focused race suite, including that mixed test, subsequently passed without
 the memory target. This does not establish a race-instrumented 512 MiB guarantee.
+
+## Cold-read FIFO restart (2026-10-18)
+
+Status: uncommitted local implementation, resumed after approval of the
+[architecture design](INCREMENTAL_READ_PUBLICATION_DESIGN.md). The following
+describes local behavior, not a deployed change.
+
+The immediate nested-upgrade rule above remains unchanged. Previously it could
+repeatedly reject a cold graph while workers handed off the bulk slot, without
+ever putting that graph in the FIFO. Graph reads now have one outer retry
+boundary, shared by direct application calls and HTTP response orchestration.
+Only the specific cold-build admission signal requests this restart; ordinary
+overload, integrity, compatibility and authorization errors are not replayed.
+
+The first failed read ends its snapshot and discards inputs. Its owning permit
+is released before a bounded bulk acquire. The retry opens a fresh snapshot,
+rechecks compatibility and recomputes the cache key. HTTP clears the previous
+actor and runs the normal authentication/viewer guard again, preserving public
+anonymous access for expired cookies while rejecting revoked private access.
+The original request deadline remains unchanged, and the final permit covers
+response encoding and writes. A warmed graph still needs no bulk upgrade.
+
+Build reservation happens after admission, so queued readers do not retain a
+cache-build marker. Once admitted, a second reader can reuse the first reader's
+completed generation. Nested caller-owned permits are not released. Transactional
+adapters must expose `RepositoryTransactionPresence` before automatic restart is
+enabled; unknown ownership and existing read/write transactions retain fail-fast
+behavior rather than waiting with a connection or lock held.
+
+Regression coverage includes FIFO worker/read/worker order, all three graph
+endpoints, cancellation and unchanged deadlines, private member/token revocation,
+public expired cookies, expired permit contexts and PostgreSQL reads reopening
+after concurrent metadata or document-compatibility changes. Disposable PostgreSQL
+tests also cover borrowed transactions and identical queued cache misses.
+Neither these checks nor the earlier synthetic RSS result establish production
+p95, a durable read model or elimination of all overload responses.
+
+The remaining structural work is tracked in
+[incremental publication and bounded reads](INCREMENTAL_READ_PUBLICATION_PLAN.md).

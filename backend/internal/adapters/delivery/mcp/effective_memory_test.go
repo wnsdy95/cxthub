@@ -5,16 +5,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 type effectiveQuery struct {
+	scope    inbound.MemoryReadScope
 	repo     domain.ContentHash
 	state    domain.ContentHash
 	items    []domain.EffectiveMemoryItem
 	received []domain.EffectiveMemoryRequest
+}
+
+func (query *effectiveQuery) WithMemoryReadResources(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
+	if repo != query.repo {
+		return domain.ErrForbidden
+	}
+	if query.scope != nil {
+		return query.scope.WithMemoryReadResources(ctx, repo, read)
+	}
+	return read(ctx)
 }
 
 func (q *effectiveQuery) QueryEffectiveMemory(_ context.Context, repo domain.ContentHash, in domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {

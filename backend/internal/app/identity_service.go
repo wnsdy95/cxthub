@@ -17,57 +17,69 @@ import (
 // Dependencies: IdentityVerifier (token→User), RepositoryStore (persistence). Visibility boundary = repository.
 // Invitations use the "share link/code" model — tokens are reusable until revoked (member addition is idempotent).
 type IdentityService struct {
-	verifier        outbound.IdentityVerifier
-	repositories    outbound.RepositoryStore
-	organization    outbound.OrganizationStore
-	teams           outbound.TeamStore
-	invitationEmail *invitationEmailConfig
-	domainResolver  outbound.DomainTXTResolver
-	federation      *federationConfig
-	saml            *samlConfig
+	verifier                 outbound.IdentityVerifier
+	repositories             outbound.RepositoryStore
+	repositoryMetadata       outbound.RepositoryMetadataTransactions
+	userPreferences          outbound.UserPreferencesStore
+	transactionalPreferences bool
+	organization             outbound.OrganizationStore
+	teams                    outbound.TeamStore
+	invitationEmail          *invitationEmailConfig
+	domainResolver           outbound.DomainTXTResolver
+	federation               *federationConfig
+	saml                     *samlConfig
 }
 
 // NewIdentityService creates an IdentityService.
 func NewIdentityService(verifier outbound.IdentityVerifier, repositories outbound.RepositoryStore) *IdentityService {
 	organization, _ := repositories.(outbound.OrganizationStore)
 	teams, _ := repositories.(outbound.TeamStore)
-	return &IdentityService{verifier: verifier, repositories: repositories, organization: organization, teams: teams}
+	userPreferences, _ := repositories.(outbound.UserPreferencesStore)
+	repositoryMetadata, _ := repositories.(outbound.RepositoryMetadataTransactions)
+	_, transactionalPreferences := repositories.(outbound.IdentityTransactions)
+	return &IdentityService{
+		verifier: verifier, repositories: repositories, organization: organization, teams: teams,
+		userPreferences: userPreferences, transactionalPreferences: transactionalPreferences, repositoryMetadata: repositoryMetadata,
+	}
 }
 
 // Authenticate validates a token, upserts the user, and returns it (login entry point).
 // For the first login, a unique username (handle) is automatically assigned from the email local part —
 // becomes the first segment of the user's personal namespace URL.
-func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (domain.User, error) {
-	u, err := s.verifier.Verify(ctx, idToken)
+func (service *IdentityService) Authenticate(ctx context.Context, idToken string) (domain.User, error) {
+	verified, err := service.verifier.Verify(ctx, idToken)
 	if err != nil {
 		return domain.User{}, err
 	}
-	if existing, gerr := s.repositories.GetUser(ctx, u.ID); gerr == nil {
-		// Existing user: handle, alias, creation time are preserved (no regeneration on re-login).
-		u.Username = existing.Username
-		u.Nickname = existing.Nickname
-		if !existing.CreatedAt.IsZero() {
-			u.CreatedAt = existing.CreatedAt
+	return identityResult(ctx, service, func(ctx context.Context) (domain.User, error) {
+		user := verified
+		existing, readErr := service.repositories.GetUser(ctx, verified.ID)
+		if readErr == nil {
+			user = existing
+			user.Email = verified.Email
+			user.Name = verified.Name
+		} else if !errors.Is(readErr, domain.ErrNotFound) {
+			return domain.User{}, readErr
 		}
-	}
-	if u.CreatedAt.IsZero() {
-		u.CreatedAt = time.Now().UTC()
-	}
-	if u.Username == "" {
-		u.Username, err = s.uniqueUsername(ctx, u)
-		if err != nil {
+		if user.CreatedAt.IsZero() {
+			user.CreatedAt = time.Now().UTC()
+		}
+		if user.Username == "" {
+			user.Username, err = service.uniqueUsername(ctx, user)
+			if err != nil {
+				return domain.User{}, err
+			}
+		}
+		if err := service.repositories.UpsertUser(ctx, user); err != nil {
 			return domain.User{}, err
 		}
-	}
-	if err := s.repositories.UpsertUser(ctx, u); err != nil {
-		return domain.User{}, err
-	}
-	if s.organization != nil {
-		if _, err := s.ensurePersonalNamespace(ctx, u); err != nil {
-			return domain.User{}, err
+		if service.organization != nil {
+			if _, err := service.ensurePersonalNamespace(ctx, user); err != nil {
+				return domain.User{}, err
+			}
 		}
-	}
-	return u, nil
+		return user, nil
+	})
 }
 
 // reservedUsernames are reserved words that conflict with URL segments (routing disruption prevention — sync with front RESERVED).
@@ -125,99 +137,82 @@ func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) (st
 //   - nickname: display alias — free change (empty string = remove).
 //   - username: personal Namespace first segment. The previous slug is retained
 //     as an alias so existing URL-derived RepoIDs and CLI remotes keep working.
-func (s *IdentityService) mutateUpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
-	original := u
+func (service *IdentityService) mutateUpdateProfile(ctx context.Context, user domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
+	original, err := service.repositories.GetUser(ctx, user.ID)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user, err = domain.ApplyUserPreferences(original, domain.UserPreferencesPatch{Nickname: nickname, LoadMode: loadMode, Avatar: avatar, Locale: locale})
+	if err != nil {
+		return domain.User{}, err
+	}
 	var personalNamespace domain.Namespace
-	if nickname != nil {
-		u.Nickname = strings.TrimSpace(*nickname)
-	}
-	if avatar != nil {
-		a := strings.TrimSpace(*avatar)
-		if err := domain.ValidateAvatarDataURL(a); err != nil {
-			return domain.User{}, err
-		}
-		u.Avatar = a
-	}
-	if loadMode != nil {
-		v := strings.TrimSpace(*loadMode)
-		if v != "" && v != "full" && v != "reconstructed" && v != "memory" {
-			return domain.User{}, domain.ErrValidation
-		}
-		u.LoadMode = v
-	}
-	if locale != nil {
-		v := strings.TrimSpace(*locale)
-		if v != "" && v != "ko" && v != "en" {
-			return domain.User{}, domain.ErrValidation
-		}
-		u.Locale = v
-	}
 	usernameChanged := false
 	if username != nil {
 		next := domain.Slugify(strings.TrimSpace(*username), "")
 		if next == "" {
 			return domain.User{}, domain.ErrValidation
 		}
-		if next != u.Username {
+		if next != user.Username {
 			if reservedUsernames[next] {
 				return domain.User{}, domain.ErrConflict // reserved word (route conflict)
 			}
-			if other, err := s.repositories.GetUserByUsername(ctx, next); err == nil && other.ID != u.ID {
+			if other, err := service.repositories.GetUserByUsername(ctx, next); err == nil && other.ID != user.ID {
 				return domain.User{}, domain.ErrConflict // handle already in use
 			}
-			if err := s.checkPersonalDocumentIdentities(ctx, u.ID); err != nil {
+			if err := service.checkPersonalDocumentIdentities(ctx, user.ID); err != nil {
 				return domain.User{}, err
 			}
-			if s.organization != nil {
+			if service.organization != nil {
 				var err error
-				personalNamespace, err = s.ensurePersonalNamespace(ctx, u)
+				personalNamespace, err = service.ensurePersonalNamespace(ctx, user)
 				if err != nil {
 					return domain.User{}, err
 				}
-				if claimed, claimErr := s.organization.GetNamespaceBySlug(ctx, next); claimErr == nil && claimed.ID != personalNamespace.ID {
+				if claimed, claimErr := service.organization.GetNamespaceBySlug(ctx, next); claimErr == nil && claimed.ID != personalNamespace.ID {
 					return domain.User{}, domain.ErrConflict
 				}
 			}
-			u.Username = next
+			user.Username = next
 			usernameChanged = true
 		}
 	}
-	if err := s.repositories.UpsertUser(ctx, u); err != nil {
+	if err := service.repositories.UpsertUser(ctx, user); err != nil {
 		return domain.User{}, err
 	}
 	if usernameChanged {
-		if s.organization != nil {
-			if err := s.organization.RenameNamespace(ctx, personalNamespace.ID, u.Username); err != nil {
-				_ = s.repositories.UpsertUser(ctx, original)
+		if service.organization != nil {
+			if err := service.organization.RenameNamespace(ctx, personalNamespace.ID, user.Username); err != nil {
+				_ = service.repositories.UpsertUser(ctx, original)
 				return domain.User{}, err
 			}
 		}
 		// Normalize only personal namespace paths. Organization repositories keep the
 		// company slug even when their human creator renames a personal handle.
-		if list, err := s.repositories.ListRepositoriesForUser(ctx, u.ID); err != nil {
+		if list, err := service.repositories.ListRepositoriesForUser(ctx, user.ID); err != nil {
 			return domain.User{}, err
 		} else {
-			for _, w := range list {
-				if w.OwnerID != u.ID || w.OwnerUsername == u.Username {
+			for _, repository := range list {
+				if repository.OwnerID != user.ID || repository.OwnerUsername == user.Username {
 					continue
 				}
-				if w.OwnerNamespaceID != "" && s.organization != nil {
-					namespace, nerr := s.organization.GetNamespace(ctx, w.OwnerNamespaceID)
-					if nerr != nil {
-						return domain.User{}, nerr
+				if repository.OwnerNamespaceID != "" && service.organization != nil {
+					namespace, namespaceErr := service.organization.GetNamespace(ctx, repository.OwnerNamespaceID)
+					if namespaceErr != nil {
+						return domain.User{}, namespaceErr
 					}
 					if namespace.Kind == domain.NamespaceOrganization {
 						continue
 					}
 				}
-				w.OwnerUsername = u.Username
-				if err := s.repositories.CreateRepository(ctx, w); err != nil {
+				repository.OwnerUsername = user.Username
+				if err := service.repositories.CreateRepository(ctx, repository); err != nil {
 					return domain.User{}, err
 				}
 			}
 		}
 	}
-	return u, nil
+	return user, nil
 }
 
 // RepositoryPatch updates repository settings. Nil fields do not change.
@@ -1086,34 +1081,18 @@ func (s *IdentityService) Login(ctx context.Context, idpToken, label string) (do
 
 // Logout deletes the session (idempotent — deletes hash record and legacy plaintext record).
 func (s *IdentityService) Logout(ctx context.Context, sessionToken string) error {
-	if err := s.repositories.DeleteSession(ctx, domain.HashToken(sessionToken)); err != nil {
-		return err
-	}
-	return s.repositories.DeleteSession(ctx, sessionToken) // legacy residue cleanup
+	return s.repositories.DeleteSession(ctx, sessionToken)
 }
 
 // ResolveSession interprets a session token as a user. Expired/invalid → domain.ErrUnauthorized.
 // The storage is queried by hash, and legacy plaintext records are promoted to hash records lazily (migration — existing login/CLI tokens do not break).
 func (s *IdentityService) resolveSessionRecord(ctx context.Context, token string) (domain.Session, domain.User, error) {
 	sess, err := s.repositories.GetSession(ctx, domain.HashToken(token))
+	if errors.Is(err, domain.ErrNotFound) {
+		sess, err = s.repositories.MigrateSession(ctx, token)
+	}
 	if err != nil {
-		legacy, lerr := s.repositories.GetSession(ctx, token)
-		if lerr != nil {
-			return domain.Session{}, domain.User{}, domain.ErrUnauthorized
-		}
-		// Promotion: plaintext record → hash record (+hint/kind enhancement), plaintext is deleted.
-		upgraded := legacy
-		upgraded.Token = domain.HashToken(token)
-		upgraded.Hint = domain.TokenHint(token)
-		if strings.HasPrefix(token, cliTokenPrefix) {
-			upgraded.Kind = "cli"
-		} else {
-			upgraded.Kind = "web"
-		}
-		if uerr := s.repositories.CreateSession(ctx, upgraded); uerr == nil {
-			_ = s.repositories.DeleteSession(ctx, token)
-		}
-		sess = upgraded
+		return domain.Session{}, domain.User{}, domain.ErrUnauthorized
 	}
 	if time.Now().After(sess.ExpiresAt) {
 		_ = s.repositories.DeleteSession(ctx, sess.Token)

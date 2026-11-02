@@ -47,7 +47,7 @@ func TestPGGitContributionQueryUsesOnlyHistoricalProofInputs(t *testing.T) {
 		if err != nil {
 			return false, err
 		}
-		if len(rows) != 1 || !rows[0].valid || rows[0].record != fixture.proof.Contribution || rows[0].publications[fixture.publication.ID] != fixture.publication {
+		if len(rows) != 1 || !rows[0].Valid || rows[0].Record != fixture.proof.Contribution || rows[0].Publications[fixture.publication.ID] != fixture.publication {
 			t.Fatalf("historical proof changed: %+v", rows)
 		}
 		snapshot, err := core.readGitAdmissionHistory(ctx, repo, history)

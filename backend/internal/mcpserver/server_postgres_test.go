@@ -4,6 +4,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,10 @@ import (
 	"time"
 
 	delivery "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/http"
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
+	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/serverruntime"
 )
 
@@ -35,6 +39,18 @@ func TestPGIndependentMCP(t *testing.T) {
 	}
 	t.Setenv("CXT_MIGRATIONS_DIR", dir)
 	ctx := context.Background()
+	setup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	seed, err := store.NewPostgresStore(setup, dsn)
+	if err != nil {
+		cancel()
+		t.Fatal("open disposable MCP fixture seed store", err)
+	}
+	_, err = seed.ApplyPublicMigrations(setup, dir)
+	seed.Close()
+	cancel()
+	if err != nil {
+		t.Fatal("migrate the disposable MCP fixture database", err)
+	}
 	open := func() *serverruntime.Runtime {
 		r, err := serverruntime.Open(ctx, "127.0.0.1:0", "", true)
 		if err != nil {
@@ -42,8 +58,22 @@ func TestPGIndependentMCP(t *testing.T) {
 		}
 		return r
 	}
-	api, mcp := open(), open()
+	openMCP := func() *serverruntime.Runtime {
+		runtime, err := serverruntime.OpenMCP(ctx, "127.0.0.1:0", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime.Context != nil || runtime.ContextBranches != nil {
+			t.Fatal("MCP constructed a command service")
+		}
+		return runtime
+	}
+	api, mcp := open(), openMCP()
 	defer func() { api.Close(); mcp.Close() }()
+	branches, actualOwner := api.ContextBranches.(*app.ContextBranchOperations)
+	if !actualOwner || branches == nil {
+		t.Fatalf("API root did not construct the actual context branch owner: %T", api.ContextBranches)
+	}
 	owner, _, err := api.Identity.Login(ctx, "dev:"+domain.NewID("owner")+"@example.test", "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +89,31 @@ func TestPGIndependentMCP(t *testing.T) {
 	repo := domain.Repo{ID: domain.HashContent([]byte(repository.ID)), RepositoryID: repository.ID, RemoteURL: "https://cxthub.example/" + owner.Username + "/independent-mcp", DefaultBranch: "main"}
 	if _, err = api.Store.PutRepo(ctx, repo); err != nil {
 		t.Fatal(err)
+	}
+	document := domain.SessionDoc{CIR: domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex},
+		Events:   []domain.CIREvent{{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "independent context query " + string(repo.ID)}}}},
+	}}
+	raw, err := domain.CanonicalBytes(document.CIR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Hash = domain.HashContent(raw)
+	if _, err := api.Store.PutDoc(ctx, repo.ID, document); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Store.PutSnapshot(ctx, domain.Snapshot{ID: document.Hash, RepoID: repo.ID, DocHash: document.Hash, Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Store.CompareAndSwapRef(ctx, repo.ID, domain.Ref{RepoID: repo.ID, Kind: domain.RefBranch, Name: "main", Target: document.Hash}, ""); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := branches.Fork(inbound.WithRepositoryActor(ctx, owner.ID), inbound.ForkInput{RepoID: repo.ID, FromSnapshot: document.Hash, NewBranch: "api-root-branch"})
+	if err != nil || fork.Branch != "api-root-branch" || fork.Head != document.Hash {
+		t.Fatal("actual API branch owner rejected the root's repository ports", fork, err)
+	}
+	if created, err := api.Store.GetRef(ctx, repo.ID, domain.RefBranch, fork.Branch); err != nil || created.Target != document.Hash {
+		t.Fatal("actual API branch owner did not publish its source-bound ref", created, err)
 	}
 	if err = api.Store.AddMember(ctx, domain.Membership{RepositoryID: repository.ID, UserID: actor.ID, Role: domain.RolePuller, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
@@ -115,22 +170,41 @@ func TestPGIndependentMCP(t *testing.T) {
 			t.Fatalf("visible=%v: %d %s", want, status, body)
 		}
 	}
+	assertContextRead := func(want bool) {
+		for _, tool := range []string{"context_list", "context_history", "context_fetch", "context_search", "git_changes", "git_observations", "context_link_status"} {
+			body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 42, "method": "tools/call", "params": map[string]any{
+				"name": tool, "arguments": map[string]any{"repository": string(repo.ID), "branch": "main", "ref": string(document.Hash), "query": "independent context"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, response := call("POST", mcpServer.URL+"/mcp", string(body), pair.AccessToken)
+			failed := strings.Contains(response, `"isError":true`)
+			if status != 200 || failed == want || (want && tool == "context_list" && !strings.Contains(response, string(document.Hash))) {
+				t.Fatalf("context=%s allowed=%v: %d %s", tool, want, status, response)
+			}
+		}
+	}
 	assertVisible(true)
+	assertContextRead(true)
 	// Closing the entire API pool/server must not interrupt MCP reads.
 	apiServer.Close()
 	api.Close()
 	assertVisible(true)
+	assertContextRead(true)
 	api = open()
 	// Restart MCP with a new pool; the existing token remains usable.
 	mcpServer.Close()
 	mcp.Close()
-	mcp = open()
+	mcp = openMCP()
 	mcpServer = makeMCP()
 	assertVisible(true)
+	assertContextRead(true)
 	if err := api.Identity.RemoveMember(ctx, owner.ID, repository.ID, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	assertVisible(false)
+	assertContextRead(false)
 	if err := api.Identity.RevokeMCPApplication(ctx, actor.ID, client); err != nil {
 		t.Fatal(err)
 	}

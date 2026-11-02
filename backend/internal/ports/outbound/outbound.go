@@ -24,7 +24,7 @@ import (
 // Mutable state (ref/manifest) is protected by manifest version-CAS boundaries (immutable invariant C1/M2).
 type MetadataStore interface {
 	// Repo.
-	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
+	RepositoryReader
 	PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) // idempotent (same id returns existing)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 
@@ -200,6 +200,7 @@ type RepositoryStore interface {
 	// Session (server login session — CLI token also represented as long-lived session)
 	CreateSession(ctx context.Context, s domain.Session) error
 	GetSession(ctx context.Context, token string) (domain.Session, error)
+	MigrateSession(ctx context.Context, token string) (domain.Session, error)
 	// ConsumeSession atomically deletes and returns a session only when kind and
 	// label match. It is used for one-time OAuth refresh-token rotation.
 	ConsumeSession(ctx context.Context, token, kind, label string) (domain.Session, error)

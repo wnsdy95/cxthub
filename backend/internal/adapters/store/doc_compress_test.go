@@ -1,68 +1,124 @@
 package store
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
+	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/klauspost/compress/zstd"
 )
 
-// TestDocCompressionRoundTripAndLegacy fixes two invariants of doc at-rest compression:
-// (1) newly written docs are stored using zstd and GetDoc round-trip matches the original, (2) legacy uncompressed
-// (JSON plain text) files are also read verbatim via magic detection — mixable without migration.
-func TestDocCompressionRoundTripAndLegacy(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	st := NewFSStore(dir)
-	repo := ph("r")
+func TestDocumentCompressionSingleEncoderCompatibility(test *testing.T) {
+	legacy, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(4))
+	if err != nil {
+		test.Fatal(err)
+	}
+	defer legacy.Close()
+	for _, body := range [][]byte{nil, []byte(`{"legacy":true}`), bytes.Repeat([]byte("typed content🙂\n"), 1<<15)} {
+		before := bytes.Clone(body)
+		for _, compressed := range [][]byte{docCompress(body), legacy.EncodeAll(body, nil)} {
+			plain, err := docDecompress(compressed)
+			if err != nil || !bytes.Equal(plain, body) || !bytes.Equal(before, body) {
+				test.Fatal("compression changed content or compatibility", len(body), err)
+			}
+		}
+	}
+	raw := []byte(`{"uncompressed":"legacy"}`)
+	if got, err := docDecompress(raw); err != nil || !bytes.Equal(got, raw) {
+		test.Fatal("legacy uncompressed bytes changed", err)
+	}
+}
 
-	doc := domain.SessionDoc{CIR: domain.CIRDocument{Envelope: domain.CIREnvelope{SessionOriginID: "sess-1", SourceModel: "claude-fable-5"}}}
-	canonical, err := domain.CanonicalBytes(doc.CIR)
-	if err != nil {
-		t.Fatal(err)
+func TestDocumentCompressionConcurrentRoundTrips(test *testing.T) {
+	const writers = 16
+	start := make(chan struct{})
+	results := make(chan error, writers)
+	var workers sync.WaitGroup
+	for ordinal := range writers {
+		workers.Go(func() {
+			<-start
+			body := bytes.Repeat([]byte(fmt.Sprintf("writer-%d🙂\n", ordinal)), 8192)
+			for range 8 {
+				got, err := docDecompress(docCompress(body))
+				if err != nil {
+					results <- err
+					return
+				}
+				if !bytes.Equal(got, body) {
+					results <- fmt.Errorf("writer %d reused another caller's bytes", ordinal)
+					return
+				}
+				if len(got) > 0 {
+					got[0] ^= 0xff
+				}
+			}
+			results <- nil
+		})
 	}
-	doc.Hash = domain.HashContent(canonical)
-	if _, err := st.PutDoc(ctx, repo, doc); err != nil {
-		t.Fatal(err)
+	close(start)
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			test.Fatal(err)
+		}
 	}
-	raw, err := os.ReadFile(st.docPath(repo, doc.Hash))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !(len(raw) >= 4 && raw[0] == 0x28 && raw[1] == 0xB5 && raw[2] == 0x2F && raw[3] == 0xFD) {
-		t.Fatalf("new doc not stored using zstd (first bytes %x)", raw[:4])
-	}
-	got, err := st.GetDoc(ctx, repo, doc.Hash)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CIR.Envelope.SessionOriginID != "sess-1" || got.CIR.Envelope.SourceModel != "claude-fable-5" {
-		t.Fatalf("compression round-trip mismatch: %+v", got.CIR.Envelope)
-	}
+}
 
-	// legacy uncompressed file — existing storage must be readable without migration.
-	legacy := domain.SessionDoc{CIR: domain.CIRDocument{Envelope: domain.CIREnvelope{SessionOriginID: "sess-legacy"}}}
-	legacyCanonical, err := domain.CanonicalBytes(legacy.CIR)
-	if err != nil {
-		t.Fatal(err)
+func TestDocumentCompressionRetainedEncoderBudget(test *testing.T) {
+	mode := os.Getenv("CXT_TEST_COMPRESSION_MEMORY_CHILD")
+	if mode == "" {
+		for _, childMode := range []string{"bounded", "cpu-sized-control"} {
+			test.Run(childMode, func(test *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDocumentCompressionRetainedEncoderBudget$", "-test.count=1", "-test.v=true")
+				command.Env = append(os.Environ(), "GOMAXPROCS=8", "GOMEMLIMIT=256MiB", "CXT_TEST_COMPRESSION_MEMORY_CHILD="+childMode)
+				output, err := command.CombinedOutput()
+				if err != nil {
+					test.Fatalf("encoder retained-memory contract: mode=%s error=%v\n%s", childMode, err, output)
+				}
+				test.Logf("mode=%s\n%s", childMode, output)
+			})
+		}
+		return
 	}
-	legacy.Hash = domain.HashContent(legacyCanonical)
-	lb, _ := json.Marshal(legacy.CIR)
-	lp := st.docPath(repo, legacy.Hash)
-	if err := os.MkdirAll(filepath.Dir(lp), 0o755); err != nil {
-		t.Fatal(err)
+	encoder := zstdEnc
+	if mode == "cpu-sized-control" {
+		var err error
+		encoder, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(8))
+		if err != nil {
+			test.Fatal(err)
+		}
+		defer encoder.Close()
+	} else if mode != "bounded" {
+		test.Fatal("unknown compression memory mode", mode)
 	}
-	if err := os.WriteFile(lp, lb, 0o644); err != nil {
-		t.Fatal(err)
+	body := bytes.Repeat([]byte("bounded compression state🙂\n"), 1<<15)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	var encodedBytes int
+	for range 64 {
+		encodedBytes += len(encoder.EncodeAll(body, nil))
 	}
-	got2, err := st.GetDoc(ctx, repo, legacy.Hash)
-	if err != nil {
-		t.Fatal(err)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(encoder)
+	runtime.KeepAlive(body)
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	const budget = 64 << 20
+	if runtime.GOMAXPROCS(0) != 8 || encodedBytes == 0 {
+		test.Fatal("isolated compression workload was not exercised", runtime.GOMAXPROCS(0), encodedBytes)
 	}
-	if got2.CIR.Envelope.SessionOriginID != "sess-legacy" {
-		t.Fatalf("failed to read legacy uncompressed doc: %+v", got2.CIR.Envelope)
+	if mode == "bounded" && retained > budget || mode == "cpu-sized-control" && retained <= budget {
+		test.Fatal("retained encoder memory did not distinguish bounded and CPU-sized pools", mode, retained, budget)
 	}
+	test.Logf("mode=%s gomaxprocs=8 retained_encoder_heap_bytes=%d budget_bytes=%d", mode, retained, budget)
 }

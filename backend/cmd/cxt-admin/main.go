@@ -13,10 +13,17 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return runMigrations(ctx, os.Args[2:], os.Stdout, os.Stderr)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "identity-keys" {
 		return runIdentityKeys(os.Args[2:], os.Stdout, os.Stderr)
 	}

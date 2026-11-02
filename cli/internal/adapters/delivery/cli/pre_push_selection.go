@@ -59,7 +59,7 @@ func resolveGitPushScope(ctx context.Context, c *Container, cwd string, updates 
 	if c.History == nil {
 		return scope, fmt.Errorf("context branch identity is unavailable")
 	}
-	repo, err := resolvePublicationRepo(ctx, c, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return scope, err
 	}
@@ -201,7 +201,7 @@ func runGitPrePush(ctx context.Context, c *Container, cwd string, args []string,
 // after selected local replay so durable publication journals can supply their
 // existing proof; never synthesize one from the requested refspec.
 func checkGitPushAliasProof(ctx context.Context, c *Container, cwd string, updates []gitPushUpdate) error {
-	repo, err := resolvePublicationRepo(ctx, c, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

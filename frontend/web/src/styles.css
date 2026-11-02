@@ -398,9 +398,24 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .inherited-toggle[aria-expanded="true"] { border-bottom-style: dashed; }
 .doc-inherited .msg { opacity: 0.45; }
 .doc-inherited .msg:hover { opacity: 0.8; }
+[data-document-target] { outline: 1px solid var(--muted); outline-offset: -1px; background: var(--hover); scroll-margin-top: 12px; }
+.doc-inherited[data-document-target] .msg { opacity: 1; }
 .doc-load-trigger { min-height: 36px; display: grid; place-items: center; padding: 6px 14px;
   color: var(--muted); font-size: .74rem; }
 .doc-load-error { padding: 10px 14px; }
+.document-find { position: sticky; top: 0; z-index: 9; padding: 6px 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.viewer .document-find { top: var(--document-find-top, 100px); }
+.document-find-panel { position: absolute; top: 100%; left: 0; right: 0; padding: 14px; max-height: min(70vh, var(--document-find-height, 70vh)); overflow: auto;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: 0 12px 30px #0002; font-size: .8rem; }
+.document-find-panel label { display: block; margin-bottom: 6px; }
+.document-find-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.document-find-controls input { flex: 1 1 140px; min-width: 80px; width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg); }
+.document-find-panel p { margin: 10px 0; }
+.document-find-panel .muted { color: var(--muted); }
+.document-find-preview, .document-find-source { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border-radius: 5px; background: var(--hover); }
+.document-find-source { max-height: 50vh; overflow: auto; }
+.document-find-preview mark, .document-find-source mark { background: #ffe082; color: #171717; }
+.document-find-reveal { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; }
 
 /* Search — input at top of commit list + results panel (click to select corresponding snapshot). */
 .ctx-search { margin-left: auto; min-width: min(220px, 100%); max-width: 100%; flex: 1 1 220px; }

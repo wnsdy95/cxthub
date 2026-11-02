@@ -38,7 +38,8 @@ function Harness() {
   return createElement('main', null,
     createElement('select', { 'aria-label': 'View mode', value: mode, onChange: (event: React.ChangeEvent<HTMLSelectElement>) => setMode(event.target.value as DocViewMode) },
       ...(['all', 'chat', 'prompts'] as const).map(value => createElement('option', { key: value, value }, value))),
-    createElement('div', { 'data-testid': 'document-scroll', style: { height: 500, width: '100%', maxWidth: 900, overflowY: 'auto' } },
+    createElement('div', { 'data-testid': 'document-scroll', className: params.has('responsive') ? 'ctx-main' : undefined,
+      style: params.has('responsive') ? undefined : { height: 500, width: '100%', maxWidth: 900, overflowY: 'auto' } },
       createElement(DocEvents, { repoId: 'repo', hash: 'document', base: 'base', start: Number(params.get('start') ?? -1), mode },
         params.has('tail') ? createElement('section', { 'data-testid': 'continuation' },
           createElement(DocEvents, { repoId: 'repo', hash: 'tail', base: 'document', mode })) : undefined)));

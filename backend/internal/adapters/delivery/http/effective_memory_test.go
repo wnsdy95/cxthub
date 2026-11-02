@@ -17,12 +17,18 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 type effectiveMemoryQueryFunc func(context.Context, domain.ContentHash, domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error)
 
 func (f effectiveMemoryQueryFunc) QueryEffectiveMemory(ctx context.Context, repo domain.ContentHash, request domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
 	return f(ctx, repo, request)
+}
+
+type scopedEffectiveMemoryQuery struct {
+	inbound.MemoryReadScope
+	effectiveMemoryQueryFunc
 }
 
 func TestEffectiveMemoryHTTPStaleCursorContract(t *testing.T) {
@@ -136,9 +142,9 @@ func TestEffectiveMemoryHTTPStaleCursorContract(t *testing.T) {
 		{"resource_limit", "memory_projection_limit", fmt.Errorf("read failed: %w", domain.ErrMemoryProjectionLimit), http.StatusUnprocessableEntity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			api.SetEffectiveMemory(effectiveMemoryQueryFunc(func(context.Context, domain.ContentHash, domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
+			api.SetEffectiveMemory(scopedEffectiveMemoryQuery{MemoryReadScope: svc, effectiveMemoryQueryFunc: func(context.Context, domain.ContentHash, domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
 				return domain.EffectiveMemoryPage{}, tc.err
-			}))
+			}})
 			checkError(t, "dev:test@t.io:Test", "page-two", tc.status, tc.code)
 		})
 	}

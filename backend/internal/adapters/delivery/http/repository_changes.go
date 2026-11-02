@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,11 +34,11 @@ type repositoryWatch struct {
 	last   *revisionNotice
 }
 type revisionNotice struct {
-	revision domain.RepositoryRevision
+	revision domain.RepositoryChangeState
 	err      error
 }
 
-func (h *repositoryChangeHub) subscribe(repo domain.ContentHash, read func(context.Context, domain.ContentHash) (domain.RepositoryRevision, error), identities ...domain.DocumentIdentity) (<-chan revisionNotice, func()) {
+func (h *repositoryChangeHub) subscribe(repo domain.ContentHash, read func(context.Context, domain.ContentHash) (domain.RepositoryChangeState, error), identities ...domain.DocumentIdentity) (<-chan revisionNotice, func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.repos == nil {
@@ -73,7 +74,7 @@ func (h *repositoryChangeHub) subscribe(repo domain.ContentHash, read func(conte
 		}
 	}
 }
-func (h *repositoryChangeHub) run(ctx context.Context, repo domain.ContentHash, watch *repositoryWatch, read func(context.Context, domain.ContentHash) (domain.RepositoryRevision, error)) {
+func (h *repositoryChangeHub) run(ctx context.Context, repo domain.ContentHash, watch *repositoryWatch, read func(context.Context, domain.ContentHash) (domain.RepositoryChangeState, error)) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -82,7 +83,7 @@ func (h *repositoryChangeHub) run(ctx context.Context, repo domain.ContentHash, 
 		cancel()
 		n := revisionNotice{v, err}
 		h.mu.Lock()
-		if watch.last == nil || watch.last.err != nil || err != nil || watch.last.revision != v {
+		if watch.last == nil || watch.last.err != nil || err != nil || !watch.last.revision.Equal(v) {
 			watch.last = &n
 			for ch := range watch.subs {
 				select {
@@ -110,34 +111,49 @@ func (s *Server) pendingView(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, nil, domain.ErrValidation)
 		return
 	}
-	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
-	if !ok {
-		return
-	}
-	defer release()
 	if projection := query.Get("projection"); projection != "" {
 		if projection != "on-hold-v1" {
 			s.respond(w, nil, domain.ErrValidation)
 			return
 		}
-		query, ok := s.b.(inbound.PendingStateQuery)
+		r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
 		if !ok {
+			return
+		}
+		defer release()
+		queries := s.repositoryStates
+		if queries == nil {
 			s.writeError(w, http.StatusNotImplemented, "pending_projection_unavailable", "On Hold projection unavailable")
 			return
 		}
-		view, err := query.GetPendingState(r.Context(), s.repoID(r))
+		authorize := s.docVisibleReadAuthorizer(r, s.repoID(r))
+		if s.repositoryStateProfile == inbound.RepositoryStatePinnedSnapshots {
+			authorize = s.memoryReadAuthorizer(r, s.repoID(r))
+		}
+		ctx := inbound.WithDocumentReadAuthorizer(r.Context(), authorize)
+		view, err := queries.GetPendingState(ctx, s.repoID(r))
+		if errors.Is(err, domain.ErrPendingProjectionFailed) {
+			s.writeError(w, http.StatusServiceUnavailable, "pending_projection_failed", "On Hold projection requires attention")
+			return
+		}
+		if errors.Is(err, domain.ErrPendingProjectionNotReady) {
+			w.Header().Set("Retry-After", "1")
+			s.writeError(w, http.StatusServiceUnavailable, "pending_projection_pending", "On Hold projection is catching up")
+			return
+		}
 		s.respond(w, view, err)
 		return
 	}
-	v, err := s.b.GetPendingView(r.Context(), s.repoID(r))
-	if err != nil {
-		s.respond(w, nil, err)
-		return
-	}
-	s.respond(w, struct {
-		domain.PendingView
-		Graph any `json:"graph"`
-	}{v, encodeGraphResponse(r, *v.Graph)}, nil)
+	s.graphRead(w, r, func(request *http.Request) (any, error) {
+		view, err := s.repositoryGraphs.GetPendingView(request.Context(), s.repoID(request))
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			domain.PendingView
+			Graph any `json:"graph"`
+		}{view, encodeGraphResponse(request, *view.Graph)}, nil
+	})
 }
 func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 	f, ok := w.(http.Flusher)
@@ -147,11 +163,11 @@ func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject before subscribing or receiving a cached notice. Each subsequent
 	// poll checks this class against the requirement in its own pinned snapshot.
-	if _, err := s.b.RepositoryRevision(r.Context(), s.repoID(r)); err != nil {
+	if _, err := s.readRepositoryChangeState(r.Context(), s.repoID(r)); err != nil {
 		s.respond(w, nil, err)
 		return
 	}
-	ch, release := s.changes.subscribe(s.repoID(r), s.b.RepositoryRevision, inbound.DocumentIdentities(r.Context())...)
+	ch, release := s.changes.subscribe(s.repoID(r), s.readRepositoryChangeState, inbound.DocumentIdentities(r.Context())...)
 	defer release()
 	// Reconnection re-runs normal membership/token authorization. A revocation
 	// cannot leave a permanent, previously authorized stream alive.
@@ -177,7 +193,7 @@ func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 			// The current durable counters recover any missed notifications, including
 			// a restart or a Last-Event-ID older than retained process state.
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if _, err = fmt.Fprintf(w, "id: %d:%d:%d\nevent: revision\ndata: %s\n\n", n.revision.Graph, n.revision.Pending, n.revision.Evidence, data); err != nil {
+			if _, err = fmt.Fprintf(w, "id: %s\nevent: revision\ndata: %s\n\n", domain.HashContent(data), data); err != nil {
 				return
 			}
 			f.Flush()
@@ -187,6 +203,16 @@ func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) repositoryRevision(w http.ResponseWriter, r *http.Request) {
-	v, err := s.b.RepositoryRevision(r.Context(), s.repoID(r))
+	v, err := s.readRepositoryChangeState(r.Context(), s.repoID(r))
 	s.respond(w, v, err)
+}
+
+func (server *Server) readRepositoryChangeState(ctx context.Context, repo domain.ContentHash) (domain.RepositoryChangeState, error) {
+	if server.repositoryStates == nil {
+		return domain.RepositoryChangeState{}, &httpAccessError{
+			status: http.StatusNotImplemented, code: "catalog_unsupported",
+			message: domain.ErrCatalogUnsupported.Error(), cause: domain.ErrCatalogUnsupported,
+		}
+	}
+	return server.repositoryStates.RepositoryChangeState(ctx, repo)
 }

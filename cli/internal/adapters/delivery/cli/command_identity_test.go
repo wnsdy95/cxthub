@@ -80,7 +80,7 @@ func TestCommandIdentityAcrossWorktreesRejectsFalseSources(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			target, err := commandCapture(context.Background(), linked, "codex")
+			target, err := captureSelectionForTest().ResolveCommandSession(context.Background(), linked, "codex")
 			if scenario == "unregistered" || scenario == "poisoned-registry" {
 				if err != nil || target.SessionPath != owned {
 					t.Fatalf("exact command failed: %+v %v", target, err)

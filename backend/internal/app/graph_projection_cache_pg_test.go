@@ -38,10 +38,14 @@ func TestPGGraphProjectionSurvivesPRQueueReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	full, err := svc.GetRepositoryView(ctx, repo)
-	if err != nil || len(svc.graphCache.entries) != 1 {
+	if err != nil || svc.graphCache.Stats().Entries != 1 {
 		t.Fatalf("initial cache: %v", err)
 	}
-	entry := svc.graphCache.entries[0]
+	keys := svc.graphCache.Keys()
+	encoded, found := svc.graphCache.Get(keys[0])
+	if !found || len(encoded) == 0 {
+		t.Fatal("initial projection encoding is unavailable")
+	}
 	pr := domain.PullRequestMerge{Number: 42, BaseBranch: "main", HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
 	for range 3 {
 		if _, err := svc.SubmitPRPromotion(ctx, repo, pr); err != nil {
@@ -55,7 +59,9 @@ func TestPGGraphProjectionSurvivesPRQueueReplay(t *testing.T) {
 	}
 	defer releaseBulk()
 	after, err := svc.GetRepositoryView(admission, repo)
-	if err != nil || after.Revision != full.Revision || &entry.value[0] != &svc.graphCache.entries[0].value[0] {
+	keys = svc.graphCache.Keys()
+	retained, found := svc.graphCache.Get(keys[0])
+	if err != nil || after.Revision != full.Revision || !found || len(retained) == 0 || &encoded[0] != &retained[0] {
 		t.Fatalf("queue replay discarded warm graph: before=%+v after=%+v err=%v", full.Revision, after.Revision, err)
 	}
 	releaseBulk()
@@ -70,10 +76,14 @@ func TestPGGraphProjectionCacheSharedEndpointsAndUnversionedUpload(t *testing.T)
 		t.Fatal(err)
 	}
 	full, err := svc.GetRepositoryView(ctx, repo)
-	if err != nil || len(svc.graphCache.entries) != 1 {
-		t.Fatalf("first projection: entries=%d err=%v", len(svc.graphCache.entries), err)
+	if err != nil || svc.graphCache.Stats().Entries != 1 {
+		t.Fatalf("first projection: entries=%d err=%v", svc.graphCache.Stats().Entries, err)
 	}
-	entry := svc.graphCache.entries[0]
+	keys := svc.graphCache.Keys()
+	encoded, found := svc.graphCache.Get(keys[0])
+	if !found || len(encoded) == 0 {
+		t.Fatal("initial projection encoding is unavailable")
+	}
 	admission, gate := admissionTestContext(10 * time.Millisecond)
 	_, releaseBulk, err := AcquireResources(admission, ResourceBulk)
 	if err != nil {
@@ -107,11 +117,15 @@ func TestPGGraphProjectionCacheSharedEndpointsAndUnversionedUpload(t *testing.T)
 			t.Fatal("endpoint graph contracts diverged")
 		}
 	}
-	if &entry.value[0] != &svc.graphCache.entries[0].value[0] {
+	keys = svc.graphCache.Keys()
+	retained, found := svc.graphCache.Get(keys[0])
+	if !found || len(retained) == 0 || &encoded[0] != &retained[0] {
 		t.Fatal("same pinned inputs recomputed graph")
 	}
 	state, err := svc.GetPendingState(ctx, repo)
-	if err != nil || state.Projection != "on-hold-v1" || state.Revision != full.Revision || len(state.Snapshots) != 1 || &entry.value[0] != &svc.graphCache.entries[0].value[0] {
+	keys = svc.graphCache.Keys()
+	retained, found = svc.graphCache.Get(keys[0])
+	if err != nil || state.Projection != "on-hold-v1" || state.Revision != full.Revision || len(state.Snapshots) != 1 || !found || len(retained) == 0 || &encoded[0] != &retained[0] {
 		t.Fatalf("independent PG pending projection: %+v %v", state, err)
 	}
 	svc.meta = graphCachePGRootPolicy{storage}

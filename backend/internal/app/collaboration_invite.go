@@ -38,44 +38,7 @@ func (s *IdentityService) collaborationRole(ctx context.Context, actor, kind, id
 	return ""
 }
 func (s *IdentityService) authorizeInvitation(ctx context.Context, actor, kind, id string, target domain.OrganizationRole) error {
-	if err := domain.ValidateCollaborationScope(kind, id); err != nil {
-		return err
-	}
-	// Preserve storage failures; a worker must not treat an unavailable
-	// membership store as a permanent revocation.
-	var role domain.OrganizationRole
-	if kind == "organization" {
-		if s.organization == nil {
-			return domain.ErrForbidden
-		}
-		member, err := s.organization.GetOrganizationMembership(ctx, id, actor)
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ErrForbidden
-		}
-		if err != nil {
-			return err
-		}
-		role = member.Role
-	} else {
-		st, err := s.enterpriseStore()
-		if err != nil {
-			return err
-		}
-		members, err := st.ListEnterpriseMembers(ctx, id)
-		if err != nil {
-			return err
-		}
-		for _, member := range members {
-			if member.UserID == actor {
-				role = domain.OrganizationRole(member.Role)
-				break
-			}
-		}
-	}
-	if !role.AtLeast(domain.OrganizationAdmin) || (target != domain.OrganizationMember && role != domain.OrganizationOwner) {
-		return domain.ErrForbidden
-	}
-	return nil
+	return s.invitationAuthority().authorizeInvitation(ctx, actor, kind, id, target)
 }
 func (s *IdentityService) invitationAudit(ctx context.Context, i domain.CollaborationInvite, actor, action string) error {
 	if i.Kind == "enterprise" {

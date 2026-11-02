@@ -35,18 +35,18 @@ type preparedGitAdmissionBatch struct {
 	admissions []preparedGitAdmission
 }
 
-func (g *GitScans) freezeGitAdmissionBatch(ctx context.Context, claim domain.GitHeadScan, identity *domain.GitProviderObservation, fence GitReadFence) (*frozenGitAdmissionBatch, error) {
-	matcher, supported := g.core.meta.(outbound.GitAdmissionMatchStore)
-	queue, queued := g.core.meta.(outbound.GitAssociationDiscoveryStore)
-	_, admissions := g.core.meta.(outbound.GitContributionAdmissionStore)
-	_, atomic := g.core.meta.(outbound.RepositoryTransactions)
+func (workers *GitIntegrationWorkers) freezeGitAdmissionBatch(ctx context.Context, claim domain.GitHeadScan, identity *domain.GitProviderObservation, fence GitReadFence) (*frozenGitAdmissionBatch, error) {
+	matcher, supported := workers.work.meta.(outbound.GitAdmissionMatchStore)
+	queue, queued := workers.work.meta.(outbound.GitAssociationDiscoveryStore)
+	_, admissions := workers.work.meta.(outbound.GitContributionAdmissionStore)
+	_, atomic := workers.work.meta.(outbound.RepositoryTransactions)
 	if !supported || !queued || !admissions || !atomic || identity == nil {
 		return nil, nil
 	}
 	if identity.Validate() != nil || fence == nil || claim.Validate() != nil || claim.State != "running" {
 		return nil, domain.ErrIntegrity
 	}
-	return repositoryReadForRepo(ctx, g.core, claim.RepoID, func(read context.Context) (*frozenGitAdmissionBatch, error) {
+	return repositoryReadForRepoWithWork(ctx, workers.work, claim.RepoID, func(read context.Context) (*frozenGitAdmissionBatch, error) {
 		previous, err := matcher.GetGitAdmissionMatch(read, claim.RepoID, claim.GitOrigin, *identity, claim.Page)
 		if errors.Is(err, domain.ErrNotFound) {
 			previous = domain.GitAdmissionMatch{RepoID: claim.RepoID, GitOrigin: claim.GitOrigin, Provider: *identity, Page: claim.Page}
@@ -92,7 +92,7 @@ func (g *GitScans) freezeGitAdmissionBatch(ctx context.Context, claim domain.Git
 			for _, publication := range batch.publications {
 				lookups = append(lookups, gitAdmissionLookup{publicationID: publication.ID})
 			}
-			batch.snapshot, err = g.core.readGitAdmissionEvidence(read, claim.RepoID, lookups)
+			batch.snapshot, err = workers.readGitAdmissionEvidence(read, claim.RepoID, lookups)
 			if err != nil {
 				return nil, err
 			}
@@ -108,15 +108,15 @@ func gitAdmissionDeferred(err error) bool {
 	return errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrConflict) || errors.Is(err, errGitContributionEvidencePending) || errors.Is(err, errGitContributionAlreadyPresent)
 }
 
-func (g *GitScans) prepareGitAdmissionBatch(ctx context.Context, frozen *frozenGitAdmissionBatch, receipt *domain.GitHeadReceipt) (*preparedGitAdmissionBatch, error) {
+func (workers *GitIntegrationWorkers) prepareGitAdmissionBatch(ctx context.Context, frozen *frozenGitAdmissionBatch, receipt *domain.GitHeadReceipt) (*preparedGitAdmissionBatch, error) {
 	if frozen == nil || receipt == nil {
 		return nil, nil
 	}
 	if receipt.Validate() != nil || receipt.RepoID != frozen.claim.RepoID || receipt.GitOrigin != frozen.claim.GitOrigin || receipt.Version != frozen.claim.Version || receipt.Page != frozen.claim.Page || receipt.Provider != frozen.authorization.provider {
 		return nil, domain.ErrIntegrity
 	}
-	return repositoryReadForRepo(ctx, g.core, receipt.RepoID, func(read context.Context) (*preparedGitAdmissionBatch, error) {
-		snapshot, err := g.core.hydrateGitAdmissionEvidence(read, frozen.snapshot, frozen.publications, *receipt)
+	return repositoryReadForRepoWithWork(ctx, workers.work, receipt.RepoID, func(read context.Context) (*preparedGitAdmissionBatch, error) {
+		snapshot, err := workers.hydrateGitAdmissionEvidence(read, frozen.snapshot, frozen.publications, *receipt)
 		stale := errors.Is(err, domain.ErrConflict)
 		if err != nil && !stale {
 			return nil, err
@@ -125,7 +125,7 @@ func (g *GitScans) prepareGitAdmissionBatch(ctx context.Context, frozen *frozenG
 		if !stale {
 			preparedFrozen.snapshot = snapshot
 		}
-		evidence, err := g.core.newCodeEvidence(read, receipt.RepoID)
+		evidence, err := workers.newCodeEvidence(read, receipt.RepoID)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +194,7 @@ func planGitAdmissionBatch(ctx context.Context, frozen *frozenGitAdmissionBatch,
 	return batch, nil
 }
 
-func (g *GitScans) persistGitAdmissionBatch(ctx context.Context, batch *preparedGitAdmissionBatch, current *gitAdmissionSnapshot) error {
+func (workers *GitIntegrationWorkers) persistGitAdmissionBatch(ctx context.Context, batch *preparedGitAdmissionBatch, current *gitAdmissionSnapshot) error {
 	if batch == nil {
 		return nil
 	}
@@ -206,10 +206,10 @@ func (g *GitScans) persistGitAdmissionBatch(ctx context.Context, batch *prepared
 			return domain.ErrIntegrity
 		}
 		for _, item := range batch.admissions {
-			if _, err := g.core.persistGitAdmissionInWrite(ctx, item.frozen, item.admission, batch.frozen.authorization, current); err != nil && !gitAdmissionDeferred(err) {
+			if _, err := workers.persistGitAdmissionInWrite(ctx, item.frozen, item.admission, batch.frozen.authorization, current); err != nil && !gitAdmissionDeferred(err) {
 				return err
 			}
 		}
 	}
-	return g.core.meta.(outbound.GitAdmissionMatchStore).SaveGitAdmissionMatch(ctx, batch.next, batch.frozen.previous.Version, batch.receipt)
+	return workers.work.meta.(outbound.GitAdmissionMatchStore).SaveGitAdmissionMatch(ctx, batch.next, batch.frozen.previous.Version, batch.receipt)
 }

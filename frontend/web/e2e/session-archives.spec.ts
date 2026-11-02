@@ -75,6 +75,86 @@ async function confirmAction(page: Page, action: 'Archive session' | 'Restore se
   await dialog.getByRole('button', {name: action, exact: true}).click();
 }
 
+for (const tab of ['context', 'onhold'] as const) {
+  for (const outcome of ['success', 'failure'] as const) test(`view mode preserves pending raw export and ${outcome} in ${tab}`, async ({page}) => {
+    const {errors, unexpected} = await fixture(page);
+    const selected = tab === 'context' ? 3 : 4;
+    const documentHash = id(selected);
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    let reads = 0;
+    await page.route(url => url.pathname === `/api/v1/repos/r/docs/${encodeURIComponent(documentHash)}`, async route => {
+      reads++;
+      await waiting;
+      await route.fulfill(outcome === 'success'
+        ? {json: {cir: {envelope: {cir_version: '2', source_provider: 'codex'}, events: [{kind: 'message', seq: 0, role: 'user', blocks: [{type: 'text', text: 'Original raw export'}]}]}}}
+        : {status: 503, json: {error: {message: 'Raw export unavailable'}}});
+    });
+    await page.goto(`/alice/cxthub${tab === 'onhold' ? '?tab=onhold' : ''}`);
+    await page.locator('.commit-row').filter({has: page.locator('code', {hasText: String(selected).repeat(10)})}).locator('code').first().click();
+    const raw = page.locator('.viewer').getByRole('button', {name: '↓ raw', exact: true});
+    await raw.evaluate(element => { element.setAttribute('data-mode-action-identity', 'raw-stable'); });
+    const download = outcome === 'success' ? page.waitForEvent('download') : undefined;
+    await raw.click();
+    try {
+      await expect.poll(() => reads).toBe(1);
+      for (const mode of ['prompts', 'all', 'chat']) {
+        await page.locator('.viewer').getByRole('combobox', {name: 'View mode'}).selectOption(mode);
+        await expect(raw).toBeDisabled();
+        await expect(raw).toHaveAttribute('data-mode-action-identity', 'raw-stable');
+        await expect(page.locator('.viewer-head > code')).toHaveText(String(selected).repeat(10));
+      }
+      expect(reads).toBe(1);
+    } finally { release(); }
+    if (download) expect((await download).suggestedFilename()).toBe(`${String(selected).repeat(10)}-context.json`);
+    else {
+      await expect(page.locator('.viewer').getByRole('alert')).toContainText('Raw export unavailable');
+      await page.locator('.viewer').getByRole('combobox', {name: 'View mode'}).selectOption('prompts');
+      await expect(page.locator('.viewer').getByRole('alert')).toContainText('Raw export unavailable');
+    }
+    await expect(raw).toBeEnabled();
+    expect(reads).toBe(1);
+    expect(errors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
+
+  for (const outcome of ['success', 'failure'] as const) test(`view mode preserves pending archive and ${outcome} in ${tab}`, async ({page}) => {
+    const {state, errors, unexpected} = await fixture(page);
+    const selected = tab === 'context' ? 3 : 4;
+    let release!: () => void;
+    state.wait = new Promise<void>(resolve => { release = resolve; });
+    state.fail = outcome === 'failure';
+    await page.goto(`/alice/cxthub${tab === 'onhold' ? '?tab=onhold' : ''}`);
+    await page.locator('.commit-row').filter({has: page.locator('code', {hasText: String(selected).repeat(10)})}).locator('code').first().click();
+    await confirmAction(page, 'Archive session');
+    const dialog = page.getByRole('dialog', {name: 'Archive session'});
+    await dialog.evaluate(element => { element.setAttribute('data-mode-action-identity', 'archive-stable'); });
+    try {
+      for (const mode of ['prompts', 'all', 'chat']) {
+        await page.locator('.viewer').getByRole('combobox', {name: 'View mode'}).selectOption(mode);
+        await expect(dialog).toHaveAttribute('data-mode-action-identity', 'archive-stable');
+        await expect(dialog.getByRole('status')).toHaveText('Saving session archive…');
+        await expect(dialog.getByRole('button', {name: 'Archive session', exact: true})).toBeDisabled();
+        await expect(dialog.getByRole('button', {name: 'Cancel', exact: true})).toBeDisabled();
+      }
+      expect(state.mutations).toEqual([{snapshot: id(selected), archived: true}]);
+    } finally { release(); }
+    if (outcome === 'success') {
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator('.viewer').getByRole('button', {name: 'Restore session', exact: true})).toBeVisible();
+    } else {
+      await expect(dialog.getByRole('alert')).toHaveText('Archive service unavailable');
+      await page.locator('.viewer').getByRole('combobox', {name: 'View mode'}).selectOption('prompts');
+      await expect(dialog.getByRole('alert')).toHaveText('Archive service unavailable');
+      expect(state.archives).toEqual([]);
+    }
+    await expect(page.locator('.viewer-head > code')).toHaveText(String(selected).repeat(10));
+    expect(state.mutations).toEqual([{snapshot: id(selected), archived: true}]);
+    expect(errors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
+}
+
 for (const [session, selected, latest] of [['committed', 2, 3], ['unpushed', 4, 4], ['uncommitted', 6, 6]] as const) {
   test(`archives and restores the whole ${session} session with authoritative reload`, async ({page}, testInfo) => {
     const {state, errors, unexpected} = await fixture(page);

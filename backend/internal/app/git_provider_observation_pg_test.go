@@ -19,8 +19,13 @@ import (
 
 func providerObservationPGFixture(t *testing.T) (*GitHubConnections, *store.PostgresStore, domain.Repo) {
 	t.Helper()
+	return providerObservationPGFixtureAt(t, a11IsolatedPGDSN(t, context.Background()))
+}
+
+func providerObservationPGFixtureAt(t *testing.T, dsn string) (*GitHubConnections, *store.PostgresStore, domain.Repo) {
+	t.Helper()
 	ctx := context.Background()
-	storage, err := store.NewPostgresStore(ctx, a11IsolatedPGDSN(t, ctx))
+	storage, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,6 +29,7 @@ func ValidateProductionStore(store any) error {
 		{"blobs", supports[outbound.BlobStore](store)},
 		{"verified document publication", supports[outbound.VerifiedDocStore](store)},
 		{"repository", supports[outbound.RepositoryStore](store)},
+		{"atomic user preferences", supports[outbound.UserPreferencesStore](store)},
 		{"organization", supports[outbound.OrganizationStore](store)},
 		{"teams", supports[outbound.TeamStore](store)},
 		{"enterprise accounts", supports[outbound.EnterpriseStore](store)},

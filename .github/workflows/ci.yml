@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: false
       - name: Install public-check dependencies
         run: sudo apt-get update && sudo apt-get install --yes ripgrep
@@ -36,6 +36,10 @@ jobs:
         run: python3 scripts/test-local-services.py
       - name: Verify bounded Go test batches
         run: python3 scripts/test-test-go-batches.py
+      - name: Verify Go test batch outcomes
+        run: python3 scripts/test-go-batches-outcomes.py
+      - name: Verify fail-closed public Git metadata checks
+        run: python3 scripts/test-check-public-git-metadata.py
       - name: Verify repository export and synchronization fences
         run: python3 scripts/test-distribute-repositories.py
       - name: Verify E2E publication fence and failure evidence
@@ -49,24 +53,13 @@ jobs:
         if: github.event.repository.private == false
         run: bash scripts/public-preflight.sh full
 
-  backend:
+  backend-checks:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: cxt
-          POSTGRES_PASSWORD: cxt
-          POSTGRES_DB: cxthub_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U cxt"
-          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache-dependency-path: backend/go.sum
       - name: build (both tags)
         working-directory: backend
@@ -89,18 +82,103 @@ jobs:
         run: |
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags postgres ./...
-      - name: test (PG contracts — real Postgres)
-        working-directory: backend
+
+  backend-contracts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [store, app, transports]
+    services:
+      postgres:
+        image: postgres:16
         env:
-          CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
+          POSTGRES_USER: cxt
+          POSTGRES_PASSWORD: cxt
+          POSTGRES_DB: cxthub_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cxt"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
+      CXT_ROOT_WRITER_COST: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10"
+          cache-dependency-path: backend/go.sum
+      - name: test (PG store contracts)
+        if: matrix.lane == 'store'
+        working-directory: backend
         run: |
-          python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres
-          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3
+          python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres --batch-size 1 \
+            --require-test TestLegacyByteRecoveryPGColdChild \
+            --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
+            --require-test TestNormalizationCheckpointPGColdChild \
+            --require-test TestNormalizationCheckpointPGColdRestartPublishes \
+            --require-test TestPGRootWriterCost \
+            --require-test TestPGRootWriterCostPreparationReferenceRead \
+            --require-test TestPGRootWriterWait \
+            --allow-skip TestLegacyProofStreamAllocationQualification \
+            --allow-skip TestLegacyStreamingPGMemoryQualification \
+            --allow-skip TestPGCycleValidationComparison \
+            --allow-skip TestPGDocSearchStageQualification \
+            --allow-skip TestPGMemoryCapturePersistenceCostD3ac \
+            --allow-skip TestPGRootPublicationCost \
+            --allow-skip TestPGRootPublicationCostWriterBarrier \
+            --allow-skip TestRootReaderLegacyClassificationCost \
+            --allow-skip TestStoredConversationReferencePerformance
+      - name: test (PG app contracts)
+        if: matrix.lane == 'app'
+        working-directory: backend
+        run: |
+          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3 --batch-size 1 \
+            --allow-skip TestPGMemoryPreparationCostD3ab \
+            --allow-skip TestPGReadModelMixedProgress
           go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v
-          go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
+          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestActivityCommitHistoryPG$'
+          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race \
+            --run '^TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads$' \
+            --require-test TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads
+      - name: test (PG transport contracts)
+        if: matrix.lane == 'transports'
+        working-directory: backend
+        run: |
+          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/http/ --tags postgres --race --run '^TestPG' --count 3 --batch-size 1 \
+            --require-test TestPGDocFindPreparedHTTPQueuesThenContinuesRoot \
+            --require-test TestPGDocFindPreparedHTTPQueuesThenContinuesLegacy
           go test -tags postgres ./internal/adapters/federation/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
-          go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity)$' -count=1 -timeout=120s -v
+          python3 ../scripts/test-go-batches.py ./internal/serverruntime/ --tags postgres --race --run '^Test(ExecutionProfilePostgres|BoundedExecutionProcessesPG|InfrastructurePostgres|RuntimePostgresCallersReuseInfrastructurePool)'
+          python3 ../scripts/test-go-batches.py ./cmd/cxtd/ --tags postgres --race --run '^TestServerLifecyclePGProcess(SIGTERM|BindFailure)'
+          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --count 3 --batch-size 1 \
+            --run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip.*)$' \
+            --require-test TestRootProjectionPGConsumersWithoutPersistentIndex \
+            --require-test TestPRContributionTransportParity \
+            --require-test TestPGConversationFindMCPPreparationRoundTrip \
+            --require-test TestPGConversationFindMCPPreparationRoundTripReasoning \
+            --require-test TestPGConversationFindMCPPreparationRoundTripMessage \
+            --require-test TestPGConversationFindMCPPreparationRoundTripSummary \
+            --require-test TestPGConversationFindMCPPreparationRoundTripSeed \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolEdit \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolWrite \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolBash \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolGeneric
+          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --run '^TestPGMCPResourceCutover$'
+          python3 ../scripts/test-go-batches.py ./cmd/cxt-admin/ --tags postgres --race --run '^TestIdentityKeyCommandRejectsSecretsWithoutEchoingConfiguration$'
+
+  backend:
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs: [backend-checks, backend-contracts]
+    steps:
+      - name: Require all backend jobs to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'keys == ["backend-checks", "backend-contracts"] and all(.[]; .result == "success")' <<< "$NEEDS_JSON"
 
   cli:
     runs-on: ubuntu-latest
@@ -108,7 +186,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: false
       - name: build · vet · test
         working-directory: cli
@@ -134,7 +212,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -205,6 +283,10 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -214,7 +296,7 @@ jobs:
           cache-dependency-path: frontend/web/package-lock.json
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache-dependency-path: backend/go.sum
       - name: Install web dependencies
         working-directory: frontend/web
@@ -224,15 +306,21 @@ jobs:
         run: npx playwright install chromium --with-deps
       - name: Browser UI E2E
         working-directory: frontend/web
-        run: npm run test:e2e
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/2 --workers=1
         env:
           CXT_E2E_FULLSTACK: "1"
           CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_browser_test?sslmode=disable
+      - name: Windowed document combined candidate
+        if: matrix.shard == 1
+        working-directory: frontend/web
+        run: npm run test:e2e -- e2e/document-combined-adoption.spec.ts --project=chromium --workers=1
+        env:
+          CXT_DOCUMENT_WINDOW: "1"
       - name: Upload Playwright failure report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: frontend/web/playwright-report/
           retention-days: 14
 
@@ -242,8 +330,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
-          cache-dependency-path: backend/go.sum
+          go-version: "1.26.10"
+          cache-dependency-path: |
+            backend/go.sum
+            cli/go.sum
       - name: e2e (real binary startup — FS store, full surface)
         run: make e2e
 
@@ -264,8 +354,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
-          cache-dependency-path: backend/go.sum
+          go-version: "1.26.10"
+          cache-dependency-path: |
+            backend/go.sum
+            cli/go.sum
       - name: Allocate private synchronization diagnostics
         id: sync-diagnostics
         run: |
@@ -302,6 +394,7 @@ jobs:
         run: |
           docker build -f deploy/Dockerfile -t cxtd:preflight .
           docker build -f deploy/Dockerfile.mcp -t cxt-mcp:preflight .
+          docker build -f deploy/Dockerfile.migrate -t cxt-migrate:preflight .
           bash scripts/deploy-preflight.sh images
 
   deployment-config:

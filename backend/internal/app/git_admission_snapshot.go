@@ -19,30 +19,30 @@ type gitAdmissionSnapshot struct {
 	history    map[string]domain.HistoryEvent
 }
 
-func (s *Service) readGitAdmissionSnapshot(ctx context.Context, repo domain.ContentHash) (*gitAdmissionSnapshot, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(read context.Context) (*gitAdmissionSnapshot, error) {
-		return s.readGitAdmissionSnapshotInRead(read, repo)
+func (workers *GitIntegrationWorkers) readGitAdmissionSnapshot(ctx context.Context, repo domain.ContentHash) (*gitAdmissionSnapshot, error) {
+	return repositoryReadForRepoWithWork(ctx, workers.work, repo, func(read context.Context) (*gitAdmissionSnapshot, error) {
+		return workers.readGitAdmissionSnapshotInRead(read, repo)
 	})
 }
 
-func (s *Service) readGitAdmissionSnapshotInRead(ctx context.Context, repo domain.ContentHash) (*gitAdmissionSnapshot, error) {
-	history, err := s.ListHistory(ctx, repo)
+func (workers *GitIntegrationWorkers) readGitAdmissionSnapshotInRead(ctx context.Context, repo domain.ContentHash) (*gitAdmissionSnapshot, error) {
+	history, err := workers.ListHistory(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := s.readGitAdmissionSnapshotWithHistory(ctx, repo, history)
+	snapshot, err := workers.readGitAdmissionSnapshotWithHistory(ctx, repo, history)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.captureGitAdmissionGeneration(ctx, repo, snapshot); err != nil {
+	if err := workers.captureGitAdmissionGeneration(ctx, repo, snapshot); err != nil {
 		return nil, err
 	}
 	return snapshot, nil
 }
 
-func (s *Service) captureGitAdmissionGeneration(ctx context.Context, repo domain.ContentHash, snapshot *gitAdmissionSnapshot) error {
-	if generations, supported := s.meta.(outbound.RepositoryMetadataGenerationStore); supported {
-		if transactions, known := s.meta.(outbound.RepositoryTransactionState); known && transactions.InReadOnlyTransaction(ctx) {
+func (workers *GitIntegrationWorkers) captureGitAdmissionGeneration(ctx context.Context, repo domain.ContentHash, snapshot *gitAdmissionSnapshot) error {
+	if generations, supported := workers.work.meta.(outbound.RepositoryMetadataGenerationStore); supported {
+		if transactions, known := workers.work.meta.(outbound.RepositoryTransactionState); known && transactions.InReadOnlyTransaction(ctx) {
 			generation, err := generations.ReadRepositoryMetadataGeneration(ctx, repo)
 			if err != nil {
 				return err
@@ -56,40 +56,32 @@ func (s *Service) captureGitAdmissionGeneration(ctx context.Context, repo domain
 	return nil
 }
 
-func (s *Service) readGitAdmissionHistory(ctx context.Context, repo domain.ContentHash, history []domain.HistoryEvent) (*gitAdmissionSnapshot, error) {
-	metadata, err := s.meta.GetRepo(ctx, repo)
+func (workers *GitIntegrationWorkers) readGitAdmissionHistory(ctx context.Context, repo domain.ContentHash, history []domain.HistoryEvent) (*gitAdmissionSnapshot, error) {
+	metadata, err := workers.graphEvidenceReader().GetRepo(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	index, err := domain.NewGitPublicationIndex(ctx, repo, history)
+	evidence, err := domain.NewGitPublicationEvidence(ctx, repo, metadata, history)
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := domain.ProjectContextBranches(history)
-	if err != nil {
-		return nil, err
-	}
-	snapshot := &gitAdmissionSnapshot{repo: metadata, index: index, bindings: bindings, history: make(map[string]domain.HistoryEvent, len(history))}
-	for _, event := range history {
-		snapshot.history[event.ID] = event
-	}
-	return snapshot, nil
+	return &gitAdmissionSnapshot{repo: metadata, index: evidence.Index, bindings: evidence.Bindings, history: evidence.History}, nil
 }
 
-func (s *Service) readGitAdmissionSnapshotWithHistory(ctx context.Context, repo domain.ContentHash, history []domain.HistoryEvent) (*gitAdmissionSnapshot, error) {
-	snapshot, err := s.readGitAdmissionHistory(ctx, repo, history)
+func (workers *GitIntegrationWorkers) readGitAdmissionSnapshotWithHistory(ctx context.Context, repo domain.ContentHash, history []domain.HistoryEvent) (*gitAdmissionSnapshot, error) {
+	snapshot, err := workers.readGitAdmissionHistory(ctx, repo, history)
 	if err != nil {
 		return nil, err
 	}
-	revision, err := s.RepositoryRevision(ctx, repo)
+	revision, err := workers.RepositoryRevision(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
 	var refs []domain.Ref
-	if lookup, supported := s.meta.(outbound.GitPublicationLookupStore); supported {
+	if lookup, supported := workers.work.meta.(outbound.GitPublicationLookupStore); supported {
 		refs, err = lookup.ListGitAdmissionRefs(ctx, repo)
 	} else {
-		refs, err = s.meta.ListRefs(ctx, repo)
+		refs, err = workers.work.meta.ListRefs(ctx, repo)
 	}
 	if err != nil {
 		return nil, err
@@ -126,14 +118,14 @@ func gitAdmissionOwners(history map[string]domain.HistoryEvent) map[string]map[s
 	return owners
 }
 
-func (s *Service) reuseGitAdmissionSnapshot(ctx context.Context, repo domain.ContentHash, frozen *gitAdmissionSnapshot) (*gitAdmissionSnapshot, error) {
+func (workers *GitIntegrationWorkers) reuseGitAdmissionSnapshot(ctx context.Context, repo domain.ContentHash, frozen *gitAdmissionSnapshot) (*gitAdmissionSnapshot, error) {
 	if frozen == nil || frozen.generation == nil {
-		return s.readGitAdmissionSnapshot(ctx, repo)
+		return workers.readGitAdmissionSnapshot(ctx, repo)
 	}
 	if frozen.repo.ID != repo || frozen.generation.RepoID != repo || frozen.generation.Validate() != nil {
 		return nil, domain.ErrIntegrity
 	}
-	storage, supported := s.meta.(outbound.RepositoryMetadataGenerationStore)
+	storage, supported := workers.work.meta.(outbound.RepositoryMetadataGenerationStore)
 	if !supported {
 		return nil, domain.ErrConflict
 	}
@@ -144,11 +136,11 @@ func (s *Service) reuseGitAdmissionSnapshot(ctx context.Context, repo domain.Con
 	if generation.Validate() != nil || generation.RepoID != repo {
 		return nil, domain.ErrIntegrity
 	}
-	metadata, err := s.meta.GetRepo(ctx, repo)
+	metadata, err := workers.work.meta.GetRepo(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	revision, err := s.RepositoryRevision(ctx, repo)
+	revision, err := workers.RepositoryRevision(ctx, repo)
 	if err != nil {
 		return nil, err
 	}

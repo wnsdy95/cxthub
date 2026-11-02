@@ -20,14 +20,21 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
+const (
+	scopedLimitMaxEntries  = 4096
+	scopedLimitMaxKeyBytes = 8 << 20
+)
+
 type GitHub struct {
-	rateMu       sync.Mutex
-	credential   func(context.Context, string) (string, string, string, error)
-	scopedLimits map[string]time.Time
-	resumeAt     time.Time
-	client       *http.Client
-	base         string
-	token        func() string
+	rateMu           sync.Mutex
+	credential       func(context.Context, string) (string, string, string, error)
+	scopedLimits     map[string]time.Time
+	scopedKeyBytes   int
+	scopedOverflowAt time.Time
+	resumeAt         time.Time
+	client           *http.Client
+	base             string
+	token            func() string
 }
 
 func NewGitHub(token func() string) *GitHub {
@@ -44,6 +51,60 @@ func NewAuthenticated(resolve func(context.Context, string) (string, string, str
 
 var _ outbound.GitEvidenceReader = (*GitHub)(nil)
 var segment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+func (provider *GitHub) sweepScopedLimits(now time.Time) {
+	for bucket, until := range provider.scopedLimits {
+		if !now.Before(until) {
+			delete(provider.scopedLimits, bucket)
+			provider.scopedKeyBytes -= len(bucket)
+		}
+	}
+	if !now.Before(provider.scopedOverflowAt) {
+		provider.scopedOverflowAt = time.Time{}
+	}
+}
+
+func (provider *GitHub) rateLimited(bucket string, now time.Time) bool {
+	provider.rateMu.Lock()
+	defer provider.rateMu.Unlock()
+	provider.sweepScopedLimits(now)
+	if bucket == "" {
+		return now.Before(provider.resumeAt)
+	}
+	return now.Before(provider.scopedLimits[bucket]) || now.Before(provider.scopedOverflowAt)
+}
+
+func (provider *GitHub) retainRateLimit(bucket string, resume, now time.Time) {
+	provider.rateMu.Lock()
+	defer provider.rateMu.Unlock()
+	provider.sweepScopedLimits(now)
+	if bucket == "" {
+		if resume.After(provider.resumeAt) {
+			provider.resumeAt = resume
+		}
+		return
+	}
+	if !now.Before(resume) {
+		return
+	}
+	if until, exists := provider.scopedLimits[bucket]; exists {
+		if resume.After(until) {
+			provider.scopedLimits[strings.Clone(bucket)] = resume
+		}
+		return
+	}
+	if len(provider.scopedLimits) >= scopedLimitMaxEntries || len(bucket) > scopedLimitMaxKeyBytes-provider.scopedKeyBytes {
+		if resume.After(provider.scopedOverflowAt) {
+			provider.scopedOverflowAt = resume
+		}
+		return
+	}
+	if provider.scopedLimits == nil {
+		provider.scopedLimits = make(map[string]time.Time)
+	}
+	provider.scopedLimits[strings.Clone(bucket)] = resume
+	provider.scopedKeyBytes += len(bucket)
+}
 
 func repositoryPath(origin string) (string, error) {
 	origin = strings.TrimSuffix(strings.TrimSpace(origin), ".git")
@@ -85,14 +146,7 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 	} else if g.token != nil {
 		token = g.token()
 	}
-	g.rateMu.Lock()
-	until := g.resumeAt
-	if bucket != "" {
-		until = g.scopedLimits[bucket]
-	}
-	blocked := time.Now().Before(until)
-	g.rateMu.Unlock()
-	if blocked {
+	if g.rateLimited(bucket, time.Now()) {
 		return fmt.Errorf("Git evidence provider rate limit; retry later")
 	}
 
@@ -120,15 +174,7 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 			if epoch, e := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); e == nil && time.Unix(epoch, 0).After(resume) {
 				resume = time.Unix(epoch, 0)
 			}
-			g.rateMu.Lock()
-			if bucket != "" {
-				if resume.After(g.scopedLimits[bucket]) {
-					g.scopedLimits[bucket] = resume
-				}
-			} else if resume.After(g.resumeAt) {
-				g.resumeAt = resume
-			}
-			g.rateMu.Unlock()
+			g.retainRateLimit(bucket, resume, time.Now())
 		}
 		return fmt.Errorf("Git evidence provider returned HTTP %d", resp.StatusCode)
 	}

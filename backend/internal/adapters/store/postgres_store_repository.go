@@ -5,7 +5,9 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -93,7 +95,7 @@ func (s *PostgresStore) CreateRepository(ctx context.Context, repositoryRecord d
 		 gh_visibility_sync=EXCLUDED.gh_visibility_sync, gh_synced_at=EXCLUDED.gh_synced_at,
 		 archived=EXCLUDED.archived, webhook_url=EXCLUDED.webhook_url, public_role=EXCLUDED.public_role`,
 		repositoryRecord.ID, repositoryRecord.Name, repositoryRecord.OwnerID, repositoryRecord.Slug, repositoryRecord.OwnerUsername, pgNullableString(repositoryRecord.OwnerNamespaceID), string(repositoryRecord.Visibility), repositoryRecord.SecretsPolicy, repositoryRecord.SettingsPolicy, repositoryRecord.GHVisibilitySync, repositoryRecord.GHSyncedAt, repositoryRecord.Archived, repositoryRecord.WebhookURL, repositoryRecord.PublicRole)
-	return storageWriteError(err)
+	return storageWriteError(mapPGConstraint(err))
 }
 
 func (s *PostgresStore) GetRepository(ctx context.Context, id string) (domain.Repository, error) {
@@ -368,13 +370,45 @@ func (s *PostgresStore) ConsumeSession(ctx context.Context, token, kind, label s
 	return sess, nil
 }
 
+func (storage *PostgresStore) MigrateSession(ctx context.Context, token string) (domain.Session, error) {
+	if err := domain.ValidateStoredSessionToken(token); err != nil {
+		return domain.Session{}, err
+	}
+	if !strings.HasPrefix(token, "sess_") {
+		return domain.Session{}, domain.ErrValidation
+	}
+	var session domain.Session
+	err := storage.db(ctx).QueryRow(ctx,
+		`UPDATE sessions SET token=$2, hint=$3, kind=COALESCE(NULLIF(kind,''),$4) WHERE token=$1
+		 RETURNING token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,''), credential_id`,
+		token, domain.HashToken(token), domain.TokenHint(token), legacySessionKind(token)).
+		Scan(&session.Token, &session.UserID, &session.CreatedAt, &session.ExpiresAt, &session.Hint, &session.Kind, &session.Label, &session.GrantID, &session.CredentialID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return storage.GetSession(ctx, domain.HashToken(token))
+	}
+	if err != nil {
+		return domain.Session{}, mapPGConstraint(err)
+	}
+	if err := domain.ValidateSessionRecord(session); err != nil {
+		return domain.Session{}, storedIdentityIntegrity(err)
+	}
+	return session, nil
+}
+
 func (s *PostgresStore) DeleteSession(ctx context.Context, token string) error {
 	if err := domain.ValidateStoredSessionToken(token); err != nil {
 		return err
 	}
-	_, err := s.db(ctx).Exec(ctx, `DELETE FROM sessions WHERE token=$1`, token)
+	if !strings.HasPrefix(token, "tkh_") {
+		token = domain.HashToken(token)
+	}
+	_, err := s.db(ctx).Exec(ctx, `DELETE FROM sessions WHERE `+sessionCapabilitySQL+`=$1`, token)
 	return err
 }
+
+const sessionCapabilitySQL = `(CASE WHEN left(token,4)='tkh_' THEN token
+ WHEN token ~ '^sess_([0-9a-f]{32}|cli_[0-9a-f]{32})$'
+ THEN 'tkh_' || encode(sha256(decode(token,'escape')),'hex') END)`
 
 func (s *PostgresStore) ListSessionsForUser(ctx context.Context, userID string) ([]domain.Session, error) {
 	if err := domain.ValidateExternalID(userID); err != nil {

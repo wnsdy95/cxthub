@@ -53,7 +53,8 @@ func captureGateFixture(t *testing.T, origins ...string) (string, *Container, *s
 	if err := st.PutWorkingPosition(context.Background(), domain.WorkingPosition{RepoID: repo.ID, Branch: "main", GitCommit: gitOut(cwd, "rev-parse", "HEAD")}); err != nil {
 		t.Fatal(err)
 	}
-	return cwd, &Container{History: app.NewContextHistoryService(st, st), ResolveRepo: git.CurrentRepo}, st, repo
+	sessions := captureSelectionForTest()
+	return cwd, &Container{SessionSelection: sessions, SessionInventory: sessions, History: app.NewContextHistoryService(st, st), ResolveRepo: git.CurrentRepo}, st, repo
 }
 
 // Probe the very same flock used by setup/admission, without a timeout or sleep.

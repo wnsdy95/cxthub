@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"log"
@@ -42,24 +43,13 @@ func (s *IdentityService) RedeemDevicePairing(ctx context.Context, code, pollHas
 	sess.Token = raw
 	return sess, true, nil
 }
-func (s *IdentityService) RunRuntimeMaintenance(ctx context.Context) {
-	st := s.RuntimeStore()
-	if st == nil {
+func (service *IdentityService) RunRuntimeMaintenance(ctx context.Context) {
+	worker, err := systemmaintenance.NewRuntime(systemmaintenance.RuntimeConfig{
+		Profile: systemmaintenance.Compatibility, Store: service.RuntimeStore(),
+	})
+	if err != nil {
+		log.Printf("runtime maintenance: %v", err)
 		return
 	}
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			prune, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := st.PruneRuntimeState(prune, time.Now().UTC())
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				log.Printf("runtime state cleanup: %v", err)
-			}
-		}
-	}
+	worker.Run(ctx)
 }

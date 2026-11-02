@@ -64,7 +64,7 @@ func TestDoctorReportsRetainedUploadsWithoutMutation(t *testing.T) {
 	}
 	before := treeBytes(t, cwd)
 	var out bytes.Buffer
-	if err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &out); err == nil {
+	if err := RunDiagnostics(ctx, inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &out); err == nil {
 		t.Fatal("failed upload not reported")
 	}
 	var report struct {
@@ -93,14 +93,14 @@ func TestDiagnosticsSurvivesDamagedReplicaWithoutReplayOrWrites(t *testing.T) {
 	}
 	before := treeBytes(t, cwd)
 	var out bytes.Buffer
-	if err := RunDiagnostics(context.Background(), cwd, []string{"doctor", "--json"}, &out); err == nil {
+	if err := RunDiagnostics(context.Background(), inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &out); err == nil {
 		t.Fatal("damaged replica reported healthy")
 	}
 	if !strings.Contains(out.String(), "needs-git-evidence") || !strings.Contains(out.String(), "document") {
 		t.Fatalf("missing diagnostics: %s", out.String())
 	}
 	out.Reset()
-	if err := RunDiagnostics(context.Background(), cwd, []string{"branch", "operations", "--json"}, &out); err != nil {
+	if err := RunDiagnostics(context.Background(), inspectionReaderForTest{}, cwd, []string{"branch", "operations", "--json"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "not-checked") {
@@ -113,7 +113,7 @@ func TestDiagnosticsSurvivesDamagedReplicaWithoutReplayOrWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := RunDiagnostics(context.Background(), cwd, []string{"branch", "operations", "--json"}, &out); err != nil || !strings.Contains(out.String(), "queued") {
+	if err := RunDiagnostics(context.Background(), inspectionReaderForTest{}, cwd, []string{"branch", "operations", "--json"}, &out); err != nil || !strings.Contains(out.String(), "queued") {
 		t.Fatalf("Git journal unavailable after replica loss: %s %v", out.String(), err)
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".cxt")); !os.IsNotExist(err) {
@@ -141,7 +141,7 @@ func TestDoctorPreCancelledReportsUncheckedWithoutReadingOrWriting(t *testing.T)
 	cancel()
 	var out bytes.Buffer
 	called := false
-	err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &out, func(context.Context, string) ([]domain.CaptureRecoveryStatus, error) {
+	err := RunDiagnostics(ctx, inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &out, func(context.Context, string) ([]domain.CaptureRecoveryStatus, error) {
 		called = true
 		return nil, nil
 	})
@@ -171,7 +171,7 @@ func TestDoctorCaptureCancellationPreservesCompletedReplicaScope(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	laterCalled := false
-	err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &out,
+	err := RunDiagnostics(ctx, inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &out,
 		func(context.Context, string) ([]domain.CaptureRecoveryStatus, error) {
 			cancel()
 			return nil, context.Canceled
@@ -203,7 +203,7 @@ func TestDoctorHumanCancellationDoesNotClaimHealthy(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var out bytes.Buffer
-	err := RunDiagnostics(ctx, t.TempDir(), []string{"doctor"}, &out)
+	err := RunDiagnostics(ctx, inspectionReaderForTest{}, t.TempDir(), []string{"doctor"}, &out)
 	if !errors.Is(err, context.Canceled) || !strings.Contains(out.String(), "Inspection incomplete") || strings.Contains(out.String(), "No failures found") {
 		t.Fatalf("output=%s err=%v", out.String(), err)
 	}
@@ -220,7 +220,7 @@ func TestDoctorUnreadableHistoricalQueueIsUnknownNotEmpty(t *testing.T) {
 	}
 	before := treeBytes(t, cwd)
 	var out bytes.Buffer
-	if err := RunDiagnostics(context.Background(), cwd, []string{"doctor", "--json"}, &out); err == nil {
+	if err := RunDiagnostics(context.Background(), inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &out); err == nil {
 		t.Fatal("unreadable queue accepted")
 	}
 	var report diagnosticsReport
@@ -231,7 +231,7 @@ func TestDoctorUnreadableHistoricalQueueIsUnknownNotEmpty(t *testing.T) {
 		t.Fatalf("queue observability changed: %+v", report)
 	}
 	out.Reset()
-	_ = RunDiagnostics(context.Background(), cwd, []string{"doctor"}, &out)
+	_ = RunDiagnostics(context.Background(), inspectionReaderForTest{}, cwd, []string{"doctor"}, &out)
 	if !strings.Contains(out.String(), "Retained historical uploads: not checked.") || strings.Contains(out.String(), "0 queued") {
 		t.Fatalf("unknown queue reported empty: %s", out.String())
 	}
@@ -244,7 +244,7 @@ func TestBranchOperationsPreCancelledRetainsTypedFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var out bytes.Buffer
-	err := RunDiagnostics(ctx, t.TempDir(), []string{"branch", "operations", "--json"}, &out)
+	err := RunDiagnostics(ctx, inspectionReaderForTest{}, t.TempDir(), []string{"branch", "operations", "--json"}, &out)
 	if !errors.Is(err, context.Canceled) || ClassifyCommandFailure(err).ExitCode != 130 {
 		t.Fatalf("branch cancellation=%v", err)
 	}

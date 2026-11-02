@@ -29,7 +29,8 @@ test.beforeAll(async () => {
       const qc=new QueryClient({defaultOptions:{queries:{staleTime:30000,refetchOnWindowFocus:false}}});
       function View({repo}) {
         const q=useRepoView(repo);
-        return <output data-testid="view">{repo}:{q.graphError?'error':q.graphLoading?'loading':'ready'}</output>;
+        return <output data-testid="view" data-read-state={q.graphReadStatus.state} data-snapshot-count={q.snapshots.length}>
+          {repo}:{q.graphError?'error':q.graphLoading?'loading':'ready'}</output>;
       }
       function Retained() {
         const q=useQuery({queryKey:['repo-view','a'],queryFn:({signal})=>api.repositoryView('a',signal),retry:false});
@@ -72,7 +73,7 @@ function gate() {
 type ReadResponse = { body: unknown; status?: number; headers?: Record<string, string> };
 type ReadOverride = () => ReadResponse | 'abort' | undefined;
 type Options = {
-  public?: boolean; denied?: boolean; revisionStatus?: number; aRevision?: () => string;
+  public?: boolean; denied?: boolean; revisionStatus?: number | (() => number); aRevision?: () => string;
   holdA?: { at: number; promise: Promise<void> };
   locale?: 'en' | 'ko';
   aView?: ReadOverride;
@@ -138,7 +139,8 @@ async function fixture(page: Page, options: Options = {}) {
       const [, id, endpoint] = match;
       if (endpoint === 'changes') { await route.fulfill({ status: 204, body: '' }); return; } // Stop reconnects; revision fallback remains real.
       if (endpoint === 'revision') {
-        await send(options.revisionStatus ? { error: { message: 'Denied' } } : { ...revision, graph: id === 'a' ? options.aRevision?.() ?? '1' : '1' }, options.revisionStatus ?? 200); return;
+        const status = (typeof options.revisionStatus === 'function' ? options.revisionStatus() : options.revisionStatus) ?? 200;
+        await send(status === 200 ? { ...revision, graph: id === 'a' ? options.aRevision?.() ?? '1' : '1' } : { error: { message: 'Denied' } }, status); return;
       }
       if (endpoint === 'view') {
         expect(url.searchParams.get('graph_encoding')).toBe('indexed-v2');
@@ -264,7 +266,9 @@ test('revision-triggered full refresh also follows last-observer cancellation', 
 for (const status of [401, 403]) test(`revision ${status} does not trigger fallback full reads`, async ({ page }) => {
   const f = await fixture(page, { revisionStatus: status });
   await page.goto('http://bootstrap.test/observers');
-  await expect(page.getByTestId('view')).toHaveText('a:ready'); await settle(page);
+  await expect(page.getByTestId('view')).toHaveText('a:error'); await settle(page);
+  await expect(page.getByTestId('view')).toHaveAttribute('data-read-state', 'denied');
+  await expect(page.getByTestId('view')).toHaveAttribute('data-snapshot-count', '0');
   expect(f.requests.filter(p => p === '/api/v1/repos/a/view')).toHaveLength(1);
   expect(f.requests.filter(p => p === '/api/v1/repos/a/revision')).toHaveLength(1);
   f.check();
@@ -521,7 +525,7 @@ test('graph refresh warns even when the last complete generation was empty', asy
 for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', 'graph-revision', 'pending-revision', 'evidence-revision']) {
   test(`graph refresh fails closed for ${failure} after a complete 200`, async ({ page }) => {
     const recovered = nextGraph();
-    let graph = '1', failing = false;
+    let graph = '1', failing = false, revisionStatus = 200;
     const invalid = structuredClone(recovered);
     if (failure === 'contract-invalid') invalid.graph.version = 2 as 1;
     if (failure === 'contract-typeerror') Object.assign(invalid.graph, { branch_contexts: { main: null } });
@@ -529,7 +533,7 @@ for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', '
     const rejected = failure === '401' || failure === '403'
       ? { status: Number(failure), body: { error: { code: 'resource_overloaded', message: 'Access denied' } } }
       : { body: invalid };
-    const fixtureState = await fixture(page, { aRevision: () => graph,
+    const fixtureState = await fixture(page, { aRevision: () => graph, revisionStatus: () => revisionStatus,
       aView: () => failing ? rejected : { body: graph === '1' ? wires.get('a') : recovered } });
     await page.goto('http://bootstrap.test/alice/a');
     await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
@@ -538,9 +542,27 @@ for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', '
     await expect(graphFailure(page)).toBeVisible();
     await expect(page.locator('.graph-row')).toHaveCount(0);
     await expect(refreshWarning(page)).toHaveCount(0);
+    if (failure === '401' || failure === '403') {
+      revisionStatus = Number(failure);
+      const beforeRetry = fixtureState.requests.length;
+      await graphFailure(page).getByRole('button', { name: 'Retry', exact: true }).click();
+      await expect.poll(() => fixtureState.requests.slice(beforeRetry).filter(path => path.endsWith('/revision')).length).toBe(1);
+      await expect(graphFailure(page)).toContainText('Denied');
+      await settle(page);
+      expect(fixtureState.requests.slice(beforeRetry).filter(path => path !== '/api/v1/repos/a/changes')).toEqual(['/api/v1/repos/a/revision']);
+      await expect(page.locator('.graph-row')).toHaveCount(0);
+      await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toHaveCount(0);
+      revisionStatus = 200;
+    }
     failing = false;
+    const beforeRecovery = fixtureState.requests.length;
     await graphFailure(page).getByRole('button', { name: 'Retry', exact: true }).click();
     await expect(page.locator('[data-graph-id="a-120"]')).toBeVisible();
+    if (failure === '401' || failure === '403') {
+      const recovery = fixtureState.requests.slice(beforeRecovery).filter(path => path !== '/api/v1/repos/a/changes');
+      expect(recovery[0]).toBe('/api/v1/repos/a/revision');
+      expect(recovery.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
+    }
     await expect(graphFailure(page)).toHaveCount(0);
     fixtureState.check();
   });

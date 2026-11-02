@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,7 +58,9 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rest := NewServer(svc, ids[i]).Handler()
+		delivery := NewServer(svc, ids[i])
+		setServiceDocumentQueriesForProfile(t, delivery, svc, inbound.DocumentQueryVerifiedRoots)
+		rest := delivery.Handler()
 		local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/mcp" {
 				m.Handler().ServeHTTP(w, r)

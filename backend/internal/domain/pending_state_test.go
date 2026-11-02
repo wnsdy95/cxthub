@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestPendingStateRefOrderDoesNotDependOnDatabaseCollation(t *testing.T) {
+	root := graphFixture("ref order")
+	refs := []Ref{{Kind: RefBranch, Name: "topic/a", Target: root.ID}, {Kind: RefBranch, Name: "topic/\ud55c\uae00", Target: root.ID}, {Kind: RefTag, Name: "tag", Target: root.ID}, {Kind: RefBranch, Name: "topic/B", Target: root.ID}}
+	want := []Ref{refs[3], refs[0], refs[1], refs[2]}
+	view, err := ProjectPendingState(context.Background(), RepositoryView{Snapshots: []Snapshot{root}, Refs: refs})
+	if err != nil || !reflect.DeepEqual(view.Refs, want) {
+		t.Fatal("noncanonical ref order", view.Refs, err)
+	}
+	if refs[0].Name != "topic/a" {
+		t.Fatal("input ref order mutated")
+	}
+}
+
 func TestPendingStateUsesFullGraphPublicationClassification(t *testing.T) {
 	root := graphFixture("root")
 	local := graphFixture("local", root.ID)

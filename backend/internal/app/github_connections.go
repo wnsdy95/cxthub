@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -462,44 +461,6 @@ func (g *GitHubConnections) Enterprise(ctx context.Context, actor, id string) ([
 // EvidenceInstallation resolves immutable repository identity, then rewrites
 // only the checked repository prefix after a GitHub rename. Stored Git history
 // and its origin are not rewritten.
-func (g *GitHubConnections) EvidenceInstallation(ctx context.Context, path string) (int64, string, error) {
-	repoID := outbound.GitRepository(ctx)
-	if repoID == "" {
-		return 0, "", domain.ErrForbidden
-	}
-	repo, err := g.core.meta.GetRepo(ctx, repoID)
-	if err != nil {
-		return 0, "", err
-	}
-	local, err := g.id.repositories.GetRepository(ctx, repo.RepositoryID)
-	if err != nil {
-		return 0, "", err
-	}
-	c, err := g.store.GetGitHubConnection(ctx, local.OwnerNamespaceID)
-	if errors.Is(err, domain.ErrNotFound) {
-		return 0, path, nil
-	}
-	if err != nil {
-		return 0, "", err
-	}
-	for _, b := range c.Bindings {
-		if b.ContextRepoID != repoID {
-			continue
-		}
-		current, err := g.binding(ctx, c, b)
-		if err != nil {
-			return 0, "", err
-		}
-		name := strings.TrimPrefix(normalizeGitURL(current.GitRemoteURL), "github.com/")
-		prefix := "/repos/" + name + "/"
-		if !strings.HasPrefix(strings.ToLower(path), prefix) {
-			return 0, "", domain.ErrForbidden
-		}
-		for _, r := range c.Repositories {
-			if r.ID == b.ExternalID {
-				return c.Installation.ID, "/repos/" + r.FullName + "/" + path[len(prefix):], nil
-			}
-		}
-	}
-	return 0, "", domain.ErrForbidden
+func (connections *GitHubConnections) EvidenceInstallation(ctx context.Context, path string) (int64, string, error) {
+	return connections.worker().EvidenceInstallation(ctx, path)
 }

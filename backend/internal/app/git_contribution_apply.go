@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"slices"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -35,71 +34,18 @@ func (snapshot *gitAdmissionSnapshot) admissionPublication(admission domain.GitC
 }
 
 func (snapshot *gitAdmissionSnapshot) admittedPublication(admission domain.GitContributionAdmission, head domain.GitContextHead) (domain.HistoryEvent, error) {
-	if admission.Validate() != nil || head.Validate() != nil || admission.Destination.RepoID != snapshot.repo.ID || head.Destination.RepoID != snapshot.repo.ID || admission.Destination.GitOrigin != snapshot.repo.GitRemoteURL || head.Destination.GitOrigin != snapshot.repo.GitRemoteURL {
-		return domain.HistoryEvent{}, domain.ErrIntegrity
-	}
-	publication, err := snapshot.index.Publication(admission.PublicationID)
-	if err != nil {
-		return domain.HistoryEvent{}, err
-	}
-	name := publication.LocalBranch
-	if name == "" {
-		name = publication.Branch
-	}
-	if publication.BranchID != admission.SourceBranchID || publication.Target != admission.Capture || publication.GitAfter != admission.OriginalHead || name != admission.SourceBranch {
-		return domain.HistoryEvent{}, domain.ErrIntegrity
-	}
-	ordinary := snapshot.index.ObservationIDs(publication.ID)
-	carry, err := snapshot.index.CarryObservationIDs(publication.ID, admission.SourceHead)
-	if err != nil {
-		return domain.HistoryEvent{}, err
-	}
-	for _, pair := range []struct{ frozen, current []string }{{admission.OrdinaryObservationIDs, ordinary}, {admission.CarryObservationIDs, carry}} {
-		for _, id := range pair.frozen {
-			if !slices.Contains(pair.current, id) {
-				return domain.HistoryEvent{}, domain.ErrConflict
-			}
-		}
-	}
-	for _, anchor := range []struct{ id, branch, name string }{{admission.SourceAnchorID, admission.SourceBranchID, admission.SourceBranch}, {admission.DestinationAnchorID, admission.Destination.DestinationBranchID, admission.Destination.DestinationBranch}, {head.AnchorID, head.Destination.DestinationBranchID, head.Destination.DestinationBranch}} {
-		if anchor.id == "" {
-			if anchor.branch != domain.LegacyContextBranchID(string(snapshot.repo.ID), anchor.name) {
-				return domain.HistoryEvent{}, domain.ErrConflict
-			}
-			continue
-		}
-		event, exists := snapshot.history[anchor.id]
-		if !exists || !domain.IsBranchBindingEvent(event) || event.Kind == "archive" || event.BranchID != anchor.branch || event.Branch != anchor.name {
-			return domain.HistoryEvent{}, domain.ErrConflict
-		}
-	}
-	if head.Destination.DestinationBranchID != admission.Destination.DestinationBranchID {
-		return domain.HistoryEvent{}, domain.ErrConflict
-	}
-	seen := map[string]bool{}
-	for anchor := head.AnchorID; anchor != admission.DestinationAnchorID; {
-		if anchor == "" || seen[anchor] {
-			return domain.HistoryEvent{}, domain.ErrConflict
-		}
-		seen[anchor] = true
-		event, exists := snapshot.history[anchor]
-		if !exists || !domain.IsBranchBindingEvent(event) || event.Kind == "archive" || event.BranchID != admission.Destination.DestinationBranchID {
-			return domain.HistoryEvent{}, domain.ErrConflict
-		}
-		anchor = event.BindingParent
-	}
-	return publication, nil
+	return domain.GitAdmittedPublication(snapshot.repo, snapshot.index, snapshot.history, admission, head)
 }
 
-func (g *GitScans) prepareGitContribution(ctx context.Context, admission domain.GitContributionAdmission, head domain.GitContextHead) (preparedGitContribution, error) {
-	return repositoryReadForRepo(ctx, g.core, admission.Destination.RepoID, func(read context.Context) (preparedGitContribution, error) {
+func (workers *GitIntegrationWorkers) prepareGitContribution(ctx context.Context, admission domain.GitContributionAdmission, head domain.GitContextHead) (preparedGitContribution, error) {
+	return repositoryReadForRepoWithWork(ctx, workers.work, admission.Destination.RepoID, func(read context.Context) (preparedGitContribution, error) {
 		var prepared preparedGitContribution
 		if admission.Validate() != nil || head.Validate() != nil {
 			return prepared, domain.ErrValidation
 		}
-		admissions, ok := g.core.meta.(outbound.GitContributionAdmissionStore)
-		heads, headStore := g.core.meta.(outbound.GitContextHeadStore)
-		receipts, receiptStore := g.core.meta.(outbound.GitHeadReceiptStore)
+		admissions, ok := workers.work.meta.(outbound.GitContributionAdmissionStore)
+		heads, headStore := workers.work.meta.(outbound.GitContextHeadStore)
+		receipts, receiptStore := workers.work.meta.(outbound.GitHeadReceiptStore)
 		if !ok || !headStore || !receiptStore {
 			return prepared, domain.ErrValidation
 		}
@@ -131,7 +77,7 @@ func (g *GitScans) prepareGitContribution(ctx context.Context, admission domain.
 		if !admission.MatchesBaseline(baseline) {
 			return prepared, domain.ErrIntegrity
 		}
-		snapshot, err := g.core.readGitAdmissionEvidence(read, admission.Destination.RepoID, []gitAdmissionLookup{historicalGitAdmissionLookup(admission)})
+		snapshot, err := workers.readGitAdmissionEvidence(read, admission.Destination.RepoID, []gitAdmissionLookup{historicalGitAdmissionLookup(admission)})
 		if err != nil {
 			return prepared, err
 		}
@@ -139,7 +85,7 @@ func (g *GitScans) prepareGitContribution(ctx context.Context, admission domain.
 		if err != nil {
 			return prepared, err
 		}
-		evidence, err := g.core.newCodeEvidence(read, admission.Destination.RepoID)
+		evidence, err := workers.newCodeEvidence(read, admission.Destination.RepoID)
 		if err != nil {
 			return prepared, err
 		}
@@ -150,7 +96,7 @@ func (g *GitScans) prepareGitContribution(ctx context.Context, admission domain.
 		if err != nil {
 			return prepared, err
 		}
-		if err := g.core.verifyContributionCapture(read, admission.Destination.RepoID, admission.Capture); err != nil {
+		if err := workers.verifyContributionCapture(read, admission.Destination.RepoID, admission.Capture); err != nil {
 			return prepared, err
 		}
 		record := (domain.GitContribution{RepoID: admission.Destination.RepoID, GitOrigin: admission.Destination.GitOrigin, ProviderRepositoryID: admission.Destination.ProviderRepositoryID,
@@ -161,7 +107,7 @@ func (g *GitScans) prepareGitContribution(ctx context.Context, admission domain.
 		}
 		prepared = preparedGitContribution{proof: proof, admission: admission, head: head, receipt: receipt, publication: publication, revision: snapshot.revision, snapshot: snapshot}
 		if publication.MemoryPinned {
-			source, err := g.core.contributionPublicationMemorySource(read, record.RepoID, record.Capture, publication)
+			source, err := workers.contributionPublicationMemorySource(read, record.RepoID, record.Capture, publication)
 			if err != nil {
 				return preparedGitContribution{}, err
 			}
@@ -175,23 +121,23 @@ func (g *GitScans) prepareGitContribution(ctx context.Context, admission domain.
 	})
 }
 
-func (g *GitScans) applyGitContribution(ctx context.Context, prepared preparedGitContribution, authorization gitAdmissionAuthorization) (domain.GitContributionProof, error) {
+func (workers *GitIntegrationWorkers) applyGitContribution(ctx context.Context, prepared preparedGitContribution, authorization gitAdmissionAuthorization) (domain.GitContributionProof, error) {
 	var empty domain.GitContributionProof
 	repo := prepared.proof.Contribution.RepoID
-	proofs, ok := g.core.meta.(outbound.GitContextHeadStore)
-	ledger, hasLedger := g.core.meta.(outbound.GitContributionStore)
-	_, atomic := g.core.meta.(outbound.RepositoryTransactions)
+	proofs, ok := workers.work.meta.(outbound.GitContextHeadStore)
+	ledger, hasLedger := workers.work.meta.(outbound.GitContributionStore)
+	_, atomic := workers.work.meta.(outbound.RepositoryTransactions)
 	if !ok || !hasLedger || !atomic || authorization.fence == nil || !prepared.proof.MatchesInputs(prepared.admission, prepared.head, prepared.receipt) {
 		return empty, domain.ErrValidation
 	}
 	if authorization.repo != repo || authorization.provider != prepared.receipt.Provider {
 		return empty, domain.ErrConflict
 	}
-	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), g.core, repo, func(write context.Context) (domain.GitContributionProof, error) {
+	return repositoryWriteWithWork(context.WithValue(ctx, revisionScopeKey{}, "none"), workers.work, repo, func(write context.Context) (domain.GitContributionProof, error) {
 		if err := authorization.fence(write); err != nil {
 			return empty, err
 		}
-		current, err := g.core.workerRepository(write, repo)
+		current, err := workers.workerRepository(write, repo)
 		if err != nil {
 			return empty, err
 		}
@@ -208,7 +154,7 @@ func (g *GitScans) applyGitContribution(ctx context.Context, prepared preparedGi
 		if !errors.Is(err, domain.ErrNotFound) {
 			return empty, err
 		}
-		snapshot, err := g.core.reuseGitAdmissionSnapshot(write, repo, prepared.snapshot)
+		snapshot, err := workers.reuseGitAdmissionSnapshot(write, repo, prepared.snapshot)
 		if err != nil {
 			return empty, err
 		}
@@ -223,7 +169,7 @@ func (g *GitScans) applyGitContribution(ctx context.Context, prepared preparedGi
 			return empty, domain.ErrConflict
 		}
 		if prepared.memory != nil {
-			source, err := g.core.contributionPublicationMemorySource(write, repo, prepared.proof.Contribution.Capture, publication)
+			source, err := workers.contributionPublicationMemorySource(write, repo, prepared.proof.Contribution.Capture, publication)
 			if err != nil {
 				return empty, err
 			}
@@ -245,7 +191,7 @@ func (g *GitScans) applyGitContribution(ctx context.Context, prepared preparedGi
 		if err := proofs.PutGitContributionProof(write, prepared.proof); err != nil {
 			return empty, err
 		}
-		if err := revisionWrite(evidenceWriteContext(write), g.core, repo); err != nil {
+		if err := workers.work.revisionWrite(evidenceWriteContext(write), repo); err != nil {
 			return empty, err
 		}
 		return prepared.proof, nil

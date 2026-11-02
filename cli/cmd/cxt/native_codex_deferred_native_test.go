@@ -273,7 +273,7 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic, defaultSearch bo
 	cfg := f.cfg
 	cfg.RemoteEndpoint = cloud.URL
 	selectionGit(t, f.root, "switch", "-qc", "feature/local-position")
-	third, err := providerLaunchHooks(cfg).PrepareDeferred(ctx, req)
+	third, err := providerLaunchHooks(cfg, f.hooks.SessionInventory).PrepareDeferred(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}

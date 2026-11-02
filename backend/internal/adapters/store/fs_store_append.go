@@ -99,5 +99,5 @@ func (s *FSStore) AppendRef(ctx context.Context, repoID domain.ContentHash, ref 
 	if err := s.writeJoinJournal(path, journal); err != nil {
 		return s.failPreparedJoin(path, journal, err)
 	}
-	return s.finishCommittedJoin(path, journal)
+	return s.completeCommittedJoin(path, journal)
 }

@@ -664,7 +664,7 @@ func TestPostCommitSkipsOnlyDetachedOperationCapture(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cwd, _, _, _, _ := publicationFixture(t)
 			runLifecycleGit(t, cwd, "switch", "--detach", "-q", "HEAD")
-			c := &Container{} // nil Save is a panic trap if the intermediate capture runs.
+			c := &Container{SessionSelection: captureSelectionForTest()} // nil Save is a panic trap if the intermediate capture runs.
 			calls := 0
 			if operation {
 				if err := os.Mkdir(filepath.Join(cwd, ".git", "rebase-merge"), 0700); err != nil {

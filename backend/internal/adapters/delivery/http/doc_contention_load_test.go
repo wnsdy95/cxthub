@@ -100,7 +100,9 @@ func TestPostgresDocPublicationContention(t *testing.T) {
 	}
 	svc := app.NewService(st, st, nil, gitengine.NewEngine(st), st)
 	ids := app.NewIdentityService(auth.NewDevVerifier(), st)
-	server := httptest.NewServer(NewServer(svc, ids).Handler())
+	delivery := NewServer(svc, ids)
+	setServiceDocumentQueriesForProfile(t, delivery, svc, inbound.DocumentQueryVerifiedRoots)
+	server := httptest.NewServer(delivery.Handler())
 	defer server.Close()
 	user, session, err := ids.Login(ctx, "dev:"+domain.NewID("contention-")+"@example.test", "contention")
 	if err != nil {
@@ -166,7 +168,7 @@ func TestPostgresDocPublicationContention(t *testing.T) {
 				}
 			}
 			if resp.StatusCode != status {
-				return len(data), fmt.Errorf("%s %s: status=%d bytes=%d expected=%d attempts=%d", method, path, resp.StatusCode, len(data), status, attempt+1)
+				return len(data), fmt.Errorf("%s %s: status=%d bytes=%d expected=%d attempts=%d response=%s", method, path, resp.StatusCode, len(data), status, attempt+1, data)
 			}
 			if out != nil {
 				return len(data), json.Unmarshal(data, out)

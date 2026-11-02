@@ -26,6 +26,19 @@ func NewClaudeCapture() *ClaudeCaptureSource { return &ClaudeCaptureSource{} }
 // Provider returns the provider (claude) this adapter is responsible for.
 func (c *ClaudeCaptureSource) Provider() domain.ProviderKind { return domain.ProviderClaude }
 
+func (c *ClaudeCaptureSource) SessionFilesForCwd(_ context.Context, cwd string) []string {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		abs = cwd
+	}
+	root, err := providerfs.ClaudeProjectsDir()
+	if err != nil {
+		return nil
+	}
+	matches, _ := filepath.Glob(filepath.Join(root, providerfs.EncodeCwd(abs), "*.jsonl"))
+	return matches
+}
+
 func claudeProjectsDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

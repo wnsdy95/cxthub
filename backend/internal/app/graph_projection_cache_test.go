@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -23,6 +22,10 @@ func (state *graphCacheReadState) InReadOnlyTransaction(context.Context) bool {
 	return state.readOnly
 }
 
+func (state *graphCacheReadState) ReadRepositoryGraphSourceGeneration(_ context.Context, repo domain.ContentHash) (domain.RepositoryViewSourceCheckpoint, error) {
+	return testProjectionGeneration(repo), nil
+}
+
 func TestGraphProjectionCacheReuseOwnsResultsAndInputs(t *testing.T) {
 	svc, storage := newFsckSvc(t)
 	state := &graphCacheReadState{FSStore: storage, readOnly: true}
@@ -35,7 +38,15 @@ func TestGraphProjectionCacheReuseOwnsResultsAndInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected, _ := json.Marshal(first)
-	entry := svc.graphCache.entries[0]
+	keys := svc.graphCache.Keys()
+	if len(keys) != 1 {
+		t.Fatal("initial projection was not retained")
+	}
+	key := keys[0]
+	encoded, found := svc.graphCache.Get(keys[0])
+	if !found || len(encoded) == 0 {
+		t.Fatal("initial projection encoding is unavailable")
+	}
 	first.SnapshotIDs[0] = hh("caller mutation")
 	first.ScopeLabels["caller"] = "mutation"
 	second, err := svc.cachedGraphState(ctx, repo, view, "")
@@ -43,38 +54,40 @@ func TestGraphProjectionCacheReuseOwnsResultsAndInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual, _ := json.Marshal(second)
-	if !bytes.Equal(expected, actual) || &svc.graphCache.entries[0].value[0] != &entry.value[0] {
+	keys = svc.graphCache.Keys()
+	retained, found := svc.graphCache.Get(keys[0])
+	if !bytes.Equal(expected, actual) || !found || len(retained) == 0 || &retained[0] != &encoded[0] {
 		t.Fatal("same projection was rebuilt or caller mutated cached data")
 	}
 	view.Snapshots = append(view.Snapshots, domain.Snapshot{ID: hh("upload without public revision"), RepoID: repo, DocHash: hh("doc2")})
 	changed, err := svc.cachedGraphState(ctx, repo, view, "")
-	if err != nil || len(changed.SnapshotIDs) != 2 || svc.graphCache.entries[0].key.inputs == entry.key.inputs {
+	if err != nil || len(changed.SnapshotIDs) != 2 || svc.graphCache.Keys()[0].Inputs == key.Inputs {
 		t.Fatalf("same-revision upload reused stale graph: %v %+v", err, changed.SnapshotIDs)
 	}
 	for _, revision := range []domain.RepositoryRevision{{Graph: 1, Pending: 1}, {Graph: 1, Pending: 1, Evidence: 1}, {Graph: 2, Pending: 1, Evidence: 1}} {
 		view.Revision = revision
 		graph, err := svc.cachedGraphState(ctx, repo, view, "")
-		if err != nil || graph.Revision != revision || len(svc.graphCache.entries) != 1 || svc.graphCache.entries[0].key.revision != revision {
+		if err != nil || graph.Revision != revision || svc.graphCache.Stats().Entries != 1 || svc.graphCache.Keys()[0].Revision != revision {
 			t.Fatalf("generation invalidation: %v %+v", err, graph.Revision)
 		}
 	}
-	prior := svc.graphCache.entries[0].key
+	prior := svc.graphCache.Keys()[0]
 	view.DefaultBranch = "changed-default"
-	if _, err := svc.cachedGraphState(ctx, repo, view, ""); err != nil || svc.graphCache.entries[0].key.inputs == prior.inputs {
+	if _, err := svc.cachedGraphState(ctx, repo, view, ""); err != nil || svc.graphCache.Keys()[0].Inputs == prior.Inputs {
 		t.Fatalf("default branch not in projection identity: %v", err)
 	}
 	origin := "https://github.com/cache/changed.git"
 	if _, err := storage.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: origin}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.cachedGraphState(ctx, repo, view, ""); err != nil || svc.graphCache.entries[0].key.origin != origin {
+	if _, err := svc.cachedGraphState(ctx, repo, view, ""); err != nil || svc.graphCache.Keys()[0].Origin != origin {
 		t.Fatalf("origin not in projection identity: %v", err)
 	}
-	if _, err := svc.cachedGraphState(ctx, repo, view, "unknown-position"); !errors.Is(err, domain.ErrNotFound) || len(svc.graphCache.building) != 0 || len(svc.graphCache.entries) != 1 {
+	if _, err := svc.cachedGraphState(ctx, repo, view, "unknown-position"); !errors.Is(err, domain.ErrNotFound) || svc.graphCache.Stats().Building != 0 || svc.graphCache.Stats().Entries != 1 {
 		t.Fatalf("failed position cached or flight leaked: %v", err)
 	}
 	other := hh("other repository")
-	if _, err := svc.cachedGraphState(ctx, other, view, ""); err != nil || len(svc.graphCache.entries) != 2 || svc.graphCache.entries[1].key.repo != other {
+	if _, err := svc.cachedGraphState(ctx, other, view, ""); err != nil || svc.graphCache.Stats().Entries != 2 || svc.graphCache.Keys()[1].Repo != other {
 		t.Fatalf("repository cache scope: %v", err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
@@ -85,7 +98,7 @@ func TestGraphProjectionCacheReuseOwnsResultsAndInputs(t *testing.T) {
 }
 
 func TestGraphProjectionCacheRequiresCommittedGeneration(t *testing.T) {
-	for _, name := range []string{"filesystem", "write", "zero revision", "write marker"} {
+	for _, name := range []string{"filesystem", "write", "zero revision", "write marker", "catalog only"} {
 		t.Run(name, func(t *testing.T) {
 			svc, storage := newFsckSvc(t)
 			ctx := systemTestContext()
@@ -99,10 +112,13 @@ func TestGraphProjectionCacheRequiresCommittedGeneration(t *testing.T) {
 			if name == "write marker" {
 				ctx = context.WithValue(ctx, afterCommitKey{}, &afterCommitActions{})
 			}
+			if name == "catalog only" {
+				svc.meta = &metadataOnlyProjectionStore{MetadataStore: storage}
+			}
 			if _, err := svc.cachedGraphState(ctx, hh(t.Name()), view, ""); err != nil {
 				t.Fatal(err)
 			}
-			if len(svc.graphCache.entries) != 0 {
+			if svc.graphCache.Stats().Entries != 0 {
 				t.Fatal("uncommitted/unknown generation entered shared cache")
 			}
 		})
@@ -132,7 +148,7 @@ func TestGraphProjectionCacheWarmReadDoesNotNeedBulk(t *testing.T) {
 		t.Fatalf("warm read blocked by worker: %v", err)
 	}
 	view.Revision.Pending++
-	if _, err := svc.cachedGraphState(interactive, repo, view, ""); !errors.Is(err, domain.ErrResourceOverloaded) || len(svc.graphCache.building) != 0 {
+	if _, err := svc.cachedGraphState(interactive, repo, view, ""); !errors.Is(err, domain.ErrResourceOverloaded) || svc.graphCache.Stats().Building != 0 {
 		t.Fatalf("cold miss bypassed bulk or leaked reservation: %v", err)
 	}
 	releaseBulk()
@@ -143,37 +159,37 @@ func TestGraphProjectionCacheWarmReadDoesNotNeedBulk(t *testing.T) {
 	assertResourcesReleased(t, gate)
 }
 
-func TestGraphProjectionCacheBoundsAndBusyRetry(t *testing.T) {
-	var cache graphProjectionCache
-	first := graphProjectionKey{repo: hh("repo")}
-	_, finish, err := cache.lookup(first)
-	if err != nil {
+func TestGraphProjectionCacheFencesSourceOutsideFingerprint(t *testing.T) {
+	service, storage := newFsckSvc(t)
+	repo := hh(t.Name())
+	metadata := &projectionCacheMetadataStore{MetadataStore: storage, generation: testProjectionGeneration(repo), readOnly: true}
+	service.meta = metadata
+	ctx := systemTestContext()
+	view := domain.RepositoryView{Revision: domain.RepositoryRevision{Graph: 1}}
+	if _, err := service.cachedGraphState(ctx, repo, view, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := cache.lookup(first); !errors.Is(err, domain.ErrResourceOverloaded) {
-		t.Fatal("concurrent identical miss must retry instead of holding a read slot")
-	}
-	finish()
-	_, finish, err = cache.lookup(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	finish()
-	cache.put(first, make([]byte, graphProjectionCacheBytes+1))
-	if len(cache.entries) != 0 || cache.bytes != 0 {
-		t.Fatal("oversized projection cached")
-	}
-	for index := range 10 {
-		cache.put(graphProjectionKey{repo: hh(fmt.Sprint(index))}, make([]byte, 3<<20))
-		if cache.bytes > graphProjectionCacheBytes || len(cache.entries) > graphProjectionCacheEntries {
-			t.Fatal("cache exceeded retention bound")
+	for _, reset := range []bool{false, true} {
+		keys := service.graphCache.Keys()
+		oldKey := keys[0]
+		oldEncoded, found := service.graphCache.Get(keys[0])
+		if !found || len(oldEncoded) == 0 {
+			t.Fatal("prior projection encoding is unavailable")
 		}
-	}
-	for index := range 10 {
-		cache.put(graphProjectionKey{repo: hh(fmt.Sprint(index))}, []byte("{}"))
-	}
-	if len(cache.entries) != graphProjectionCacheEntries {
-		t.Fatal("entry count bound not exercised")
+		if reset {
+			metadata.generation.Epoch = "22345678-abcd-4321-9876-123456789abc"
+		} else {
+			metadata.generation.Sequence++
+		}
+		if _, err := service.cachedGraphState(ctx, repo, view, ""); err != nil {
+			t.Fatal(err)
+		}
+		keys = service.graphCache.Keys()
+		nextKey := keys[0]
+		nextEncoded, found := service.graphCache.Get(keys[0])
+		if !found || len(nextEncoded) == 0 || oldKey.Inputs != nextKey.Inputs || oldKey.Revision != nextKey.Revision || oldKey.Source == nextKey.Source || &oldEncoded[0] == &nextEncoded[0] {
+			t.Fatalf("source reset=%v reused outer graph: before=%+v after=%+v", reset, oldKey, nextKey)
+		}
 	}
 }
 

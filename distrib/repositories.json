@@ -31,6 +31,8 @@
         ["backend/", "backend/"],
         ["schemas/", "schemas/"],
         ["deploy/Dockerfile", "Dockerfile"],
+        ["deploy/Dockerfile.migrate", "Dockerfile.migrate"],
+        ["docs/DATABASE_MIGRATIONS.md", "docs/DATABASE_MIGRATIONS.md"],
         [".dockerignore", ".dockerignore"],
         ["distrib/repository-templates/backend/", ""]
       ]
@@ -40,6 +42,9 @@
       "visibility": "private",
       "paths": [
         ["frontend/web/", ""],
+        ["schemas/fixtures/markdown-display-v1.json", "tests/fixtures/markdown-display-v1.json"],
+        ["schemas/fixtures/event-display-v1.json", "tests/fixtures/event-display-v1.json"],
+        ["schemas/fixtures/tool-display-v1.json", "tests/fixtures/tool-display-v1.json"],
         ["distrib/repository-templates/frontend/", ""]
       ]
     },

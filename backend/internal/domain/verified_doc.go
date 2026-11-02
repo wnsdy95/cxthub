@@ -1,9 +1,6 @@
 package domain
 
-import (
-	"context"
-	"encoding/json"
-)
+import "context"
 
 // VerifiedSessionDoc carries immutable canonical content after schema and hash
 // validation. Its private strings cannot alias caller-owned CIR or byte slices.
@@ -21,12 +18,6 @@ func VerifySessionDoc(doc SessionDoc) (VerifiedSessionDoc, error) {
 	raw, err := ValidatedSessionDocBytes(doc)
 	if err != nil {
 		return VerifiedSessionDoc{}, err
-	}
-	// CanonicalBytes normalizes each event independently. Include both JSON
-	// wrapper levels in the decoder's nesting limit before publishing a proof,
-	// so a typed value cannot produce an archive the normal reader cannot decode.
-	if !json.Valid(raw) {
-		return VerifiedSessionDoc{}, ErrIntegrity
 	}
 	return VerifiedSessionDoc{hash: doc.Hash, canonical: string(raw)}, nil
 }

@@ -34,7 +34,16 @@ sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
   the services do not replicate business rules or communicate over a private
   REST hop. Each has its own connection pool and shutdown lifecycle.
 - OAuth/rate-limit records are writable operational data. Read-only MCP tools
-  do not imply a read-only database account. Startup migrations also need DDL.
+  do not imply a read-only database account. Schema startup is verification-only;
+  DDL belongs to the separate operator migration image and credential.
+
+Before starting API, MCP, or worker processes, follow the
+[explicit migration procedure](../docs/DATABASE_MIGRATIONS.md): drain the old
+release, review the backup and compatible image/schema pair, apply with the
+operator image using `--apply`, verify, then start runtime services with their
+separate DML credentials. An unprepared or mismatched schema refuses startup.
+This is a release requirement, not an automatically provisioned Render service
+or pre-deploy hook. No new resources or credential grants are activated here.
 
 ## Provision
 

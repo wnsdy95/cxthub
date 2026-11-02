@@ -7,11 +7,17 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 func (s *Server) conditionalAppendV1(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !ok {
+		return
+	}
+	defer release()
 	var body struct {
 		BranchID         string             `json:"branch_id"`
 		Target           domain.ContentHash `json:"target"`
@@ -64,6 +70,6 @@ func (s *Server) conditionalAppendV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revision := domain.RepositoryRevision{Graph: *body.ExpectedRevision.Graph, Evidence: *body.ExpectedRevision.Evidence, Pending: body.ExpectedRevision.Pending}
-	out, err := s.b.UpdateRef(r.Context(), inbound.UpdateRefInput{RepoID: ref.RepoID, Ref: ref, Append: true, ExpectedTarget: body.ExpectedTarget, ExpectedRevision: &revision})
+	out, err := s.repositoryRefs.UpdateRef(r.Context(), inbound.UpdateRefInput{RepoID: ref.RepoID, Ref: ref, Append: true, ExpectedTarget: body.ExpectedTarget, ExpectedRevision: &revision})
 	s.respond(w, out, err)
 }

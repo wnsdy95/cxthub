@@ -9,3 +9,10 @@ import (
 type ContextQuery interface {
 	QueryContext(context.Context, domain.ContentHash, domain.ContextSelection) (domain.ContextQueryView, error)
 }
+
+type ContextQueryProfile = RepositoryStateQueryProfile
+
+const (
+	ContextQueryCompatibility   = RepositoryStateCompatibility
+	ContextQueryPinnedSnapshots = RepositoryStatePinnedSnapshots
+)

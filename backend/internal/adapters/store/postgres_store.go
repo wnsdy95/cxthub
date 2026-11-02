@@ -23,8 +23,10 @@ import (
 
 // PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
 type PostgresStore struct {
-	docProofs docProofCache
-	pool      *pgxpool.Pool
+	docProofs                    docProofCache
+	pool                         *pgxpool.Pool
+	legacyByteRangePublication   bool
+	legacyDerivedBytePublication bool
 }
 
 // NewPostgresStore connects to a pgx pool using a dsn.
@@ -115,8 +117,10 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 		return domain.Repo{}, err
 	}
 	var r domain.Repo
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity FROM repos WHERE id=$1`, string(id)).
-		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity)
+	var topics string
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity,
+ COALESCE(description,''), COALESCE(website,''), COALESCE(topics,'null') FROM repos WHERE id=$1`, string(id)).
+		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity, &r.Description, &r.Website, &topics)
 	if err != nil {
 		return domain.Repo{}, mapNoRows(err)
 	}
@@ -130,6 +134,9 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 	}
 	if err := r.RequiredDocIdentity.Validate(); err != nil {
 		return domain.Repo{}, err
+	}
+	if err := json.Unmarshal([]byte(topics), &r.Topics); err != nil {
+		return domain.Repo{}, domain.ErrIntegrity
 	}
 	r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 	r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
@@ -171,7 +178,8 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 }
 
 func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity FROM repos WHERE team=$1`, team)
+	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity,
+ COALESCE(description,''), COALESCE(website,''), COALESCE(topics,'null') FROM repos WHERE team=$1`, team)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +187,8 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 	var out []domain.Repo
 	for rows.Next() {
 		var r domain.Repo
-		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity); err != nil {
+		var topics string
+		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity, &r.Description, &r.Website, &topics); err != nil {
 			return nil, err
 		}
 		if err := validateHash(r.ID); err != nil {
@@ -192,6 +201,9 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 		}
 		if err := r.RequiredDocIdentity.Validate(); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(topics), &r.Topics); err != nil {
+			return nil, domain.ErrIntegrity
 		}
 		r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 		r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
@@ -1186,14 +1198,19 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 	}
 	doc := prepared.doc
 	s.docProofs.put(docProofKey{repo: repoID, expected: doc.Hash(), representation: doc.Hash()}, doc.Reference())
-	tx, err := s.db(ctx).Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
+	return rawRepresentationTransaction(ctx, s, func(tx pgx.Tx, attempt *rawRepresentationAttempt) (bool, error) {
+		return s.putPreparedDocInRawTransaction(ctx, tx, repoID, prepared, attempt)
+	})
+}
+
+func (s *PostgresStore) putPreparedDocInRawTransaction(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash, prepared preparedDocPG, attempt *rawRepresentationAttempt) (bool, error) {
+	doc := prepared.doc
 	// Lock order is doc → chunks, matching GetDocManifest. A new manifest row is
 	// invisible until this transaction also stores its chunks and commits.
 	plan, chunked := prepared.chunks, prepared.chunked
+	if err := attempt.lock(ctx, tx, doc.Hash(), plan.Order); err != nil {
+		return false, err
+	}
 	ct, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
 		string(doc.Hash()), prepared.payload)
 	if err != nil {
@@ -1225,8 +1242,8 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 		}
 	}
 	if chunked {
-		for _, ch := range plan.Order {
-			if err := retainDocChunkPG(ctx, tx, ch, plan.Bodies[ch], !matchingManifest); err != nil {
+		for _, ch := range attempt.order(plan.Order) {
+			if err := s.retainRawBlobPG(ctx, tx, ch, plan.Bodies[ch], !matchingManifest, attempt.exclusive[ch]); err != nil {
 				return false, err
 			}
 			if _, err := tx.Exec(ctx,
@@ -1248,7 +1265,7 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 				return false, err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, prepared.payload, string(doc.Hash())); err != nil {
+		if err := preserveRawBlobPG(ctx, tx, doc.Hash(), prepared.payload); err != nil {
 			return false, err
 		}
 	} else if isMan {
@@ -1270,48 +1287,7 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 	if err := putPreparedReadIndexPG(ctx, tx, prepared.read); err != nil {
 		return false, err
 	}
-	if err := storageWriteError(tx.Commit(ctx)); err != nil {
-		return false, err
-	}
 	return created, nil
-}
-
-// Finalization normally receives chunks already uploaded by negotiation. Read
-// and retain those bytes instead of compressing/sending them to a losing INSERT.
-// Presence alone is never integrity proof; compare decompressed bytes even on
-// reuse. The key-share lock protects the ownership grant from concurrent GC.
-func retainDocChunkPG(ctx context.Context, tx pgx.Tx, hash domain.ContentHash, body []byte, allowInsert bool) error {
-	var stored []byte
-	read := func() error {
-		return tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR KEY SHARE`, string(hash)).Scan(&stored)
-	}
-	err := read()
-	if errors.Is(err, pgx.ErrNoRows) {
-		if !allowInsert {
-			// Replaying an existing manifest is validation, not repair. A new
-			// document may reconstruct chunks collected after verification;
-			// an already published broken archive must still fail closed.
-			return domain.ErrIntegrity
-		}
-		result, insertErr := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`, string(hash), docCompress(body))
-		if insertErr != nil {
-			return insertErr
-		}
-		if result.RowsAffected() == 1 {
-			return nil // This transaction inserted the verified bytes and owns the row.
-		}
-		// A competing writer won insertion. Validate its bytes under retention,
-		// exactly as for a chunk present before this transaction started.
-		err = read()
-	}
-	if err != nil {
-		return err
-	}
-	stored, err = docDecompress(stored)
-	if err != nil || !bytes.Equal(stored, body) {
-		return domain.ErrIntegrity
-	}
-	return nil
 }
 
 // reassembleManifestTx reassembles canonical bytes from chunks in blobs if the stored blob is a manifest (for PutDoc blob validation — transaction integrity check, unnecessary owner join).
@@ -1359,37 +1335,34 @@ func (s *PostgresStore) PutChunks(ctx context.Context, repoID domain.ContentHash
 	if err := validateHash(repoID); err != nil {
 		return 0, 0, err
 	}
-	tx, err := s.db(ctx).Begin(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer tx.Rollback(ctx)
+	counts, err := rawRepresentationTransaction(ctx, s, func(tx pgx.Tx, attempt *rawRepresentationAttempt) ([2]int, error) {
+		return s.putChunksInRawTransaction(ctx, tx, repoID, chunks, attempt)
+	})
+	return counts[0], counts[1], err
+}
+
+func (s *PostgresStore) putChunksInRawTransaction(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash, chunks map[domain.ContentHash][]byte, attempt *rawRepresentationAttempt) ([2]int, error) {
 	stored, deduped := 0, 0
-	for hash, body := range chunks {
+	ordered := attempt.mapOrder(chunks)
+	if err := attempt.lock(ctx, tx, "", ordered); err != nil {
+		return [2]int{}, err
+	}
+	for _, hash := range ordered {
+		body := chunks[hash]
 		if err := validateHash(hash); err != nil {
-			return 0, 0, err
+			return [2]int{}, err
 		}
 		if domain.HashContent(body) != hash {
-			return 0, 0, domain.ErrIntegrity
+			return [2]int{}, domain.ErrIntegrity
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-			string(hash), docCompress(body)); err != nil {
-			return 0, 0, err
-		}
-		var existing []byte
-		if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(hash)).Scan(&existing); err != nil {
-			return 0, 0, err
-		}
-		existing, err = docDecompress(existing)
-		if err != nil || !bytes.Equal(existing, body) {
-			return 0, 0, domain.ErrIntegrity
+		if err := s.retainRawBlobPG(ctx, tx, hash, body, true, attempt.exclusive[hash]); err != nil {
+			return [2]int{}, err
 		}
 		ct, err := tx.Exec(ctx,
 			`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,
 			string(repoID), string(hash))
 		if err != nil {
-			return 0, 0, err
+			return [2]int{}, err
 		}
 		if ct.RowsAffected() == 1 {
 			stored++
@@ -1397,10 +1370,7 @@ func (s *PostgresStore) PutChunks(ctx context.Context, repoID domain.ContentHash
 			deduped++
 		}
 	}
-	if err := storageWriteError(tx.Commit(ctx)); err != nil {
-		return 0, 0, err
-	}
-	return stored, deduped, nil
+	return [2]int{stored, deduped}, nil
 }
 
 // HasChunks returns the list of owned chunks in the repo (negotiate delta negotiation).
@@ -1475,11 +1445,27 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 		// Lazy repacking belongs to a writable maintenance operation.
 		return domain.DocChunkManifest{}, domain.ErrNotFound
 	}
-	tx, err := s.db(ctx).Begin(ctx)
+	current, err = canonicalRawDocumentPG(current, hash)
 	if err != nil {
 		return domain.DocChunkManifest{}, err
 	}
-	defer tx.Rollback(ctx)
+	plan, ok := domain.PlanDocChunks(current)
+	if !ok {
+		return domain.DocChunkManifest{}, domain.ErrNotFound
+	}
+	manifest, err := rawRepresentationTransaction(ctx, s, func(tx pgx.Tx, attempt *rawRepresentationAttempt) (domain.DocChunkManifest, error) {
+		return s.getDocManifestInRawTransaction(ctx, tx, repoID, hash, current, plan, attempt)
+	})
+	if err == domain.ErrStorageLimit && ctx.Err() == nil && !s.InTransaction(ctx) {
+		return domain.DocChunkManifest{}, domain.ErrNotFound
+	}
+	return manifest, err
+}
+
+func (s *PostgresStore) getDocManifestInRawTransaction(ctx context.Context, tx pgx.Tx, repoID, hash domain.ContentHash, expected []byte, plan domain.DocChunkPlan, attempt *rawRepresentationAttempt) (domain.DocChunkManifest, error) {
+	if err := attempt.lock(ctx, tx, hash, plan.Order); err != nil {
+		return domain.DocChunkManifest{}, err
+	}
 	var raw []byte
 	if err := tx.QueryRow(ctx,
 		`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
@@ -1497,33 +1483,13 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if man, isMan := domain.ParseDocChunkManifest(data); isMan {
 		return man, nil
 	}
-	if domain.HashContent(data) != hash {
-		var cir domain.CIRDocument
-		if json.Unmarshal(data, &cir) != nil {
-			return domain.DocChunkManifest{}, domain.ErrIntegrity
-		}
-		cb, cerr := domain.CanonicalBytes(cir)
-		if cerr != nil || domain.HashContent(cb) != hash {
-			return domain.DocChunkManifest{}, domain.ErrIntegrity
-		}
-		data = cb
+	data, err = canonicalRawDocumentPG(data, hash)
+	if err != nil || !bytes.Equal(data, expected) {
+		return domain.DocChunkManifest{}, domain.ErrIntegrity
 	}
-	plan, ok := domain.PlanDocChunks(data)
-	if !ok {
-		return domain.DocChunkManifest{}, domain.ErrNotFound // Plan not possible — legacy response fallback
-	}
-	for _, ch := range plan.Order {
-		if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-			string(ch), docCompress(plan.Bodies[ch])); err != nil {
+	for _, ch := range attempt.order(plan.Order) {
+		if err := s.retainRawBlobPG(ctx, tx, ch, plan.Bodies[ch], true, attempt.exclusive[ch]); err != nil {
 			return domain.DocChunkManifest{}, err
-		}
-		var existing []byte
-		if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(ch)).Scan(&existing); err != nil {
-			return domain.DocChunkManifest{}, err
-		}
-		existing, err = docDecompress(existing)
-		if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
-			return domain.DocChunkManifest{}, domain.ErrIntegrity
 		}
 		// blobs are globally deduplicated while ownership is repo-scoped. Before
 		// replacing the shared doc body with a manifest, grant every current doc
@@ -1539,10 +1505,7 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if err != nil {
 		return domain.DocChunkManifest{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(manifest), string(hash)); err != nil {
-		return domain.DocChunkManifest{}, err
-	}
-	if err := storageWriteError(tx.Commit(ctx)); err != nil {
+	if err := preserveRawBlobPG(ctx, tx, hash, docCompress(manifest)); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
 	return plan.Manifest, nil
@@ -1623,15 +1586,19 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 	if err != nil {
 		return "", err
 	}
-	tx, err := s.db(ctx).Begin(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback(ctx)
+	return rawRepresentationTransaction(ctx, s, func(tx pgx.Tx, attempt *rawRepresentationAttempt) (domain.ContentHash, error) {
+		return s.putMemoryInRawTransaction(ctx, tx, repoID, h, digest, data, attempt)
+	})
+}
+
+func (s *PostgresStore) putMemoryInRawTransaction(ctx context.Context, tx pgx.Tx, repoID, h domain.ContentHash, digest domain.MemoryDigest, data []byte, attempt *rawRepresentationAttempt) (domain.ContentHash, error) {
 	// Lock order is memory object → memory components. A newly inserted manifest
 	// is invisible until every component and ownership grant commits with it.
 	plan, chunked, err := domain.PlanMemoryChunks(digest)
 	if err != nil {
+		return "", err
+	}
+	if err := attempt.lock(ctx, tx, h, plan.Order); err != nil {
 		return "", err
 	}
 	payload := data
@@ -1674,19 +1641,10 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 		}
 	}
 	if chunked {
-		for _, chunkHash := range plan.Order {
+		for _, chunkHash := range attempt.order(plan.Order) {
 			body := plan.Bodies[chunkHash]
-			if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-				string(chunkHash), docCompress(body)); err != nil {
+			if err := s.retainRawBlobPG(ctx, tx, chunkHash, body, true, attempt.exclusive[chunkHash]); err != nil {
 				return "", err
-			}
-			var existing []byte
-			if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(chunkHash)).Scan(&existing); err != nil {
-				return "", err
-			}
-			existing, err = docDecompress(existing)
-			if err != nil || !bytes.Equal(existing, body) {
-				return "", domain.ErrIntegrity
 			}
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'memory_chunk',$2) ON CONFLICT DO NOTHING`,
@@ -1711,7 +1669,7 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 		if err != nil {
 			return "", err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, manifest, string(h)); err != nil {
+		if err := preserveRawBlobPG(ctx, tx, h, manifest); err != nil {
 			return "", err
 		}
 	} else if isManifest {
@@ -1736,9 +1694,6 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'memory',$2) ON CONFLICT DO NOTHING`,
 		string(repoID), string(h)); err != nil {
-		return "", err
-	}
-	if err := storageWriteError(tx.Commit(ctx)); err != nil {
 		return "", err
 	}
 	return h, nil
@@ -2387,11 +2342,19 @@ func (s *PostgresStore) DeleteDoc(ctx context.Context, repoID domain.ContentHash
 	if err := validateHashes(repoID, hash); err != nil {
 		return err
 	}
-	tx, err := s.db(ctx).Begin(ctx)
+	tx, err := s.db(ctx).BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackPG(tx)
+	attempt := &rawRepresentationAttempt{}
+	if err := attempt.lock(ctx, tx, hash, nil); err != nil {
+		return err
+	}
+	var retained domain.ContentHash
+	if err := tx.QueryRow(ctx, `SELECT hash FROM blobs WHERE hash=$1 FOR UPDATE`, hash).Scan(&retained); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2`,
 		string(repoID), string(hash)); err != nil {

@@ -3,6 +3,7 @@ package domain
 // RepositoryView is one committed generation of graph metadata. Document bodies
 // remain independently addressable by immutable content hash.
 type RepositoryView struct {
+	ReadGeneration   *GraphReadGeneration `json:"read_generation,omitempty"`
 	ArchivedSessions []SessionArchiveView `json:"archived_sessions"`
 	Graph            *GraphState          `json:"graph"`
 	DefaultBranch    string               `json:"default_branch"`

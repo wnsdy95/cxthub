@@ -241,6 +241,25 @@ class DistributionTests(unittest.TestCase):
             self.assertIn(f"GIT_{role}_EMAIL: ${{{{ steps.publisher.outputs.email }}}}", workflow)
         self.assertNotIn("distribution@users.noreply.github.com", workflow)
 
+    def test_frontend_export_carries_the_shared_markdown_display_fixture(self):
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads((root / distribution.CONFIG).read_text())
+        source = "schemas/fixtures/markdown-display-v1.json"
+        self.assertIn([source, "tests/fixtures/markdown-display-v1.json"], config["components"]["frontend"]["paths"])
+        fixture = json.loads((root / source).read_text())
+        self.assertEqual(fixture["version"], 1)
+        self.assertGreater(len(fixture["cases"]), 30)
+
+    def test_frontend_export_carries_event_and_tool_display_fixtures(self):
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads((root / distribution.CONFIG).read_text())
+        for name, minimum in [("event-display-v1", 12), ("tool-display-v1", 27)]:
+            source = f"schemas/fixtures/{name}.json"
+            self.assertIn([source, f"tests/fixtures/{name}.json"], config["components"]["frontend"]["paths"])
+            fixture = json.loads((root / source).read_text())
+            self.assertEqual(fixture["version"], 1)
+            self.assertGreaterEqual(len(fixture["cases"]), minimum)
+
 
 if __name__ == "__main__":
     unittest.main()

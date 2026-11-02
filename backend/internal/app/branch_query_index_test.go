@@ -36,13 +36,13 @@ func TestBranchQueryIndexMatchesHistorySelection(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, ref := range []domain.Ref{main, child} {
-			rows := inputs.history.targetEvents(ref.BranchID, ref.Target)
+			rows := inputs.History().TargetEvents(ref.BranchID, ref.Target)
 			if got, want := branchCodeCandidates(ref, rows), branchCodeCandidates(ref, history); !reflect.DeepEqual(got, want) {
 				t.Fatalf("indexed candidates = %v, want %v", got, want)
 			}
-			for _, position := range inputs.history.receipts[main.BranchID] {
+			for _, position := range inputs.History().ReceiptPositions(main.BranchID) {
 				receipt := history[position]
-				_, got, err := inputs.history.completion(receipt)
+				_, got, err := inputs.History().Completion(receipt)
 				want, wantErr := hasPRCompletion(history, receipt)
 				if got != want || !errors.Is(err, wantErr) {
 					t.Fatalf("indexed completion = %v/%v, want %v/%v", got, err, want, wantErr)
@@ -111,10 +111,10 @@ func TestBranchQueryIndexDoesNotRetainPriorRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, complete, err := before.completion(history[0]); complete || err != nil {
+	if _, complete, err := before.Completion(history[0]); complete || err != nil {
 		t.Fatalf("future completion leaked backwards: %v %v", complete, err)
 	}
-	if _, complete, err := after.completion(history[0]); !complete || err != nil {
+	if _, complete, err := after.Completion(history[0]); !complete || err != nil {
 		t.Fatalf("new completion hidden: %v %v", complete, err)
 	}
 	conflict := slices.Clone(history)
@@ -123,7 +123,7 @@ func TestBranchQueryIndexDoesNotRetainPriorRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := broken.completion(history[0]); !errors.Is(err, domain.ErrRefConflict) {
+	if _, _, err := broken.Completion(history[0]); !errors.Is(err, domain.ErrRefConflict) {
 		t.Fatalf("conflicting completion accepted: %v", err)
 	}
 }

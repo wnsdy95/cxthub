@@ -3,52 +3,28 @@ package app
 import (
 	"context"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/evidencequery"
+	"github.com/wnsdy95/cxthub/backend/internal/app/memoryquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-type contributionMemoryRecord struct {
-	ID                  string
-	RepoID              domain.ContentHash
-	DestinationBranchID string
-	SourceBranchID      string
-	Capture             domain.ContentHash
-	OriginalHead        string
-	IntegrationSHA      string
-}
+type contributionMemoryRecord = memoryquery.ContributionRecord
 
-type verifiedMemoryContribution struct {
-	record       contributionMemoryRecord
-	valid        bool
-	publications map[string]domain.HistoryEvent
-}
+type verifiedMemoryContribution = memoryquery.VerifiedContribution
 
-type verifiedGitContribution struct {
-	record            domain.GitContribution
-	valid             bool
-	publications      map[string]domain.HistoryEvent
-	sourceBranch      string
-	destinationBranch string
-}
+type verifiedGitContribution = evidencequery.VerifiedGitContribution
 
-type contributionMemoryPin struct {
-	ID             string             `json:"id"`
-	RepoID         domain.ContentHash `json:"repo_id"`
-	ContributionID string             `json:"contribution_id"`
-	PublicationID  string             `json:"publication_id"`
-	MemoryHash     domain.ContentHash `json:"memory_hash"`
-	MemorySource   domain.ContentHash `json:"memory_source"`
-	MemoryPinned   bool               `json:"memory_pinned"`
-}
+type contributionMemoryPin = memoryquery.ContributionPin
 
 func (s *Service) prepareContextContributionMemory(ctx context.Context, repo domain.ContentHash, inclusion domain.BranchContext, snapshots []domain.Snapshot, verified []contextContributionProjection) (prContributionMemoryPlan, error) {
 	records := make([]verifiedMemoryContribution, 0, len(verified))
 	for _, contribution := range verified {
-		records = append(records, verifiedMemoryContribution{record: contribution.record, valid: contribution.valid, publications: contribution.publications})
+		records = append(records, verifiedMemoryContribution{Record: contribution.record, Valid: contribution.valid, Publications: contribution.publications})
 	}
 	pins := []contributionMemoryPin{}
 	if len(records) > 0 {
-		if ledger, ok := s.meta.(outbound.PRContributionStore); ok {
+		if ledger, ok := s.memoryPinReader().(outbound.PRContributionMemoryReader); ok {
 			stored, err := ledger.ListPRContributionMemories(ctx, repo)
 			if err != nil {
 				return prContributionMemoryPlan{}, err
@@ -60,7 +36,7 @@ func (s *Service) prepareContextContributionMemory(ctx context.Context, repo dom
 				pins = append(pins, contributionMemoryPin(pin))
 			}
 		}
-		if ledger, ok := s.meta.(outbound.GitContributionStore); ok {
+		if ledger, ok := s.memoryPinReader().(outbound.GitContributionMemoryReader); ok {
 			stored, err := ledger.ListGitContributionMemories(ctx, repo)
 			if err != nil {
 				return prContributionMemoryPlan{}, err
@@ -77,6 +53,10 @@ func (s *Service) prepareContextContributionMemory(ctx context.Context, repo dom
 }
 
 func (s *Service) contributionPublicationMemorySource(ctx context.Context, repo domain.ContentHash, capture domain.ContentHash, publication domain.HistoryEvent) (domain.ContentHash, error) {
+	return contributionPublicationMemorySourceFromReader(ctx, s.memoryProjectionReader(), repo, capture, publication)
+}
+
+func contributionPublicationMemorySourceFromReader(ctx context.Context, reader outbound.MemoryObjectReader, repo domain.ContentHash, capture domain.ContentHash, publication domain.HistoryEvent) (domain.ContentHash, error) {
 	if publication.Kind != "publish" || publication.RepoID != string(repo) || publication.Target != capture || publication.Source != capture || !publication.MemoryPinned {
 		return "", domain.ErrIntegrity
 	}
@@ -87,7 +67,7 @@ func (s *Service) contributionPublicationMemorySource(ctx context.Context, repo 
 	if source == "" {
 		source = capture
 	}
-	digest, err := s.blobs.GetMemory(ctx, repo, publication.MemoryHash)
+	digest, err := reader.GetMemory(ctx, repo, publication.MemoryHash)
 	if err != nil {
 		return "", err
 	}
@@ -110,14 +90,14 @@ func normalizePRContributionMemory(ctx context.Context, repo domain.ContentHash,
 	}
 	records := make([]verifiedMemoryContribution, 0, len(verified))
 	for _, contribution := range verified {
-		if contribution.record.Validate() != nil || contribution.record.RepoID != repo {
+		if contribution.Record.Validate() != nil || contribution.Record.RepoID != repo {
 			return nil, nil, domain.ErrIntegrity
 		}
-		record := contribution.record
+		record := contribution.Record
 		records = append(records, verifiedMemoryContribution{
-			record: contributionMemoryRecord{ID: record.ID, RepoID: record.RepoID, DestinationBranchID: record.DestinationBranchID,
+			Record: contributionMemoryRecord{ID: record.ID, RepoID: record.RepoID, DestinationBranchID: record.DestinationBranchID,
 				SourceBranchID: record.SourceBranchID, Capture: record.Capture, OriginalHead: record.OriginalHead, IntegrationSHA: record.PR.MergeSHA},
-			valid: contribution.valid, publications: contribution.publications,
+			Valid: contribution.Valid, Publications: contribution.Publications,
 		})
 	}
 	memories := make([]contributionMemoryPin, 0, len(pins))
@@ -153,14 +133,14 @@ func normalizeGitContributionMemory(ctx context.Context, repo domain.ContentHash
 	}
 	records := make([]verifiedMemoryContribution, 0, len(verified))
 	for _, contribution := range verified {
-		if contribution.record.Validate() != nil || contribution.record.RepoID != repo {
+		if contribution.Record.Validate() != nil || contribution.Record.RepoID != repo {
 			return nil, nil, domain.ErrIntegrity
 		}
-		record := contribution.record
+		record := contribution.Record
 		records = append(records, verifiedMemoryContribution{
-			record: contributionMemoryRecord{ID: record.ID, RepoID: record.RepoID, DestinationBranchID: record.DestinationBranchID,
+			Record: contributionMemoryRecord{ID: record.ID, RepoID: record.RepoID, DestinationBranchID: record.DestinationBranchID,
 				SourceBranchID: record.SourceBranchID, Capture: record.Capture, OriginalHead: record.OriginalHead, IntegrationSHA: record.IntegrationSHA},
-			valid: contribution.valid, publications: contribution.publications,
+			Valid: contribution.Valid, Publications: contribution.Publications,
 		})
 	}
 	memories := make([]contributionMemoryPin, 0, len(pins))

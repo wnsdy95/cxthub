@@ -16,132 +16,42 @@ const prJobLease = 2 * time.Minute
 const prSourcePendingAttempts = 8
 
 func (s *Service) prJobs() (outbound.PRJobStore, error) {
-	st, ok := s.meta.(outbound.PRJobStore)
-	if !ok {
-		return nil, fmt.Errorf("durable PR queue unavailable")
-	}
-	return st, nil
+	return prJobsFromMetadata(s.meta)
 }
 func (s *Service) submitPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (domain.PRPromotionJob, error) {
-	if err := pr.Validate(); err != nil {
-		return domain.PRPromotionJob{}, fmt.Errorf("%w: %v", domain.ErrValidation, err)
-	}
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return domain.PRPromotionJob{}, err
-	}
-	metadata, err := s.meta.GetRepo(ctx, repo)
-	if err != nil {
-		return domain.PRPromotionJob{}, err
-	}
-	if metadata.GitRemoteURL == "" {
-		return domain.PRPromotionJob{}, fmt.Errorf("%w: repository has no Git origin", domain.ErrValidation)
-	}
-	st, err := s.prJobs()
-	if err != nil {
-		return domain.PRPromotionJob{}, err
-	}
-	existing, err := st.GetPRJob(ctx, repo, domain.PRPromotionID(repo, pr.Number))
-	if err == nil {
-		if existing.PR != pr || existing.GitOrigin != normalizeGitURL(metadata.GitRemoteURL) {
-			return existing, domain.ErrConflict
-		}
-		if e := s.queuePRGitScans(ctx, repo, metadata.GitRemoteURL, pr); e != nil {
-			return existing, e
-		}
-		return existing, nil
-	}
-	if !errors.Is(err, domain.ErrNotFound) {
-		return domain.PRPromotionJob{}, err
-	}
-	events, err := s.ListHistory(ctx, repo)
-	if err != nil {
-		return domain.PRPromotionJob{}, err
-	}
-	bindings, err := domain.ProjectContextBranches(events)
-	if err != nil {
-		return domain.PRPromotionJob{}, err
-	}
-	baseID := domain.LegacyContextBranchID(string(repo), pr.BaseBranch)
-	if b, ok := bindings.Active[pr.BaseBranch]; ok {
-		baseID = b.ID
-	} else if bindings.Released[pr.BaseBranch] != "" {
-		return domain.PRPromotionJob{}, fmt.Errorf("%w: PR base was released", domain.ErrConflict)
-	}
-	if err := s.queuePRGitScans(ctx, repo, metadata.GitRemoteURL, pr); err != nil {
-		return domain.PRPromotionJob{}, err
-	}
-	now := time.Now().UTC()
-	return st.EnqueuePRJob(ctx, domain.PRPromotionJob{ID: domain.PRPromotionID(repo, pr.Number), RepoID: repo, PR: pr, BaseBranchID: baseID, GitOrigin: normalizeGitURL(metadata.GitRemoteURL), State: "waiting", CreatedAt: now, UpdatedAt: now, NextAttempt: now})
+	return s.prPublications().submitPRPromotion(ctx, repo, pr)
 }
 func (s *Service) ListPRPromotions(ctx context.Context, repo domain.ContentHash) ([]domain.PRPromotionJob, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.PRPromotionJob, error) {
-		st, err := s.prJobs()
-		if err != nil {
-			return nil, err
-		}
-		jobs, err := st.ListPRJobs(ctx, repo)
-		if err != nil {
-			return nil, err
-		}
-		return s.projectPRJobAssociations(ctx, repo, jobs)
-	})
-}
-func (s *Service) retryPRPromotionCommand(ctx context.Context, repo domain.ContentHash, id string) error {
-	st, err := s.prJobs()
-	if err != nil {
-		return err
-	}
-	return st.RetryPRJob(ctx, repo, id, time.Now().UTC())
+	return s.prCoordinations().ListPRPromotions(ctx, repo)
 }
 
 // Compatibility path: acceptance survives caller cancellation and synchronous failure.
 func (s *Service) DeliverPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error) {
-	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
-	j, err := s.SubmitPRPromotion(ctx, repo, pr)
-	if err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	ctx, release, err := AcquireResources(ctx, ResourceBulk)
-	if err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	defer release()
-	if j.State == "completed" {
-		return s.promoteBoundPR(ctx, repo, pr, j.BaseBranchID)
-	}
-	st, _ := s.prJobs()
-	j, err = st.ClaimPRJob(ctx, repo, j.ID, time.Now().UTC(), prJobLease)
-	if errors.Is(err, domain.ErrNotFound) {
-		return inbound.UpdateRefOutput{}, fmt.Errorf("%w: PR promotion is durably queued", domain.ErrConflict)
-	}
-	if err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	return s.runPRJob(ctx, j)
+	return s.prCoordinations().DeliverPRPromotion(ctx, repo, pr)
 }
-func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inbound.UpdateRefOutput, error) {
+func (worker *PRPromotionWorker) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inbound.UpdateRefOutput, error) {
 	work, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	var out inbound.UpdateRefOutput
 	var runErr error
-	runErr = repositoryWriteError(work, s, j.RepoID, func(work context.Context) error {
+	runErr = repositoryWriteErrorWithWork(work, worker.work, j.RepoID, func(work context.Context) error {
 		runErr = nil // a retry after a database abort starts from fresh state
 		if err := work.Err(); err != nil {
 			return err
 		}
-		if fence, ok := s.meta.(outbound.PRJobFence); ok {
+		if fence, ok := worker.meta.(outbound.PRJobFence); ok {
 			if err := fence.FencePRJob(work, j); err != nil {
 				return err
 			}
 		}
-		repo, err := s.meta.GetRepo(work, j.RepoID)
+		repo, err := worker.meta.GetRepo(work, j.RepoID)
 		if err != nil {
 			runErr = err
 		} else if normalizeGitURL(repo.GitRemoteURL) != j.GitOrigin {
 			runErr = fmt.Errorf("%w: repository origin changed", domain.ErrConflict)
 		} else {
-			if repo.RepositoryID != "" && s.repositories != nil {
-				repository, err := s.repositories.GetRepository(work, repo.RepositoryID)
+			if repo.RepositoryID != "" && worker.repositories != nil {
+				repository, err := worker.repositories.GetRepository(work, repo.RepositoryID)
 				if err != nil {
 					runErr = err
 				} else if repository.Archived {
@@ -149,7 +59,7 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 				}
 			}
 			if runErr == nil {
-				out, runErr = s.promoteBoundPR(work, j.RepoID, j.PR, j.BaseBranchID)
+				out, runErr = worker.promoteBoundPR(work, j.RepoID, j.PR, j.BaseBranchID)
 			}
 		}
 		if runErr != nil {
@@ -159,7 +69,7 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 		completed.State, completed.Reason = "completed", ""
 		completed.FailureClass = ""
 		completed.UpdatedAt, completed.LeaseUntil = time.Now().UTC(), time.Time{}
-		st, _ := s.prJobs()
+		st, _ := worker.prJobs()
 		return st.FinishPRJob(work, completed)
 	})
 	if runErr == nil {
@@ -209,7 +119,7 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 	// A canceled request must still release its lease/persist retry state.
 	finishCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	st, _ := s.prJobs()
+	st, _ := worker.prJobs()
 	if err := st.FinishPRJob(finishCtx, j); err != nil {
 		return out, errors.Join(runErr, err)
 	}
@@ -230,9 +140,9 @@ func prJobFailureClass(err error) string {
 }
 
 // ProcessPRPromotions is bounded per tick, safe to run on multiple instances.
-func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
-	ctx = s.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
-	st, err := s.prJobs()
+func (worker *PRPromotionWorker) ProcessPRPromotions(ctx context.Context, limit int) error {
+	ctx = worker.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
+	st, err := worker.prJobs()
 	if err != nil {
 		return err
 	}
@@ -248,7 +158,7 @@ func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
 		err := admittedJob(ctx, func(bound context.Context) (domain.PRPromotionJob, error) {
 			return st.ClaimPRJob(bound, "", "", time.Now().UTC(), prJobLease)
 		}, func(bound context.Context, job domain.PRPromotionJob) error {
-			if _, err := s.runPRJob(bound, job); err != nil {
+			if _, err := worker.runPRJob(bound, job); err != nil {
 				log.Printf("PR promotion %s attempt %d deferred: %v", job.ID, job.Attempts, err)
 			}
 			return nil
@@ -262,11 +172,11 @@ func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
 	}
 	return nil
 }
-func (s *Service) RunPRPromotionWorker(ctx context.Context) {
+func (worker *PRPromotionWorker) RunPRPromotionWorker(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		if err := s.ProcessPRPromotions(ctx, 8); err != nil && !errors.Is(err, context.Canceled) {
+		if err := worker.ProcessPRPromotions(ctx, 8); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("PR promotion worker: %v", err)
 		}
 		select {
@@ -278,5 +188,5 @@ func (s *Service) RunPRPromotionWorker(ctx context.Context) {
 }
 
 func (s *Service) RetryPRPromotion(ctx context.Context, repo domain.ContentHash, id string) error {
-	return repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repo, func(ctx context.Context) error { return s.retryPRPromotionCommand(ctx, repo, id) })
+	return s.prCoordinations().RetryPRPromotion(ctx, repo, id)
 }

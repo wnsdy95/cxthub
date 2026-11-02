@@ -8,6 +8,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,6 +69,10 @@ func TestIndexedMCPSearchRootBypassesLegacyCandidateExclusion(t *testing.T) {
 			snap := domain.Snapshot{ID: pageHash(2), DocHash: pageHash(2), DocIdentity: tc.identity, RepoID: repo.ID, Branch: "main"}
 			b := &rootCandidateBackend{indexedPageBackend: indexedPageBackend{pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snap}}}}}, err: tc.err}
 			s := &Server{context: b}
+			setContextQueryTestPort(t, s, b)
+			if err := s.SetDocumentEventQueries(b, inbound.DocumentQueryCompatibility); err != nil {
+				t.Fatal(err)
+			}
 			raw, err := s.searchPage(systemTestContext(), repo, toolArgs{Repository: string(repo.ID), Query: "needle", Limit: 2})
 			if !errors.Is(err, tc.err) || b.searches != tc.reads {
 				t.Fatalf("searches=%d, error=%v", b.searches, err)
@@ -101,6 +106,14 @@ func TestIndexedMCPFetchAndSearchPreserveCursorContract(t *testing.T) {
 	snap := domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash, RepoID: repo.ID, Branch: "main"}
 	b := &indexedPageBackend{pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snap}}}}, reader: app.NewService(fs, fs, nil, nil, nil)}
 	s := &Server{context: b}
+	setContextQueryTestPort(t, s, b)
+	queries, err := b.reader.DocumentEventQueries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDocumentEventQueries(queries, inbound.DocumentQueryCompatibility); err != nil {
+		t.Fatal(err)
+	}
 	a := toolArgs{Ref: string(snap.ID), Events: 2}
 	parts := make([]string, 4)
 	for calls := 0; calls < 100; calls++ {

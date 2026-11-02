@@ -13,7 +13,7 @@ func (s *PostgresStore) ReadConversationChunk(ctx context.Context, repo, hash do
 	if length <= 0 || length > domain.ConversationManifestChunkBytes {
 		return nil, domain.ErrIntegrity
 	}
-	raw, err := s.readOwnedDocObject(ctx, repo, "chunk", hash)
+	raw, err := s.readOwnedDocObjectBounded(ctx, repo, "chunk", hash, int(2*length)+64)
 	if err != nil {
 		return nil, err
 	}

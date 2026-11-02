@@ -188,7 +188,7 @@ func TestInspectReplicaReusedEventsRereadCurrentFiles(t *testing.T) {
 		t.Fatalf("shared healthy inspection: %+v", report)
 	}
 	assertInspectionUnchanged(t, store, before)
-	reports := make(chan ReplicaInspection, 2)
+	reports := make(chan domain.ReplicaInspection, 2)
 	for i := 0; i < 2; i++ {
 		go func() { reports <- store.InspectReplica(ctx) }()
 	}
