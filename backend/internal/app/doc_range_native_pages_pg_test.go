@@ -425,6 +425,7 @@ type docRangeNativePagesPGWork struct {
 	afterResources  outbound.RootPublicationResources
 	failure         error
 	rawDecode       bool
+	resumeObserved  bool
 }
 
 func (storage *docRangeNativePagesPGStore) PrepareDocRangeWork(ctx context.Context, job domain.DocRangeIndexJob) (outbound.PreparedDocRangeWork, error) {
@@ -450,8 +451,12 @@ func (work *docRangeNativePagesPGWork) Step(ctx context.Context, job domain.DocR
 	if err != nil {
 		return 0, err
 	}
-	work.inspection = &docRangeNativePagesPGContext{Context: ctx, rawDecode: work.rawDecode}
-	progress, stepErr := work.PreparedDocRangeWork.Step(work.inspection, job)
+	stepContext := ctx
+	if !work.resumeObserved {
+		work.inspection = &docRangeNativePagesPGContext{Context: ctx, rawDecode: work.rawDecode}
+		stepContext = work.inspection
+	}
+	progress, stepErr := work.PreparedDocRangeWork.Step(stepContext, job)
 	work.after, err = docRangeNativePagesPGInspect(work.handle, work.rawDecode)
 	if err != nil {
 		return 0, errors.Join(stepErr, err)
@@ -821,6 +826,7 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 							return errors.New("same active canonical inspector did not resume its retained projection")
 						}
 						resumedStep = step
+						observed.work.resumeObserved = true
 					}
 					return nil
 				}
