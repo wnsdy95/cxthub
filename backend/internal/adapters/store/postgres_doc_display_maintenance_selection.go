@@ -27,45 +27,45 @@ func (storage *PostgresStore) selectDocDisplayMaintenance(ctx context.Context) (
 	defer cancel()
 	transaction, err := storage.beginDocRangeJob(ctx)
 	if err != nil {
-		return candidate, err
+		return candidate, fmt.Errorf("document display maintenance selection begin: %w", err)
 	}
 	defer rollbackPG(transaction)
 	if _, err := transaction.Exec(ctx, `SET LOCAL idle_in_transaction_session_timeout='500ms'; SET LOCAL statement_timeout='500ms'`); err != nil {
-		return candidate, err
+		return candidate, fmt.Errorf("document display maintenance selection configure timeouts: %w", err)
 	}
 	after, candidate, found, err := readDocDisplayMaintenanceRange(ctx, transaction, `source_hash>locked_cursor.after_source`)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if _, err := transaction.Exec(ctx, `INSERT INTO doc_display_maintenance_cursor_v1(singleton) VALUES(true) ON CONFLICT DO NOTHING`); err != nil {
-			return candidate, err
+			return candidate, fmt.Errorf("document display maintenance selection initialize cursor: %w", err)
 		}
 		after, candidate, found, err = readDocDisplayMaintenanceRange(ctx, transaction, `source_hash>locked_cursor.after_source`)
 	}
 	if err != nil {
-		return candidate, docDisplayMaintenanceAcquisitionError(err)
+		return candidate, fmt.Errorf("document display maintenance selection read forward: %w", docDisplayMaintenanceAcquisitionError(err))
 	}
 	if !found {
 		var current string
 		current, candidate, found, err = readDocDisplayMaintenanceRange(ctx, transaction, `source_hash<=locked_cursor.after_source`)
 		if err != nil {
-			return docDisplayMaintenanceCandidate{}, docDisplayMaintenanceAcquisitionError(err)
+			return docDisplayMaintenanceCandidate{}, fmt.Errorf("document display maintenance selection read wrap: %w", docDisplayMaintenanceAcquisitionError(err))
 		}
 		if current != after {
-			return docDisplayMaintenanceCandidate{}, domain.ErrConflict
+			return docDisplayMaintenanceCandidate{}, fmt.Errorf("document display maintenance selection validate cursor: %w", domain.ErrConflict)
 		}
 	}
 	if !found {
 		if err := transaction.Commit(ctx); err != nil {
-			return candidate, err
+			return candidate, fmt.Errorf("document display maintenance selection commit empty: %w", err)
 		}
 		return candidate, domain.ErrNotFound
 	}
 	if string(candidate.source) != after {
 		if _, err := transaction.Exec(ctx, `UPDATE doc_display_maintenance_cursor_v1 SET after_source=$1 WHERE singleton`, candidate.source); err != nil {
-			return candidate, err
+			return candidate, fmt.Errorf("document display maintenance selection advance cursor: %w", err)
 		}
 	}
 	if err := transaction.Commit(ctx); err != nil {
-		return candidate, err
+		return candidate, fmt.Errorf("document display maintenance selection commit candidate: %w", err)
 	}
 	return candidate, nil
 }
