@@ -58,6 +58,7 @@ func memoryReadWakeDuePG(test *testing.T, storage *PostgresStore, ctx context.Co
 }
 
 func TestPGMemoryReadWakeTransactionCoalescingAndRollback(test *testing.T) {
+	rootProjectionIsolatedPG(test)
 	storage, ctx, target := memoryReadWorkPG(test)
 	hash := memorySourceBlobPG(test, ctx, storage, target.RepoID, "memory", "wake transaction")
 	memoryReadWakeDispatchPG(test, storage, ctx)
@@ -161,6 +162,7 @@ func TestPGMemoryReadWakeBusinessSourcesAndResets(test *testing.T) {
 }
 
 func TestPGMemoryReadWakePhysicalObjectsNotifyOnlyMemoryOwners(test *testing.T) {
+	rootProjectionIsolatedPG(test)
 	for _, kind := range []string{"memory", "memory_chunk"} {
 		test.Run(kind, func(test *testing.T) {
 			storage, ctx, target := memoryReadWorkPG(test)

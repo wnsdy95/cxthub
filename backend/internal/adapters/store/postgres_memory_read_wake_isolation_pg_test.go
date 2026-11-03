@@ -361,6 +361,7 @@ func TestPGMemoryReadWakeSourceChangeOverlapsAcknowledgement(test *testing.T) {
 }
 
 func TestPGMemoryReadWakePhysicalChangeAtFinalAttemptIsNotLost(test *testing.T) {
+	rootProjectionIsolatedPG(test)
 	for _, retry := range []bool{false, true} {
 		test.Run(map[bool]string{false: "terminal", true: "exhausted"}[retry], func(test *testing.T) {
 			storage, ctx, job, qualification, _ := memoryReadWorkOutputPG(test)
@@ -406,6 +407,7 @@ func TestPGMemoryReadWakePhysicalChangeAtFinalAttemptIsNotLost(test *testing.T) 
 }
 
 func TestPGMemoryReadWakeSuccessfulFinishConsumesProvenLatestNotice(test *testing.T) {
+	rootProjectionIsolatedPG(test)
 	storage, ctx, job, qualification, _ := memoryReadWorkOutputPG(test)
 	repo := job.Target.RepoID
 	catalogExecPG(test, ctx, storage.pool, `UPDATE blobs SET bytes=bytes WHERE hash=$1`, string(qualification.Witnesses[0].Hash))
