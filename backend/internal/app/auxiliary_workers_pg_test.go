@@ -196,6 +196,17 @@ func wave41NotificationState(test *testing.T, postgres *store.PostgresStore, rec
 	return jobs[0]
 }
 
+func wave41NotificationJobsEqual(actual, expected domain.NotificationJob) bool {
+	normalize := func(job domain.NotificationJob) domain.NotificationJob {
+		job.CreatedAt = job.CreatedAt.UTC()
+		job.UpdatedAt = job.UpdatedAt.UTC()
+		job.NextAttempt = job.NextAttempt.UTC()
+		job.LeaseUntil = job.LeaseUntil.UTC()
+		return job
+	}
+	return normalize(actual) == normalize(expected)
+}
+
 func wave41SecureSender(test testing.TB, client *http.Client) outbound.NotificationSender {
 	test.Helper()
 	sender, err := secureadapter.NewWithClient(client)
@@ -247,7 +258,7 @@ func TestPGWave41NotificationFactoryDurableRetryRestartAndStableEventID(test *te
 	storage.actor = record.OwnerID
 	storage.beforeGuard = func(ctx context.Context, delivery outbound.NotificationDelivery) error {
 		persisted := wave41NotificationState(test, postgres, record)
-		if !reflect.DeepEqual(persisted, delivery.Job) || persisted.State != "running" || persisted.Attempts != 1 || persisted.Version != 1 {
+		if !wave41NotificationJobsEqual(persisted, delivery.Job) || persisted.State != "running" || persisted.Attempts != 1 || persisted.Version != 1 {
 			test.Fatal("egress did not observe a committed durable claim", persisted)
 		}
 		var due bool
@@ -277,7 +288,7 @@ func TestPGWave41NotificationFactoryDurableRetryRestartAndStableEventID(test *te
 		test.Fatal(err)
 	}
 	test.Cleanup(restarted.Close)
-	if persisted := wave41NotificationState(test, restarted, record); !reflect.DeepEqual(persisted, retrying) {
+	if persisted := wave41NotificationState(test, restarted, record); !wave41NotificationJobsEqual(persisted, retrying) {
 		test.Fatal("store restart lost the notification retry receipt", persisted)
 	}
 	storage.PostgresStore = restarted
@@ -288,7 +299,7 @@ func TestPGWave41NotificationFactoryDurableRetryRestartAndStableEventID(test *te
 	if worked, err := worker.Process(ctx); err != nil || worked {
 		test.Fatal("fresh owner ignored persisted Retry-After", worked, err)
 	}
-	if persisted := wave41NotificationState(test, restarted, record); !reflect.DeepEqual(persisted, retrying) {
+	if persisted := wave41NotificationState(test, restarted, record); !wave41NotificationJobsEqual(persisted, retrying) {
 		test.Fatal("idle recovery consumed an attempt or changed the retry receipt", persisted)
 	}
 	if err := restarted.RetryNotification(ctx, record.ID, job.ID, record.WebhookURL, time.Now().UTC()); err != nil {
@@ -383,7 +394,7 @@ func TestPGWave41NotificationFactoryFencesStaleLeaseAndCurrentPolicy(test *testi
 			persisted := wave41NotificationState(test, postgres, record)
 			if mode == "lease_reclaimed" {
 				claimed := storage.claims[0]
-				if reclaimed.Job.ID != claimed.Job.ID || reclaimed.Job.Version != claimed.Job.Version+1 || reclaimed.Job.Attempts != claimed.Job.Attempts+1 || !reflect.DeepEqual(persisted, reclaimed.Job) {
+				if reclaimed.Job.ID != claimed.Job.ID || reclaimed.Job.Version != claimed.Job.Version+1 || reclaimed.Job.Attempts != claimed.Job.Attempts+1 || !wave41NotificationJobsEqual(persisted, reclaimed.Job) {
 					test.Fatal("reclaim did not retain durable event identity and advance the fence", persisted, reclaimed)
 				}
 				claimed.Job.State = "delivered"
@@ -391,10 +402,10 @@ func TestPGWave41NotificationFactoryFencesStaleLeaseAndCurrentPolicy(test *testi
 				if err := postgres.FinishNotification(oracle, claimed.Job, time.Now().UTC()); !errors.Is(err, domain.ErrRefConflict) {
 					test.Fatal("stale worker overwrote the reclaimed durable notification", err)
 				}
-				if current := wave41NotificationState(test, postgres, record); !reflect.DeepEqual(current, reclaimed.Job) {
+				if current := wave41NotificationState(test, postgres, record); !wave41NotificationJobsEqual(current, reclaimed.Job) {
 					test.Fatal("stale receipt changed the winning durable claim", current)
 				}
-			} else if !reflect.DeepEqual(persisted, storage.claims[0].Job) {
+			} else if !wave41NotificationJobsEqual(persisted, storage.claims[0].Job) {
 				test.Fatal("guard rejection changed the original live claim", persisted)
 			}
 			if mode == "identity_upgraded" {
@@ -519,7 +530,7 @@ func TestPGWave41NotificationFactoryPreservesHTTPOutcomesErrorsAndCancellation(t
 		if worked, err := worker.Process(ctx); worked || !errors.Is(err, context.Canceled) {
 			test.Fatal("pre-claim cancellation was swallowed", worked, err)
 		}
-		if persisted := wave41NotificationState(test, postgres, record); !reflect.DeepEqual(persisted, job) {
+		if persisted := wave41NotificationState(test, postgres, record); !wave41NotificationJobsEqual(persisted, job) {
 			test.Fatal("canceled owner changed a pending durable notification", persisted)
 		}
 	})
