@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -162,7 +163,7 @@ func docNativeEventsPGSource(test *testing.T, storage *PostgresStore, ctx contex
 func TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes(test *testing.T) {
 	for _, change := range []string{"unchanged", "lease expiry", "source version", "ownership", "cancellation", "job fence", "source incarnation", "snapshot identity", "argument fence"} {
 		test.Run(change, func(test *testing.T) {
-			storage, ctx := chunkReusePG(test)
+			storage, ctx := chunkReusePGContext(test, test.Context())
 			fixture, stored := docNativeEventsPGSource(test, storage, ctx)
 			work, job, trace := docNormalizationPGStartSource(test, storage, ctx, fixture, stored)
 			source, err := work.decoding.proofSource(ctx)
@@ -174,10 +175,31 @@ func TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes(test *testing.T) {
 			private := legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1)
 			public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
 			original := legacyDerivedOriginalImagePG(test, storage, ctx, fixture)
+			renew := docNormalizationPGKeepLease(test, storage, ctx, fixture, job, 2*time.Minute, &public)
+			checkpointSteps, checkpoints := 0, 0
+			drainCheckpoint := func() bool {
+				remaining := normalizationCheckpointPGStepLimit
+				drained := docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &remaining, renew)
+				checkpointSteps += normalizationCheckpointPGStepLimit - remaining
+				if drained {
+					checkpoints++
+				}
+				return drained
+			}
 			var before docNativeEventsPGState
 			inspection := &docNativeEventsPGContext{Context: ctx}
 			witnessed := 0
 			for quantum := 0; quantum < docCaptureWorkPGPreparationStepLimit && witnessed < 2; quantum++ {
+				if err := renew(); err != nil {
+					test.Fatal("raw event-list fixture lost its renewable lease", err)
+				}
+				frozen := docNativeEventsPGSnapshot(test, work, stored)
+				if drainCheckpoint() {
+					if docNativeEventsPGSnapshot(test, work, stored) != frozen {
+						test.Fatal("checkpoint serialization advanced the frozen raw decoder")
+					}
+					private = legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1)
+				}
 				loads := inspection.loads
 				if progress, err := work.Step(inspection, job); err != nil || progress != outbound.DocRangeWorkPending {
 					test.Fatal("actual raw replacement decoding did not yield pending", quantum, progress, err)
@@ -225,6 +247,10 @@ func TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes(test *testing.T) {
 				var err error
 				canonicalWitnessed := false
 				for quantum := 0; quantum < docCaptureWorkPGPreparationStepLimit+8192 && work.work == nil; quantum++ {
+					if err := renew(); err != nil {
+						test.Fatal("raw event-list fixture lost its renewable lease", err)
+					}
+					drainCheckpoint()
 					progress, err = work.Step(ctx, job)
 					if err != nil || progress != outbound.DocRangeWorkPending {
 						break
@@ -239,6 +265,9 @@ func TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes(test *testing.T) {
 					test.Fatal("raw event-list decoding did not reach its same-process verified handoff", progress, err)
 				}
 				for quantum := 0; quantum < docCaptureWorkPGPreparationStepLimit && progress != outbound.DocRangeWorkPublishable; quantum++ {
+					if err := renew(); err != nil {
+						test.Fatal("raw event-list fixture lost its renewable lease", err)
+					}
 					progress, err = work.Step(ctx, job)
 					if err != nil || progress == outbound.DocRangeWorkCompatibilityRequired {
 						test.Fatal("raw event-list control failed delegated preparation", quantum, progress, err)
@@ -256,6 +285,7 @@ func TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes(test *testing.T) {
 				}); err != nil {
 					test.Fatal("private raw event-list control became readable", err)
 				}
+				test.Logf("raw native preparation: checkpoints=%d checkpoint_steps=%d", checkpoints, checkpointSteps)
 				if err := work.Publish(ctx, job); err != nil {
 					test.Fatal("publish raw event-list control", err)
 				}
