@@ -95,6 +95,34 @@ func (work *legacyNormalizationCheckpointWork) busy() bool {
 	return work != nil && (work.capture != nil || work.restoring || work.restoreFailure != nil)
 }
 
+func (work *legacyNormalizationCheckpointWork) sameUnwrittenRestart(ctx context.Context, capture *domain.LegacyNormalizationCheckpointCapture) (bool, error) {
+	if work == nil || work.state.hash == "" || !work.root.State.Staging() || work.root.State.Written != 0 {
+		return false, nil
+	}
+	control, err := capture.Control(ctx)
+	if err != nil {
+		return false, err
+	}
+	prior := work.root.State
+	if !control.Staging() || control.Written != 0 || control.Count != prior.Count ||
+		control.StagePending != prior.StagePending || control.Active != prior.Active {
+		return false, nil
+	}
+	position, err := capture.ParserInputPosition(ctx)
+	if err != nil || position != work.parserPosition {
+		return false, err
+	}
+	for slot, file := range control.Files {
+		previous := prior.Files[slot]
+		if file.Generation != previous.Generation || file.Size != previous.Size || file.BufferBytes != previous.BufferBytes ||
+			file.Parts != previous.Parts || file.PartsBytes != previous.PartsBytes || file.PageBytes != previous.PageBytes ||
+			!bytes.Equal(file.HashState, previous.HashState) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (work *legacyNormalizationCheckpointWork) begin(ctx context.Context, preparation *domain.LegacyNormalizationPreparation) error {
 	if work.busy() {
 		return domain.ErrLegacyNormalizationBusy
