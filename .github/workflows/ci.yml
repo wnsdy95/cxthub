@@ -115,6 +115,19 @@ jobs:
         run: |
           python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres --batch-size 1 \
             --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFences \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceVersion \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceIncarnation \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesOwnership \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesLeaseExpiry \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesJobFence \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSnapshotIdentity \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesArgumentFence \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellation \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeSourceConflict \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeOwnershipFailure \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeArgumentFence \
+            --no-batch-timeout TestDocNativeBlockPGActivePagesRetainFencesAndPublish \
+            --no-batch-timeout TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
             --require-test TestLegacyByteRecoveryPGColdChild \
             --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
             --require-test TestNormalizationCheckpointPGColdChild \
@@ -142,6 +155,8 @@ jobs:
             --no-batch-timeout TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
             --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
             --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
+            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementLeaseExpiry \
+            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementSourceVersion \
             --allow-skip TestPGMemoryPreparationCostD3ab \
             --allow-skip TestPGReadModelMixedProgress
           go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v

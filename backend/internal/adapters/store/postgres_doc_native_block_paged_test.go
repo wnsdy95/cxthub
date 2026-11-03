@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -211,7 +212,14 @@ func docNativeBlockPGPublish(test *testing.T, storage *PostgresStore, ctx contex
 	progress := outbound.DocRangeWorkPending
 	var err error
 	canonicalWitnessed := false
+	checkpointSteps := normalizationCheckpointPGStepLimit
+	public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
+	renew := docNormalizationPGKeepLease(test, storage, ctx, fixture, job, 2*time.Minute, &public)
 	for quantum := 0; quantum < docCaptureWorkPGPreparationStepLimit && work.work == nil; quantum++ {
+		if err := renew(); err != nil {
+			test.Fatal("native block fixture lost its renewable lease", err)
+		}
+		docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps, renew)
 		progress, err = work.Step(ctx, job)
 		if err != nil || progress != outbound.DocRangeWorkPending {
 			break
@@ -226,6 +234,9 @@ func docNativeBlockPGPublish(test *testing.T, storage *PostgresStore, ctx contex
 		test.Fatal("native block capture did not reach its verified same-process handoff", progress, err, canonicalWitnessed)
 	}
 	for quantum := 0; quantum < docCaptureWorkPGPreparationStepLimit && progress != outbound.DocRangeWorkPublishable; quantum++ {
+		if err := renew(); err != nil {
+			test.Fatal("native block fixture lost its renewable lease", err)
+		}
 		progress, err = work.Step(ctx, job)
 		if err != nil || progress == outbound.DocRangeWorkCompatibilityRequired {
 			test.Fatal("native block capture failed delegated publication preparation", quantum, progress, err)
@@ -314,7 +325,7 @@ func TestDocNativeBlockPGActivePagesRetainFencesAndPublish(test *testing.T) {
 		{name: "cancellation before argument fence", canceled: true, argumentFence: true},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
-			storage, ctx := chunkReusePG(test)
+			storage, ctx := chunkReusePGContext(test, test.Context())
 			fixture, stored := docNativeBlockPGSource(test, storage, ctx)
 			work, job, trace := docNormalizationPGStartSource(test, storage, ctx, fixture, stored)
 			source, err := work.decoding.proofSource(ctx)

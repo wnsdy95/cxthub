@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -362,25 +363,32 @@ func docCanonicalPagesPGActiveNativePreparationFixtures(test *testing.T, scenari
 	}
 }
 
-func docCanonicalPagesPGDrainCheckpoint(test *testing.T, work *preparedLegacyCaptureWork, ctx context.Context, job domain.DocRangeIndexJob, remaining *int) bool {
+func docCanonicalPagesPGDrainCheckpoint(test *testing.T, work *preparedLegacyCaptureWork, ctx context.Context, job domain.DocRangeIndexJob, remaining *int, renew func() error) bool {
 	test.Helper()
 	drained := false
 	var sequence int64
+	var control domain.LegacyNormalizationControl
+	var parserPosition int
 	if work.checkpoint != nil {
 		sequence = work.checkpoint.state.sequence
+		control, parserPosition = work.checkpoint.next.State, work.checkpoint.nextParserPosition
 	}
 	for work.checkpoint.busy() {
 		if *remaining == 0 {
 			test.Fatal("native preparation exhausted its existing checkpoint processing budget")
 		}
 		*remaining--
+		if err := renew(); err != nil {
+			test.Fatal("native preparation fixture lost its renewable lease", err)
+		}
 		if progress, err := work.Step(ctx, job); err != nil || progress != outbound.DocRangeWorkPending {
 			test.Fatal("native preparation checkpoint failed", progress, err, "sequence", work.checkpoint.state.sequence,
 				"position", work.checkpoint.position, "written", work.checkpoint.next.State.Written, "remaining", *remaining)
 		}
 		drained = true
 	}
-	if drained && (work.checkpoint.state.sequence <= sequence || !work.checkpoint.root.valid(work.checkpoint.state)) {
+	if drained && (work.checkpoint.state.sequence <= sequence || !work.checkpoint.root.valid(work.checkpoint.state) ||
+		!reflect.DeepEqual(work.checkpoint.root.State, control) || work.checkpoint.parserPosition != parserPosition) {
 		test.Fatal("checkpoint-only quanta did not acknowledge a valid durable continuation")
 	}
 	return drained
@@ -431,12 +439,16 @@ func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture d
 		bodyReads := trace.bodyReads.Load()
 		private := legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1)
 		public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
+		renew := docNormalizationPGKeepLease(test, storage, ctx, fixture, job, 2*time.Minute, &public)
 		inspection := &docCanonicalPagesPGContext{Context: ctx}
 		witnessed := 0
 		checkpointSteps := normalizationCheckpointPGStepLimit
 		var originalReplacement reflect.Value
 		for quantum := 0; quantum < preparationLimit && witnessed < 2; quantum++ {
-			if docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps) {
+			if err := renew(); err != nil {
+				test.Fatal("native preparation fixture lost its renewable lease", err)
+			}
+			if docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps, renew) {
 				private = legacyByteStagePGImage(test, storage, ctx, fixture.hash, -1)
 			}
 			before := docCanonicalPagesPGScratch(test, work)
@@ -502,7 +514,10 @@ func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture d
 			progress := outbound.DocRangeWorkPending
 			var err error
 			for quantum := 0; quantum < preparationLimit && work.work == nil; quantum++ {
-				docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps)
+				if err := renew(); err != nil {
+					test.Fatal("native preparation fixture lost its renewable lease", err)
+				}
+				docCanonicalPagesPGDrainCheckpoint(test, work, ctx, job, &checkpointSteps, renew)
 				progress, err = work.Step(ctx, job)
 				if err != nil || progress != outbound.DocRangeWorkPending {
 					break
@@ -515,6 +530,9 @@ func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture d
 				docCanonicalPagesPGReplacementUnchanged(test, originalReplacement, event.Replacement)
 			}
 			for quantum := 0; quantum < docCaptureWorkPGPreparationStepLimit && progress != outbound.DocRangeWorkPublishable; quantum++ {
+				if err := renew(); err != nil {
+					test.Fatal("native preparation fixture lost its renewable lease", err)
+				}
 				progress, err = work.Step(ctx, job)
 				if err != nil || progress == outbound.DocRangeWorkCompatibilityRequired {
 					test.Fatal("dense native control failed delegated preparation", quantum, progress, err)
