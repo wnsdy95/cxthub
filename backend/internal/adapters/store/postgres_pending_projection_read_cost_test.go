@@ -253,7 +253,7 @@ func TestPGPendingProjectionReadCostCurrentKeysOnly(t *testing.T) {
 		t.Fatal("historical, unlisted, or future parts changed the ready read")
 	}
 	decoded, err := domain.DecodePendingProjection(ctx, repo, after.Parts)
-	if err != nil || !reflect.DeepEqual(decoded, view) {
+	if err != nil || !reflect.DeepEqual(pendingProjectionViewUTCTimesPG(decoded), pendingProjectionViewUTCTimesPG(view)) {
 		t.Fatalf("poison history reached projection decoding: err=%v", err)
 	}
 	if afterBytes := pendingProjectionAssertReadTransferPG(t, after, afterQueries); afterBytes != beforeBytes {

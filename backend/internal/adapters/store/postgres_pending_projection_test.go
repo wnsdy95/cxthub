@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -87,6 +88,34 @@ func pendingProjectionPartsPG(t *testing.T, ctx context.Context, storage *Postgr
 	return view, parts
 }
 
+func pendingProjectionViewUTCTimesPG(view domain.PendingStateView) domain.PendingStateView {
+	view.Pending = slices.Clone(view.Pending)
+	for index := range view.Pending {
+		view.Pending[index].UpdatedAt = view.Pending[index].UpdatedAt.UTC()
+		if view.Pending[index].ActivityAt != nil {
+			activity := view.Pending[index].ActivityAt.UTC()
+			view.Pending[index].ActivityAt = &activity
+		}
+	}
+	view.Snapshots = slices.Clone(view.Snapshots)
+	for index := range view.Snapshots {
+		view.Snapshots[index].CreatedAt = view.Snapshots[index].CreatedAt.UTC()
+	}
+	view.ArchivedSessions = slices.Clone(view.ArchivedSessions)
+	for index := range view.ArchivedSessions {
+		view.ArchivedSessions[index].ArchivedAt = view.ArchivedSessions[index].ArchivedAt.UTC()
+		view.ArchivedSessions[index].UpdatedAt = view.ArchivedSessions[index].UpdatedAt.UTC()
+	}
+	view.Hold = slices.Clone(view.Hold)
+	for index := range view.Hold {
+		view.Hold[index].Tips = slices.Clone(view.Hold[index].Tips)
+		for tip := range view.Hold[index].Tips {
+			view.Hold[index].Tips[tip].UpdatedAt = view.Hold[index].Tips[tip].UpdatedAt.UTC()
+		}
+	}
+	return view
+}
+
 func pendingProjectionReadPG(t *testing.T, ctx context.Context, storage *PostgresStore, job domain.PendingProjectionLease, want domain.PendingStateView) domain.PendingProjectionRead {
 	t.Helper()
 	read, err := storage.ReadPendingProjection(ctx, job.RepoID)
@@ -95,7 +124,7 @@ func pendingProjectionReadPG(t *testing.T, ctx context.Context, storage *Postgre
 		t.Fatalf("ready checkpoint: read=%+v job=%+v err=%v", read, job, err)
 	}
 	got, err := domain.DecodePendingProjection(ctx, job.RepoID, read.Parts)
-	if err != nil || !reflect.DeepEqual(got, want) {
+	if err != nil || !reflect.DeepEqual(pendingProjectionViewUTCTimesPG(got), pendingProjectionViewUTCTimesPG(want)) {
 		t.Fatalf("decoded projection differs: got=%+v want=%+v err=%v", got, want, err)
 	}
 	return read
