@@ -221,6 +221,38 @@ func TestPGInvitationEmailWorkerIdentityConfigurationUsesCurrentPorts(test *test
 	}
 }
 
+func invitationEmailPGUTCTimes(email domain.InvitationEmail) domain.InvitationEmail {
+	email.FirstAttempt = email.FirstAttempt.UTC()
+	email.NextAttempt = email.NextAttempt.UTC()
+	return email
+}
+
+func TestPGInvitationEmailWorkerTimestampParity(test *testing.T) {
+	stamp := time.Date(2026, time.November, 3, 1, 2, 3, 456789123, time.UTC)
+	emailAt := func(stamp time.Time) domain.InvitationEmail {
+		return domain.InvitationEmail{State: "sending", Attempts: 1, FirstAttempt: stamp, NextAttempt: stamp.Add(time.Minute), Message: domain.EmailMessage{To: []string{"member@example.test"}}}
+	}
+	want := emailAt(stamp)
+	for _, location := range []*time.Location{time.FixedZone("local UTC", 0), time.FixedZone("local Seoul", 9*60*60)} {
+		got := emailAt(stamp.In(location))
+		if !reflect.DeepEqual(invitationEmailPGUTCTimes(got), want) || !reflect.DeepEqual(got, emailAt(stamp.In(location))) {
+			test.Fatal("timestamp comparison lost parity or mutated the original email")
+		}
+	}
+	for name, mutate := range map[string]func(*domain.InvitationEmail){
+		"first instant": func(email *domain.InvitationEmail) { email.FirstAttempt = email.FirstAttempt.Add(time.Nanosecond) },
+		"next instant":  func(email *domain.InvitationEmail) { email.NextAttempt = email.NextAttempt.Add(time.Nanosecond) },
+		"attempt":       func(email *domain.InvitationEmail) { email.Attempts++ },
+		"recipient":     func(email *domain.InvitationEmail) { email.Message.To[0] = "other@example.test" },
+	} {
+		got := emailAt(stamp)
+		mutate(&got)
+		if reflect.DeepEqual(invitationEmailPGUTCTimes(got), want) {
+			test.Fatal("timestamp comparison discarded a semantic difference", name)
+		}
+	}
+}
+
 func TestPGInvitationEmailWorkerDirectClaimAndCompletionRollback(test *testing.T) {
 	for _, failureState := range []string{"sending", "accepted"} {
 		test.Run(failureState, func(test *testing.T) {
@@ -230,7 +262,7 @@ func TestPGInvitationEmailWorkerDirectClaimAndCompletionRollback(test *testing.T
 			injected, sent := false, 0
 			storage.afterPut = func(bound context.Context, email domain.InvitationEmail) error {
 				current, err := fixture.storage.GetInvitationEmail(bound, email.InvitationID)
-				if err != nil || !reflect.DeepEqual(current, email) {
+				if err != nil || !reflect.DeepEqual(invitationEmailPGUTCTimes(current), invitationEmailPGUTCTimes(email)) {
 					return errors.Join(domain.ErrIntegrity, err)
 				}
 				outside, err := fixture.observedEmail(fixture.ctx)

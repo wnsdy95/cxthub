@@ -605,6 +605,60 @@ func expirePRPromotionPGClaim(test *testing.T, ctx context.Context, fixture *prP
 	}
 }
 
+func prPromotionPGUTCTimes(job domain.PRPromotionJob) domain.PRPromotionJob {
+	job.CreatedAt = job.CreatedAt.UTC()
+	job.UpdatedAt = job.UpdatedAt.UTC()
+	job.NextAttempt = job.NextAttempt.UTC()
+	job.LeaseUntil = job.LeaseUntil.UTC()
+	if job.Diagnostics != nil {
+		diagnostics := *job.Diagnostics
+		diagnostics.Since = diagnostics.Since.UTC()
+		diagnostics.Events = slices.Clone(diagnostics.Events)
+		for index := range diagnostics.Events {
+			diagnostics.Events[index].At = diagnostics.Events[index].At.UTC()
+		}
+		job.Diagnostics = &diagnostics
+	}
+	return job
+}
+
+func TestPGPRPromotionWorkerTimestampParity(test *testing.T) {
+	stamp := time.Date(2026, time.November, 3, 1, 2, 3, 456789123, time.UTC)
+	jobAt := func(stamp time.Time) domain.PRPromotionJob {
+		return domain.PRPromotionJob{State: "running", Version: 2, CreatedAt: stamp, UpdatedAt: stamp, NextAttempt: stamp, LeaseUntil: stamp.Add(time.Minute), Diagnostics: &domain.PRJobDiagnostics{Since: stamp, Events: []domain.PRJobDiagnostic{{At: stamp, Kind: "claimed", Version: 2}}}}
+	}
+	want := jobAt(stamp)
+	for _, location := range []*time.Location{time.FixedZone("local UTC", 0), time.FixedZone("local Seoul", 9*60*60)} {
+		got := jobAt(stamp.In(location))
+		if !reflect.DeepEqual(prPromotionPGUTCTimes(got), want) || !reflect.DeepEqual(got, jobAt(stamp.In(location))) {
+			test.Fatal("timestamp comparison lost parity or mutated the original claim")
+		}
+	}
+	for name, mutate := range map[string]func(*domain.PRPromotionJob){
+		"created instant":  func(job *domain.PRPromotionJob) { job.CreatedAt = job.CreatedAt.Add(time.Nanosecond) },
+		"updated instant":  func(job *domain.PRPromotionJob) { job.UpdatedAt = job.UpdatedAt.Add(time.Nanosecond) },
+		"next instant":     func(job *domain.PRPromotionJob) { job.NextAttempt = job.NextAttempt.Add(time.Nanosecond) },
+		"lease instant":    func(job *domain.PRPromotionJob) { job.LeaseUntil = job.LeaseUntil.Add(time.Nanosecond) },
+		"diagnostic start": func(job *domain.PRPromotionJob) { job.Diagnostics.Since = job.Diagnostics.Since.Add(time.Nanosecond) },
+		"diagnostic instant": func(job *domain.PRPromotionJob) {
+			job.Diagnostics.Events[0].At = job.Diagnostics.Events[0].At.Add(time.Nanosecond)
+		},
+		"fence":            func(job *domain.PRPromotionJob) { job.Version++ },
+		"diagnostic fence": func(job *domain.PRPromotionJob) { job.Diagnostics.Events[0].Version++ },
+	} {
+		got := jobAt(stamp)
+		mutate(&got)
+		if reflect.DeepEqual(prPromotionPGUTCTimes(got), want) {
+			test.Fatal("timestamp comparison discarded a semantic difference", name)
+		}
+	}
+	for _, job := range []domain.PRPromotionJob{{}, {Diagnostics: &domain.PRJobDiagnostics{}}, {Diagnostics: &domain.PRJobDiagnostics{Events: []domain.PRJobDiagnostic{}}}} {
+		if !reflect.DeepEqual(prPromotionPGUTCTimes(job), job) {
+			test.Fatal("comparison changed nil or empty diagnostics")
+		}
+	}
+}
+
 func TestPGPRPromotionWorkerDirectSharedAdmissionLeaseReplacementAndRecovery(test *testing.T) {
 	fixture := newPRPromotionPGFixture(test, true, false)
 	ctx, cancel := context.WithTimeout(wave40PGContext(context.Background(), fixture.storage), 20*time.Second)
@@ -660,7 +714,7 @@ func TestPGPRPromotionWorkerDirectSharedAdmissionLeaseReplacementAndRecovery(tes
 		test.Fatal(err)
 	}
 	<-joined
-	if current, err := peer.GetPRJob(ctx, fixture.repo, old.ID); err != nil || !reflect.DeepEqual(current, replacement) || metadata.staleFences != 1 {
+	if current, err := peer.GetPRJob(ctx, fixture.repo, old.ID); err != nil || !reflect.DeepEqual(prPromotionPGUTCTimes(current), prPromotionPGUTCTimes(replacement)) || metadata.staleFences != 1 {
 		test.Fatal("actual stale worker or its detached cleanup changed the replacement", current, metadata.staleFences, err)
 	}
 	if after, err := fixture.publication(ctx, peer); err != nil || !reflect.DeepEqual(after, before) {
