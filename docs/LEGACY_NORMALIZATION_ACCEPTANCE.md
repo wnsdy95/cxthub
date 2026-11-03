@@ -4,6 +4,11 @@ Decision: 2026-11-03. A complete legacy-document conversion has no 30-second
 product deadline. Correctness, recoverability and bounded resource use are the
 acceptance criteria; elapsed time is reported separately.
 
+Range jobs continue while their lease renews and the caller remains active;
+they no longer inherit the ten-minute whole-job limit. Lease renewal still has
+its bounded operation deadline, and lease loss or caller cancellation stops
+the worker. Other document workers retain their existing work limits.
+
 ## Scope
 
 This is background preparation of an existing document for verified range reads,
@@ -45,7 +50,7 @@ Fresh-process recovery is tested separately. None of the ordering, byte/hash,
 publication, fence or work/resource assertions is removed by this decision.
 
 The test-runner watchdog is an infrastructure hang guard, not a conversion
-latency SLA. The four full-conversion cases explicitly listed in CI use
+latency SLA. The full-conversion cases explicitly listed in CI use
 `--no-batch-timeout` with isolated single-test batches, relying on the enclosing
 CI job cancellation/watchdog rather than the default 120-second binary limit.
 Other batches retain that limit. Test selection, repetitions and strict outcome
