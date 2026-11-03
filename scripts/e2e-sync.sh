@@ -161,11 +161,12 @@ if [ -n "${CXT_E2E_DSN:-}" ]; then
     "$TMP/bin/cxt-admin" migrate --apply || { echo "fixture migration setup failed" >&2; exit 1; }
 fi
 
-CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
+fixture_server=(env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
   CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN" \
   CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN" \
   RESEND_API_KEY= CXT_GITHUB_TOKEN= \
-  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data" >"$TMP/srv.log" 2>&1 &
+  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data")
+"${fixture_server[@]}" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
 SERVER_READY=0
 for i in $(seq 1 30); do
