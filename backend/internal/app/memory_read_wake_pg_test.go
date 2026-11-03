@@ -81,6 +81,7 @@ func TestPGMemoryReadWakeAutomaticallyPreparesChangedSourceAfterRestart(test *te
 }
 
 func TestPGMemoryReadWakePhysicalRepairWithoutLogicalSourceChange(test *testing.T) {
+	wave40IsolatedPG(test)
 	service, storage, connection, repo, request, _ := qualifiedMemoryFixturePG(test)
 	ctx := systemTestContext()
 	memoryWorkConfigurePG(test, service, storage, repo)
