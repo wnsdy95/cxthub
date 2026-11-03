@@ -114,6 +114,7 @@ jobs:
         working-directory: backend
         run: |
           python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres --batch-size 1 \
+            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFences \
             --require-test TestLegacyByteRecoveryPGColdChild \
             --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
             --require-test TestNormalizationCheckpointPGColdChild \
@@ -138,6 +139,9 @@ jobs:
             --first-test TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
             --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
             --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
+            --no-batch-timeout TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
+            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
+            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
             --allow-skip TestPGMemoryPreparationCostD3ab \
             --allow-skip TestPGReadModelMixedProgress
           go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v

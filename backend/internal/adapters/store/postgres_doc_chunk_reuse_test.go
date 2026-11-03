@@ -15,12 +15,17 @@ import (
 
 func chunkReusePG(t *testing.T) (*PostgresStore, context.Context) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	return chunkReusePGContext(t, ctx)
+}
+
+func chunkReusePGContext(t *testing.T, ctx context.Context) (*PostgresStore, context.Context) {
+	t.Helper()
 	dsn := os.Getenv("CXT_TEST_DSN")
 	if dsn == "" {
 		t.Skip("CXT_TEST_DSN unset")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
 	st, err := NewPostgresStore(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)

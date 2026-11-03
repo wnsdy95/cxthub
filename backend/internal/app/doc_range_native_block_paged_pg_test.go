@@ -460,10 +460,9 @@ func docRangeNativeBlockPagedPGScenario(test *testing.T, decode bool, change str
 
 func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bool, change string) {
 	test.Helper()
-	started := time.Now()
 	fixture := newDocViewPGFixture(test)
 	gate := &resourceAdmission{wait: resourceWaitLimit}
-	ctx, cancel := context.WithDeadline(context.WithValue(fixture.ctx, resourceAdmissionKey{}, gate), started.Add(30*time.Second))
+	ctx, cancel := context.WithCancel(context.WithValue(fixture.ctx, resourceAdmissionKey{}, gate))
 	defer cancel()
 	fixture.ctx = ctx
 	if maxParkedRootHeapBytes != 16<<20 || maxParkedRootSpoolBytes != 64<<20 {
@@ -608,7 +607,9 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 		parkStep, parked, parkedResources = step, state, resources
 		parkedPermit, resumeBefore = permit, permit.resumeWait.Load()
 		go func() {
-			foreground <- resourceWork(ctx, ResourceBulk, func(read context.Context) error {
+			readContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			foreground <- resourceWork(readContext, ResourceBulk, func(read context.Context) error {
 				gate.mu.Lock()
 				parkedNow := gate.retained == permit && permit.parked && permit.live.Load() && gate.bulk == 1
 				gate.mu.Unlock()

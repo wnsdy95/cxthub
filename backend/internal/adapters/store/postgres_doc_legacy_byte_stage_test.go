@@ -64,7 +64,7 @@ func legacyByteStagePGDocument(test *testing.T, storage *PostgresStore, ctx cont
 		test.Fatal(err)
 	}
 	test.Cleanup(func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanup, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		for _, statement := range []string{
 			`DELETE FROM snapshots WHERE id=$1 OR doc_hash=$1`,

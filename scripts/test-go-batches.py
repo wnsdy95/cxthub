@@ -225,6 +225,14 @@ def run_batches(args):
         unknown_first = sorted(first_tests - set(tests))
         if unknown_first:
             raise ValueError("--first-test names not in discovered selection: " + ", ".join(unknown_first))
+        no_timeout = set(args.no_batch_timeout)
+        if len(no_timeout) != len(args.no_batch_timeout):
+            raise ValueError("duplicate --no-batch-timeout test names")
+        unknown_no_timeout = sorted(no_timeout - set(tests))
+        if unknown_no_timeout:
+            raise ValueError("--no-batch-timeout names not in discovered selection: " + ", ".join(unknown_no_timeout))
+        if no_timeout and args.batch_size != 1:
+            raise ValueError("--no-batch-timeout requires --batch-size 1 to isolate the selected tests")
         tests = args.first_test + [name for name in tests if name not in first_tests]
         batches = [tests[start:start + args.batch_size] for start in range(0, len(tests), args.batch_size)]
         print(f"[go-batches] {len(tests)} tests, {len(batches)} serial batches, {args.count} repetitions; cwd={package_dir}", flush=True)
@@ -235,10 +243,11 @@ def run_batches(args):
                 pattern = "^(" + "|".join(re.escape(name) for name in batch) + ")$"
                 result = BatchResults(batch, args.count, args.package, allow_skip.intersection(batch))
                 results.append(result)
+                timeout = "0" if batch[0] in no_timeout else "120s"
                 run_command([
                     "go", "tool", "test2json", "-t", "-p", args.package,
                     binary, "-test.run=" + pattern, f"-test.count={args.count}",
-                    "-test.timeout=120s", "-test.parallel=1", "-test.v=test2json",
+                    "-test.timeout=" + timeout, "-test.parallel=1", "-test.v=test2json",
                 ], package_dir, on_line=result.feed)
                 result.verify()
         except Cancelled:
@@ -264,11 +273,12 @@ def run_batches(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Compile one Go package once and run serial batches with a fixed 120s timeout.")
+    parser = argparse.ArgumentParser(description="Compile one Go package once and run serial batches with a default 120s timeout.")
     parser.add_argument("package")
     parser.add_argument("--tags", default="")
     parser.add_argument("--run", default="^Test")
     parser.add_argument("--first-test", action="append", default=[], metavar="TEST", help="move an exact discovered top-level test name to the front of the batch order; repeat in priority order")
+    parser.add_argument("--no-batch-timeout", action="append", default=[], metavar="TEST", help="disable the binary timeout only for an exact discovered test; requires --batch-size 1 and an external CI watchdog")
     parser.add_argument("--require-test", action="append", default=[], metavar="TEST", help="require an exact top-level test name in the discovered selection and forbid allowing it to skip; repeat for each name")
     parser.add_argument("--allow-skip", action="append", default=[], metavar="TEST", help="allow an exact discovered top-level test name to skip; repeat for each name")
     parser.add_argument("--race", action="store_true")
