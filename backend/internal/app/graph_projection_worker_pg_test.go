@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph(t *testing.T) {
 				continue
 			}
 			got, err := domain.DecodeGraphViewProjection(ctx, repo.ID, read.Parts)
-			if err != nil || !reflect.DeepEqual(got, want) {
+			if err != nil || !reflect.DeepEqual(graphWorkerViewUTCTimesPG(got), graphWorkerViewUTCTimesPG(want)) {
 				actual, _ := json.Marshal(got)
 				expected, _ := json.Marshal(want)
 				t.Fatalf("%s durable graph differs from live graph: %v\ngot %s\nwant %s", label, err, actual, expected)
@@ -103,7 +104,7 @@ func TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph(t *testing.T) {
 				t.Fatal(label, "mixed PR/Git evidence lost or duplicated integration", got.Graph.Integrations)
 			}
 			qualifyGraphBundlePG(t, peer, connection, repo.ID)
-			assertGraphBundleServingPG(t, peer, repo.ID, want, true)
+			assertGraphBundleServingPG(t, peer, repo.ID, got, true)
 			return read
 		}
 		t.Fatal(label, "graph worker did not converge")
@@ -126,5 +127,73 @@ func TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph(t *testing.T) {
 	assertGraphBundleRepairPG(t, peer, connection, repo.ID, fixture.basis.dsn)
 	if worker.graphCache.Stats().Entries != 0 || restarted.graphCache.Stats().Entries != 0 || len(restarted.pendingProjectionRepos) != 0 {
 		t.Fatal("shadow worker populated serving state")
+	}
+}
+
+func graphWorkerViewUTCTimesPG(view domain.RepositoryView) domain.RepositoryView {
+	view.Snapshots = slices.Clone(view.Snapshots)
+	for index := range view.Snapshots {
+		view.Snapshots[index].CreatedAt = view.Snapshots[index].CreatedAt.UTC()
+	}
+	view.Reflog = slices.Clone(view.Reflog)
+	for index := range view.Reflog {
+		view.Reflog[index].CreatedAt = view.Reflog[index].CreatedAt.UTC()
+	}
+	view.ArchivedSessions = slices.Clone(view.ArchivedSessions)
+	for index := range view.ArchivedSessions {
+		view.ArchivedSessions[index].ArchivedAt = view.ArchivedSessions[index].ArchivedAt.UTC()
+		view.ArchivedSessions[index].UpdatedAt = view.ArchivedSessions[index].UpdatedAt.UTC()
+	}
+	return view
+}
+
+func TestPGGraphProjectionWorkerViewTimestampParity(test *testing.T) {
+	stamp := time.Date(2026, time.November, 3, 1, 2, 3, 456789123, time.UTC)
+	viewAt := func(stamp time.Time) domain.RepositoryView {
+		return domain.RepositoryView{
+			Snapshots:        []domain.Snapshot{{ID: "capture", Parents: []domain.ContentHash{"parent"}, CreatedAt: stamp}},
+			Reflog:           []domain.RefLogEntry{{New: "capture", CreatedAt: stamp}},
+			ArchivedSessions: []domain.SessionArchiveView{{SessionArchive: domain.SessionArchive{SnapshotID: "capture", ArchivedAt: stamp}, UpdatedAt: stamp}},
+		}
+	}
+	want := viewAt(stamp)
+	for _, location := range []*time.Location{time.FixedZone("local UTC", 0), time.FixedZone("local Seoul", 9*60*60)} {
+		test.Run(location.String(), func(test *testing.T) {
+			got := viewAt(stamp.In(location))
+			if reflect.DeepEqual(got, want) {
+				test.Fatal("fixture must distinguish time locations")
+			}
+			if !reflect.DeepEqual(graphWorkerViewUTCTimesPG(got), want) {
+				test.Fatal("equivalent timestamp locations changed graph parity")
+			}
+			if !reflect.DeepEqual(got, viewAt(stamp.In(location))) {
+				test.Fatal("comparison mutated the original view")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*domain.RepositoryView){
+		"snapshot instant": func(view *domain.RepositoryView) { view.Snapshots[0].CreatedAt = stamp.Add(time.Nanosecond) },
+		"reflog instant":   func(view *domain.RepositoryView) { view.Reflog[0].CreatedAt = stamp.Add(time.Nanosecond) },
+		"archive instant":  func(view *domain.RepositoryView) { view.ArchivedSessions[0].ArchivedAt = stamp.Add(time.Nanosecond) },
+		"archive updated instant": func(view *domain.RepositoryView) {
+			view.ArchivedSessions[0].UpdatedAt = stamp.Add(time.Nanosecond)
+		},
+		"snapshot node":  func(view *domain.RepositoryView) { view.Snapshots[0].ID = "other" },
+		"snapshot edge":  func(view *domain.RepositoryView) { view.Snapshots[0].Parents[0] = "other" },
+		"reflog target":  func(view *domain.RepositoryView) { view.Reflog[0].New = "other" },
+		"archive target": func(view *domain.RepositoryView) { view.ArchivedSessions[0].SnapshotID = "other" },
+	} {
+		test.Run(name, func(test *testing.T) {
+			got := viewAt(stamp)
+			mutate(&got)
+			if reflect.DeepEqual(graphWorkerViewUTCTimesPG(got), want) {
+				test.Fatal("comparison discarded a semantic difference")
+			}
+		})
+	}
+	for _, view := range []domain.RepositoryView{{}, {Snapshots: []domain.Snapshot{}, Reflog: []domain.RefLogEntry{}, ArchivedSessions: []domain.SessionArchiveView{}}} {
+		if !reflect.DeepEqual(graphWorkerViewUTCTimesPG(view), view) {
+			test.Fatal("comparison changed nil or empty slices")
+		}
 	}
 }
