@@ -419,6 +419,14 @@ func (work *preparedLegacyCaptureWork) advanceNormalization(ctx context.Context,
 					capture.Close()
 				}
 			}()
+			redundant, err := work.checkpoint.sameUnwrittenRestart(ctx, capture)
+			if err != nil {
+				return 0, err
+			}
+			if redundant {
+				work.encoderSteps = 0
+				return outbound.DocRangeWorkPending, nil
+			}
 			if work.checkpoint == nil {
 				stage, err := work.store.ensureLegacyNormalizationStage(ctx, job, work.witness.stage)
 				if err != nil {
