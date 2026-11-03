@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -221,8 +222,8 @@ func (fixture docRangeEnqueueBudgetPGFixture) waitBlocked(t *testing.T, blocker 
 	defer ticker.Stop()
 	for {
 		var blocked bool
-		if err := fixture.storage.pool.QueryRow(poll, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
- WHERE datname=current_database() AND $1::int=ANY(pg_blocking_pids(pid)))`, blocker.Conn().PgConn().PID()).Scan(&blocked); err != nil {
+		if err := blocker.QueryRow(poll, `SELECT EXISTS(SELECT 1 FROM pg_locks
+ WHERE NOT granted AND $1::int=ANY(pg_blocking_pids(pid)))`, blocker.Conn().PgConn().PID()).Scan(&blocked); err != nil {
 			t.Fatal(err)
 		}
 		if blocked {
@@ -279,6 +280,14 @@ func TestDocRangeEnqueueBudgetPGTotalTimeoutRollback(t *testing.T) {
 	for _, kind := range []string{"index", "boundary"} {
 		t.Run(kind, func(t *testing.T) {
 			fixture := docRangeEnqueueBudgetPG(t, kind)
+			config := fixture.storage.pool.Config()
+			config.MaxConns, config.MinConns, config.MinIdleConns = 4, 0, 0
+			pool, err := pgxpool.NewWithConfig(fixture.ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			fixture.storage = &PostgresStore{pool: pool}
 			fixture.stale(t)
 			before := fixture.queue(t)
 			advisory := fixture.hold(t, "advisory")
