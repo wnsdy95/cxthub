@@ -81,7 +81,7 @@ func TestPGPendingProjectionWorkerMatchesDirectClassificationAcrossMutations(t *
 				t.Fatal(label, "missing complete generation")
 			}
 			got.ReadGeneration = nil
-			if !reflect.DeepEqual(got, want) {
+			if !reflect.DeepEqual(pendingWorkerViewUTCTimesPG(got), pendingWorkerViewUTCTimesPG(want)) {
 				actual, _ := json.Marshal(got)
 				expected, _ := json.Marshal(want)
 				t.Fatalf("%s parity mismatch\ngot: %s\nwant: %s", label, actual, expected)
@@ -184,4 +184,14 @@ func TestPGPendingProjectionWorkerResumesCapturedCursorAfterRestart(t *testing.T
 	if err != nil || before != after {
 		t.Fatal("idle derived work changed source revision", before, after, err)
 	}
+}
+
+func pendingWorkerViewUTCTimesPG(view domain.PendingStateView) domain.PendingStateView {
+	normalized := graphWorkerViewUTCTimesPG(domain.RepositoryView{
+		Pending: view.Pending, Snapshots: view.Snapshots, ArchivedSessions: view.ArchivedSessions,
+	})
+	view.Pending = normalized.Pending
+	view.Snapshots = normalized.Snapshots
+	view.ArchivedSessions = normalized.ArchivedSessions
+	return view
 }

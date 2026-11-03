@@ -135,6 +135,10 @@ func graphWorkerViewUTCTimesPG(view domain.RepositoryView) domain.RepositoryView
 	for index := range view.Snapshots {
 		view.Snapshots[index].CreatedAt = view.Snapshots[index].CreatedAt.UTC()
 	}
+	view.Pending = slices.Clone(view.Pending)
+	for index := range view.Pending {
+		view.Pending[index].UpdatedAt = view.Pending[index].UpdatedAt.UTC()
+	}
 	view.Reflog = slices.Clone(view.Reflog)
 	for index := range view.Reflog {
 		view.Reflog[index].CreatedAt = view.Reflog[index].CreatedAt.UTC()
@@ -152,6 +156,7 @@ func TestPGGraphProjectionWorkerViewTimestampParity(test *testing.T) {
 	viewAt := func(stamp time.Time) domain.RepositoryView {
 		return domain.RepositoryView{
 			Snapshots:        []domain.Snapshot{{ID: "capture", Parents: []domain.ContentHash{"parent"}, CreatedAt: stamp}},
+			Pending:          []domain.Pending{{Target: "capture", UpdatedAt: stamp}},
 			Reflog:           []domain.RefLogEntry{{New: "capture", CreatedAt: stamp}},
 			ArchivedSessions: []domain.SessionArchiveView{{SessionArchive: domain.SessionArchive{SnapshotID: "capture", ArchivedAt: stamp}, UpdatedAt: stamp}},
 		}
@@ -173,6 +178,7 @@ func TestPGGraphProjectionWorkerViewTimestampParity(test *testing.T) {
 	}
 	for name, mutate := range map[string]func(*domain.RepositoryView){
 		"snapshot instant": func(view *domain.RepositoryView) { view.Snapshots[0].CreatedAt = stamp.Add(time.Nanosecond) },
+		"pending instant":  func(view *domain.RepositoryView) { view.Pending[0].UpdatedAt = stamp.Add(time.Nanosecond) },
 		"reflog instant":   func(view *domain.RepositoryView) { view.Reflog[0].CreatedAt = stamp.Add(time.Nanosecond) },
 		"archive instant":  func(view *domain.RepositoryView) { view.ArchivedSessions[0].ArchivedAt = stamp.Add(time.Nanosecond) },
 		"archive updated instant": func(view *domain.RepositoryView) {
@@ -180,6 +186,7 @@ func TestPGGraphProjectionWorkerViewTimestampParity(test *testing.T) {
 		},
 		"snapshot node":  func(view *domain.RepositoryView) { view.Snapshots[0].ID = "other" },
 		"snapshot edge":  func(view *domain.RepositoryView) { view.Snapshots[0].Parents[0] = "other" },
+		"pending target": func(view *domain.RepositoryView) { view.Pending[0].Target = "other" },
 		"reflog target":  func(view *domain.RepositoryView) { view.Reflog[0].New = "other" },
 		"archive target": func(view *domain.RepositoryView) { view.ArchivedSessions[0].SnapshotID = "other" },
 	} {
@@ -191,7 +198,7 @@ func TestPGGraphProjectionWorkerViewTimestampParity(test *testing.T) {
 			}
 		})
 	}
-	for _, view := range []domain.RepositoryView{{}, {Snapshots: []domain.Snapshot{}, Reflog: []domain.RefLogEntry{}, ArchivedSessions: []domain.SessionArchiveView{}}} {
+	for _, view := range []domain.RepositoryView{{}, {Snapshots: []domain.Snapshot{}, Pending: []domain.Pending{}, Reflog: []domain.RefLogEntry{}, ArchivedSessions: []domain.SessionArchiveView{}}} {
 		if !reflect.DeepEqual(graphWorkerViewUTCTimesPG(view), view) {
 			test.Fatal("comparison changed nil or empty slices")
 		}
