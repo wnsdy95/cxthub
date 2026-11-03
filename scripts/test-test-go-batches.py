@@ -235,6 +235,45 @@ class GoBatchesTest(unittest.TestCase):
                 self.assertEqual(sum(call[:2] == ["test", "-c"] for call in self.read_log("go.jsonl")), 1)
                 self.assertIn("selected=12 expected=36 run=36 pass=36 fail=0 skip=0 missing=0 cancelled=0 unfinished=0 allowed_skip=0", result.stdout)
 
+    def test_no_batch_timeout_changes_only_exact_tests_and_preserves_all_runs(self):
+        config = self.configure(names=["TestPGOne", "TestPGOneSuffix", "TestPGTwo"])
+        result = self.run_fixture("--batch-size", "1", "--no-batch-timeout", "TestPGOne", "--first-test", "TestPGTwo")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = self.read_log("batches.jsonl")
+        self.assertEqual([run["tests"] for run in runs], [["TestPGTwo"], ["TestPGOne"], ["TestPGOneSuffix"]])
+        for run in runs:
+            self.assertEqual(run["count"], 3)
+            self.assertIn("-test.parallel=1", run["args"])
+            timeout = "0" if run["tests"] == ["TestPGOne"] else "120s"
+            self.assertIn("-test.timeout=" + timeout, run["args"])
+        for repetition in range(3):
+            self.assertEqual(Counter(name for run in runs if repetition < run["count"] for name in run["tests"]), Counter(config["names"]))
+        self.assertIn("expected=9 run=9 pass=9 fail=0 skip=0 missing=0", result.stdout)
+
+    def test_no_batch_timeout_rejects_invalid_names_and_mixed_batches(self):
+        self.configure(names=["TestPGOne", "TestPGTwo", "TestOutsideSelection"])
+        cases = (
+            (["--no-batch-timeout", "TestPGOne", "--no-batch-timeout", "TestPGOne", "--batch-size", "1"], "duplicate --no-batch-timeout"),
+            (["--no-batch-timeout", "TestPGUnknown", "--batch-size", "1"], "not in discovered selection"),
+            (["--no-batch-timeout", "TestOutsideSelection", "--batch-size", "1"], "not in discovered selection"),
+            (["--no-batch-timeout", "TestPG.*", "--batch-size", "1"], "not in discovered selection"),
+            (["--no-batch-timeout", "TestPGOne"], "requires --batch-size 1"),
+        )
+        for arguments, message in cases:
+            with self.subTest(arguments=arguments):
+                result = self.run_fixture(*arguments)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(self.read_log("batches.jsonl"), [])
+
+    def test_no_batch_timeout_does_not_accept_failure_skip_or_missing_results(self):
+        for changes in ({"outcome": "fail"}, {"outcome": "skip"}, {"actual_count": 2}):
+            with self.subTest(changes=changes):
+                self.configure(names=["TestPGOne"], **changes)
+                result = self.run_fixture("--batch-size", "1", "--no-batch-timeout", "TestPGOne")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("[go-batches] passed", result.stdout)
+
     def test_first_tests_can_reorder_the_entire_selection_without_duplicates(self):
         self.configure(names=["TestPGOne", "TestPGTwo", "TestPGThree"])
         first = ["TestPGTwo", "TestPGThree", "TestPGOne"]
@@ -565,11 +604,16 @@ class GoBatchesTest(unittest.TestCase):
                 self.assertEqual(self.read_log("go.jsonl"), [])
 
     def test_cancel_fails_and_reaps_active_batch(self):
-        for signum, descendant in ((signal.SIGINT, False), (signal.SIGTERM, False), (signal.SIGINT, True), (signal.SIGTERM, True)):
-            with self.subTest(signal=signum, descendant=descendant):
+        cases = [(signum, descendant, no_timeout) for signum in (signal.SIGINT, signal.SIGTERM)
+                 for descendant in (False, True) for no_timeout in (False, True)]
+        for signum, descendant, no_timeout in cases:
+            with self.subTest(signal=signum, descendant=descendant, no_timeout=no_timeout):
                 (self.root / "batches.jsonl").unlink(missing_ok=True)
                 self.configure(cancel=True, descendant=descendant)
-                process = subprocess.Popen(self.command(), cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                command = self.command()
+                if no_timeout:
+                    command += ["--batch-size", "1", "--no-batch-timeout", "TestPGCase001"]
+                process = subprocess.Popen(command, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 child = None
                 try:
                     output = b""
@@ -595,6 +639,8 @@ class GoBatchesTest(unittest.TestCase):
                     self.assertIn(b"cancelled=1", output + remainder)
                     self.assertNotIn(b"[go-batches] passed", output + remainder)
                     self.assertEqual(len(self.read_log("batches.jsonl")), 1)
+                    if no_timeout:
+                        self.assertIn("-test.timeout=0", self.read_log("batches.jsonl")[0]["args"])
                 finally:
                     if child is not None:
                         try:

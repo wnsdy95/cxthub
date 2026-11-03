@@ -389,7 +389,7 @@ func docCanonicalPagesPGDrainCheckpoint(test *testing.T, work *preparedLegacyCap
 func docCanonicalPagesPGActiveNativePreparation(test *testing.T, activeFixture docCanonicalPagesPGFixture, scenario docCanonicalPagesPGFence) {
 	test.Helper()
 	test.Run(scenario.name, func(test *testing.T) {
-		storage, ctx := chunkReusePG(test)
+		storage, ctx := chunkReusePGContext(test, test.Context())
 		repo, _ := docRangeJobPGRepo(test, storage, ctx)
 		const fields = 4*1024 + 1
 		replacement := activeFixture.replacementPhase != ""

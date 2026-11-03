@@ -6,6 +6,12 @@ existing repository, organization and Enterprise authority boundaries remain.
 
 ## Delivery order and acceptance
 
+Legacy conversion acceptance (2026-11-03):
+[correctness and recovery contract](LEGACY_NORMALIZATION_ACCEPTANCE.md) separates
+whole-document completion time from foreground read deadlines. Conversion may
+take longer than 30 seconds; exact results, original preservation, fresh-process
+recovery, single publication and bounded resources remain mandatory.
+
 Current performance priority (2026-10-19):
 [architecture design](INCREMENTAL_READ_PUBLICATION_DESIGN.md) has been approved
 for staged implementation. D1 admission and D2 pinned-header/readiness,
