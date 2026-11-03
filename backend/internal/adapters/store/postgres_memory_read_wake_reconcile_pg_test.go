@@ -24,6 +24,7 @@ func memoryReadWakeRejectPG(test *testing.T, storage *PostgresStore, ctx context
 }
 
 func TestPGMemoryReadWakeCompletedTargetRequeuesWithoutDemand(test *testing.T) {
+	rootProjectionIsolatedPG(test)
 	for _, scenario := range []string{"graph", "memory", "physical-object", "catalog-reset", "memory-reset"} {
 		test.Run(scenario, func(test *testing.T) {
 			storage, ctx, job, qualification, _ := memoryReadWorkOutputPG(test)
