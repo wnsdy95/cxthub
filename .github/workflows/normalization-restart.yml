@@ -45,6 +45,6 @@ jobs:
           CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_restart_test?sslmode=disable
         run: >-
           go test -json -tags postgres -p 1 -parallel=1 -race -count=1 -timeout=0 ./internal/adapters/store
-          -run '^(TestNormalizationCheckpointPGPreparingColdRestart|TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed|TestNormalizationCheckpointPGAutomaticOutputGenerationReset|TestNormalizationCheckpointPGRootCommitFailureAndLostResponse|TestDocNormalizationWorkPGFencesEachPhase|TestNormalizationCheckpointPGPreservesLocalDamageAndRejectsDerivedProof)$'
+          -run '^(TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress|TestNormalizationCheckpointPGPreparingColdRestart|TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed|TestNormalizationCheckpointPGAutomaticOutputGenerationReset|TestNormalizationCheckpointPGRootCommitFailureAndLostResponse|TestDocNormalizationWorkPGFencesEachPhase|TestNormalizationCheckpointPGPreservesLocalDamageAndRejectsDerivedProof)$'
       - name: Vet the changed backend packages
         run: go vet -tags postgres -p 1 ./internal/domain ./internal/adapters/store

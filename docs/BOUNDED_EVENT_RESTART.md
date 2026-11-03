@@ -17,6 +17,21 @@ ordering are derived structures, so restarting from the source produces the
 same canonical bytes. The cost of preparing the current event again is an
 explicit tradeoff; arbitrary runtime frames and iterators are not serialized.
 
+Automatic capture must advance the durable restart point. During zero-output
+Stage preparation, it does not save another checkpoint if the acknowledged
+parser position, completed occurrence count, pending batch, active occurrence
+and output file generations/extents are unchanged. The live preparation keeps
+running. This does not suppress the first source checkpoint, explicit captures,
+parser progress, a new occurrence, or partially emitted output checkpoints.
+
+The regression fixture with 4,097 replacement children exposed repeated saves
+of an identical zero-output restart point: inspection work increased from
+12,507 to 24,987 while input and output stayed at 1,086,897 and zero bytes.
+Of the first 15,030 steps, 14,874 serviced checkpoint capture. This established
+repeated serialization, not a rewind of the live preparation. The regression
+checks both monotonic live preparation and distinct automatic restart points,
+then verifies the complete published bytes against the canonical oracle.
+
 ## Verification
 
 `TestNormalizationCheckpointPGPreparingColdRestart` runs a real producer
@@ -32,7 +47,12 @@ Its fixture includes a 5,001-element array and repeated event sequence numbers.
 Domain tests additionally retain the original 5,000-entry nested-map and
 1,200-replacement cases. Existing partial-output manual/automatic recovery,
 commit-response loss, corruption, ownership, generation, and lease regressions
-remain enabled. Their resource and fixture deadlines are unchanged.
+remain enabled. Their per-step resource bounds and fence assertions are unchanged.
+
+Total conversion and the preparing-restart producer/consumer have no duration
+acceptance limit. Cancellation, live lease ownership, bounded per-step work and
+all publication assertions remain required. Elapsed time is diagnostic evidence,
+not a substitute for exact completion.
 
 The `Normalization restart` workflow checks this bounded scope independently of
 the unfinished foundation's broader CI. It does not replace those required

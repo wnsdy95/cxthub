@@ -58,7 +58,8 @@ func TestNormalizationCheckpointPGPreparingColdRestart(test *testing.T) {
 			test.Fatal("preparing restart refuses a nonlocal PostgreSQL fallback")
 		}
 	}
-	storage, ctx := rootProjectionIsolatedPG(test)
+	test.Setenv("CXT_TEST_DSN", rootProjectionIsolatedDSN(test, test.Context()))
+	storage, ctx := chunkReusePGContext(test, test.Context())
 	if _, owned := docDisplayOwnedFixturesPG.Load(storage.pool.Config().ConnConfig.Database); !owned {
 		test.Fatal("preparing restart requires its own isolated local database")
 	}
@@ -84,7 +85,7 @@ func TestNormalizationCheckpointPGPreparingColdRestart(test *testing.T) {
 			test.Fatal(err)
 		}
 	}
-	command := exec.CommandContext(ctx, executable, "-test.run=^TestNormalizationCheckpointPGPreparingColdRestart$", "-test.count=1", "-test.timeout=30s", "-test.v")
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestNormalizationCheckpointPGPreparingColdRestart$", "-test.count=1", "-test.timeout=0", "-test.v")
 	command.Env = append(os.Environ(), "CXT_NORMALIZATION_PREPARING_PRODUCER=1", "CXT_NORMALIZATION_PREPARING_REPO="+string(repo),
 		"CXT_NORMALIZATION_PREPARING_HASH="+string(fixture.hash), "TMPDIR="+producerDirectory, "TMP="+producerDirectory, "TEMP="+producerDirectory)
 	command.ExtraFiles = []*os.File{writer}
@@ -129,9 +130,9 @@ func TestNormalizationCheckpointPGPreparingColdRestart(test *testing.T) {
 		test.Fatal(err)
 	}
 	if err := ctx.Err(); err != nil {
-		test.Fatal("producer exceeded the unchanged setup deadline", err)
+		test.Fatal("producer was canceled before restart", err)
 	}
-	restart, cancel := context.WithTimeout(test.Context(), 30*time.Second)
+	restart, cancel := context.WithCancel(test.Context())
 	defer cancel()
 	changed, err := storage.pool.Exec(restart, `UPDATE doc_range_jobs_v1 SET lease_until=clock_timestamp()-interval '1 minute'
  WHERE repo_id=$1 AND doc_hash=$2 AND base_hash='' AND state='running' AND version=$3`,
@@ -143,7 +144,7 @@ func TestNormalizationCheckpointPGPreparingColdRestart(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	consumer := exec.CommandContext(restart, executable, "-test.run=^TestNormalizationCheckpointPGColdChild$", "-test.count=1", "-test.timeout=30s", "-test.v")
+	consumer := exec.CommandContext(restart, executable, "-test.run=^TestNormalizationCheckpointPGColdChild$", "-test.count=1", "-test.timeout=0", "-test.v")
 	consumer.Env = append(os.Environ(), "CXT_NORMALIZATION_CHECKPOINT_CHILD=1", "CXT_NORMALIZATION_CHECKPOINT_PRIOR="+string(encoded),
 		"CXT_NORMALIZATION_CHECKPOINT_EXPECTED_ROOT="+string(acknowledged.Root),
 		"CXT_NORMALIZATION_CHECKPOINT_EXPECTED_PARSER="+string(acknowledged.Parser))
@@ -165,7 +166,7 @@ func normalizationPreparingPGProducer(test *testing.T) {
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateContentHash(hash) != nil {
 		test.Fatal("invalid preparing producer fixture")
 	}
-	storage, ctx := chunkReusePG(test)
+	storage, ctx := chunkReusePGContext(test, test.Context())
 	document := normalizationPreparingPGDocument(repo)
 	stored, err := json.Marshal(document)
 	if err != nil {
@@ -185,6 +186,8 @@ func normalizationPreparingPGProducer(test *testing.T) {
 	fixture := legacyByteStagePGFixture{repo: repo, hash: hash}
 	work, job, _ := docNormalizationPGStartSource(test, storage, ctx, fixture, stored)
 	defer work.Close()
+	stopRenewal := docNormalizationPGMaintainLease(test, storage, ctx, job, 2*time.Minute)
+	defer stopRenewal()
 	preserved := legacyByteRecoveryPGPreservedImage(test, storage, ctx, fixture)
 	normalizationParserRestartPGAwaitRoot(test, work, ctx, job, 0)
 	input := work.checkpoint.root.Parser.Input

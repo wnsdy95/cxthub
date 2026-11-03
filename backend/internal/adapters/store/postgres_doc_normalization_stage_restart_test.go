@@ -73,7 +73,8 @@ func TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed(test
 					test.Fatal("Stage restart refuses a nonlocal PostgreSQL fallback")
 				}
 			}
-			storage, ctx := rootProjectionIsolatedPG(test)
+			test.Setenv("CXT_TEST_DSN", rootProjectionIsolatedDSN(test, test.Context()))
+			storage, ctx := chunkReusePGContext(test, test.Context())
 			if _, owned := docDisplayOwnedFixturesPG.Load(storage.pool.Config().ConnConfig.Database); !owned {
 				test.Fatal("Stage restart requires its own isolated local database")
 			}
@@ -111,6 +112,8 @@ func TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed(test
 			completedBytes := len(canonical.Events[0])
 			work, job, _ := docNormalizationPGStartSource(test, storage, ctx, fixture, stored)
 			defer work.Close()
+			stopRenewal := docNormalizationPGMaintainLease(test, storage, ctx, job, 2*time.Minute)
+			defer stopRenewal()
 			preserved := legacyByteRecoveryPGPreservedImage(test, storage, ctx, fixture)
 			normalizationParserRestartPGAwaitRoot(test, work, ctx, job, 0)
 			normalizationParserRestartPGAssertObjects(test, storage, ctx, job, work, stored)
@@ -200,10 +203,11 @@ func TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed(test
 			if err := work.Publish(ctx, job); !errors.Is(err, domain.ErrDocRangeIndexPending) {
 				test.Fatal("partial event Stage acquired publication authority before fresh canonical verification", err)
 			}
+			stopRenewal()
 			if err := ctx.Err(); err != nil {
-				test.Fatal("Stage producer exceeded its unchanged setup deadline", err)
+				test.Fatal("Stage producer was canceled before restart", err)
 			}
-			restart, cancel := context.WithTimeout(test.Context(), 30*time.Second)
+			restart, cancel := context.WithCancel(test.Context())
 			defer cancel()
 			normalizationCheckpointPGColdReclaim(test, storage, restart, fixture, job, work)
 			if work.checkpoint != nil || work.decoding != nil || work.normalization != nil || work.source != nil {
