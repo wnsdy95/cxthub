@@ -57,6 +57,13 @@ fixture applies the existing checkpoint bound to each save, not a cumulative
 bound borrowed from a smaller document, and reports the total saves and steps.
 The per-step IO/memory limits and the outer preparation-progress bound remain.
 
+The oversized-event parking test queues a test-owned waiter directly, then
+performs the real foreground page read with the permit granted by dispatch.
+It verifies release ordering, not whether a client can wait through an oversized
+event within the one-second admission budget. That production budget is unchanged
+and remains covered by admission tests. Early dispatch, lost permits, wrong page
+contents and missing foreground progress still fail the parking test.
+
 The test-runner watchdog is an infrastructure hang guard, not a conversion
 latency SLA. The full-conversion cases explicitly listed in CI use
 `--no-batch-timeout` with isolated single-test batches, relying on the enclosing

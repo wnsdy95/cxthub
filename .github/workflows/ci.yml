@@ -114,6 +114,7 @@ jobs:
         working-directory: backend
         run: |
           python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres --batch-size 1 \
+            --first-test TestDocRangeEnqueueBudgetPGTotalTimeoutRollback \
             --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFences \
             --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceVersion \
             --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceIncarnation \
@@ -152,6 +153,13 @@ jobs:
         working-directory: backend
         run: |
           python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3 --batch-size 1 \
+            --first-test TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph \
+            --first-test TestPGInvitationEmailWorkerDirectClaimAndCompletionRollback \
+            --first-test TestPGPRPromotionWorkerDirectSharedAdmissionLeaseReplacementAndRecovery \
+            --first-test TestPGPendingProjectionWorkerMatchesDirectClassificationAcrossMutations \
+            --first-test TestPGWave40ProjectionWorkersCaptureRestartPublishAndQualifyWithoutService \
+            --first-test TestPGWave41NotificationFactoryDurableRetryRestartAndStableEventID \
+            --first-test TestPGWave41NotificationFactoryFencesStaleLeaseAndCurrentPolicy \
             --first-test TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
             --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
             --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \

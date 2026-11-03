@@ -142,15 +142,41 @@ func TestPGDocRangeWorkKeepsPermitWhileEventExceedsParkingBudget(test *testing.T
 		}
 		queuedReads++
 		waiting, resumeBeforeQueue = true, permit.resumeWait.Load()
+		waiter := &resourceWaiter{ready: make(chan struct{}), queued: time.Now()}
+		gate.mu.Lock()
+		gate.waiters[ResourceBulk] = append(gate.waiters[ResourceBulk], waiter)
+		gate.dispatch()
+		gate.mu.Unlock()
 		go func() {
-			page, err := fixture.service.ReadDocEvents(ctx, fixture.repo, fixture.hash, "", 0, 20)
-			if err == nil && (len(page.Events) != 20 || page.Hash != fixture.hash || page.Next != 20) {
-				err = errors.New("queued foreground read lost its pinned page")
+			select {
+			case <-waiter.ready:
+			case <-ctx.Done():
+			}
+			gate.mu.Lock()
+			granted := waiter.granted
+			if !granted {
+				gate.removeResourceWaiter(ResourceBulk, waiter)
+			}
+			gate.mu.Unlock()
+			err := ctx.Err()
+			var foregroundPermit *resourcePermit
+			if granted {
+				foregroundPermit = &resourcePermit{owner: gate, class: ResourceBulk, wait: waiter.wait}
+				foregroundPermit.live.Store(true)
+				read := context.WithValue(ctx, resourcePermitKey{}, foregroundPermit)
+				page, failure := fixture.service.ReadDocEvents(read, fixture.repo, fixture.hash, "", 0, 20)
+				err = failure
+				if err == nil && (len(page.Events) != 20 || page.Hash != fixture.hash || page.Next != 20) {
+					err = errors.New("queued foreground read lost its pinned page")
+				}
 			}
 			if err != nil {
 				readFailure.Store(&err)
 			}
 			readCompleted.Add(1)
+			if foregroundPermit != nil {
+				foregroundPermit.release()
+			}
 			foreground <- err
 		}()
 		waitResourceQueue(test, gate, ResourceBulk, 1)

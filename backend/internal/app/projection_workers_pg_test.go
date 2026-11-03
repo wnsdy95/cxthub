@@ -383,7 +383,7 @@ func TestPGWave40ProjectionWorkersCaptureRestartPublishAndQualifyWithoutService(
 	restarted := wave40NewPGWorkers(test, restartedStore, repo)
 	candidate := wave40PublishGraphPG(test, ctx, restarted, peer, repo)
 	gotGraph, err := domain.DecodeGraphViewProjection(ctx, repo, candidate.Parts)
-	if err != nil || !reflect.DeepEqual(gotGraph, wantGraph) || candidate.Dataset != dataset || candidate.Applied != pinned || candidate.Source != current || candidate.Ready {
+	if err != nil || !reflect.DeepEqual(graphWorkerViewUTCTimesPG(gotGraph), graphWorkerViewUTCTimesPG(wantGraph)) || candidate.Dataset != dataset || candidate.Applied != pinned || candidate.Source != current || candidate.Ready {
 		test.Fatal("restarted native graph changed captured content, source, or dataset identity", err, candidate)
 	}
 	if len(restartedStore.graphRequests) == 0 || restartedStore.graphRequests[0].Cursor != cursor || restartedStore.graphRequests[0].Limit != domain.DefaultRepositoryViewSourceLimit || restartedStore.graphRequests[0].After != nil {
@@ -403,7 +403,7 @@ func TestPGWave40ProjectionWorkersCaptureRestartPublishAndQualifyWithoutService(
 		}
 	}
 	gotPending, err := domain.DecodePendingProjection(ctx, repo, pending.Parts)
-	if err != nil || !pending.Ready || pending.Source != pending.Applied || pending.Dataset != pendingDataset || !reflect.DeepEqual(gotPending, wantPending) {
+	if err != nil || !pending.Ready || pending.Source != pending.Applied || pending.Dataset != pendingDataset || !reflect.DeepEqual(pendingWorkerViewUTCTimesPG(gotPending), pendingWorkerViewUTCTimesPG(wantPending)) {
 		test.Fatal("restarted native pending owner differs from independent direct classification", err, pending)
 	}
 	if _, err := peer.ReadGraphQualification(ctx, candidate.QualificationKey()); !errors.Is(err, domain.ErrNotFound) {
@@ -421,7 +421,7 @@ func TestPGWave40ProjectionWorkersCaptureRestartPublishAndQualifyWithoutService(
 		test.Fatal("qualified serving lost the exact completed prior-generation identity", err, served)
 	}
 	servedView, err := domain.DecodeGraphViewProjection(ctx, repo, served.Parts)
-	if err != nil || !reflect.DeepEqual(servedView, wantGraph) {
+	if err != nil || !reflect.DeepEqual(graphWorkerViewUTCTimesPG(servedView), graphWorkerViewUTCTimesPG(wantGraph)) {
 		test.Fatal("completion receipt covered different serving content", err)
 	}
 	after, err := peer.ReadRepositoryGraphSourceGeneration(ctx, repo)
