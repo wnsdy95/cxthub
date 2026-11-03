@@ -21,7 +21,7 @@ func NewRangeWorker(storage outbound.DocRangeJobStore, scope Scope) *RangeWorker
 
 func (worker *RangeWorker) RunJob(ctx context.Context, job domain.DocRangeIndexJob, lease time.Duration) error {
 	published := false
-	err := WithLease(ctx, lease, func(renew context.Context) error {
+	err := withRenewingLease(ctx, lease, func(renew context.Context) error {
 		return worker.storage.RenewDocRangeJob(renew, job, time.Now().UTC(), lease)
 	}, func(work context.Context) error {
 		err := worker.scope.WithinRepositoryRead(work, job.RepoID, func(context.Context) error {

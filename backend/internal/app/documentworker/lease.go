@@ -8,6 +8,12 @@ import (
 func WithLease(ctx context.Context, lease time.Duration, renew func(context.Context) error, run func(context.Context) error) error {
 	work, cancel := context.WithTimeout(ctx, WorkLimit)
 	defer cancel()
+	return withRenewingLease(work, lease, renew, run)
+}
+
+func withRenewingLease(ctx context.Context, lease time.Duration, renew func(context.Context) error, run func(context.Context) error) error {
+	work, cancel := context.WithCancel(ctx)
+	defer cancel()
 	done, renewed := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(renewed)
