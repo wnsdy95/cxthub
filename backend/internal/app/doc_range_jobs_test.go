@@ -148,12 +148,16 @@ func TestDocRangeWorkerFailureAndShutdown(t *testing.T) {
 	}
 }
 
-func TestDocRangeWorkerRenewsAndBoundsWork(t *testing.T) {
+func TestDocRangeWorkerRenewsUntilCompletionOrLeaseLoss(t *testing.T) {
 	for _, lost := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			renewals, finished := 0, 0
 			fake := &docRangeJobFake{
 				build: func(ctx context.Context, _ domain.DocRangeIndexJob) error {
+					if !lost {
+						time.Sleep(docJobWorkLimit + docJobLease)
+						return ctx.Err()
+					}
 					<-ctx.Done()
 					return fmt.Errorf("%w: event validation: %w", domain.ErrConversationManifest, ctx.Err())
 				},
@@ -177,11 +181,20 @@ func TestDocRangeWorkerRenewsAndBoundsWork(t *testing.T) {
 			}
 			service := NewService(preparationMetadata{}, fake, nil, nil, nil)
 			err := service.runDocRangeJob(context.Background(), fake, domain.DocRangeIndexJob{RepoID: h('1'), Attempts: 1}, docJobLease)
-			if err == nil || finished != 1 || renewals < 1 || (lost && renewals != 1) {
-				t.Fatal("unbounded or unrenewed work", err, finished, renewals)
+			wantFinished := 0
+			if lost {
+				wantFinished = 1
+				if !errors.Is(err, context.Canceled) || !errors.Is(err, domain.ErrConversationManifest) || renewals != 1 {
+					t.Fatal("lost lease did not interrupt work or preserve its errors", err, renewals)
+				}
+			} else if err != nil || renewals <= int(docJobWorkLimit/(docJobLease/3)) {
+				t.Fatal("healthy renewal did not outlive the old work limit", err, renewals)
+			}
+			if finished != wantFinished {
+				t.Fatal("completion or lease loss changed failure recording", finished, wantFinished)
 			}
 			fake.build = func(context.Context, domain.DocRangeIndexJob) error { return nil }
-			if err := service.runDocRangeJob(context.Background(), fake, domain.DocRangeIndexJob{RepoID: h('1'), Attempts: 2, Version: 2}, docJobLease); err != nil || finished != 1 {
+			if err := service.runDocRangeJob(context.Background(), fake, domain.DocRangeIndexJob{RepoID: h('1'), Attempts: 2, Version: 2}, docJobLease); err != nil || finished != wantFinished {
 				t.Fatal("interrupted document could not complete on retry", err, finished)
 			}
 		})

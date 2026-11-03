@@ -122,10 +122,10 @@ func TestRangeWave38ProcessKeepsAdmissionIdentityAndReadBoundary(test *testing.T
 			return job, nil
 		},
 		build: func(selected context.Context, got domain.DocRangeIndexJob) error {
-			deadline, bounded := selected.Deadline()
+			_, bounded := selected.Deadline()
 			if !admitted || reading || got != job || selected.Value(rangeWave38ContextKey("read")) != nil ||
 				selected.Value(rangeWave38ContextKey("request")) != "preserved" || selected.Value(rangeWave38ContextKey("worker")) != "identity" ||
-				selected.Value(rangeWave38ContextKey("admission")) != "owned" || !bounded || time.Until(deadline) <= 0 || time.Until(deadline) > WorkLimit {
+				selected.Value(rangeWave38ContextKey("admission")) != "owned" || bounded || selected.Err() != nil {
 				test.Fatal("build changed job, lifetime, or context boundary")
 			}
 			calls = append(calls, "build")
