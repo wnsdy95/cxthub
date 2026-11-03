@@ -49,6 +49,14 @@ separate five-second deadline that can interrupt cascading checkpoint cleanup.
 Fresh-process recovery is tested separately. None of the ordering, byte/hash,
 publication, fence or work/resource assertions is removed by this decision.
 
+Checkpoint serialization freezes the decoder. Tests distinguish those steps
+from semantic preparation: serialization must acknowledge a valid continuation
+without moving the decoder, and preparation must advance without restarting it.
+Checkpoint steps do not consume the semantic-step budget. The raw 8192-child
+fixture applies the existing checkpoint bound to each save, not a cumulative
+bound borrowed from a smaller document, and reports the total saves and steps.
+The per-step IO/memory limits and the outer preparation-progress bound remain.
+
 The test-runner watchdog is an infrastructure hang guard, not a conversion
 latency SLA. The full-conversion cases explicitly listed in CI use
 `--no-batch-timeout` with isolated single-test batches, relying on the enclosing
