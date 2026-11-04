@@ -3,12 +3,13 @@
 // and provides a branch dropdown + commit log (click to show context at that point in time).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Repo, Repository, Snapshot } from '../types';
-import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, useRepoView, useReflog } from '../hooks';
+import { useMemory, useMe, useFork, useSnapDiff, useSearch, useRepoView, useReflog } from '../hooks';
 import { navigate, repoPath } from '../route';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { atLeast, type Role } from '../roles';
 import { CommitGraph } from './CommitGraph';
+import { ReadGenerationBanner } from './ReadGenerationBanner';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { AIBar, AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK, modelColor, modelLogo } from './AIBar';
 import type { ViewMode } from './EventStream';
@@ -21,8 +22,9 @@ import { GitChanges } from './GitChanges';
 import { MemoryPanel } from './MemoryPanel';
 import { saveBlob } from '../zip';
 import { ArchivedSessionNotice, SessionArchiveActions } from './SessionArchive';
-import { DocEvents } from './DocEvents';
+import { DocEvents, DocumentReader, DocumentEvents } from './DocEvents';
 import { useT, Rich } from '../i18n';
+import { searchEventPosition } from '../documentSearch';
 
 // Participant AI points (overlap) — a reduced version of the GitHub participant avatar stack. Overlays snapshots models[] (if any)
 // on provider color circles. Continuous commit color changes soon indicate the "range of work done by which AI" intervals.
@@ -87,7 +89,7 @@ type ContextRepository = Pick<Repository, 'id' | 'owner_username' | 'slug' | 'vi
 export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: ContextRepository | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, retryGraph, pendings } =
+  const { refs, snapshots: allSnapshots, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, graphReadStatus, graphReadNotice, retryGraph, pendings } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -132,7 +134,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
     return new Map(Object.entries(graphState?.continuations ?? {}).flatMap(([id,session]) => bySession.has(session) ? [[id,bySession.get(session)!] as const] : []));
   }, [pendings,graphState]);
   const [snapId, setSnapId] = useState<string | null>(null);
-  const { viewerRef, openSnapshot, selectedEvent } = useContextSelection(repo.id, snapId, setSnapId);
+  const { viewerRef, openSnapshot, selectedEvent, selectedEventIndex, selectedTargetKey } = useContextSelection(repo.id, snapId, setSnapId);
   // Auto-selection is conservative: keep current selection if it exists in the full list (user click respected),
   // otherwise set to branch head. (Orphan commits selected in the graph are also kept).
   useEffect(() => {
@@ -174,10 +176,6 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   );
   const parent = useMemo(() => archiveSnapshots.find(s => s.id === selected?.parents?.[0]) ?? null, [archiveSnapshots, selected]);
   const [inheritedOpen, setInheritedOpen] = useState(false);
-  const docQ = useDocPages(repo.id, selected?.doc_hash ?? null, parent?.doc_hash, inheritedOpen ? 0 : -1, viewMode);
-  const page = docQ.data?.pages[0];
-  const doc = page ? { cir: { envelope: page.envelope, events: page.events } } : undefined;
-  const inheritedCount = page?.inherited ?? 0;
   const [memoryOpen, setMemoryOpen] = useState(false);
   useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); }, [selected?.id]);
   const memoryQ = useMemory(repo.id, selected?.memory_hash ?? null, memoryOpen);
@@ -203,9 +201,11 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
     return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure); };
   }, [branches.length > 0]);
 
-  if (branches.length === 0 && !selected && !archivedSessions.length && !graphLoading && !graphError && !graphRefreshError) {
+  const graphEmptyIsCurrent = graphReadStatus.showGraph && (graphReadStatus.state === 'legacy' || graphReadStatus.state === 'ready');
+  if (branches.length === 0 && !selected && !archivedSessions.length && graphReadStatus.showGraph && !graphLoading && !graphError && !graphRefreshError) {
     return <>
-      <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>
+      <ReadGenerationBanner {...graphReadNotice} />
+      {graphEmptyIsCurrent && <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>}
       <GitAssociations key={`git-associations:${repo.id}`} repoId={repo.id} />
     </>;
   }
@@ -221,7 +221,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
             </option>
           ))}
         </select>
-        <span className="ctx-count">{t('context.branchCommits', { branch: branch ?? '', count: snapshots.length })}</span>
+        {graphReadStatus.showGraph && <span className="ctx-count">{t('context.branchCommits', { branch: branch ?? '', count: snapshots.length })}</span>}
         <input
           className="ctx-search"
           value={q}
@@ -239,9 +239,13 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
             <>
               {(searchQ.data.hits ?? []).map((hit, i) => (
                 <button
-                  key={`${hit.snapshot_id}-${hit.kind}-${hit.seq ?? i}`}
+                  key={`${hit.snapshot_id}-${hit.kind}-${searchEventPosition(hit) ?? i}`}
                   className={`search-hit${hit.snapshot_id === snapId ? ' on' : ''}`}
-                  onClick={() => openSnapshot(hit.snapshot_id)}
+                  onClick={() => {
+                    const position = searchEventPosition(hit);
+                    if (position !== undefined) setViewMode('all');
+                    openSnapshot(hit.snapshot_id, undefined, position);
+                  }}
                 >
                   <span className={`hit-kind ${hit.kind}`}>{hit.kind === 'commit' ? t('context.hitCommit') : hit.role || t('context.hitConvo')}</span>
                   <code>{short(hit.snapshot_id)}</code>
@@ -345,30 +349,38 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
             {compactions.has(s.id) && <div className="compaction-divider">{t('context.compactionDivider')}</div>}
           </li>
         ))}
-        {snapshots.length === 0 && <li className="repository-empty">{t('context.noCommitsBranch')}</li>}
+        {snapshots.length === 0 && graphEmptyIsCurrent && <li className="repository-empty">{t('context.noCommitsBranch')}</li>}
       </ul>
 
-      {selected && (
-        <div
+      {selected && <DocumentReader repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} start={selectedEventIndex ?? (inheritedOpen ? 0 : -1)} mode={viewMode} targetIndex={selectedEventIndex} targetKey={selectedTargetKey}>
+      {reader => {
+        const page = reader.query.data?.pages[0];
+        const envelope = page?.header;
+        const inheritedCount = page?.inherited ?? 0;
+        return <div
           className="viewer"
           ref={viewerRef}
           style={{ ['--assistant-ink' as string]: PROVIDER_INK[selected.provider] ?? 'var(--text)' } as React.CSSProperties}
         >
           <ContextSelectionNotice event={selectedEvent} />
+          {selectedEventIndex !== undefined && <div className="context-selection-notice" role="status">
+            <span>{t('context.searchPosition')}</span>
+            <button onClick={() => openSnapshot(selected.id)}>{t('context.showFromStart')}</button>
+          </div>}
           <div className="viewer-head">
             <code>{short(selected.id)}</code> {selected.message}
             {selected.grafted && <span className="ref-badge seam">⎘ appended</span>}
-            {doc && directModel(doc.cir.envelope) && (
+            {envelope && directModel(envelope) && (
               <em>
                 {' '}
-                · {directModel(doc.cir.envelope)}
+                · {directModel(envelope)}
               </em>
             )}
-            {Boolean(doc?.cir.envelope.context_tokens) && (
+            {Boolean(envelope?.context_tokens) && (
               <em>
                 {' '}
-                · {t('context.contextTok', { n: tok(doc!.cir.envelope.context_tokens!) })}
-                {Boolean(doc!.cir.envelope.output_tokens) && <> · {t('context.outputTok', { n: tok(doc!.cir.envelope.output_tokens!) })}</>}
+                · {t('context.contextTok', { n: tok(envelope!.context_tokens!) })}
+                {Boolean(envelope!.output_tokens) && <> · {t('context.outputTok', { n: tok(envelope!.output_tokens!) })}</>}
               </em>
             )}
             {/* Download: stores received data as-is — raw CIR / compressed memory JSON */}
@@ -406,7 +418,10 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
                 aria-label={t('context.viewModeAria')}
                 title={t('context.promptOnlyTitle')}
                 value={viewMode}
-                onChange={(e) => setViewMode(e.target.value as ViewMode)}
+                onChange={(e) => {
+                  if (selectedEventIndex !== undefined) openSnapshot(selected.id);
+                  setViewMode(e.target.value as ViewMode);
+                }}
               >
                 <option value="all">{t('context.viewModeAll')}</option>
                 <option value="prompts">{t('common.promptOnly')}</option>
@@ -510,27 +525,31 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
           </MemoryPanel>}
-          {doc && inheritedCount > 0 && (
-            <button type="button" className="inherited-toggle" aria-expanded={inheritedOpen} onClick={() => setInheritedOpen(open => !open)}>
+          {page && inheritedCount > 0 && (
+            <button type="button" className="inherited-toggle" aria-expanded={inheritedOpen} onClick={() => {
+              if (selectedEventIndex !== undefined) openSnapshot(selected.id);
+              setInheritedOpen(open => !open);
+            }}>
               {inheritedOpen ? '▾' : '▸'} {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}
             </button>
           )}
           {!inheritedOpen && page && page.total > 0 && page.total === inheritedCount && <p className="empty-box">{t('context.allInherited')}</p>}
           {page?.total === 0 && <p className="empty-box">{t('context.noEvents')}</p>}
-          <DocEvents key={`main-${selected.id}-${inheritedOpen}`} repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} start={inheritedOpen ? 0 : -1} mode={viewMode}>
-            {doc && tailPending && <>
+          <DocumentEvents reader={reader}>
+            {page && tailPending && <>
               <div className="session-divider pending-divider">{t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}</div>
               <DocEvents key={tailPending.target} repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
             </>}
-          </DocEvents>
+          </DocumentEvents>
 
-        </div>
-      )}
+        </div>;
+      }}</DocumentReader>}
       </div>
 
       <aside className="ctx-side">
-        <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} archivedSessions={archivedSessions} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} graphRefreshError={graphRefreshError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
+        <ReadGenerationBanner {...graphReadNotice} />
+        {graphReadStatus.showGraph && <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>}
+        {(graphSnapshots.length > 0 || archivedSessions.length > 0 || graphEmptyIsCurrent || graphLoading || graphError) && <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} archivedSessions={archivedSessions} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} graphRefreshError={graphRefreshError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
           allSnapshots={archiveSnapshots} afterGraph={<AIBar snapshots={committedSnapshots} />}
           diagnostics={<>
             <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
@@ -540,7 +559,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
             <GitChanges key={`git-changes:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
             <ReflogPanel repoId={repo.id} />
           </>}
-        />
+        />}
       </aside>
     </div>
   );

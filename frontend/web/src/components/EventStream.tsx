@@ -1,218 +1,48 @@
-import { useState } from 'react';
 import type { CIREvent, DocViewEvent, DocViewMode } from '../types';
 import { useT } from '../i18n';
 import { Markdown } from './Markdown';
 import { useDocEvent, useDocEventFragment } from '../hooks';
 import { ApiError } from '../api';
 import { DOCUMENT_RAW_EVENT_BYTES, DocumentReadLimitError } from '../documentReads';
+import { DocumentDisclosure, DocumentEventIdentity, DocumentScrollText, useDocumentPresentation, useDocumentDisclosureState } from './DocumentPresentation';
+import { documentEventIsSummary, documentSeedPrefixes } from '../documentEventClassification';
 
-const CXT_SEED_PREFIXES = ['[cxt seed] Branch-switch context:', '[cxt] This session was resumed from a branch context seed.'];
+type DisplayEvent = DocViewEvent & { seed_summary?: boolean; empty_reasoning?: boolean };
 
-function isCompactSummaryEvent(ev: CIREvent): boolean {
-  if (ev.kind !== 'message') return false;
-  if (ev.compact_summary) return true;
-  const text = (ev.blocks ?? []).map((b) => b.text).join('\n').trimStart();
-  return CXT_SEED_PREFIXES.some((prefix) => text.startsWith(prefix));
-}
-
-// Prompt-only view hides assistant, tool, and reasoning events while retaining user prompts.
-// Clicking a prompt expands every AI event in that turn until the next prompt; clicking again
-// collapses it. Expansion state resets for each snapshot key.
-function isPrompt(ev: CIREvent): boolean {
-  // Distillation is for role=user only — not a human prompt — do not use as turn head.
-  return ev.kind === 'message' && ev.role === 'user' && !isCompactSummaryEvent(ev);
-}
-
-// chatGroups — group turn body into "hidden work (pre: tools·reasoning) + result message" units.
-// In prompt+response mode, append ▸ AI N (pre count) to response lines to expand response units.
-function chatGroups(body: { ev: CIREvent; idx: number }[]): { pre: { ev: CIREvent; idx: number }[]; msg: { ev: CIREvent; idx: number } | null }[] {
-  const out: { pre: { ev: CIREvent; idx: number }[]; msg: { ev: CIREvent; idx: number } | null }[] = [];
-  let pre: { ev: CIREvent; idx: number }[] = [];
-  for (const item of body) {
-    if (item.ev.kind === 'message') {
-      out.push({ pre, msg: item });
-      pre = [];
-    } else {
-      pre.push(item);
-    }
-  }
-  if (pre.length > 0) out.push({ pre, msg: null });
-  return out;
-}
-
-// Non-rendered events (encryption reasoning without summary — ReasoningRow returns null) are excluded from turn body — the number of rows shown when expanded should match the "AI N" count.
-function isRendered(ev: DocViewEvent): boolean {
-  return !(ev.kind === 'reasoning' && !ev.deferred && !(ev.redacted_summary ?? '').trim());
-}
-
-// View mode: all = all events / prompts = prompts only (fold turns) / chat = prompts+assistant messages only (hide tools·results·reasoning — read conversation flow only).
 export type ViewMode = DocViewMode;
 
-export function EventStream({ events, offset = 0, inherited = 0, mode, repoId = '', hash = '' }: {
-  events: DocViewEvent[]; offset?: number; inherited?: number; mode: ViewMode; repoId?: string; hash?: string;
+export function EventStream({ events, inherited = 0, repoId = '', hash = '' }: {
+  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string;
 }) {
-  const tr = useT();
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const row = (event: DocViewEvent, index: number, revealed = false) => (
-    <div key={index} data-event-index={index} className={index < inherited ? 'doc-inherited' : undefined}>
-      {event.deferred && event.kind !== 'compaction'
-        ? <DeferredEventRow event={event} index={index} repoId={repoId} hash={hash} revealed={revealed} />
-        : <EventRow ev={event} />}
-    </div>
-  );
-  if (mode === 'all') {
-    return (
-      <>
-        {events.map((ev, i) => (
-          row(ev, ev.event_index ?? offset + i)
-        ))}
-      </>
-    );
-  }
-
-  // Turn splitting: prompt as head, body up to next prompt. Events before the first prompt are grouped into a leading turn (headIdx=-1) with no head, shown as a collapsible row.
-  type Turn = { head: DocViewEvent | null; headIdx: number; body: { ev: DocViewEvent; idx: number }[] };
-  const turns: Turn[] = [];
-  let cur: Turn = { head: null, headIdx: offset - 1, body: [] };
-  events.forEach((ev, i) => {
-    const absolute = ev.event_index ?? offset + i;
-    if (isPrompt(ev)) {
-      turns.push(cur);
-      cur = { head: ev, headIdx: absolute, body: [] };
-    } else if (isRendered(ev)) {
-      cur.body.push({ ev, idx: absolute });
-    }
-  });
-  turns.push(cur);
-
-  const toggle = (k: string) =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
-      return next;
-    });
-
-  return (
-    <>
-      {turns.map((t) => {
-        if (!t.head && t.body.length === 0) return null; // Empty leading turn
-        const turnKey = `turn:${t.headIdx}`;
-        const opened = open.has(turnKey);
-        const body = t.body;
-        // chat mode: the entire conversation (prompt+response) is shown from the beginning (user confirmed) —
-        // only the hidden work (tools·reasoning) per response is collapsed. No turn-based collapsing.
-        return (
-          <div key={t.headIdx} className={`turn${opened ? ' open' : ''}`}>
-            {t.head ? (
-              mode === 'chat' ? (
-                row(t.head, t.headIdx)
-              ) : (
-                <div
-                  className={`turn-head${body.length > 0 ? ' has-more' : ''}`}
-                  onClick={body.length > 0 ? () => toggle(turnKey) : undefined}
-                  role={body.length > 0 ? 'button' : undefined}
-                  tabIndex={body.length > 0 ? 0 : undefined}
-                  aria-expanded={body.length > 0 ? opened : undefined}
-                  onKeyDown={event => {
-                    if (event.target === event.currentTarget && body.length && ['Enter', ' '].includes(event.key)) {
-                      event.preventDefault(); toggle(turnKey);
-                    }
-                  }}
-                  title={body.length > 0 ? `${tr('context.aiEvents', { count: body.length })} ${opened ? tr('common.collapse') : tr('common.expand')}` : undefined}
-                >
-                  {row(t.head, t.headIdx)}
-                  {body.length > 0 && (
-                    <span className="turn-count">
-                      {opened ? '▾' : '▸'} AI {body.length}
-                    </span>
-                  )}
-                </div>
-              )
-            ) : mode === 'chat' ? null : (
-              <button className="turn-lead" aria-expanded={opened} onClick={() => toggle(turnKey)}>
-                {opened ? '▾' : '▸'} {tr('context.leadingEvents', { count: body.length })}
-              </button>
-            )}
-            {(mode === 'chat' || opened) &&
-              (mode === 'chat'
-                ? // chat: collapses the hidden work (tools·reasoning) that made each response into ▸ AI N.
-                  chatGroups(t.body).map((g) => {
-                    const key = `work:${g.pre[0]?.idx ?? g.msg!.idx}`;
-                    const subOpened = open.has(key);
-                    return (
-                      <div key={`g${key}`}>
-                        {/* time-based rendering (user confirmed): work (tools·reasoning) appears before the response
-                            so the expanded content is above the response — same reading order as in full mode.
-                            vertical guide (│) + indentation to show that the following response is part of the same group.
-                            For interrupted or ongoing tail work with no answer, keep the anchor above
-                            and do not imply a conclusion that does not exist. */}
-                        {subOpened && g.msg && (
-                          <div key="work" className="asst-work">
-                            {g.pre.map(({ ev, idx }) => (
-                              row(ev, idx)
-                            ))}
-                          </div>
-                        )}
-                        {g.msg ? (
-                          <div
-                            className={`turn-head${g.pre.length > 0 ? ' has-more' : ''}`}
-                            onClick={g.pre.length > 0 ? () => toggle(key) : undefined}
-                            role={g.pre.length > 0 ? 'button' : undefined}
-                            tabIndex={g.pre.length > 0 ? 0 : undefined}
-                            aria-expanded={g.pre.length > 0 ? subOpened : undefined}
-                            onKeyDown={event => {
-                              if (event.target === event.currentTarget && g.pre.length && ['Enter', ' '].includes(event.key)) {
-                                event.preventDefault(); toggle(key);
-                              }
-                            }}
-                            title={g.pre.length > 0 ? `${tr('context.aiEvents', { count: g.pre.length })} ${subOpened ? tr('common.collapse') : tr('common.expand')}` : undefined}
-                          >
-                            {row(g.msg.ev, g.msg.idx)}
-                            {g.pre.length > 0 && (
-                              <span className="turn-count">
-                                {subOpened ? '▾' : '▸'} AI {g.pre.length}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          g.pre.length > 0 && (
-                            <button className="turn-lead" aria-expanded={subOpened} onClick={() => toggle(key)}>
-                              {subOpened ? '▾' : '▸'} AI {g.pre.length}
-                            </button>
-                          )
-                        )}
-                        {subOpened && !g.msg && (
-                          <div key="work" className="asst-work">
-                            {g.pre.map(({ ev, idx }) => (
-                              row(ev, idx)
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                : body.map(({ ev, idx }) => row(ev, idx, true)))}
-          </div>
-        );
-      })}
-    </>
-  );
+  return events.map(event => <DocumentEventRow key={event.event_index} event={event} index={event.event_index!}
+    inherited={inherited} repoId={repoId} hash={hash} />);
 }
 
-type DeferredEventProps = { event: DocViewEvent; repoId: string; hash: string; index: number };
+type DeferredEventProps = { event: DisplayEvent; repoId: string; hash: string; index: number };
+
+export function DocumentEventRow({ event, index, inherited, repoId, hash, revealed = false, targeted = false, navigationTarget = targeted }: {
+  event: DisplayEvent; index: number; inherited: number; repoId: string; hash: string; revealed?: boolean; targeted?: boolean; navigationTarget?: boolean;
+}) {
+  if (event.empty_reasoning) return null;
+  return <DocumentEventIdentity index={index} targeted={targeted}><div data-event-index={index} data-document-target={navigationTarget ? index : undefined} className={index < inherited ? 'doc-inherited' : undefined}>
+    {event.deferred && event.kind !== 'compaction'
+      ? <DeferredEventRow event={event} index={index} repoId={repoId} hash={hash} revealed={revealed} />
+      : <EventRow ev={event} />}
+  </div></DocumentEventIdentity>;
+}
 
 function DeferredEventRow({ event, repoId, hash, index, revealed }: DeferredEventProps & { revealed: boolean }) {
   const translate = useT();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useDocumentDisclosureState('deferred');
   if (revealed && event.kind === 'message' && !event.compact_summary) {
     return <DeferredEventContent event={event} repoId={repoId} hash={hash} index={index} />;
   }
-  const label = event.provider_tool_name || event.tool_name || event.role || event.kind;
+  const label = event.seed_summary ? translate('context.cxtSeedSummary') : event.compact_summary ? translate('context.compactSummary')
+    : event.provider_tool_name || event.tool_name || event.role || event.kind;
   return <div className={`msg ${event.role ?? 'tool'}`}>
     <span className="msg-role">{event.role ?? event.kind}</span>
     <div className="msg-body">
-      <details className="tool-more" data-deferred-event={index} onClick={click => click.stopPropagation()}
+      <details open={expanded} className="tool-more" data-deferred-event={index} onClick={click => click.stopPropagation()}
         onToggle={toggle => setExpanded(toggle.currentTarget.open)}>
         <summary>{translate('common.expand')} — {label}{event.event_bytes ? ` (${event.event_bytes.toLocaleString()} B)` : ''}</summary>
         {expanded && <DeferredEventContent event={event} repoId={repoId} hash={hash} index={index} />}
@@ -234,19 +64,20 @@ function RawEventContent(props: DeferredEventProps) {
     return <FragmentEventContent {...props} />;
   }
   if (query.isError) return <div role="alert" className="err">{query.error.message} <button onClick={() => void query.refetch()}>{translate('context.retryRead')}</button></div>;
-  return query.data ? <EventRow ev={query.data} /> : <span role="status">{translate('context.loadingEvents')}</span>;
+  return query.data ? <EventRow ev={{ ...query.data, seed_summary: props.event.seed_summary, empty_reasoning: props.event.empty_reasoning }} />
+    : <span role="status">{translate('context.loadingEvents')}</span>;
 }
 
 function FragmentEventContent({ repoId, hash, index }: DeferredEventProps) {
   const translate = useT();
-  const [navigation, setNavigation] = useState({ offsets: [0], position: 0 });
+  const [navigation, setNavigation] = useDocumentPresentation('fragment', { offsets: [0], position: 0 });
   const offset = navigation.offsets[navigation.position];
   const query = useDocEventFragment(repoId, hash, index, offset);
   const fragment = query.data;
   return <div className="event-fragment" data-fragment-offset={offset}>
     {fragment && <>
       <p role="status">{translate('context.eventFragment', { start: fragment.byte_offset, end: fragment.next < 0 ? fragment.total_bytes : fragment.next, total: fragment.total_bytes })}</p>
-      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '60vh', overflow: 'auto' }}>{fragment.json_fragment}</pre>
+      <DocumentScrollText name={`fragment-scroll:${offset}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '60vh', overflow: 'auto' }}>{fragment.json_fragment}</DocumentScrollText>
     </>}
     {query.isFetching && <span role="status">{translate('context.loadingEvents')}</span>}
     {query.isError && <div role="alert" className="err">{query.error.message} <button onClick={() => void query.refetch()}>{translate('context.retryRead')}</button></div>}
@@ -260,13 +91,13 @@ function FragmentEventContent({ repoId, hash, index }: DeferredEventProps) {
 // Event line: role label + block (text is body), tool_call is tool-specific details
 // (Edit=diff, Write=file content, Bash=command), tool_result/reasoning is collapsible.
 // In CIR, the original tool input/output is preserved, so rendering is handled (truncation is for display — data is complete).
-function EventRow({ ev }: { ev: CIREvent }) {
+function EventRow({ ev }: { ev: DisplayEvent }) {
   const t = useT();
   if (ev.kind === 'tool_call') return <ToolCallRow ev={ev} />;
   if (ev.kind === 'tool_result') return <ToolResultRow ev={ev} />;
   if (ev.kind === 'reasoning') return <ReasoningRow ev={ev} />;
   if (ev.kind === 'compaction') return <div className="compaction-divider">{t('context.compactionDivider')}</div>;
-  if (isCompactSummaryEvent(ev)) return <CompactSummaryRow ev={ev} />;
+  if (documentEventIsSummary(ev)) return <CompactSummaryRow ev={ev} />;
   if (ev.kind !== 'message' || !ev.blocks?.length) {
     return <div className="msg meta">[{ev.kind}]</div>;
   }
@@ -353,10 +184,10 @@ function ToolCallRow({ ev }: { ev: CIREvent }) {
     body = <pre className="tool-cmd">$ {str(input.command)}</pre>;
   } else if (Object.keys(input).length > 0) {
     body = (
-      <details className="tool-more">
+      <DocumentDisclosure name="input" className="tool-more">
         <summary>{t('context.viewInput')}</summary>
         <pre>{JSON.stringify(input, null, 2).slice(0, 4000)}</pre>
-      </details>
+      </DocumentDisclosure>
     );
   }
 
@@ -383,13 +214,13 @@ function ToolResultRow({ ev }: { ev: CIREvent }) {
     <div className="msg tool">
       <span className="msg-role" />
       <div className="msg-body">
-        <details className="tool-more">
+        <DocumentDisclosure name="result" className="tool-more">
           <summary>
             ↳ <code>{firstLine}</code>
             {out.length > firstLine.length && ' …'}
           </summary>
           <pre>{out.slice(0, 8000)}</pre>
-        </details>
+        </DocumentDisclosure>
       </div>
     </div>
   );
@@ -404,11 +235,11 @@ function ReasoningRow({ ev }: { ev: CIREvent }) {
     <div className="msg meta">
       <span className="msg-role" />
       <div className="msg-body">
-        <details className="tool-more reasoning">
+        <DocumentDisclosure name="reasoning" className="tool-more reasoning">
           <summary>reasoning — {summary.split('\n')[0].slice(0, 80)}…</summary>
           {/* Reasoning summary also markdown text — rendered like chat body */}
           <Markdown text={mdSlice(summary, 8000)} />
-        </details>
+        </DocumentDisclosure>
       </div>
     </div>
   );
@@ -416,20 +247,20 @@ function ReasoningRow({ ev }: { ev: CIREvent }) {
 
 // CompactSummaryRow — Summary generated by agent context compression. It can resemble a long user message, so a collapsible block distinguishes it (audit finding #13).
 // cxt-synthesized seed digests carry the same CompactSummary marking but are not agent-written — they get their own label (#38).
-function CompactSummaryRow({ ev }: { ev: CIREvent }) {
+function CompactSummaryRow({ ev }: { ev: DisplayEvent }) {
   const t = useT();
   const text = (ev.blocks ?? []).map((b) => b.text).join('\n');
-  const isSeed = CXT_SEED_PREFIXES.some((p) => text.trimStart().startsWith(p));
+  const isSeed = ev.seed_summary ?? documentSeedPrefixes.some(prefix => text.trimStart().startsWith(prefix));
   return (
     <div className="msg meta compact-summary">
       <span className="msg-role" />
       <div className="msg-body">
-        <details className="tool-more">
+        <DocumentDisclosure name="summary" className="tool-more">
           <summary>
             ◈ {t(isSeed ? 'context.cxtSeedSummary' : 'context.compactSummary')} — <code>{text.slice(0, 72)}…</code>
           </summary>
           <Markdown text={mdSlice(text, 16000)} />
-        </details>
+        </DocumentDisclosure>
       </div>
     </div>
   );

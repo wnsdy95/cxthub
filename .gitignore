@@ -122,6 +122,11 @@ Thumbs.db
 !/docs/BRANCHING.md
 !/docs/CLI.md
 !/docs/COMPLETION_PLAN.md
+!/docs/LEGACY_NORMALIZATION_ACCEPTANCE.md
+!/docs/INCREMENTAL_READ_PUBLICATION_PLAN.md
+!/docs/INCREMENTAL_READ_PUBLICATION_DESIGN.md
+!/docs/PROJECTION_MUTATION_AUDIT.md
+!/docs/REPOSITORY_VIEW_SOURCE.md
 !/docs/AUTOMATIC_CONTEXT_LINKING.md
 !/docs/ENTERPRISE_IDENTITY.md
 !/docs/CONTEXT_HISTORY.md
@@ -129,6 +134,7 @@ Thumbs.db
 !/docs/CONVERSATION_MEMORY_STORAGE.md
 !/docs/CONVERSATION_IDENTITY.md
 !/docs/DOCUMENT_RANGE_READS.md
+!/docs/BOUNDED_EVENT_RESTART.md
 !/docs/CATALOG_SYNC.md
 !/docs/NATIVE_HOST_TRANSPORT.md
 !/docs/PERSONAL_WORK.md
@@ -141,6 +147,7 @@ Thumbs.db
 !/docs/RELEASING.md
 !/docs/REPOSITORY_ORGANIZATIONS.md
 !/docs/REPOSITORY_DISTRIBUTION.md
+!/docs/DATABASE_MIGRATIONS.md
 
 # Local operator setup guide; do not include in the public repository.
 /docs/GITHUB_CONNECTIONS_SETUP.md
@@ -261,3 +268,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Local execution ledgers are not public product documentation.
+/docs/INCREMENTAL_READ_PUBLICATION_DESIGN.md
+/docs/INCREMENTAL_READ_PUBLICATION_PLAN.md
+/docs/references/ci-review-2026-10-24/

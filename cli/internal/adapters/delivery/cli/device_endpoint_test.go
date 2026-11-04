@@ -77,7 +77,7 @@ func TestEndpointDeviceLoginSeparatesFrontendFromAPI(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 	})}
 	output, err := captureContractStdout(t, func() error {
-		return deviceLogin(context.Background(), "https://api.example.test/api/v1", "api.example.test")
+		return testDeviceLoginContainer().deviceLogin(context.Background(), "https://api.example.test/api/v1", "api.example.test")
 	})
 	if err != nil {
 		t.Fatal(err)

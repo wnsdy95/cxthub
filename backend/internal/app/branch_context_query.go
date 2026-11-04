@@ -2,357 +2,46 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"errors"
-	"fmt"
-	"sort"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/contextprojection"
+	"github.com/wnsdy95/cxthub/backend/internal/app/repositoryquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// branchCode selects only exact associations with this context and identity.
-// A shared content hash may have different source and merged code associations;
-// branch identity disambiguates them without guessing from wall-clock order.
 func branchCode(ref domain.Ref, history []domain.HistoryEvent) string {
-	codes := branchCodeCandidates(ref, history)
-	if len(codes) == 1 {
-		for code := range codes {
-			return code
-		}
-	}
-	return ""
+	return contextprojection.BranchCode(ref, history)
 }
 
 func branchCodeCandidates(ref domain.Ref, history []domain.HistoryEvent) map[string]bool {
-	codes := map[string]bool{}
-	mergedSources := map[string]bool{}
-	for _, h := range history {
-		if h.BranchID != ref.BranchID || h.Target != ref.Target {
-			continue
-		}
-		code := ""
-		switch h.Kind {
-		case "publish":
-			if h.Source == h.Target {
-				code = h.GitAfter
-			}
-		case "position", "advance", "birth", "attach":
-			code = h.GitAfter
-		case "pr-merge":
-			if h.PRCompleted && h.PR != nil {
-				code = h.PR.MergeSHA
-				// Tracking aliases share the destination identity. Their exact
-				// source publication still names the pre-squash Git head. A
-				// completed receipt proves that this same context was integrated
-				// at MergeSHA, so HeadSHA is not a competing destination position.
-				// Unrelated positions and competing merges remain ambiguous.
-				if h.Source == ref.Target && h.PR.HeadSHA != code && domain.ValidateGitOID(code) == nil {
-					mergedSources[h.PR.HeadSHA] = true
-				}
-			}
-		}
-		if domain.ValidateGitOID(code) == nil {
-			codes[code] = true
-		}
-	}
-	for code := range mergedSources {
-		delete(codes, code)
-	}
-	return codes
+	return contextprojection.BranchCodeCandidates(ref, history)
 }
 
-// A completed append moves the context pointer, but its arrival time does not
-// select a Git revision. Follow only the recorded pre-append selections, then
-// choose a revision proven to contain every candidate. Explicit code requests
-// bypass this resolver. Ordinary conflicting observations remain ambiguous.
 func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.HistoryEvent, evidence *codeEvidence) (string, error) {
-	index, err := newBranchHistoryIndex(ctx, ref.RepoID, history)
-	if err != nil {
-		return "", err
-	}
-	return resolvedBranchCodeFromIndex(ctx, ref, index, evidence)
+	return contextprojection.ResolveBranchCode(ctx, ref, history, branchPolicyEvidence(evidence))
 }
 
 func resolvedBranchCodeFromIndex(ctx context.Context, ref domain.Ref, index *branchHistoryIndex, evidence *codeEvidence) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if index.repo != ref.RepoID {
-		return "", domain.ErrIntegrity
-	}
-	if evidence == nil {
-		return branchCode(ref, index.targetEvents(ref.BranchID, ref.Target)), nil
-	}
-	// Keep each code association tied to its exact context. A squash receipt
-	// for one source must not normalize an unrelated worker's same-code record.
-	associations := map[domain.ContentHash]map[string]bool{}
-	causalCompletions := map[string]bool{}
-	visited, active := map[domain.ContentHash]bool{}, map[domain.ContentHash]bool{}
-	var collect func(domain.ContentHash) error
-	collect = func(target domain.ContentHash) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if active[target] {
-			return errAmbiguousBranchCode
-		}
-		if visited[target] {
-			return nil
-		}
-		if len(visited) >= maxCodeEvidenceReads {
-			return errAmbiguousBranchCode
-		}
-		visited[target], active[target] = true, true
-		defer delete(active, target)
-		r := ref
-		r.Target = target
-		rows := index.targetEvents(ref.BranchID, target)
-		codes := branchCodeCandidates(r, rows)
-		merges := map[string]bool{}
-		for _, h := range rows {
-			if h.Kind == "pr-merge" && h.PRCompleted && h.PR != nil && domain.ValidateGitOID(h.PR.MergeSHA) == nil {
-				merges[h.PR.MergeSHA] = true
-				causalCompletions[h.ID] = true
-			}
-		}
-		associations[target] = codes
-		if len(merges) == 0 {
-			if target == ref.Target && len(codes) > 1 {
-				return errAmbiguousBranchCode
-			}
-			return nil
-		}
-		for _, h := range rows {
-			if h.Kind == "pr-merge" && h.PRCompleted && h.PR != nil && h.SharedTarget != "" && h.SharedTarget != target {
-				if err := collect(h.SharedTarget); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := collect(ref.Target); err != nil {
-		if errors.Is(err, errAmbiguousBranchCode) {
-			return "", nil
-		}
-		return "", err
-	}
-	// An already-contained promotion can leave its destination ref unchanged,
-	// so its completion target differs from the source carrying HeadSHA. Only
-	// exact receipt/completion pairs encountered in this causal selection can
-	// account for that source SHA. An unrelated/future receipt cannot advance a
-	// historical selection; unrelated observations still participate below.
-	for _, position := range index.receipts[ref.BranchID] {
-		receipt := index.rows[position]
-		if receipt.PR.HeadSHA == receipt.PR.MergeSHA {
-			continue
-		}
-		key := sha256.Sum256([]byte(receipt.ID + ":completed"))
-		if !causalCompletions[fmt.Sprintf("%x", key[:16])] || !associations[receipt.Source][receipt.PR.HeadSHA] {
-			continue
-		}
-		_, complete, err := index.completion(receipt)
-		if err != nil {
-			return "", err
-		}
-		if complete {
-			delete(associations[receipt.Source], receipt.PR.HeadSHA)
-			// MergeSHA already participates at this causal completion's target.
-			// Do not create new source associations while iterating receipts.
-		}
-	}
-	candidates := map[string]bool{}
-	for _, codes := range associations {
-		for code := range codes {
-			candidates[code] = true
-		}
-	}
-	codes := make([]string, 0, len(candidates))
-	for c := range candidates {
-		codes = append(codes, c)
-	}
-	sort.Strings(codes)
-	if len(codes) == 0 {
-		return "", nil
-	}
-	selected := codes[0]
-	var ordinary []domain.HistoryEvent
-	for _, h := range index.targetEvents(ref.BranchID, ref.Target) {
-		if h.Kind != "pr-merge" {
-			ordinary = append(ordinary, h)
-		}
-	}
-	ordinaryCodes := branchCodeCandidates(ref, ordinary)
-	for code := range ordinaryCodes {
-		if !associations[ref.Target][code] {
-			delete(ordinaryCodes, code)
-		}
-	}
-	if len(ordinaryCodes) > 1 {
-		return "", nil
-	}
-	if len(ordinaryCodes) == 1 {
-		for code := range ordinaryCodes {
-			selected = code
-		}
-	} else {
-		for _, c := range codes[1:] {
-			relation, err := evidence.relation(ctx, selected, c)
-			if err != nil {
-				return "", err
-			}
-			if relation == "ancestor" {
-				selected = c
-			}
-		}
-	}
-	for _, c := range codes {
-		relation, err := evidence.relation(ctx, c, selected)
-		if err != nil {
-			return "", err
-		}
-		if relation != "ancestor" {
-			return "", nil
-		}
-	}
-	return selected, nil
+	return contextprojection.ResolveBranchCodeFromIndex(ctx, ref, index, branchPolicyEvidence(evidence))
 }
-
-var errAmbiguousBranchCode = errors.New("ambiguous ordinary branch code observations")
 
 func (s *Service) QueryBranchMemory(ctx context.Context, repo domain.ContentHash, branch string, snapshot domain.ContentHash, code string) (domain.MemoryProjection, error) {
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateContentHash(snapshot) != nil || domain.ValidateBranchName(branch) != nil || (code != "" && domain.ValidateGitOID(code) != nil) {
 		return domain.MemoryProjection{}, domain.ErrValidation
 	}
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.MemoryProjection, error) {
-		return s.queryBranchMemory(ctx, repo, branch, snapshot, code)
-	})
-}
-func (s *Service) queryBranchMemory(ctx context.Context, repo domain.ContentHash, branch string, snapshot domain.ContentHash, code string) (domain.MemoryProjection, error) {
-	ref, err := s.meta.GetRef(ctx, repo, domain.RefBranch, branch)
+	queries, err := s.LiveMemoryQueries()
 	if err != nil {
 		return domain.MemoryProjection{}, err
 	}
-	history, err := s.ListHistory(ctx, repo)
-	if err != nil {
-		return domain.MemoryProjection{}, err
-	}
-	if ref.BranchID == "" {
-		bindings, err := domain.ProjectContextBranches(history)
-		if err != nil {
-			return domain.MemoryProjection{}, err
-		}
-		ref.BranchID = bindings.Identity(string(repo), branch)
-	}
-	ref.Target = snapshot
-	snaps, err := s.meta.ListSnapshots(ctx, repo, "")
-	if err != nil {
-		return domain.MemoryProjection{}, err
-	}
-	inputs, err := newBranchQueryInputs(ctx, repo, snaps, history)
-	if err != nil {
-		return domain.MemoryProjection{}, err
-	}
-	evidence, err := s.newCodeEvidence(ctx, repo)
-	if err != nil {
-		return domain.MemoryProjection{}, err
-	}
-	if code == "" {
-		code, err = resolvedBranchCodeFromIndex(ctx, ref, inputs.history, evidence)
-		if err != nil {
-			return domain.MemoryProjection{}, err
-		}
-	}
-	inclusion, err := s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
-	if err != nil {
-		return domain.MemoryProjection{}, err
-	}
-	contributions, err := s.contextContributionsForEvidence(ctx, repo, history, evidence)
-	if err != nil {
-		return domain.MemoryProjection{}, err
-	}
-	return s.projectBranchMemoryWithContributions(ctx, repo, inclusion, snaps, contributions)
+	return queries.QueryBranchMemory(ctx, repo, branch, snapshot, code)
 }
 
-// Both full and pending views use this same projection. No adapter enriches a
-// graph independently; one MVCC generation owns code, receipts and contexts.
-func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView, position string) (domain.GraphState, error) {
-	graph, err := domain.ProjectGraphState(v, v.DefaultBranch, position)
-	if err != nil {
-		return graph, err
-	}
-	graph.BranchContexts = map[string]domain.BranchContext{}
-	graph.Integrations = []domain.GraphIntegration{}
-	// An explicit worktree position retains its existing historical scope.
+func (service *Service) projectGraphState(ctx context.Context, view domain.RepositoryView, position string) (domain.GraphState, error) {
 	if position != "" {
-		return graph, nil
+		return repositoryquery.ProjectGraphPosition(view, position)
 	}
-	var repo domain.ContentHash
-	for _, r := range v.Refs {
-		if r.Kind == domain.RefBranch {
-			repo = r.RepoID
-			break
-		}
-	}
-	if repo == "" {
-		return graph, nil
-	}
-	evidence, err := s.newCodeEvidence(ctx, repo)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return graph, err
-	}
-	contributions, err := s.contextContributionsForEvidence(ctx, repo, v.History, evidence)
+	projection, err := service.legacyGraphProjection()
 	if err != nil {
-		return graph, err
+		return domain.GraphState{}, err
 	}
-	// Only committed graph/evidence generations can reuse derived branch facts.
-	// Pending captures still rebuild their current display projection below.
-	key := branchProjectionKey{repo: repo, graph: v.Revision.Graph, evidence: v.Revision.Evidence}
-	if evidence != nil {
-		key.origin = evidence.origin
-	}
-	_, insideWrite := ctx.Value(afterCommitKey{}).(*afterCommitActions)
-	cacheable := v.Revision.Graph > 0 && !insideWrite
-	if cacheable {
-		if cached, ok := s.branchCache.get(key); ok {
-			graph.BranchContexts = cached
-			for branch, c := range cached {
-				graph.BranchSnapshots[branch] = append([]domain.ContentHash{}, c.SnapshotIDs...)
-			}
-			appendContributionOperations(&graph, contributions)
-			domain.ApplyGraphIntegrations(&graph, v.Snapshots)
-			return graph, nil
-		}
-	}
-	inputs, err := newBranchQueryInputs(ctx, repo, v.Snapshots, v.History)
-	if err != nil {
-		return graph, err
-	}
-	for _, ref := range v.Refs {
-		if ref.Kind != domain.RefBranch || ref.Target == "" {
-			continue
-		}
-		if ref.BranchID == "" {
-			ref.BranchID = graph.RefScopes[ref.Name]
-		}
-		code, err := resolvedBranchCodeFromIndex(ctx, ref, inputs.history, evidence)
-		if err != nil {
-			return graph, err
-		}
-		if evidence == nil {
-			code = ""
-		} // legacy metadata without a bound Git origin
-		inclusion, err := s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
-		if err != nil {
-			return graph, err
-		}
-		graph.BranchSnapshots[ref.Name] = inclusion.SnapshotIDs
-		graph.BranchContexts[ref.Name] = inclusion
-	}
-	if cacheable {
-		s.branchCache.put(key, graph.BranchContexts)
-	}
-	appendContributionOperations(&graph, contributions)
-	domain.ApplyGraphIntegrations(&graph, v.Snapshots)
-	return graph, nil
+	return projection.Project(ctx, view, position)
 }

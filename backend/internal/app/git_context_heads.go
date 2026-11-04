@@ -9,9 +9,9 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (g *GitScans) freezeGitHeadContext(ctx context.Context, claim domain.GitHeadScan, identity *domain.GitProviderObservation, batch *frozenGitAdmissionBatch) (*gitAdmissionSnapshot, error) {
-	_, supported := g.core.meta.(outbound.GitContextHeadStore)
-	_, atomic := g.core.meta.(outbound.RepositoryTransactions)
+func (workers *GitIntegrationWorkers) freezeGitHeadContext(ctx context.Context, claim domain.GitHeadScan, identity *domain.GitProviderObservation, batch *frozenGitAdmissionBatch) (*gitAdmissionSnapshot, error) {
+	_, supported := workers.work.meta.(outbound.GitContextHeadStore)
+	_, atomic := workers.work.meta.(outbound.RepositoryTransactions)
 	if !supported || !atomic || identity == nil {
 		return nil, nil
 	}
@@ -21,8 +21,8 @@ func (g *GitScans) freezeGitHeadContext(ctx context.Context, claim domain.GitHea
 	if batch != nil && batch.snapshot != nil {
 		return batch.snapshot, nil
 	}
-	return repositoryReadForRepo(ctx, g.core, claim.RepoID, func(read context.Context) (*gitAdmissionSnapshot, error) {
-		return g.core.readGitAdmissionEvidence(read, claim.RepoID, nil)
+	return repositoryReadForRepoWithWork(ctx, workers.work, claim.RepoID, func(read context.Context) (*gitAdmissionSnapshot, error) {
+		return workers.readGitAdmissionEvidence(read, claim.RepoID, nil)
 	})
 }
 
@@ -58,7 +58,7 @@ func prepareGitContextHeads(snapshot *gitAdmissionSnapshot, receipt *domain.GitH
 	return heads, nil
 }
 
-func (g *GitScans) persistGitContextHeads(ctx context.Context, receipt *domain.GitHeadReceipt, heads []domain.GitContextHead, current *gitAdmissionSnapshot) error {
+func (workers *GitIntegrationWorkers) persistGitContextHeads(ctx context.Context, receipt *domain.GitHeadReceipt, heads []domain.GitContextHead, current *gitAdmissionSnapshot) error {
 	if len(heads) == 0 {
 		return nil
 	}
@@ -85,5 +85,5 @@ func (g *GitScans) persistGitContextHeads(ctx context.Context, receipt *domain.G
 	if len(accepted) == 0 {
 		return nil
 	}
-	return g.core.meta.(outbound.GitContextHeadStore).PutGitContextHeads(ctx, *receipt, accepted)
+	return workers.work.meta.(outbound.GitContextHeadStore).PutGitContextHeads(ctx, *receipt, accepted)
 }

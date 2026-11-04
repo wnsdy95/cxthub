@@ -24,6 +24,10 @@ type RepositoryTransactionState interface {
 	InReadOnlyTransaction(context.Context) bool
 }
 
+type RepositoryTransactionPresence interface {
+	InTransaction(context.Context) bool
+}
+
 // PRJobFence holds the current job row until the repository transaction ends.
 // A stale/expired worker must fail before changing any context state.
 type PRJobFence interface {

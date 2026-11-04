@@ -1,0 +1,13 @@
+FROM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS build
+WORKDIR /src
+COPY backend/ backend/
+RUN cd backend && CGO_ENABLED=0 go build -tags postgres -o /out/cxt-admin ./cmd/cxt-admin
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
+WORKDIR /app
+COPY --from=build /out/cxt-admin /app/cxt-admin
+COPY --from=build /src/backend/internal/domain/legacy_native_float64/ /usr/share/doc/cxthub/legacy-native-float64/
+COPY schemas/db/migrations/ /app/migrations/
+ENV CXT_MIGRATIONS_DIR=/app/migrations
+USER nonroot:nonroot
+ENTRYPOINT ["/app/cxt-admin", "migrate"]

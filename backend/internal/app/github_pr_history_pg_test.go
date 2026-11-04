@@ -187,4 +187,5 @@ func TestPGGitHubPRHistoryPageAtomicityAndStaleReader(t *testing.T) {
 	if err != nil || main.Target != base {
 		t.Fatalf("reconciliation moved main: %+v, %v", main, err)
 	}
+	assertCapturedGraphParityPG(t, core, storage, repo.ID, nil)
 }

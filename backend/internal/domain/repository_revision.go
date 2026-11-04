@@ -8,6 +8,7 @@ type RepositoryRevision struct {
 	Pending  uint64 `json:"pending,string"`
 }
 type PendingView struct {
+	ReadGeneration   *GraphReadGeneration `json:"read_generation,omitempty"`
 	ArchivedSessions []SessionArchiveView `json:"archived_sessions"`
 	Graph            *GraphState          `json:"graph"`
 	Revision         RepositoryRevision   `json:"revision"`

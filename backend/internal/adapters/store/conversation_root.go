@@ -82,17 +82,28 @@ func (s *rootDeclarationScanner) scan(b []byte) {
 }
 
 func docObjectStream(raw []byte) (io.Reader, func(), error) {
-	if len(raw) < 4 || !bytes.Equal(raw[:4], []byte{0x28, 0xb5, 0x2f, 0xfd}) {
-		return bytes.NewReader(raw), func() {}, nil
+	return docObjectReader(bytes.NewReader(raw), docObjectIsCompressed(raw))
+}
+
+func docObjectIsCompressed(raw []byte) bool {
+	return len(raw) >= 4 && bytes.Equal(raw[:4], []byte{0x28, 0xb5, 0x2f, 0xfd})
+}
+
+func docObjectReader(source io.Reader, compressed bool) (io.Reader, func(), error) {
+	if !compressed {
+		return source, func() {}, nil
 	}
 	// Streaming avoids DecodeAll's unbounded output allocation. Disable its
 	// small-compressed-input eager DecodeAll optimization as well.
 	// Match the normal at-rest encoder's 8 MiB window. Output limits alone do
 	// not constrain a hostile frame's advertised history allocation. Large
 	// legacy whole bodies still stream through this window without a size cap.
-	dec, err := zstd.NewReader(bytes.NewReader(raw), zstd.WithDecoderConcurrency(1), zstd.WithDecodeBuffersBelow(0),
+	dec, err := zstd.NewReader(source, zstd.WithDecoderConcurrency(1), zstd.WithDecodeBuffersBelow(0),
 		zstd.WithDecoderMaxWindow(8<<20), zstd.WithDecoderMaxMemory(8<<20))
 	if err != nil {
+		if dec != nil {
+			dec.Close()
+		}
 		return nil, nil, err
 	}
 	return dec, dec.Close, nil
@@ -242,6 +253,13 @@ func verifyLegacyStoredDoc(ctx context.Context, hash domain.ContentHash, raw []b
 			}
 			return body, ctx.Err()
 		})
+	}
+	return verifyLegacyDecodedMonolithicDoc(ctx, hash, data)
+}
+
+func verifyLegacyDecodedMonolithicDoc(ctx context.Context, hash domain.ContentHash, data []byte) (domain.VerifiedSessionDoc, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.VerifiedSessionDoc{}, err
 	}
 	var cir domain.CIRDocument
 	if err := json.Unmarshal(data, &cir); err != nil {

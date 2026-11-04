@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +18,7 @@ import (
 	memoryadapter "github.com/wnsdy95/cxthub-cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // ProviderLaunchHooks connects the delivery adapter to the application package
@@ -27,7 +26,8 @@ import (
 // integrity, and materialize atomically. Record must durably persist receipts;
 // a process start is never evidence that the provider accepted the package.
 type ProviderLaunchHooks struct {
-	Prepare func(context.Context, ProviderLaunchRequest) (PreparedProviderLaunch, error)
+	SessionInventory outbound.ProviderSessionInventory
+	Prepare          func(context.Context, ProviderLaunchRequest) (PreparedProviderLaunch, error)
 	// PrepareDeferred owns a native runtime for fresh native history launches.
 	// When configured, failure never falls back to materialized delivery.
 	PrepareDeferred func(context.Context, ProviderLaunchRequest) (DeferredProviderLaunch, error)
@@ -132,19 +132,21 @@ type ProviderInputObservation struct {
 func RunProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hooks ProviderLaunchHooks) error {
 	return runProviderLaunch(ctx, cwd, intent, hooks, providerLaunchRuntime{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
-		interactive:   providerLaunchTerminal(os.Stdin) && providerLaunchTerminal(os.Stdout),
-		pollInterval:  time.Second,
-		handleSignals: true,
+		sessionInventory: hooks.SessionInventory,
+		interactive:      providerLaunchTerminal(os.Stdin) && providerLaunchTerminal(os.Stdout),
+		pollInterval:     time.Second,
+		handleSignals:    true,
 	})
 }
 
 type providerLaunchRuntime struct {
-	stdin         io.Reader
-	stdout        io.Writer
-	stderr        io.Writer
-	interactive   bool
-	pollInterval  time.Duration
-	handleSignals bool
+	sessionInventory outbound.ProviderSessionInventory
+	stdin            io.Reader
+	stdout           io.Writer
+	stderr           io.Writer
+	interactive      bool
+	pollInterval     time.Duration
+	handleSignals    bool
 }
 
 type providerLaunchWriter struct {
@@ -209,6 +211,9 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 	deferred := managed && nativeDeferredProvider(intent.Provider) && intent.Pull && hooks.PrepareDeferred != nil
 	if managed && ((!deferred && hooks.Prepare == nil) || hooks.Record == nil) {
 		return fmt.Errorf("CXT context preparation is unavailable; %s was not started. Run %s directly to explicitly start without CXT context", intent.Provider, intent.Provider)
+	}
+	if managed && runtime.sessionInventory == nil {
+		return fmt.Errorf("provider session inventory unavailable; %s was not started", intent.Provider)
 	}
 	request := ProviderLaunchRequest{Cwd: selectionCwd, Executable: bin, Intent: intent}
 	args := append([]string(nil), intent.ProviderArgs...)
@@ -465,7 +470,7 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 			transition = false
 		}
 		if retireSession {
-			retireOwnedProviderSession(ctx, selectionCwd, intent.Provider, prepared.SessionID)
+			retireOwnedProviderSession(ctx, runtime.sessionInventory, selectionCwd, intent.Provider, prepared.SessionID)
 		}
 		cleanupErr := cleanup()
 		if failure := deferredProviderFailureReady(prepared.Deferred); failure != nil {
@@ -536,54 +541,21 @@ func validateReadyLaunch(ctx context.Context, request ProviderLaunchRequest, obs
 	return ctx.Err()
 }
 
-func retireOwnedProviderSession(ctx context.Context, cwd string, provider domain.ProviderKind, sessionID string) {
-	if !providerfs.ValidSessionID(sessionID) {
+func retireOwnedProviderSession(ctx context.Context, sessions outbound.ProviderSessionInventory, cwd string, provider domain.ProviderKind, sessionID string) {
+	if sessions == nil || !providerfs.ValidSessionID(sessionID) {
 		return
 	}
-	var paths []string
 	switch provider {
-	case domain.ProviderClaude:
-		paths = claudeSessionFiles(cwd)
-	case domain.ProviderCodex:
-		paths = codexSessionFiles(ctx, cwd)
+	case domain.ProviderClaude, domain.ProviderCodex:
 	default:
 		return
 	}
-	for _, path := range paths {
-		if providerfs.SessionIDFromPath(path) != sessionID {
-			continue
-		}
-		if provider == domain.ProviderCodex && !validCodexRetirementTarget(cwd, sessionID, path) {
+	for _, path := range sessions.SessionFilesForCwd(ctx, cwd, provider) {
+		if !sessions.MatchesSession(cwd, provider, sessionID, path) {
 			continue
 		}
 		boundary.Supersede(cwd, path)
 	}
-}
-
-func validCodexRetirementTarget(cwd, sessionID, path string) bool {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		return false
-	}
-	file, err := providerfs.OpenRegularFile(path)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(io.LimitReader(file, 1<<20))
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	if !scanner.Scan() {
-		return false
-	}
-	var header struct {
-		Type    string `json:"type"`
-		Payload struct {
-			ID  string `json:"id"`
-			Cwd string `json:"cwd"`
-		} `json:"payload"`
-	}
-	return json.Unmarshal(scanner.Bytes(), &header) == nil && header.Type == "session_meta" &&
-		strings.EqualFold(header.Payload.ID, sessionID) && header.Payload.Cwd == abs
 }
 
 var errProviderCleanup = errors.New("provider runtime cleanup failed")

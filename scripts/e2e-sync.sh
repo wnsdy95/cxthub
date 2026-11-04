@@ -130,6 +130,9 @@ echo "── build(isolated bin) · server start :$PORT"
 server_build=(go build -o "$TMP/bin/cxtd")
 if [ -n "${CXT_E2E_DSN:-}" ]; then server_build+=(-tags postgres); fi
 ( cd "$ROOT/backend" && "${server_build[@]}" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
+if [ -n "${CXT_E2E_DSN:-}" ]; then
+  ( cd "$ROOT/backend" && go build -tags postgres -o "$TMP/bin/cxt-admin" ./cmd/cxt-admin ) || { echo "cxt-admin build failed"; exit 1; }
+fi
 evidence_build=(go test -c -o "$TMP/bin/publication-git-evidence")
 if [ -n "${CXT_E2E_DSN:-}" ]; then evidence_build+=(-tags postgres); fi
 ( cd "$ROOT/backend" && "${evidence_build[@]}" ./internal/app ) || { echo "Git evidence fixture build failed"; exit 1; }
@@ -152,11 +155,18 @@ git config --global user.email e2e@test.local
 git config --global user.name E2E
 git config --global init.defaultBranch main
 
-CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
+if [ -n "${CXT_E2E_DSN:-}" ]; then
+  CXT_ENV_FILE=/dev/null CXT_POSTGRES_DSN="$CXT_E2E_DSN" \
+    CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" \
+    "$TMP/bin/cxt-admin" migrate --apply || { echo "fixture migration setup failed" >&2; exit 1; }
+fi
+
+fixture_server=(env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
   CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN" \
   CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN" \
   RESEND_API_KEY= CXT_GITHUB_TOKEN= \
-  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data" >"$TMP/srv.log" 2>&1 &
+  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data")
+"${fixture_server[@]}" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
 SERVER_READY=0
 for i in $(seq 1 30); do

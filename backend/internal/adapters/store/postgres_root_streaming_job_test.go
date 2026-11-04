@@ -75,15 +75,17 @@ func TestRootStreamingPGPagesReceiptAndCleanup(t *testing.T) {
 				t.Fatal("preparation changed durable archive, ownership, accounting or receipt")
 			}
 			paths, err := filepath.Glob(filepath.Join(directory, "cxthub-doc-range-*"))
-			if err != nil || len(paths) != 1 {
-				t.Fatal("preparation did not retain exactly one bounded page spool", paths, err)
+			if err != nil || len(paths) != 2 {
+				t.Fatal("preparation did not retain its original and derived bounded spools", paths, err)
 			}
-			info, err := os.Stat(paths[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Mode().Perm() != 0600 || count > 0 && info.Size() == 0 {
-				t.Fatal("spool is empty or not private", info.Mode(), info.Size())
+			for _, path := range paths {
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.Mode().Perm() != 0600 || count > 0 && info.Size() == 0 {
+					t.Fatal("spool is empty or not private", info.Mode(), info.Size())
+				}
 			}
 			if err := publication.Complete(ctx, job, time.Now()); err != nil {
 				t.Fatal(err)
@@ -268,7 +270,6 @@ func TestRootStreamingPGCompleteRechecksCurrentClosureAndFence(t *testing.T) {
 				want = context.Canceled
 			case "recompressed":
 				_, err = storage.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, chunk.Hash, fixture.bodies[chunk.Hash])
-				want = nil
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -277,7 +278,15 @@ func TestRootStreamingPGCompleteRechecksCurrentClosureAndFence(t *testing.T) {
 			if !errors.Is(err, want) {
 				t.Fatalf("got %v, want %v", err, want)
 			}
-			if want == nil {
+			if damage == "recompressed" {
+				assertRootStreamingUnpublishedPG(t, storage, ctx, job)
+				if err := publication.Close(); err != nil {
+					t.Fatal(err)
+				}
+				fresh := prepareRootStreamingPG(t, storage, ctx, job, directory)
+				if err := fresh.Complete(ctx, job, time.Now()); err != nil {
+					t.Fatal("fresh source generation did not preserve recompression support", err)
+				}
 				assertRangePages(t, ctx, storage, job.RepoID, fixture)
 				return
 			}
@@ -399,10 +408,11 @@ func TestRootStreamingPGRollbackAndChangedStoragePolicy(t *testing.T) {
 				}
 			case "spool-corrupt":
 				paths, globErr := filepath.Glob(filepath.Join(directory, "cxthub-doc-range-*"))
-				if globErr != nil || len(paths) != 1 {
+				if globErr != nil || len(paths) != 2 {
 					t.Fatal(paths, globErr)
 				}
-				if err := os.WriteFile(paths[0], []byte("invalid page"), 0600); err != nil {
+				sourcePath := publication.(*pgStreamingRootPublication).spool.file.Name()
+				if err := os.WriteFile(sourcePath, []byte("invalid page"), 0600); err != nil {
 					t.Fatal(err)
 				}
 				err = publication.Complete(ctx, job, time.Now())

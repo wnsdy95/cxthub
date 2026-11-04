@@ -79,6 +79,19 @@ An expired or replaced worker cannot publish its prepared result. This reduces
 CPU work under the repository lock; it does not remove database contention or
 make document publication cost-independent of document size.
 
+Missing viewer range indexes use a separate derived-data queue, not document
+publication or a new graph event. PostgreSQL viewer requests register owned-root
+jobs and return bounded pending responses; the API worker verifies under shared
+bulk admission and atomically commits the index with its fenced completion
+receipt. Read-only/MCP contexts do not acquire this write path. Existing source
+content identities, refs and activity revisions stay unchanged. PostgreSQL viewer
+reads use compact v2 generation descriptors and authenticated selected metadata
+paths, not complete manifests. A trigger-controlled source version fences each
+generation's lifetime even when an older writer cannot see newly published rows;
+the source version is not a replacement for document identity or current access.
+The exact readiness,
+verification and retry contracts are in [conversation range reads](DOCUMENT_RANGE_READS.md).
+
 [Conversation chunks and memory versions](CONVERSATION_MEMORY_STORAGE.md)
 defines why memory recompression publishes a separate version without replacing
 conversation chunks. A manifest-root protocol that removes full-stream hashing
@@ -151,11 +164,25 @@ revision and projection. Pending responses carry the same classification contrac
 but only current capture metadata; they omit branch memberships owned by the full
 view. Missing new inputs trigger one full browser refresh, not local inference.
 
-There is no cross-request graph cache: staging metadata can change before its
-publication revision advances. A revision-only cache could serve stale inputs on
-one replica. Per-read ancestry bitsets have an 8 MiB / 4,096-entry cache limit;
+The bounded cross-request graph cache requires a read-only transaction and keys
+on the complete metadata fingerprint, revisions, position and Git origin.
+Staging metadata can change before its publication revision advances; a
+revision-only cache could serve stale inputs on one replica. Cache hits use
+interactive admission. In the uncommitted cold-read prototype, builds that cannot
+upgrade immediately unwind the
+read transaction and outer request permit before joining the bounded bulk FIFO
+once. The HTTP retry rechecks authentication and repository access, then reloads
+all inputs in a fresh snapshot. Its original deadline and final response admission
+remain in force. Caller-owned permits/transactions are never surrendered by a
+nested query. Per-read ancestry bitsets have an 8 MiB / 4,096-entry cache limit;
 exhaustion changes cost, never correctness. Documents are not loaded for graph
 classification.
+
+The uncommitted implementation is being validated under the approved
+[architecture design](INCREMENTAL_READ_PUBLICATION_DESIGN.md).
+The next changes and their acceptance gates are tracked in
+[incremental publication and bounded reads](INCREMENTAL_READ_PUBLICATION_PLAN.md).
+The in-process cache is not yet a durable incrementally maintained read model.
 
 The HTTP graph adapter uses `indexed-v1`: repeated ID sets reference one response
 local dictionary. These indices are neither persisted identities nor business
