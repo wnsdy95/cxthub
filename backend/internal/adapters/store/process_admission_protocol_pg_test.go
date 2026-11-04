@@ -36,6 +36,26 @@ func processAdmissionLegacyControlPG(test *testing.T, fixture *processAdmissionP
 	return legacy
 }
 
+func processAdmissionCloseLegacyControlPG(test *testing.T, fixture *processAdmissionPGFixture, legacy *pgx.Conn, roleKey int32) {
+	test.Helper()
+	legacyPID := legacy.PgConn().PID()
+	if err := legacy.Close(fixture.ctx); err != nil {
+		test.Fatal("legacy control witness did not drain", err)
+	}
+	processAdmissionEventually(test, func() bool {
+		var released bool
+		if err := fixture.observer.QueryRow(fixture.ctx, `SELECT NOT EXISTS (
+ SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory'
+ AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+ AND classid=1129862210::oid AND objid=$2::oid AND objsubid=2
+ AND mode='ExclusiveLock' AND granted
+)`, legacyPID, roleKey).Scan(&released); err != nil {
+			test.Fatal("could not observe legacy role lock release", err)
+		}
+		return released
+	})
+}
+
 func processAdmissionProtocolConflictedPG(test *testing.T, fixture *processAdmissionPGFixture, controllers ...*postgresProcessAdmission) {
 	test.Helper()
 	for _, controller := range controllers {
@@ -185,9 +205,7 @@ func TestPGProcessAdmissionLegacyBudgetControlRejectsCurrentPeers(test *testing.
 				if duplicate != nil || !errors.Is(err, domain.ErrConflict) {
 					test.Fatal("legacy role lock did not exclude a current duplicate", err)
 				}
-				if err := legacy.Close(fixture.ctx); err != nil {
-					test.Fatal("legacy control witness did not drain", err)
-				}
+				processAdmissionCloseLegacyControlPG(test, fixture, legacy, legacyRole.roleKey)
 				if fixture.lockCount(test, 10, 12) != 2 {
 					test.Fatal("legacy control drain did not release exactly its original role lock")
 				}
@@ -248,9 +266,7 @@ func TestPGProcessAdmissionLegacyPeerReplacementCancelsActiveUpgrade(test *testi
 	if err := active.Release(); err != nil {
 		test.Fatal(err)
 	}
-	if err := legacy.Close(fixture.ctx); err != nil {
-		test.Fatal("incompatible replacement control did not drain", err)
-	}
+	processAdmissionCloseLegacyControlPG(test, fixture, legacy, 12)
 	controllers[outbound.ProcessWorker] = fixture.open(test, storage[outbound.ProcessWorker], outbound.ProcessWorker)
 	processAdmissionProtocolRecoveredPG(test, fixture, storage, controllers)
 }
