@@ -33,8 +33,12 @@ var ErrUnauthorized = errors.New("unauthorized")
 // ErrForbidden indicates authentication is valid but permission is denied (403). Example: repository non-member.
 var ErrForbidden = errors.New("forbidden")
 
+var ErrBreakGlassAuditUnavailable = errors.New("break-glass audit unavailable")
+
 // ErrConflict indicates a duplicate creation/state conflict (409). Example: already used invite, occupied username.
 var ErrConflict = errors.New("conflict")
+
+var ErrDocDisplayIncarnationChanged = fmt.Errorf("%w: document display source incarnation changed", ErrConflict)
 
 // ErrEffectiveMemoryCursorStale means an effective-memory continuation cursor no longer
 // matches the current query state. It does not establish unchanged content.

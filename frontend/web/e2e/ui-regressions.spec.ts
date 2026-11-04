@@ -4,6 +4,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { capturePageErrors, installApiFixture, type ApiRequest, type ApiResponse } from './api-fixture';
 import { expectRenderedGraphPath } from './graph-paths';
+import type { DocVisiblePage } from '../src/documentVisible';
+import { visibleMessage } from '../tests/documentVisibleFixture';
 
 const auditSnapshot = (hash: string, branch: string, parents: string[], message: string, n: number) => ({
   id: hash, repo_id: repoId, doc_hash: hash, branch, parents, message, provider: 'codex', fidelity: 'full',
@@ -22,6 +24,127 @@ const graftTarget = id('b');
 const pushedHead = id('c');
 const unpushedHead = id('d');
 const uncommittedHead = id('e');
+
+for (const scenario of [
+  { protocol: 'visible', ordinal: 0, reasoning: false, width: 1280 },
+  { protocol: 'visible', ordinal: 142, reasoning: true, width: 390 },
+  { protocol: 'legacy', ordinal: 142, reasoning: true, width: 1280 },
+  { protocol: 'legacy', ordinal: 0, reasoning: false, width: 390 },
+] as const) test(`search reveals archive ordinal ${scenario.ordinal} using ${scenario.protocol} at ${scenario.width}px`, async ({ page }) => {
+  await page.setViewportSize({ width: scenario.width, height: 800 });
+  await page.addInitScript(() => localStorage.setItem('cxt.locale', 'en'));
+  const errors = capturePageErrors(page);
+  const snapshot = auditSnapshot(pushedHead, 'main', [], 'Search position fixture', 1);
+  const base = publicRepositoryApi([snapshot], [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }]);
+  const reads: URLSearchParams[] = [];
+  const matched = scenario.reasoning
+    ? { kind: 'reasoning', event_index: scenario.ordinal, seq: 9000, seed_summary: false, empty_reasoning: false,
+      redacted_summary: 'Hidden reasoning heading\n\nExact searchable detail that must be expanded.' }
+    : visibleMessage(scenario.ordinal, 'Exact searchable detail that must be expanded.');
+  const unexpected = await installApiFixture(page, request => {
+    if (request.pathname.endsWith('/search')) return { body: { hits: [{ snapshot_id: pushedHead, branch: 'main', kind: 'event',
+      event_index: scenario.ordinal, seq: 9000, snippet: 'Exact searchable detail', created_at: snapshot.created_at }], truncated: false } };
+    if (request.pathname.endsWith(`/docs/${encodeURIComponent(pushedHead)}/events`)) {
+      reads.push(new URLSearchParams(request.searchParams));
+      const start = Math.max(0, Number(request.searchParams.get('offset') ?? 0));
+      const selected = request.searchParams.get('view') === 'all';
+      const total = scenario.ordinal + 1;
+      if (scenario.protocol === 'visible') {
+        const fold = scenario.ordinal ? { from: start, to: scenario.ordinal, rows: scenario.ordinal - start, cursor: 'search-fold' } : null;
+        return { body: { projection: 'visible-v1', kind: 'units', hash: pushedHead, base: '', generation: 'search-generation', rules: 1,
+          view: request.searchParams.get('view'), envelope: { cir_version: '2', source_provider: 'codex' }, total, inherited: 0, start,
+          from: start, to: total, units: selected ? [{ from: start, to: total, turn_index: -1, event: matched, fold: null }]
+            : [{ from: 0, to: total, turn_index: -1,
+              event: scenario.reasoning ? null : matched,
+              fold: scenario.reasoning ? { from: 0, to: total, rows: total, cursor: 'search-fold' } : fold }],
+          fold: null, events: [], next_cursor: null } };
+      }
+      return { body: { hash: pushedHead, envelope: { cir_version: '2', source_provider: 'codex' }, total, inherited: 0, offset: start,
+        next: -1, events: Array.from({ length: total - start }, (_, position) => start + position === scenario.ordinal ? matched
+          : { kind: 'tool_result', event_index: start + position, seq: 5000 + position, deferred: true, event_bytes: 100 }) } };
+    }
+    return base(request);
+  });
+  await page.goto('/alice/cxthub');
+  await page.getByRole('textbox', { name: 'Search context' }).fill('Exact searchable detail');
+  await page.locator('.search-hit').click();
+  const target = page.locator(`[data-document-target="${scenario.ordinal}"]`);
+  await expect(target).toBeVisible();
+  if (scenario.reasoning) {
+    await expect(target.locator('details')).toHaveAttribute('open', '');
+    await target.locator('summary').click();
+    await expect(target.locator('details')).not.toHaveAttribute('open', '');
+    await page.locator('.search-hit').click();
+    await expect(target.locator('details')).toHaveAttribute('open', '');
+  }
+  await expect(target).toContainText('Exact searchable detail that must be expanded.');
+  expect(reads.filter(params => params.get('view') === 'all').map(params => params.get('offset'))).toEqual([String(scenario.ordinal)]);
+  expect(reads.every(params => params.get('offset') !== '9000')).toBe(true);
+  await page.getByRole('button', { name: 'Read from the beginning' }).click();
+  await expect(page.locator('[data-document-target]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+for (const width of [390, 1280]) test(`search target stays below the header and reopens its recycled page at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 800 });
+  await page.addInitScript(() => localStorage.setItem('cxt.locale', 'en'));
+  const windowed = process.env.CXT_DOCUMENT_WINDOW === '1' || process.env.CXT_DOCUMENT_BASELINE === '1';
+  const errors = capturePageErrors(page);
+  const duplicateKeys: string[] = [];
+  page.on('console', message => { if (message.text().includes('same key')) duplicateKeys.push(message.text()); });
+  const snapshot = auditSnapshot(pushedHead, 'main', [], 'Long search fixture', 1);
+  const base = publicRepositoryApi([snapshot], [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }]);
+  const reads: URLSearchParams[] = [];
+  const unexpected = await installApiFixture(page, request => {
+    if (request.pathname.endsWith('/search')) return { body: { hits: [100, 120].map(event_index => ({ snapshot_id: pushedHead, branch: 'main', kind: 'event',
+      event_index, seq: 9000, snippet: `Long event ${event_index}`, created_at: snapshot.created_at })), truncated: false } };
+    if (request.pathname.endsWith(`/docs/${encodeURIComponent(pushedHead)}/events`)) {
+      reads.push(new URLSearchParams(request.searchParams));
+      const token = request.searchParams.get('cursor')?.split(':');
+      const view = token?.[0] ?? request.searchParams.get('view')!;
+      const start = token ? Number(token[1]) : Math.max(0, Number(request.searchParams.get('offset') ?? 0));
+      const from = token ? Number(token[2]) : start;
+      const to = Math.min(300, from + 20);
+      return { body: { projection: 'visible-v1', kind: 'units', hash: pushedHead, base: '', generation: 'long-search-generation',
+        rules: 1, view, envelope: { cir_version: '2', source_provider: 'codex' }, total: 300, inherited: 0, start, from, to,
+        units: Array.from({ length: to - from }, (_, position) => ({ from: from + position, to: from + position + 1,
+          turn_index: -1, event: visibleMessage(from + position, `Long event ${from + position}\n\n` + 'Readable paragraph.\n\n'.repeat(15)), fold: null })),
+        events: [], fold: null, replay_cursor: `${view}:${start}:${from}`, next_cursor: to === 300 ? null : `${view}:${start}:${to}` } };
+    }
+    return base(request);
+  });
+  await page.goto('/alice/cxthub');
+  await page.getByRole('textbox', { name: 'Search context' }).fill('Long event 100');
+  await page.locator('.search-hit').first().click();
+  const target = page.locator('[data-document-target="100"]');
+  await expect(target).toBeVisible();
+  const clearance = () => target.evaluate(element => {
+    const headers = Array.from(element.closest('.viewer')!.querySelectorAll<HTMLElement>('.viewer-head,[data-document-sticky]'));
+    return element.getBoundingClientRect().top - Math.max(...headers.map(header => header.getBoundingClientRect().bottom));
+  });
+  await expect.poll(clearance).toBeGreaterThanOrEqual(0);
+  for (let visited = 2; visited <= 4; visited++) {
+    await expect.poll(async () => {
+      if (await page.locator(`[data-event-index="${100 + visited * 20 - 1}"]`).count()) return 1;
+      await page.locator('[data-document-sentinel]').evaluate(element => element.scrollIntoView({ block: 'end' }));
+      return page.locator(`[data-event-index="${100 + visited * 20 - 1}"]`).count();
+    }).toBe(1);
+  }
+  if (windowed) {
+    await expect(page.locator('[data-document-page="units:100"]')).toHaveAttribute('data-page-mounted', 'false');
+    await expect(target).not.toBeAttached();
+  }
+  await page.locator('.search-hit').first().click();
+  await expect(target).toBeVisible();
+  await expect.poll(clearance).toBeGreaterThanOrEqual(0);
+  expect(reads.filter(params => params.get('view') === 'all' && params.get('offset') === '100')).toHaveLength(1);
+  await page.locator('.search-hit').last().click();
+  await expect(page.locator('[data-document-target="120"]')).toBeVisible();
+  expect(duplicateKeys).toEqual([]);
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
 
 function sessionDoc(hash: string) {
   return {
@@ -1617,7 +1740,7 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
   expect(pageErrors).toEqual([]);
 });
 
-test('independent API and MCP complete remote OAuth consent, PKCE, read-only call, and revocation', async ({ page }) => {
+test('independent API and MCP complete remote OAuth consent, PKCE, read-only call, and revocation', async ({ page }, info) => {
   test.skip(!process.env.CXT_E2E_FULLSTACK, 'full-stack smoke runs in CI or with CXT_E2E_FULLSTACK=1');
 
   const pageErrors = capturePageErrors(page);
@@ -1626,9 +1749,10 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
   const callback = `${origin}/e2e-mcp-callback`;
   const verifier = 'v'.repeat(64);
   const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const email = `mcp-e2e-${Date.now()}-${info.workerIndex}-${info.retry}@example.test`;
 
   const login = await api.post('/api/v1/auth/session', {
-    headers: { Origin: origin, 'X-Cxt-CSRF': '1', Authorization: 'Bearer dev:mcp-e2e@example.test:MCP E2E' },
+    headers: { Origin: origin, 'X-Cxt-CSRF': '1', Authorization: `Bearer dev:${email}:MCP E2E` },
   });
   expect(login.ok()).toBe(true);
 
@@ -1723,7 +1847,7 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
     });
     expect(toolResponse.ok()).toBe(true);
     const tool = await toolResponse.json();
-    expect(tool.result.isError).not.toBe(true);
+    expect(tool.result.isError, JSON.stringify(tool)).not.toBe(true);
     expect(JSON.parse(tool.result.content[0].text)).toEqual(status);
   }
   await api.patch('/api/v1/me', {headers:{Origin:origin,'X-Cxt-CSRF':'1'},data:{locale:'en'}});
@@ -1783,7 +1907,165 @@ test('repository history protection is explicit, survives reload, and reports up
   expect(unexpected).toEqual([]);
 });
 
+function documentReaderFixture(inherited = 100, model = 'fixture-original', terminal = true): DocVisiblePage {
+  const to = inherited + 20;
+  return {
+    projection: 'visible-v1', kind: 'units', hash: pushedHead, base: graftTarget,
+    generation: model, rules: 1, view: 'chat', envelope: { ...sessionDoc(pushedHead).cir.envelope, cir_version: '2', source_model: model },
+    total: terminal ? to : to + 20, inherited, start: inherited, from: inherited, to,
+    units: Array.from({ length: 20 }, (_, position) => {
+      const index = inherited + position;
+      return { from: index, to: index + 1, turn_index: index, fold: null,
+        event: { seq: index, event_index: index, kind: 'message', role: 'user', seed_summary: false, empty_reasoning: false,
+          blocks: [{ type: 'text', text: `${model} message ${index}\n\n` + 'Readable context paragraph.\n\n'.repeat(3) }] } };
+    }),
+    events: [], fold: null, next_cursor: terminal ? null : 'fixture-next',
+  };
+}
+
+function documentReaderRepository() {
+  return publicRepositoryApi([
+    auditSnapshot(pushedHead, 'main', [graftTarget], 'Reader head', 1),
+    auditSnapshot(graftTarget, 'main', [], 'Reader parent', 0),
+  ], [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }]);
+}
+
+for (const protocol of ['visible', 'unsupported'] as const) test(`context reader shares header and body with ${protocol} protocol`, async ({ page }) => {
+  const base = documentReaderRepository();
+  const reads: URLSearchParams[] = [];
+  const content = documentReaderFixture();
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (!request.pathname.includes('/docs/')) return base(request);
+    reads.push(request.searchParams);
+    if (!request.pathname.endsWith('/events')) return { status: 500, body: { error: { message: 'Whole read forbidden' } } };
+    if (protocol === 'visible') return { body: content };
+    if (request.searchParams.has('projection')) return { status: 409,
+      body: { error: { code: 'doc_visible_projection_unsupported', message: 'Use the legacy event projection' } } };
+    return { body: { hash: content.hash, envelope: content.envelope, inherited: content.inherited, total: content.total,
+      offset: content.from, next: -1, events: content.units.map(unit => unit.event) } };
+  });
+  await expect(page.locator('.viewer-head')).toContainText('fixture-original');
+  await expect(page.locator('.viewer').getByText(/fixture-original message 100/)).toBeVisible();
+  await expect(page.locator('.inherited-toggle')).toContainText('100');
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
+  expect(reads).toHaveLength(protocol === 'visible' ? 1 : 2);
+  expect(reads[0].get('projection')).toBe('visible-v1');
+  if (protocol === 'unsupported') expect(reads[1].has('projection')).toBe(false);
+  expect(reads.every(params => params.get('base') === graftTarget && params.get('offset') === '-1')).toBe(true);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('context reader restarts header and body together after a stale continuation', async ({ page }) => {
+  const base = documentReaderRepository();
+  const reads: URLSearchParams[] = [];
+  let restarted = false;
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (!request.pathname.includes('/docs/')) return base(request);
+    reads.push(request.searchParams);
+    if (request.searchParams.has('cursor')) return { status: 409,
+      body: { error: { code: 'doc_visible_cursor_expired', message: 'Fixture generation expired' } } };
+    const content = restarted ? documentReaderFixture(120, 'fixture-restarted') : documentReaderFixture(100, 'fixture-original', false);
+    return { body: content };
+  });
+  await expect(page.locator('.viewer-head')).toContainText('fixture-original');
+  await expect(page.locator('.inherited-toggle')).toContainText('100');
+  await page.locator('[data-document-sentinel]').scrollIntoViewIfNeeded();
+  const error = page.locator('.doc-load-error');
+  await expect(error).toContainText('Fixture generation expired');
+  expect(reads).toHaveLength(2);
+  restarted = true;
+  await error.getByRole('button', { name: 'Restart document' }).click();
+  await expect(page.locator('.viewer-head')).toContainText('fixture-restarted');
+  await expect(page.locator('.viewer-head')).not.toContainText('fixture-original');
+  await expect(page.locator('.inherited-toggle')).toContainText('120');
+  await expect(page.locator('.viewer').getByText(/fixture-restarted message 120/)).toBeAttached();
+  await expect(page.locator('.viewer').getByText(/fixture-original message/)).toHaveCount(0);
+  await expect(error).toHaveCount(0);
+  expect(reads).toHaveLength(3);
+  expect(reads.every(params => params.get('projection') === 'visible-v1')).toBe(true);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('context reader allows explicit retry after a terminal initial failure', async ({ page }) => {
+  const base = documentReaderRepository();
+  const reads: URLSearchParams[] = [];
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (!request.pathname.includes('/docs/')) return base(request);
+    reads.push(request.searchParams);
+    if (reads.length === 1) return { status: 503,
+      body: { error: { code: 'fixture_read_failed', message: 'Explicit retry required' } } };
+    return { body: documentReaderFixture() };
+  });
+  await expect(page.locator('.doc-load-error')).toContainText('Explicit retry required');
+  expect(reads).toHaveLength(1);
+  await page.locator('.doc-load-error').getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.locator('.viewer-head')).toContainText('fixture-original');
+  await expect(page.locator('.viewer').getByText(/fixture-original message 100/)).toBeVisible();
+  await expect(page.locator('.doc-load-error')).toHaveCount(0);
+  expect(reads).toHaveLength(2);
+  expect(reads[1].toString()).toBe(reads[0].toString());
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('context reader preserves pending export and its error across mode and inherited changes', async ({ page }) => {
+  const base = documentReaderRepository();
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (!request.pathname.includes('/docs/')) return base(request);
+    const inheritedOpen = request.searchParams.get('offset') === '0';
+    const content = documentReaderFixture(inheritedOpen ? 0 : 100);
+    return { body: { ...content, view: request.searchParams.get('view'), inherited: 100, total: 120,
+      next_cursor: inheritedOpen ? 'fixture-next' : null } };
+  });
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let exports = 0;
+  await page.route(url => url.pathname.includes('/docs/') && !url.pathname.endsWith('/events'), async route => {
+    exports++;
+    await pending;
+    await route.fulfill({ status: 503, json: { error: { code: 'fixture_export_failed', message: 'Fixture export failed safely' } } });
+  });
+  try {
+    const raw = page.getByRole('button', { name: '↓ raw', exact: true });
+    await expect(page.locator('.viewer-head')).toContainText('fixture-original');
+    await raw.click();
+    await expect.poll(() => exports).toBe(1);
+    await expect(raw).toBeDisabled();
+    await page.locator('.view-mode').selectOption('prompts');
+    await expect(page.locator('[data-visible-unit="100"]')).toBeAttached();
+    await expect(raw).toBeDisabled();
+    await page.locator('.inherited-toggle').click();
+    await expect(page.locator('[data-visible-unit="0"]')).toBeAttached();
+    await expect(raw).toBeDisabled();
+    release();
+    await expect(page.locator('.viewer-head [role="alert"]')).toHaveText('Fixture export failed safely');
+    await expect(raw).toBeEnabled();
+    expect(exports).toBe(1);
+    expect(pageErrors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  } finally { release(); }
+});
+
+for (const status of [401, 403, 409]) test(`context reader never starts a legacy header query after ${status}`, async ({ page }) => {
+  const base = documentReaderRepository();
+  const reads: URLSearchParams[] = [];
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (!request.pathname.includes('/docs/')) return base(request);
+    reads.push(request.searchParams);
+    return { status, body: { error: { code: 'fixture_read_denied', message: `Read stopped ${status}` } } };
+  });
+  await expect(page.locator('.doc-load-error')).toContainText(`Read stopped ${status}`);
+  await expect(page.locator('.inherited-toggle')).toHaveCount(0);
+  expect(reads).toHaveLength(1);
+  expect(reads[0].get('projection')).toBe('visible-v1');
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('context loads bounded pages and only reads inherited events when expanded', async ({ page }) => {
+  const windowed = process.env.CXT_DOCUMENT_WINDOW === '1' || process.env.CXT_DOCUMENT_BASELINE === '1';
   const snapshots = [
     { id: pushedHead, repo_id: repoId, branch: 'main', parents: [graftTarget], doc_hash: pushedHead, provider: 'codex', fidelity: 'full', message: 'paged head', created_at: '2026-09-16T00:01:00Z' },
     { id: graftTarget, repo_id: repoId, branch: 'main', parents: [], doc_hash: graftTarget, provider: 'codex', fidelity: 'full', message: 'parent', created_at: '2026-09-16T00:00:00Z' },
@@ -1802,25 +2084,30 @@ test('context loads bounded pages and only reads inherited events when expanded'
     return base(request);
   };
   const { pageErrors, unexpected } = await openGraph(page, responder);
+  const document = page.locator('.viewer .doc-events').first();
   await expect(page.getByText('Event 100 — current', { exact: true })).toBeVisible();
   await expect(page.getByText('Event 0 — inherited', { exact: true })).toHaveCount(0);
   expect(reads).toHaveLength(1);
   expect(reads[0]).toContain('base=');
   await expect(page.locator('.doc-load-more')).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText('Event 199 — current', { exact: true })).toBeAttached();
+  await expect(document).toHaveAttribute('data-document-to', '200');
+  if (!windowed) await expect(page.getByText('Event 199 — current', { exact: true })).toBeAttached();
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText('Event 219 — current', { exact: true })).toBeAttached();
+  await expect(document).toHaveAttribute('data-document-to', '220');
+  if (!windowed) await expect(page.getByText('Event 219 — current', { exact: true })).toBeAttached();
   await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
   await expect(page.locator('.doc-load-more')).toHaveCount(0);
   await page.locator('.inherited-toggle').click();
   await expect(page.getByText('Event 0 — inherited', { exact: true })).toBeVisible();
   await expect(page.getByText('Event 100 — current', { exact: true })).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText('Event 99 — inherited', { exact: true })).toBeAttached();
+  await expect(document).toHaveAttribute('data-document-to', '100');
+  if (!windowed) await expect(page.getByText('Event 99 — inherited', { exact: true })).toBeAttached();
   await expect(page.getByText('Event 100 — current', { exact: true })).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText('Event 100 — current', { exact: true })).toBeAttached();
+  await expect(document).toHaveAttribute('data-document-to', '150');
+  if (!windowed) await expect(page.getByText('Event 100 — current', { exact: true })).toBeAttached();
   for (const read of reads) {
     const query = new URLSearchParams(read.split('?')[1]);
     expect(query.has('base')).toBe(['-1', '0'].includes(query.get('offset')!));
@@ -1832,6 +2119,7 @@ test('context loads bounded pages and only reads inherited events when expanded'
 });
 
 for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(`${view} appends pages only at the conversation bottom (${width}px)`, async ({ page }) => {
+  const windowed = process.env.CXT_DOCUMENT_WINDOW === '1' || process.env.CXT_DOCUMENT_BASELINE === '1';
   await page.setViewportSize({ width, height: 800 });
   const root = id('1'), head = id('2'), tail = id('3');
   const snapshots = [auditSnapshot(root, 'main', [], 'Root', 0),
@@ -1874,34 +2162,50 @@ for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(
     await page.getByRole('button', {name:'On Hold',exact:true}).click();
     await page.locator(`.graph-row[data-graph-snapshot="${head}"]`).click();
   }
-  await expect(page.getByText(/^Saved 49\b/)).toBeAttached();
+  const saved = page.locator('.viewer .doc-events').first();
+  await expect(saved).toHaveAttribute('data-document-from', '0');
+  await expect(saved).toHaveAttribute('data-document-to', '50');
+  await expect(page.getByText(/^Saved 0\b/)).toBeVisible();
+  if (!windowed) await expect(page.getByText(/^Saved 49\b/)).toBeAttached();
   expect(reads).toEqual(['saved:-1']);
   await expect(page.locator('.doc-load-more')).toHaveCount(0);
   await expect(page.locator('.doc-load-trigger')).toHaveCount(1);
   await expect(page.locator('.viewer .pending-divider')).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText(/^Saved 99\b/)).toBeAttached();
+  await expect(saved).toHaveAttribute('data-document-to', '100');
+  if (!windowed) await expect(page.getByText(/^Saved 99\b/)).toBeAttached();
   expect(reads).toEqual(['saved:-1','saved:50']);
   await expect(page.locator('.viewer .pending-divider')).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText(/^Live 149\b/)).toBeAttached();
+  const live = page.locator('.viewer .doc-events').nth(1);
+  await expect(live).toHaveAttribute('data-document-from', '100');
+  await expect(live).toHaveAttribute('data-document-to', '150');
+  if (!windowed) await expect(page.getByText(/^Live 149\b/)).toBeAttached();
   await expect(page.locator('.viewer .pending-divider')).toHaveCount(1);
   await expect(page.locator('.doc-load-trigger')).toHaveCount(1);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText(/^Live 179\b/)).toBeAttached();
+  await expect(live).toHaveAttribute('data-document-to', '180');
+  if (!windowed) await expect(page.getByText(/^Live 179\b/)).toBeAttached();
   await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
   expect(reads).toEqual(['saved:-1','saved:50','live:-1','live:150']);
   const content = await page.locator('.viewer .msg-body').allTextContents();
-  expect(content.map(text=>Number(text.match(/^(?:Saved|Live) (\d+)/)![1]))).toEqual(Array.from({length:180},(_,i)=>i));
+  const positions = content.map(text=>Number(text.match(/^(?:Saved|Live) (\d+)/)![1]));
+  if (windowed) {
+    expect(positions.length).toBeGreaterThan(0);
+    expect(positions.every(index => index >= 0 && index < 180)).toBe(true);
+    expect(positions).toEqual([...new Set(positions)].sort((left, right) => left - right));
+  } else expect(positions).toEqual(Array.from({length:180},(_,i)=>i));
   // Returning to a cached snapshot still displays a bounded prefix and reveals
   // cached pages at the bottom without transferring the document again.
   await page.locator(`.graph-row[data-graph-snapshot="${root}"]`).click();
   await page.locator(`.graph-row[data-graph-snapshot="${head}"]`).click();
-  await expect(page.getByText(/^Saved 49\b/)).toBeAttached();
+  await expect(saved).toHaveAttribute('data-document-to', '50');
+  if (!windowed) await expect(page.getByText(/^Saved 49\b/)).toBeAttached();
   await expect(page.getByText(/^Saved 50\b/)).toHaveCount(0);
   await expect(page.locator('.viewer .pending-divider')).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
-  await expect(page.getByText(/^Saved 99\b/)).toBeAttached();
+  await expect(saved).toHaveAttribute('data-document-to', '100');
+  if (!windowed) await expect(page.getByText(/^Saved 99\b/)).toBeAttached();
   expect(reads).toEqual(['saved:-1','saved:50','live:-1','live:150']);
   expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
 });

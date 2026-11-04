@@ -7,7 +7,7 @@ import "github.com/klauspost/compress/zstd"
 // and reads transparently handle new compressed and legacy uncompressed data via zstd magic (0x28B52FFD).
 // EncodeAll/DecodeAll are safe for concurrent calls (shared instance OK).
 var (
-	zstdEnc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	zstdEnc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
 	zstdDec, _ = zstd.NewReader(nil)
 )
 

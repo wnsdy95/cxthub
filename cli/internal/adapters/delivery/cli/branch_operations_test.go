@@ -66,7 +66,8 @@ func historyFixtureWithRemote(t *testing.T, remote string) (string, *Container, 
 	if err = store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: "main"}); err != nil {
 		t.Fatal(err)
 	}
-	c := &Container{List: app.NewListSessionsService(store), Fork: app.NewForkSessionService(store), History: app.NewContextHistoryService(store, store)}
+	sessions := captureSelectionForTest()
+	c := &Container{ResolveRepo: repositoryResolverForTest(cwd), SessionSelection: sessions, SessionInventory: sessions, List: app.NewListSessionsService(store), Fork: app.NewForkSessionService(store), History: app.NewContextHistoryService(store, store)}
 	return cwd, c, store, repo.ID, id
 }
 

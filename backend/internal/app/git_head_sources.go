@@ -11,9 +11,9 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (scans *GitScans) readGitAdmissionSources(ctx context.Context, frozen *frozenGitAdmissionBatch) ([]domain.GitRefObservation, error) {
-	reader, supported := scans.reader.(outbound.GitHeadReader)
-	_, persisted := scans.core.meta.(outbound.GitHeadSourceScanStore)
+func (workers *GitIntegrationWorkers) readGitAdmissionSources(ctx context.Context, frozen *frozenGitAdmissionBatch) ([]domain.GitRefObservation, error) {
+	reader, supported := workers.reader.(outbound.GitHeadReader)
+	_, persisted := workers.work.meta.(outbound.GitHeadSourceScanStore)
 	if !supported || !persisted || frozen == nil || frozen.snapshot == nil {
 		return nil, nil
 	}

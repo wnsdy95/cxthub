@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"strings"
 )
 
@@ -32,16 +31,20 @@ func (s *Server) memoryBranch(ctx context.Context, repo domain.Repo, ref string)
 	return "", nil
 }
 func (s *Server) projectMemory(ctx context.Context, repo domain.Repo, a toolArgs, snapshot domain.ContentHash) (domain.MemoryProjection, error) {
-	if query, ok := s.context.(inbound.BranchMemoryQuery); ok {
-		branch, err := s.memoryBranch(ctx, repo, a.Ref)
-		if err != nil {
-			return domain.MemoryProjection{}, err
-		}
-		if branch != "" {
-			return query.QueryBranchMemory(ctx, repo.ID, branch, snapshot, a.CodeCommit)
-		}
+	branch, err := s.memoryBranch(ctx, repo, a.Ref)
+	if err != nil {
+		return domain.MemoryProjection{}, err
 	}
-	return s.context.GetMemoryProjection(ctx, repo.ID, snapshot)
+	if branch != "" {
+		if s.branchMemory == nil {
+			return domain.MemoryProjection{}, domain.ErrCatalogUnsupported
+		}
+		return s.branchMemory.QueryBranchMemory(ctx, repo.ID, branch, snapshot, a.CodeCommit)
+	}
+	if s.memorySnapshots == nil {
+		return domain.MemoryProjection{}, errMemorySnapshotsUnavailable
+	}
+	return s.memorySnapshots.GetMemoryProjection(ctx, repo.ID, snapshot)
 }
 
 func memoryInclusionSummary(in *domain.BranchContext) map[string]any {

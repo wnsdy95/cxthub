@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -19,7 +20,7 @@ func (s *PostgresStore) WithinIdentity(ctx context.Context, fn func(context.Cont
 		}
 		return fn(ctx)
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}

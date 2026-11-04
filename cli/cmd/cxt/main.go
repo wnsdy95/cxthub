@@ -67,7 +67,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return delivcli.RunSyncStatus(context.Background(), cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+		return delivcli.RunSyncStatus(context.Background(), localReplicaInspector{}, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
 	}
 	if args[1] == "doctor" || (args[1] == "branch" && len(args) > 2 && args[2] == "operations") {
 		cwd, err := os.Getwd()
@@ -76,7 +76,7 @@ func run(args []string) error {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		return delivcli.RunDiagnostics(ctx, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
+		return delivcli.RunDiagnostics(ctx, localReplicaInspector{}, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
 	}
 	if args[1] == "capture" {
 		cwd, err := os.Getwd()
@@ -246,6 +246,7 @@ func buildReadContainer(cfg config) container {
 	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	c := &delivcli.Container{
 		ResolveRepo:  gitCtx.CurrentRepo,
+		Inspection:   localReplicaInspector{},
 		List:         app.NewListSessionsService(store),
 		Queries:      app.NewLocalRefQueryService(gitCtx, store),
 		HistoryQuery: history,
@@ -294,6 +295,7 @@ func buildContainer(cfg config) container {
 		domain.ProviderClaude: claudeCap,
 		domain.ProviderCodex:  codexCap,
 	}
+	nativeSessions := capture.NewCommandSessionResolver(claudeCap, codexCap)
 
 	// Memory adapter (compatibility rules): MemorySource/MemorySink registry + self-distillation MemoryDistiller.
 	memSources := map[domain.ProviderKind]outbound.MemorySource{
@@ -350,11 +352,20 @@ func buildContainer(cfg config) container {
 	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
 	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	clictr := &delivcli.Container{
-		ProviderLaunch:          providerLaunchHooks(cfg),
-		WakeHistoricalSync:      delivcli.SpawnHistoricalSync,
-		SetCaptureIdentity:      setCaptureIdentity(cfg),
-		SetRemoteEndpoint:       setRemoteEndpoint(cfg),
-		ResolveRepo:             gitCtx.CurrentRepo,
+		DeviceLoginClient:  deviceLoginClient,
+		OpenLoginBrowser:   openDeviceLoginBrowser,
+		ProviderLaunch:     providerLaunchHooks(cfg, nativeSessions),
+		WakeHistoricalSync: delivcli.SpawnHistoricalSync,
+		SetCaptureIdentity: setCaptureIdentity(cfg),
+		SetRemoteEndpoint:  setRemoteEndpoint(cfg),
+		ResolveRepo:        gitCtx.CurrentRepo,
+		Inspection:         localReplicaInspector{},
+		WithSecretsLock: func(ctx context.Context, cwd string, work func() error) error {
+			return storage.NewFileStore(cwd).WithSecretsLock(ctx, work)
+		},
+		WithBackfillDaemon: func(ctx context.Context, root string, work func() error) (bool, error) {
+			return storage.NewFileStore(root).WithBackfillDaemon(ctx, work)
+		},
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
 		PrepareCapturePush:      prepareCapturePush(cfg, store),
 		Queries:                 app.NewLocalRefQueryService(gitCtx, store),
@@ -386,6 +397,9 @@ func buildContainer(cfg config) container {
 		Init:              initSvc,
 		Save:              saveSvc,
 		CommitCapture:     saveSvc,
+		RequestCapture:    coord.RequestCapture,
+		SessionSelection:  nativeSessions,
+		SessionInventory:  nativeSessions,
 		WakeCommitCapture: delivcli.SpawnCommitCapture,
 		Fork:              forkSvc,
 		Branches:          branchLifecycleSvc,
@@ -408,6 +422,9 @@ func buildContainer(cfg config) container {
 	}
 	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
 	clictr.WakeFetchDiscovery = delivcli.SpawnFetchDiscovery
+	clictr.ObserveLiveSession = func(ctx context.Context, cwd string, provider domain.ProviderKind, id string) error {
+		return capture.ObserveLiveSession(ctx, cwd, provider, id, clictr.WakeFetchDiscovery)
+	}
 	hookHdl.WithAgentContext(preparer)
 	loadSvc.WithAgentContext(preparer).WithAgentCodePosition(gitctx.NewGitContextAdapter())
 	seedSvc.WithAgentContext(preparer)

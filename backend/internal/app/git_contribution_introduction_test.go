@@ -44,7 +44,7 @@ func introductionEvidence(commits ...domain.GitCommitTree) (*codeEvidence, *intr
 	for _, commit := range commits {
 		reader.commits[commit.Commit] = commit
 	}
-	return &codeEvidence{repo: hh("introduction repo"), origin: "https://github.com/acme/repo", trees: reader, commits: map[string]evidenceValue[domain.GitCommitTree]{}}, reader
+	return &codeEvidence{repo: hh("introduction repo"), origin: "https://github.com/acme/repo", trees: reader}, reader
 }
 
 func TestGitContributionIntroductionUsesActualFirstParentBoundary(t *testing.T) {
@@ -208,8 +208,8 @@ func TestGitContributionRangeSharesEvidenceBudget(t *testing.T) {
 			if got != want || !errors.Is(err, scenario.wantErr) {
 				t.Fatalf("introduction=%s want=%s err=%v wantErr=%v", got, want, err, scenario.wantErr)
 			}
-			if readsBeforeAfter != scenario.baselineLength+1 || reader.reads != maxCodeEvidenceReads || evidence.reads != maxCodeEvidenceReads || evidence.limited != (scenario.wantErr != nil) {
-				t.Fatalf("range did not share evidence budget: beforeAfter=%d reads=%d budgetReads=%d limited=%v", readsBeforeAfter, reader.reads, evidence.reads, evidence.limited)
+			if readsBeforeAfter != scenario.baselineLength+1 || reader.reads != maxCodeEvidenceReads || evidence.ReadCount() != maxCodeEvidenceReads || evidence.Limited() != (scenario.wantErr != nil) {
+				t.Fatalf("range did not share evidence budget: beforeAfter=%d reads=%d budgetReads=%d limited=%v", readsBeforeAfter, reader.reads, evidence.ReadCount(), evidence.Limited())
 			}
 		})
 	}
@@ -261,12 +261,12 @@ func TestGitContributionRangeWithholdsIncompleteAfter(t *testing.T) {
 			commits := append([]domain.GitCommitTree{introductionCommit(1), introductionCommit(2, 1)}, scenario.commits...)
 			evidence, _ := introductionEvidence(commits...)
 			got, err := locateGitContributionInRange(context.Background(), evidence, introductionCommit(3).Commit, introductionCommit(2).Commit, introductionCommit(scenario.after).Commit)
-			if got != "" || !errors.Is(err, errGitContributionEvidencePending) || errors.Is(err, errGitContributionEvidenceLimit) || evidence.limited {
-				t.Fatalf("incomplete after evidence accepted: introduction=%s err=%v limited=%v", got, err, evidence.limited)
+			if got != "" || !errors.Is(err, errGitContributionEvidencePending) || errors.Is(err, errGitContributionEvidenceLimit) || evidence.Limited() {
+				t.Fatalf("incomplete after evidence accepted: introduction=%s err=%v limited=%v", got, err, evidence.Limited())
 			}
-			missing, checked := evidence.commits[introductionCommit(4).Commit]
-			if !checked || !errors.Is(missing.err, domain.ErrNotFound) {
-				t.Fatalf("missing first-parent evidence was not checked: checked=%v err=%v", checked, missing.err)
+			_, cachedErr, checked := evidence.CachedCommit(introductionCommit(4).Commit)
+			if !checked || !errors.Is(cachedErr, domain.ErrNotFound) {
+				t.Fatalf("missing first-parent evidence was not checked: checked=%v err=%v", checked, cachedErr)
 			}
 			commits = append(commits, introductionCommit(4, 2))
 			completeEvidence, _ := introductionEvidence(commits...)

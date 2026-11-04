@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -44,12 +43,8 @@ func (p *pgDocPublication) stageReadBlocks(ctx context.Context, j domain.DocFina
 		return err
 	}
 	defer rollbackPG(tx)
-	var raw []byte
-	if err := tx.QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&raw); err != nil {
-		return mapNoRows(err)
-	}
-	var old domain.DocFinalizationJob
-	if err := json.Unmarshal(raw, &old); err != nil {
+	old, err := readLockedDocJobPG(ctx, tx, j.RepoID, j.ID)
+	if err != nil {
 		return err
 	}
 	if err := publicationJobMatches(old, p.doc.doc); err != nil {

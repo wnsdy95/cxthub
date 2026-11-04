@@ -6,6 +6,7 @@
 !deploy/
 !deploy/Dockerfile
 !deploy/Dockerfile.mcp
+!deploy/Dockerfile.migrate
 
 !backend/
 !backend/go.mod
@@ -16,6 +17,8 @@
 !backend/internal/
 !backend/internal/**/
 !backend/internal/**/*.go
+!backend/internal/domain/legacy_native_float64/NOTICE.md
+!backend/internal/domain/legacy_native_float64/SOURCE.json
 
 !schemas/
 !schemas/db/

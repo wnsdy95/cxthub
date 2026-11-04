@@ -1,0 +1,206 @@
+//go:build postgres
+
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+)
+
+func TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph(t *testing.T) {
+	fixture, connection := graphSourceQueryFixturePG(t)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 90*time.Second)
+	defer cancel()
+	provider, storage, repo := fixture.basis.worker, fixture.storage.PostgresStore, fixture.basis.repo
+	pr := domain.PullRequestMerge{Number: 7, BaseBranch: "main", HeadBranch: "feature", HeadSHA: fixture.admission.OriginalHead, MergeSHA: fixture.proof.Contribution.IntegrationSHA}
+	if _, err := provider.core.SubmitPRPromotion(ctx, repo.ID, pr); err != nil {
+		t.Fatal(err)
+	}
+	remote := &githubHistoryRemote{GitHubApp: provider.remote, pages: map[string]domain.GitHubPRHistoryPage{"": {
+		RepositoryID: 91, HeadRepositoryID: 91, PullRequestID: "PR_7", PullRequestDatabaseID: 701, Number: 7,
+		BaseBranch: pr.BaseBranch, HeadBranch: pr.HeadBranch, HeadSHA: pr.HeadSHA, MergeSHA: pr.MergeSHA, Merged: true, MergedAt: time.Unix(300, 0).UTC(),
+		Rewrites: []domain.GitHubHeadRewrite{{ID: "original-head-restored", Before: strings.Repeat("6", 40), After: pr.HeadSHA, CreatedAt: time.Unix(200, 0).UTC()}},
+	}}}
+	if err := provider.reconcilePRHistory(ctx, remote, fixture.storage, historyWork(t, provider, fixture.storage, repo)); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < domain.DefaultRepositoryViewSourceLimit+1; index++ {
+		collaborationSnapshot(t, storage, repo.ID, fmt.Sprintf("graph capture page %03d", index))
+	}
+	worker := NewService(storage, storage, auth.NewTeamTokenAuth(), gitengine.NewEngine(storage), storage)
+	if err := worker.ConfigureGraphProjections(ctx, []domain.ContentHash{repo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(systemTestContext(), 5*time.Second)
+		defer cancel()
+		if err := storage.ConfigureGraphProjection(cleanup, repo.ID, false); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := worker.ProcessGraphProjections(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	partial, err := storage.ReadGraphProjection(ctx, repo.ID)
+	if err != nil || partial.Ready || len(partial.Parts) != 0 {
+		t.Fatal("partial graph capture became readable", partial, err)
+	}
+	var phase, cursor, dataset string
+	if err := connection.QueryRow(ctx, `SELECT phase,cursor,dataset::text FROM graph_projection_work WHERE repo_id=$1`, repo.ID).Scan(&phase, &cursor, &dataset); err != nil || phase != "capture" || cursor == "" {
+		t.Fatal("first lease did not persist a resumable graph cursor", phase, cursor, err)
+	}
+	peer, err := store.NewPostgresStore(ctx, fixture.basis.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	restarted := NewService(peer, peer, auth.NewTeamTokenAuth(), gitengine.NewEngine(peer), peer)
+	if err := restarted.ConfigureGraphProjections(ctx, []domain.ContentHash{repo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertParity := func(label string) domain.GraphProjectionRead {
+		t.Helper()
+		want, err := provider.core.GetRepositoryView(ctx, repo.ID)
+		if err != nil {
+			t.Fatal(label, err)
+		}
+		before, err := peer.ReadRepositoryGraphSourceGeneration(ctx, repo.ID)
+		if err != nil {
+			t.Fatal(label, err)
+		}
+		for attempt := 0; attempt < 20; attempt++ {
+			if err := restarted.ProcessGraphProjections(ctx, 1); err != nil {
+				t.Fatal(label, err)
+			}
+			read, err := peer.ReadGraphProjection(ctx, repo.ID)
+			if err != nil || read.NeedsAttention {
+				t.Fatal(label, "graph generation failed", read, err)
+			}
+			if !read.Ready {
+				continue
+			}
+			got, err := domain.DecodeGraphViewProjection(ctx, repo.ID, read.Parts)
+			if err != nil || !reflect.DeepEqual(graphWorkerViewUTCTimesPG(got), graphWorkerViewUTCTimesPG(want)) {
+				actual, _ := json.Marshal(got)
+				expected, _ := json.Marshal(want)
+				t.Fatalf("%s durable graph differs from live graph: %v\ngot %s\nwant %s", label, err, actual, expected)
+			}
+			after, err := peer.ReadRepositoryGraphSourceGeneration(ctx, repo.ID)
+			if err != nil || after != before || read.Source != read.Applied || read.Applied != before || read.Applied.Scope != domain.RepositoryGraphSourceScope || read.Dataset != dataset {
+				t.Fatal(label, "worker rewrote source or lost pinned generation", before, after, read, err)
+			}
+			if len(got.Graph.Integrations) != 1 || len(got.Graph.Operations.Merges) != 1 || len(got.Graph.BranchContexts["main"].Merges) != 1 {
+				t.Fatal(label, "mixed PR/Git evidence lost or duplicated integration", got.Graph.Integrations)
+			}
+			qualifyGraphBundlePG(t, peer, connection, repo.ID)
+			assertGraphBundleServingPG(t, peer, repo.ID, got, true)
+			return read
+		}
+		t.Fatal(label, "graph worker did not converge")
+		return domain.GraphProjectionRead{}
+	}
+	baseline := assertParity("restart")
+	if err := provider.core.SetSessionArchived(ctx, repo.ID, fixture.admission.Capture, true); err != nil {
+		t.Fatal(err)
+	}
+	lagged, err := peer.ReadGraphProjection(ctx, repo.ID)
+	if err != nil || lagged.Ready || lagged.Applied != baseline.Applied || lagged.Source.Sequence <= lagged.Applied.Sequence {
+		t.Fatal("lagged graph advertised current readiness", lagged, err)
+	}
+	prior, err := domain.DecodeGraphViewProjection(ctx, repo.ID, baseline.Parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGraphBundleServingPG(t, peer, repo.ID, prior, false)
+	assertParity("archive delta")
+	assertGraphBundleRepairPG(t, peer, connection, repo.ID, fixture.basis.dsn)
+	if worker.graphCache.Stats().Entries != 0 || restarted.graphCache.Stats().Entries != 0 || len(restarted.pendingProjectionRepos) != 0 {
+		t.Fatal("shadow worker populated serving state")
+	}
+}
+
+func graphWorkerViewUTCTimesPG(view domain.RepositoryView) domain.RepositoryView {
+	view.Snapshots = slices.Clone(view.Snapshots)
+	for index := range view.Snapshots {
+		view.Snapshots[index].CreatedAt = view.Snapshots[index].CreatedAt.UTC()
+	}
+	view.Pending = slices.Clone(view.Pending)
+	for index := range view.Pending {
+		view.Pending[index].UpdatedAt = view.Pending[index].UpdatedAt.UTC()
+	}
+	view.Reflog = slices.Clone(view.Reflog)
+	for index := range view.Reflog {
+		view.Reflog[index].CreatedAt = view.Reflog[index].CreatedAt.UTC()
+	}
+	view.ArchivedSessions = slices.Clone(view.ArchivedSessions)
+	for index := range view.ArchivedSessions {
+		view.ArchivedSessions[index].ArchivedAt = view.ArchivedSessions[index].ArchivedAt.UTC()
+		view.ArchivedSessions[index].UpdatedAt = view.ArchivedSessions[index].UpdatedAt.UTC()
+	}
+	return view
+}
+
+func TestPGGraphProjectionWorkerViewTimestampParity(test *testing.T) {
+	stamp := time.Date(2026, time.November, 3, 1, 2, 3, 456789123, time.UTC)
+	viewAt := func(stamp time.Time) domain.RepositoryView {
+		return domain.RepositoryView{
+			Snapshots:        []domain.Snapshot{{ID: "capture", Parents: []domain.ContentHash{"parent"}, CreatedAt: stamp}},
+			Pending:          []domain.Pending{{Target: "capture", UpdatedAt: stamp}},
+			Reflog:           []domain.RefLogEntry{{New: "capture", CreatedAt: stamp}},
+			ArchivedSessions: []domain.SessionArchiveView{{SessionArchive: domain.SessionArchive{SnapshotID: "capture", ArchivedAt: stamp}, UpdatedAt: stamp}},
+		}
+	}
+	want := viewAt(stamp)
+	for _, location := range []*time.Location{time.FixedZone("local UTC", 0), time.FixedZone("local Seoul", 9*60*60)} {
+		test.Run(location.String(), func(test *testing.T) {
+			got := viewAt(stamp.In(location))
+			if reflect.DeepEqual(got, want) {
+				test.Fatal("fixture must distinguish time locations")
+			}
+			if !reflect.DeepEqual(graphWorkerViewUTCTimesPG(got), want) {
+				test.Fatal("equivalent timestamp locations changed graph parity")
+			}
+			if !reflect.DeepEqual(got, viewAt(stamp.In(location))) {
+				test.Fatal("comparison mutated the original view")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*domain.RepositoryView){
+		"snapshot instant": func(view *domain.RepositoryView) { view.Snapshots[0].CreatedAt = stamp.Add(time.Nanosecond) },
+		"pending instant":  func(view *domain.RepositoryView) { view.Pending[0].UpdatedAt = stamp.Add(time.Nanosecond) },
+		"reflog instant":   func(view *domain.RepositoryView) { view.Reflog[0].CreatedAt = stamp.Add(time.Nanosecond) },
+		"archive instant":  func(view *domain.RepositoryView) { view.ArchivedSessions[0].ArchivedAt = stamp.Add(time.Nanosecond) },
+		"archive updated instant": func(view *domain.RepositoryView) {
+			view.ArchivedSessions[0].UpdatedAt = stamp.Add(time.Nanosecond)
+		},
+		"snapshot node":  func(view *domain.RepositoryView) { view.Snapshots[0].ID = "other" },
+		"snapshot edge":  func(view *domain.RepositoryView) { view.Snapshots[0].Parents[0] = "other" },
+		"pending target": func(view *domain.RepositoryView) { view.Pending[0].Target = "other" },
+		"reflog target":  func(view *domain.RepositoryView) { view.Reflog[0].New = "other" },
+		"archive target": func(view *domain.RepositoryView) { view.ArchivedSessions[0].SnapshotID = "other" },
+	} {
+		test.Run(name, func(test *testing.T) {
+			got := viewAt(stamp)
+			mutate(&got)
+			if reflect.DeepEqual(graphWorkerViewUTCTimesPG(got), want) {
+				test.Fatal("comparison discarded a semantic difference")
+			}
+		})
+	}
+	for _, view := range []domain.RepositoryView{{}, {Snapshots: []domain.Snapshot{}, Pending: []domain.Pending{}, Reflog: []domain.RefLogEntry{}, ArchivedSessions: []domain.SessionArchiveView{}}} {
+		if !reflect.DeepEqual(graphWorkerViewUTCTimesPG(view), view) {
+			test.Fatal("comparison changed nil or empty slices")
+		}
+	}
+}

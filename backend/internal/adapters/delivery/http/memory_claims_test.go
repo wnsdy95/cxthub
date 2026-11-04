@@ -17,7 +17,11 @@ func TestTypedMemoryAttachmentVersionGateAndAuthorization(t *testing.T) {
 	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
-	ts := httptest.NewServer(NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st)).Handler())
+	server := NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st))
+	if err := server.SetMemorySnapshotQueries(memorySnapshotQueriesForTest(t, svc)); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
 	var me struct {
 		Username string `json:"username"`

@@ -9,7 +9,7 @@ import { validateGraphState } from './graphState';
 import type { StorageUsageReport, RefLogEntry, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
 import { normalizeActivityResponse } from './activity';
 import { validateContextSemantics } from './graphEvidence';
-import type { DocFragmentPage, DocViewEvent, DocViewMode } from './types';
+import type { DocumentIdentity, DocFragmentPage, DocViewEvent, DocViewMode } from './types';
 import { DOCUMENT_DETAIL_BYTES, DOCUMENT_FRAGMENT_BYTES, DOCUMENT_FRAGMENT_RESPONSE_BYTES, DOCUMENT_PAGE_BYTES, readDocumentResponse, scheduleDocumentRead } from './documentReads';
 import { DOCUMENT_VISIBLE_MESSAGES, validateDocEventDetail, validateDocFragment, validateDocViewPage } from './documentPaging';
 import { validatePendingState } from './pendingState';
@@ -58,9 +58,9 @@ async function readTransport<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal, maxBytes?: number): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal, maxBytes?: number, additionalHeaders?: Record<string, string>): Promise<T> {
   // Compatibility declaration only; cookies continue to carry authentication.
-  const headers: Record<string, string> = {'X-Cxt-Doc-Identities': 'cxt-manifest-sha256-v1'};
+  const headers: Record<string, string> = {'X-Cxt-Doc-Identities': 'cxt-manifest-sha256-v1', ...additionalHeaders};
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers['X-Cxt-CSRF'] = '1';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idpToken) headers['Authorization'] = `Bearer ${idpToken}`; // Only used for exchangeSession
@@ -98,6 +98,7 @@ export interface DocEventPage {
 }
 
 export interface DocViewEventPage extends Omit<DocEventPage, 'events'> {
+  doc_identity?: DocumentIdentity;
   events: DocViewEvent[];
 }
 
@@ -304,8 +305,6 @@ export const api = {
     call<Snapshot[]>('GET', `/repos/${encodeURIComponent(repoId)}/snapshots?branch=${encodeURIComponent(branch)}`),
   getDoc: (repoId: string, hash: string) =>
     call<SessionDoc>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}`),
-  getDocEvents: (repoId: string, hash: string, base: string | undefined, offset: number, signal?: AbortSignal) =>
-    call<DocEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?offset=${offset}&limit=50${base ? `&base=${encodeURIComponent(base)}` : ''}`, undefined, undefined, signal),
   getDocViewEvents: (repoId: string, hash: string, base: string | undefined, offset: number, view: DocViewMode, signal?: AbortSignal) =>
     scheduleDocumentRead(async () => {
       const params = new URLSearchParams({ view, offset: String(offset), limit: String(DOCUMENT_VISIBLE_MESSAGES) });
@@ -313,6 +312,18 @@ export const api = {
       const page = await call<DocViewEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?${params}`, undefined, undefined, signal, DOCUMENT_PAGE_BYTES);
       return validateDocViewPage(page, hash, offset);
     }, signal),
+  getDocVisibleEvents: (repoId: string, hash: string, params: URLSearchParams, signal?: AbortSignal) =>
+    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?${params}`,
+      undefined, undefined, signal, DOCUMENT_PAGE_BYTES), signal),
+  getDocFindPage: (repoId: string, hash: string, params: URLSearchParams, signal?: AbortSignal) =>
+    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/find?${params}`,
+      undefined, undefined, signal, DOCUMENT_PAGE_BYTES, { Accept: 'application/json, application/vnd.cxthub.find-source-ranges-v1+json' }), signal),
+  getDocFindFragment: (repoId: string, hash: string, params: URLSearchParams, signal?: AbortSignal) =>
+    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/find-fragments?${params}`,
+      undefined, undefined, signal, DOCUMENT_FRAGMENT_RESPONSE_BYTES), signal),
+  getDocFindLegacyEvent: (repoId: string, hash: string, index: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?view=raw&offset=${index}&limit=1`,
+      undefined, undefined, signal, DOCUMENT_PAGE_BYTES), signal),
   getDocEvent: (repoId: string, hash: string, index: number, signal?: AbortSignal) =>
     scheduleDocumentRead(async () => {
       const page = await call<DocViewEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?view=raw&offset=${index}&limit=1`, undefined, undefined, signal, DOCUMENT_DETAIL_BYTES);

@@ -352,7 +352,7 @@ func TestEffectiveMemoryReadBoundEndsPageBeforeChangingLaterClaim(t *testing.T) 
 	}
 	// Emulate a preceding expensive claim that consumed the page budget. The
 	// next claim has not been emitted and must get a fresh budget next page.
-	evidence.reads = maxCodeEvidenceReads
+	exhaustCodeEvidenceReads(t, evidence)
 	out := domain.EffectiveMemoryPage{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(3)}, StateHash: hh("generation"), Items: []domain.EffectiveMemoryItem{{ID: hh("preceding item")}}}
 	got, err := resolveEffectiveMemoryPage(ctx, resolver, out, items, 0, 20)
 	if err != nil || len(got.Items) != 1 || got.NextCursor == "" {

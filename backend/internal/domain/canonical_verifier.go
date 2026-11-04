@@ -3,7 +3,6 @@ package domain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"sync"
 )
 
@@ -24,36 +23,78 @@ type canonicalEventProof struct {
 // Its zero value is ready for concurrent use; it must not be copied after use.
 // A process restart or eviction loses speed, not correctness or stored data.
 type CanonicalDocVerifier struct {
-	mu     sync.Mutex
-	events map[canonicalEventKey]int
-	order  []canonicalEventKey
-	next   int
+	mu       sync.Mutex
+	events   map[canonicalEventKey]int
+	order    []canonicalEventKey
+	next     int
+	uncached bool
+}
+
+func NewCanonicalDocVerifierWithoutCache() *CanonicalDocVerifier {
+	return &CanonicalDocVerifier{uncached: true}
 }
 
 func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []byte, pending *[]canonicalEventProof) (int, error) {
-	key := canonicalEventKey{HashContent(raw), version}
+	if ctx.Err() != nil {
+		return v.eventWithKey(ctx, canonicalEventKey{HashContent(raw), version}, raw, pending)
+	}
+	hash, err := HashContentContext(ctx, raw)
+	if err != nil {
+		return 0, err
+	}
+	key := canonicalEventKey{hash, version}
 	return v.eventWithKey(ctx, key, raw, pending)
 }
 
 func (v *CanonicalDocVerifier) eventWithKey(ctx context.Context, key canonicalEventKey, raw []byte, pending *[]canonicalEventProof) (int, error) {
+	if v.uncached {
+		return verifyCanonicalEvent(ctx, key.version, raw)
+	}
 	v.mu.Lock()
 	seq, found := v.events[key]
 	v.mu.Unlock()
 	if found {
 		return seq, ctx.Err()
 	}
-	var event CIREvent
-	if err := json.Unmarshal(raw, &event); err != nil {
+	seq, err := verifyCanonicalEvent(ctx, key.version, raw)
+	if err != nil {
+		return 0, err
+	}
+	if len(*pending) < maxCanonicalEventProofs {
+		*pending = append(*pending, canonicalEventProof{key, seq})
+	}
+	return seq, nil
+}
+
+func verifyCanonicalEvent(ctx context.Context, version string, raw []byte) (int, error) {
+	if ctx.Err() != nil {
+		return verifyCanonicalEventBytes(ctx, version, raw)
+	}
+	projected, err := canonicalEventProjection(ctx, raw)
+	if err != nil {
+		return 0, err
+	}
+	if sequence, valid := canonicalMessageEventSequence(version, projected); valid {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return sequence, nil
+	}
+	return verifyCanonicalEventBytes(ctx, version, projected)
+}
+
+func verifyCanonicalEventBytes(ctx context.Context, version string, raw []byte) (int, error) {
+	event, err := decodeCanonicalEvent(raw)
+	if err != nil {
 		return 0, ErrIntegrity
 	}
-	doc := CIRDocument{Envelope: CIREnvelope{CIRVersion: key.version}, Events: []CIREvent{event}}
+	doc := CIRDocument{Envelope: CIREnvelope{CIRVersion: version}, Events: []CIREvent{event}}
 	if err := ValidateCIRVersion(doc); err != nil {
 		return 0, err
 	}
-	// Replacement history has its own stable sequence ordering. Reuse the same
-	// canonical rules as ordinary typed document validation, including union and
-	// explicit optional-field presence checks.
-	event = canonicalEvents(doc.Events)[0]
+	if event.Replacement != nil {
+		event.Replacement = canonicalEvents(event.Replacement)
+	}
 	canonical, err := canonicalDecodedEventJSON(event)
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return 0, ErrIntegrity
@@ -61,17 +102,13 @@ func (v *CanonicalDocVerifier) eventWithKey(ctx context.Context, key canonicalEv
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	// Do not evict proofs that a later event in this same document may need.
-	// Admission is bounded independently of document size and follows complete
-	// document validation. Rejection or cancellation observed during validation
-	// therefore discards the pending admissions without churning the cache.
-	if len(*pending) < maxCanonicalEventProofs {
-		*pending = append(*pending, canonicalEventProof{key, event.Seq})
-	}
 	return event.Seq, nil
 }
 
 func (v *CanonicalDocVerifier) remember(pending []canonicalEventProof) {
+	if v.uncached {
+		return
+	}
 	if len(pending) == 0 {
 		return
 	}
@@ -105,27 +142,24 @@ func (v *CanonicalDocVerifier) Verify(ctx context.Context, hash ContentHash, raw
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
-	if ValidateContentHash(hash) != nil || HashContent(raw) != hash {
+	if ValidateContentHash(hash) != nil {
 		return zero, ErrIntegrity
 	}
-	env, stream, ok := canonicalStream(raw)
-	if !ok {
-		return zero, ErrIntegrity
-	}
-	var envelope CIREnvelope
-	if json.Unmarshal(env, &envelope) != nil {
-		return zero, ErrIntegrity
-	}
-	if err := ValidateCIRVersion(CIRDocument{Envelope: envelope}); err != nil {
+	actual, err := HashContentContext(ctx, raw)
+	if err != nil {
 		return zero, err
 	}
-	canonical, err := canonicalJSON(envelope)
-	if err != nil || !bytes.Equal(canonical, env) {
+	if actual != hash {
 		return zero, ErrIntegrity
 	}
-	// Framing has already validated JSON. Borrow each event slice without a
-	// second JSON decoder or a transcript-sized RawMessage array. Only a cold
-	// event needs typed decoding and canonicalization.
+	env, stream, err := canonicalVerificationFrame(ctx, raw)
+	if err != nil {
+		return zero, err
+	}
+	envelope, err := decodeCanonicalCIREnvelope(env)
+	if err != nil {
+		return zero, canonicalVerificationFailure(ctx, raw, err)
+	}
 	previous, havePrevious := 0, false
 	var pending []canonicalEventProof
 	err = visitCanonicalEvents(ctx, stream, func(body []byte) error {
@@ -143,7 +177,7 @@ func (v *CanonicalDocVerifier) Verify(ctx context.Context, hash ContentHash, raw
 		return nil
 	})
 	if err != nil {
-		return zero, err
+		return zero, canonicalVerificationFailure(ctx, raw, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return zero, err

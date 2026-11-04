@@ -69,14 +69,16 @@ type rangeLoadSample struct {
 	End          time.Time
 	Microseconds int64
 	Error        string `json:",omitempty"`
+	Retry        bool
 }
 
 type rangeLoadClient struct {
-	client  *http.Client
-	base    string
-	token   string
-	mu      sync.Mutex
-	samples []rangeLoadSample
+	client     *http.Client
+	base       string
+	token      string
+	mu         sync.Mutex
+	samples    []rangeLoadSample
+	operations []rangeLoadOperation
 }
 
 type rangeLoadMemoryRecorder struct {
@@ -217,7 +219,10 @@ func rangeLoadBuild(t *testing.T, name string, target int, consume func(domain.C
 		if index == 1 {
 			payloadBytes = 256 << 10
 		}
-		if index%10 != 0 {
+		if index >= 140 && index%10 == 5 {
+			event.Role = domain.RoleAssistant
+		}
+		if index != 0 && (index < 140 || index%5 != 0) {
 			event.Kind, event.Role = domain.EventToolResult, ""
 			event.CallID = fmt.Sprintf("range-tool-%06d", index)
 			line := fmt.Sprintf("%s tool %06d deterministic output \uac80\uc99d\n", name, index)
@@ -348,6 +353,9 @@ func rangeLoadSetup(t *testing.T, ctx context.Context, storage *store.PostgresSt
 	if _, err := storage.DocRangeIndex(ctx, fixture.Repo, fixture.Root.Wire.Hash); err != nil {
 		t.Fatalf("setup publication did not create range index: %v", err)
 	}
+	if ready, err := storage.HasDocVisibleIndex(ctx, fixture.Repo, fixture.Root.Wire.Hash); err != nil || !ready {
+		t.Fatalf("setup publication did not create visible-v1 index: ready=%v err=%v", ready, err)
+	}
 	if err := storage.CompareAndSwapRef(ctx, fixture.Repo, domain.Ref{RepoID: fixture.Repo, Kind: domain.RefBranch, Name: "main", Target: fixture.Root.Wire.Hash}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -400,8 +408,21 @@ func rangeLoadSetup(t *testing.T, ctx context.Context, storage *store.PostgresSt
 	t.Logf("upload payload source=%s; exact HTTP-body hashes recorded; each body <=1MiB; generation outside application cgroup", uploadSource)
 }
 
-func (client *rangeLoadClient) request(ctx context.Context, phase, kind, method, path string, body []byte, expected int) ([]byte, error) {
+func (client *rangeLoadClient) request(ctx context.Context, phase, kind, method, path string, body []byte, expected int) (result []byte, failure error) {
+	operation := rangeLoadOperation{Phase: phase, Kind: kind, Start: time.Now()}
+	defer func() {
+		operation.End = time.Now()
+		operation.Microseconds = operation.End.Sub(operation.Start).Microseconds()
+		operation.Completed = failure == nil
+		if failure != nil {
+			operation.Error = failure.Error()
+		}
+		client.mu.Lock()
+		client.operations = append(client.operations, operation)
+		client.mu.Unlock()
+	}()
 	for attempt := 0; attempt < 64; attempt++ {
+		operation.Attempts++
 		sample := rangeLoadSample{Phase: phase, Kind: kind, Start: time.Now()}
 		request, err := http.NewRequestWithContext(ctx, method, client.base+path, bytes.NewReader(body))
 		if err != nil {
@@ -430,8 +451,9 @@ func (client *rangeLoadClient) request(ctx context.Context, phase, kind, method,
 					} `json:"error"`
 				}
 				err = json.Unmarshal(raw, &failure)
-				retry = err == nil && failure.Error.Code == "resource_overloaded" && response.Header.Get("Retry-After") == "1"
-				if !retry {
+				retry = err == nil && expected != 503 && failure.Error.Code == "resource_overloaded" && response.Header.Get("Retry-After") == "1"
+				pending := err == nil && expected == 503 && failure.Error.Code == "doc_range_index_pending" && response.Header.Get("Retry-After") == "3"
+				if !retry && !pending {
 					err = fmt.Errorf("unexpected 503: %s", raw)
 				}
 			} else if err == nil && response.StatusCode != expected {
@@ -439,6 +461,7 @@ func (client *rangeLoadClient) request(ctx context.Context, phase, kind, method,
 			}
 		}
 		sample.End = time.Now()
+		sample.Retry = retry
 		sample.Microseconds = sample.End.Sub(sample.Start).Microseconds()
 		if err != nil {
 			sample.Error = err.Error()
@@ -548,6 +571,9 @@ func rangeLoadCheckGraph(raw []byte, fixture rangeLoadFixture) error {
 }
 
 func (client *rangeLoadClient) read(ctx context.Context, phase, kind string, fixture rangeLoadFixture, iteration int) error {
+	if strings.HasPrefix(kind, "visible_") {
+		return client.readVisible(ctx, phase, strings.TrimPrefix(kind, "visible_"), fixture, iteration)
+	}
 	path := "/docs/" + string(fixture.Root.Wire.Hash)
 	if kind == "chat" || kind == "raw" {
 		offset := 0
@@ -650,12 +676,12 @@ func rangeLoadMix(ctx context.Context, client *rangeLoadClient, fixture rangeLoa
 	var group sync.WaitGroup
 	group.Add(21)
 	go func() { defer group.Done(); <-start; errorsFound <- work() }()
-	kinds := []string{"chat", "raw", "fragment", "graph", "pending"}
+	kinds := []string{"visible_all", "visible_chat", "visible_prompts", "chat", "raw", "fragment", "graph", "pending"}
 	for actor := 0; actor < 20; actor++ {
 		go func(actor int) {
 			defer group.Done()
 			<-start
-			for iteration := 0; iteration < 8; iteration++ {
+			for iteration := 0; iteration < 2*len(kinds); iteration++ {
 				if err := client.read(ctx, phase, kinds[(actor+iteration)%len(kinds)], fixture, iteration); err != nil {
 					errorsFound <- err
 					return
@@ -718,7 +744,7 @@ func rangeLoadCgroup(t *testing.T) {
 	}
 }
 
-func rangeLoadCold(t *testing.T, ctx context.Context, dsn, directory string, client *rangeLoadClient, storage *store.PostgresStore, fixture rangeLoadFixture) {
+func rangeLoadCold(t *testing.T, ctx context.Context, dsn, directory string, client *rangeLoadClient, service *app.Service, storage *store.PostgresStore, fixture rangeLoadFixture) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -736,7 +762,7 @@ func rangeLoadCold(t *testing.T, ctx context.Context, dsn, directory string, cli
 	sourceFingerprint := func() string {
 		var count int
 		var fingerprint string
-		err := pool.QueryRow(ctx, `SELECT count(*), md5(string_agg(rb.kind || ':' || rb.hash || ':' || octet_length(b.bytes)::text || ':' || md5(b.bytes), E'\n' ORDER BY rb.kind, rb.hash))
+		err := pool.QueryRow(ctx, `SELECT count(*), md5(string_agg(rb.kind || ':' || rb.hash || ':' || octet_length(b.bytes)::text || ':' || md5(b.bytes) || ':' || b.doc_range_source_version::text, E'\n' ORDER BY rb.kind, rb.hash))
  FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash WHERE rb.repo_id=$1 AND rb.hash=ANY($2::text[])`, fixture.Repo, hashes).Scan(&count, &fingerprint)
 		if err != nil || count != len(hashes) {
 			t.Fatalf("cold source/grant fingerprint: rows=%d expected=%d err=%v", count, len(hashes), err)
@@ -744,29 +770,43 @@ func rangeLoadCold(t *testing.T, ctx context.Context, dsn, directory string, cli
 		return fingerprint
 	}
 	before := sourceFingerprint()
-	deleted, err := pool.Exec(ctx, `DELETE FROM doc_range_indexes_v1 WHERE hash=$1
+	deleted, err := pool.Exec(ctx, `DELETE FROM doc_range_generations_v2 WHERE doc_hash=$1
  AND EXISTS (SELECT 1 FROM repo_blobs WHERE repo_id=$2 AND kind='doc' AND hash=$1)`, fixture.Root.Wire.Hash, fixture.Repo)
 	if err != nil || deleted.RowsAffected() != 1 {
 		t.Fatalf("cold preparation must delete exactly one derived header: rows=%d err=%v", deleted.RowsAffected(), err)
 	}
 	var remaining int
-	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM doc_range_indexes_v1 WHERE hash=$1) + (SELECT count(*) FROM doc_range_pages_v1 WHERE doc_hash=$1)`, fixture.Root.Wire.Hash).Scan(&remaining); err != nil || remaining != 0 {
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM doc_range_generations_v2 WHERE doc_hash=$1) + (SELECT count(*) FROM doc_range_objects_v2 WHERE doc_hash=$1)`, fixture.Root.Wire.Hash).Scan(&remaining); err != nil || remaining != 0 {
 		t.Fatalf("cold derived index deletion incomplete: rows=%d err=%v", remaining, err)
 	}
-	if _, err := storage.DocRangeIndex(ctx, fixture.Repo, fixture.Root.Wire.Hash); !errors.Is(err, domain.ErrDocRangeIndexUnavailable) {
-		t.Fatalf("cold root unexpectedly still indexed: %v", err)
+	if ready, err := storage.HasDocRangeIndex(ctx, fixture.Repo, fixture.Root.Wire.Hash); err != nil || ready {
+		t.Fatalf("cold root unexpectedly still ready: %v", err)
 	}
 	if sourceFingerprint() != before {
 		t.Fatal("derived index deletion changed source blobs or grants")
 	}
-	t.Logf("cold preparation deleted only disposable root derived header/pages; %d source/grant rows unchanged; PostgreSQL buffers are not cold", len(hashes))
+	t.Logf("cold preparation deleted only disposable root v2 generation/objects; v1 index retained; %d source/grant rows unchanged; PostgreSQL buffers are not cold", len(hashes))
 	path := "/docs/" + string(fixture.Root.Wire.Hash) + "/events?view=chat&offset=0&limit=20"
 	started := time.Now()
+	if _, err := client.request(ctx, "cold", "prepare", "GET", path, nil, 503); err != nil {
+		t.Fatal(err)
+	}
+	enqueueElapsed := time.Since(started)
+	if ready, err := storage.HasDocRangeIndex(ctx, fixture.Repo, fixture.Root.Wire.Hash); err != nil || ready {
+		t.Fatalf("cold request built an index instead of queuing work: %v", err)
+	}
+	workerStarted := time.Now()
+	if err := service.ProcessDocRangeJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	workerElapsed := time.Since(workerStarted)
+	readStarted := time.Now()
 	raw, err := client.request(ctx, "cold", "chat", "GET", path, nil, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
 	coldElapsed := time.Since(started)
+	readElapsed := time.Since(readStarted)
 	if err := rangeLoadCheckPage(raw, fixture.Root, 0, 20, "chat"); err != nil {
 		t.Fatal(err)
 	}
@@ -777,7 +817,7 @@ func rangeLoadCold(t *testing.T, ctx context.Context, dsn, directory string, cli
 	if err := rangeLoadSave(filepath.Join(directory, "cold-samples.json"), client.samples); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("isolated cold first chat page=%s cumulative_peak_bytes=%s; verifying rebuilt index before sequential warm request", coldElapsed, strings.TrimSpace(string(peak)))
+	t.Logf("isolated cold enqueue=%s worker=%s ready_chat=%s total=%s cumulative_peak_bytes=%s; verifying rebuilt index before sequential warm request", enqueueElapsed, workerElapsed, readElapsed, coldElapsed, strings.TrimSpace(string(peak)))
 	rebuilt, err := storage.DocRangeIndex(ctx, fixture.Repo, fixture.Root.Wire.Hash)
 	if err != nil || !reflect.DeepEqual(rebuilt, header) {
 		t.Fatalf("cold backfill changed authenticated range header: %v", err)
@@ -811,10 +851,10 @@ func rangeLoadCold(t *testing.T, ctx context.Context, dsn, directory string, cli
 	if err := rangeLoadCheckPage(raw, fixture.Root, 0, 20, "chat"); err != nil {
 		t.Fatal(err)
 	}
-	if err := rangeLoadSave(filepath.Join(directory, "cold-proof.json"), map[string]any{"root": fixture.Root.Wire.Hash, "deleted_headers": 1, "source_grant_rows": len(hashes), "source_grant_fingerprint": before, "verified_events": verified, "cold_microseconds": coldElapsed.Microseconds(), "cold_cumulative_peak_bytes": strings.TrimSpace(string(peak)), "warm_microseconds": warmElapsed.Microseconds()}); err != nil {
+	if err := rangeLoadSave(filepath.Join(directory, "cold-proof.json"), map[string]any{"root": fixture.Root.Wire.Hash, "deleted_headers": 1, "source_grant_rows": len(hashes), "source_grant_fingerprint": before, "verified_events": verified, "enqueue_microseconds": enqueueElapsed.Microseconds(), "worker_microseconds": workerElapsed.Microseconds(), "ready_read_microseconds": readElapsed.Microseconds(), "cold_microseconds": coldElapsed.Microseconds(), "cold_cumulative_peak_bytes": strings.TrimSpace(string(peak)), "warm_microseconds": warmElapsed.Microseconds()}); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("PASS: isolated cold backfill=%s warm=%s; all %d event checksums and source/grant preservation verified; cold derived index only, one sample each, not disk-cold or SLA evidence", coldElapsed, warmElapsed, verified)
+	t.Logf("PASS: isolated cold enqueue=%s worker=%s ready_chat=%s total=%s warm=%s; all %d event checksums and source/grant preservation verified; cold derived index only, one sample each, not disk-cold or SLA evidence", enqueueElapsed, workerElapsed, readElapsed, coldElapsed, warmElapsed, verified)
 }
 
 func TestPostgresDocRangeMixedLoad(t *testing.T) {
@@ -889,12 +929,31 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 	if fixture.Run != run || fixture.Root.Manifest.StreamBytes < 310<<20 || fixture.Upload.Manifest.StreamBytes < 32<<20 || len(fixture.Snapshots) != 700 || fixture.UploadSource != uploadSource || len(fixture.UploadPayloadHashes) != len(fixture.Upload.Manifest.Chunks) {
 		t.Fatal("fixture provenance/size mismatch")
 	}
-	service := app.NewService(storage, storage, nil, gitengine.NewEngine(storage), storage)
+	bounded := &rangeLoadVisibleStore{PostgresStore: storage}
+	service := app.NewService(bounded, bounded, nil, gitengine.NewEngine(bounded), bounded)
 	if err := service.ConfigureConversationRootPublication(true); err != nil {
 		t.Fatal(err)
 	}
 	identity := app.NewIdentityService(auth.NewDevVerifier(), storage)
-	server := httptest.NewServer(NewServer(service, identity).Handler())
+	visible := &rangeLoadVisibleBackend{Service: service}
+	defer func() {
+		if err := rangeLoadSave(filepath.Join(directory, "visible-costs.json"), visible.costs); err != nil {
+			t.Error(err)
+		}
+	}()
+	delivery := NewServer(visible, identity)
+	queries, err := service.GraphQueriesForProfile(inbound.RepositoryGraphPinnedSnapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.SetRepositoryGraphQueries(queries, inbound.RepositoryGraphPinnedSnapshots); err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.SetRepositoryStateQueries(service, inbound.RepositoryStatePinnedSnapshots); err != nil {
+		t.Fatal(err)
+	}
+	setServiceDocumentQueriesForProfile(t, delivery, service, inbound.DocumentQueryVerifiedRoots)
+	server := httptest.NewServer(delivery.Handler())
 	defer server.Close()
 	client := &rangeLoadClient{client: &http.Client{Timeout: 45 * time.Second}, base: server.URL + "/api/v1/repos/" + string(fixture.Repo), token: fixture.Token}
 	defer client.client.CloseIdleConnections()
@@ -906,6 +965,9 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 	}()
 	defer func() {
 		if err := rangeLoadSave(filepath.Join(directory, "samples.json"), client.samples); err != nil {
+			t.Error(err)
+		}
+		if err := rangeLoadSave(filepath.Join(directory, "operations.json"), client.operations); err != nil {
 			t.Error(err)
 		}
 		groups := map[string][]int64{}
@@ -923,12 +985,12 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 		for _, key := range keys {
 			values := groups[key]
 			sort.Slice(values, func(left, right int) bool { return values[left] < values[right] })
-			t.Logf("%s attempts=%d p50_us=%d p95_us=%d max_us=%d max_response_bytes=%d", key, len(values), values[(len(values)-1)/2], values[(len(values)-1)*95/100], values[len(values)-1], maximum[key])
+			t.Logf("%s attempts=%d p50_us=%d p95_us=%d max_us=%d max_response_bytes=%d", key, len(values), values[(len(values)-1)/2], values[(len(values)*95+99)/100-1], values[len(values)-1], maximum[key])
 		}
 	}()
 	if phase == "cold" {
 		memory.setPhase("cold")
-		rangeLoadCold(t, ctx, dsn, directory, client, storage, fixture)
+		rangeLoadCold(t, ctx, dsn, directory, client, service, storage, fixture)
 		functionalComplete = true
 		return
 	}
@@ -981,8 +1043,14 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 	}
 	t.Logf("controlled upload input=%s; payload bodies individually hash-verified and bounded to1MiB", uploadSource)
 	var uploadStart, uploadEnd time.Time
+	windows := map[string][2]time.Time{}
+	defer func() {
+		if err := rangeLoadSave(filepath.Join(directory, "work-windows.json"), windows); err != nil {
+			t.Error(err)
+		}
+	}()
 	memory.setPhase("upload")
-	if err := rangeLoadMix(ctx, client, fixture, "upload", func() error {
+	uploadError := rangeLoadMix(ctx, client, fixture, "upload", func() error {
 		uploadStart = time.Now()
 		defer func() { uploadEnd = time.Now() }()
 		for _, chunk := range fixture.Upload.Manifest.Chunks {
@@ -1004,8 +1072,10 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 			}
 		}
 		return nil
-	}); err != nil {
-		t.Fatal(err)
+	})
+	windows["upload"] = [2]time.Time{uploadStart, uploadEnd}
+	if uploadError != nil {
+		t.Fatal(uploadError)
 	}
 	if err := rangeLoadSave(filepath.Join(directory, "upload-samples.json"), client.samples); err != nil {
 		t.Fatal(err)
@@ -1034,7 +1104,7 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 	var workerEnd time.Time
 	workerAdmissionRetries := 0
 	memory.setPhase("worker")
-	if err := rangeLoadMix(ctx, client, fixture, "worker", func() error {
+	workerError := rangeLoadMix(ctx, client, fixture, "worker", func() error {
 		defer func() {
 			workerEnd = time.Now()
 			memory.setPhase("worker_done")
@@ -1052,9 +1122,7 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 			}
 		}
 		return fmt.Errorf("worker admission retries exhausted")
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	var workerStart time.Time
 	select {
 	case workerStart = <-observed.claimed:
@@ -1062,10 +1130,14 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 		t.Fatal("worker never claimed the job")
 	}
 	t.Logf("worker_admission_retries=%d", workerAdmissionRetries)
-	if err := rangeLoadSave(filepath.Join(directory, "work-windows.json"), map[string][2]time.Time{"upload": {uploadStart, uploadEnd}, "worker": {workerStart, workerEnd}}); err != nil {
+	windows["worker"] = [2]time.Time{workerStart, workerEnd}
+	if err := rangeLoadSave(filepath.Join(directory, "worker-admission.json"), map[string]int{"retries": workerAdmissionRetries}); err != nil {
 		t.Fatal(err)
 	}
-	for phase, window := range map[string][2]time.Time{"upload": {uploadStart, uploadEnd}, "worker": {workerStart, workerEnd}} {
+	if workerError != nil {
+		t.Fatal(workerError)
+	}
+	for phase, window := range windows {
 		overlap, completedDuring := map[string]int{}, map[string]int{}
 		for _, sample := range client.samples {
 			if sample.Phase != phase || sample.Kind == "chunk_upload" || sample.Kind == "submit" {
@@ -1074,7 +1146,7 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 			if sample.Start.Before(window[1]) && sample.End.After(window[0]) {
 				overlap[sample.Kind]++
 			}
-			if sample.Status == 200 && sample.End.After(window[0]) && sample.End.Before(window[1]) {
+			if sample.Status == 200 && sample.Error == "" && sample.End.After(window[0]) && sample.End.Before(window[1]) {
 				completedDuring[sample.Kind]++
 			}
 		}
@@ -1085,6 +1157,11 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 		}
 		if completedDuring["chat"] == 0 {
 			t.Errorf("no successful chat page completed during %s", phase)
+		}
+		for _, kind := range rangeLoadVisibleKinds() {
+			if completedDuring[kind] == 0 {
+				t.Errorf("no successful %s completed during %s", kind, phase)
+			}
 		}
 		t.Logf("%s duration=%s overlapping_attempts=%v successful_completions_during=%v", phase, window[1].Sub(window[0]), overlap, completedDuring)
 	}
@@ -1143,8 +1220,78 @@ func TestPostgresDocRangeMixedLoad(t *testing.T) {
 	if err := rangeLoadCheckPage(raw, fixture.Upload, 0, 20, "chat"); err != nil {
 		t.Fatal(err)
 	}
+	uploaded := fixture
+	uploaded.Root = fixture.Upload
+	for _, view := range []string{"all", "chat", "prompts"} {
+		if err := client.readVisible(ctx, "verify", view, uploaded, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Logf("PASS: response identities, inline/event-fragment checksums, worker completion, published range index and full uploaded stream SHA256=%s; timings are observations, not SLA guarantees", fixture.Upload.StreamSHA256)
 	functionalComplete = true
+}
+
+func TestDocRangeLoadPreparationContract(t *testing.T) {
+	for _, scenario := range []struct {
+		name, code, retryAfter string
+		expected               int
+		accepted               bool
+	}{
+		{"queued preparation", "doc_range_index_pending", "3", 503, true},
+		{"unexpected preparation", "doc_range_index_pending", "3", 200, false},
+		{"missing projection", "doc_range_index_unavailable", "3", 503, false},
+		{"invalid retry hint", "doc_range_index_pending", "1", 503, false},
+		{"admission not preparation", "resource_overloaded", "1", 503, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Retry-After", scenario.retryAfter)
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(writer).Encode(map[string]any{"error": map[string]string{"code": scenario.code}})
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			client := rangeLoadClient{client: server.Client(), base: server.URL}
+			_, err := client.request(ctx, "cold", "prepare", "GET", "/events", nil, scenario.expected)
+			if (err == nil) != scenario.accepted || len(client.samples) != 1 {
+				t.Fatal("load test hid an invalid preparation response", err, len(client.samples))
+			}
+		})
+	}
+}
+
+func TestDocRangeLoadRetryAccounting(t *testing.T) {
+	for _, completes := range []bool{false, true} {
+		t.Run(strconv.FormatBool(completes), func(t *testing.T) {
+			attempts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				attempts++
+				if completes && attempts == 2 {
+					_, _ = writer.Write([]byte(`{"ok":true}`))
+					return
+				}
+				writer.Header().Set("Retry-After", "1")
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = writer.Write([]byte(`{"error":{"code":"resource_overloaded"}}`))
+			}))
+			defer server.Close()
+			timeout := 50 * time.Millisecond
+			if completes {
+				timeout = 3 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			client := rangeLoadClient{client: server.Client(), base: server.URL}
+			_, err := client.request(ctx, "fixture", "retry", "GET", "/", nil, 200)
+			if (err == nil) != completes || len(client.operations) != 1 || client.operations[0].Completed != completes || client.operations[0].Attempts != len(client.samples) || client.samples[0].Status != 503 || !client.samples[0].Retry {
+				t.Fatal("retry was not distinguished from completion", err, client.samples, client.operations)
+			}
+			if completes && (len(client.samples) != 2 || client.samples[1].Status != 200 || client.operations[0].Microseconds < 1000000) {
+				t.Fatal("retry wait/attempt was omitted", client.operations)
+			}
+		})
+	}
 }
 
 func TestDocRangeLoadFixtureRoundTrip(t *testing.T) {
