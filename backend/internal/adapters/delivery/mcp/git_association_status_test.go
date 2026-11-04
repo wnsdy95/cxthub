@@ -36,7 +36,7 @@ func TestGitAssociationStatusMCPBoundedAndSelectionBound(t *testing.T) {
 	for index := 1; index <= 20; index++ {
 		backend.page.Items = append(backend.page.Items, domain.GitAssociationStatus{ID: fmt.Sprintf("%064x", index), Kind: "integration", State: "waiting", SourceBranch: strings.Repeat("source-", 100), DestinationBranch: strings.Repeat("destination-", 100)})
 	}
-	server := &Server{context: backend}
+	server := &Server{context: fakeContextBackend{}, gitAssociationStatus: backend}
 	args := toolArgs{Repository: string(repo.ID), Limit: 20}
 	raw, err := server.gitAssociationStatusPage(systemTestContext(), repo, args)
 	if err != nil || len(raw) > pageBytes {
@@ -74,7 +74,8 @@ func TestGitAssociationStatusMCPBoundedAndSelectionBound(t *testing.T) {
 	if _, err := server.gitAssociationStatusPage(systemTestContext(), repo, args); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatal("query error masked", err)
 	}
-	server.context = fakeContextBackend{}
+	server.gitAssociationStatus = nil
+	server.context = backend
 	if _, err := server.gitAssociationStatusPage(systemTestContext(), repo, args); !errors.Is(err, domain.ErrGitAssociationStatusUnavailable) {
 		t.Fatal("unsupported service reported success", err)
 	}
@@ -90,7 +91,7 @@ func TestGitAssociationStatusMCPLegalEscapedBranchFitsSinglePage(t *testing.T) {
 		SourceBranchID: strings.Repeat("b", 128), DestinationBranchID: strings.Repeat("c", 128), Capture: pageHash(2), OriginalHead: strings.Repeat("d", 64),
 		PublicationID: strings.Repeat("e", 32), AdmissionID: strings.Repeat("f", 64), ContributionID: strings.Repeat("1", 64)}
 	backend := &associationStatusMCPBackend{page: domain.GitAssociationStatusPage{Items: []domain.GitAssociationStatus{item}, NextCursor: item.ID, CurrentApplicability: "not_evaluated"}}
-	server := &Server{context: backend}
+	server := &Server{context: fakeContextBackend{}, gitAssociationStatus: backend}
 	raw, err := server.gitAssociationStatusPage(systemTestContext(), repo, toolArgs{Repository: string(repo.ID), State: "all"})
 	if err != nil || len(raw) > pageBytes {
 		t.Fatal("valid labels blocked pagination", len(raw), err)
@@ -117,6 +118,9 @@ func TestGitAssociationStatusMCPUsesRepositoryAuthorization(t *testing.T) {
 	backend := &associationStatusMCPBackend{fakeContextBackend: fakeContextBackend{repos: []domain.Repo{repo}}, page: domain.GitAssociationStatusPage{Items: []domain.GitAssociationStatus{}}}
 	server, err := NewServer(backend, identity, storage, "https://cxthub.test")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetGitAssociationStatus(backend); err != nil {
 		t.Fatal(err)
 	}
 	args, _ := json.Marshal(map[string]string{"repository": string(repo.ID)})

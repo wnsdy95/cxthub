@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -171,6 +174,93 @@ func TestPGGitAdmissionGenerationNeverReusesUncommittedImage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPGGitAdmissionGenerationRejectsUncheckedOwnEvidence(t *testing.T) {
+	fixture := newAdmissionPGFixture(t)
+	ctx := systemTestContext()
+	frozen := *fixture.frozen.snapshot.generation
+	err := repositoryWriteError(evidenceWriteContext(ctx), fixture.worker.core, fixture.repo.ID, func(write context.Context) error {
+		if err := fixture.storage.FinishGitHeadScan(write, fixture.claim, fixture.observations, false, time.Now().UTC()); err != nil {
+			return err
+		}
+		global, err := fixture.storage.ReadRepositoryMetadataGeneration(write, fixture.repo.ID)
+		if err != nil || global.Epoch != frozen.Epoch || global.Sequence <= frozen.Sequence {
+			t.Fatal("fixture did not publish private evidence", global, frozen, err)
+		}
+		_, err = fixture.worker.core.persistGitAdmission(write, fixture.frozen, fixture.prepared, fixture.authorization)
+		return err
+	})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("unchecked write bypassed the full generation fence", err)
+	}
+	if current, err := fixture.storage.ReadRepositoryMetadataGeneration(ctx, fixture.repo.ID); err != nil || current != frozen {
+		t.Fatal("rejected admission left an input mutation", current, frozen, err)
+	}
+	receipts, err := fixture.storage.ListGitHeadReceipts(ctx, fixture.repo.ID, fixture.repo.GitRemoteURL, 0, 10)
+	if err != nil || len(receipts) != 0 {
+		t.Fatal("rejected admission left its provider receipt", len(receipts), err)
+	}
+}
+
+func TestPGGitAdmissionGenerationRejectsChangedCommitAncestry(t *testing.T) {
+	fixture := newGitContributionApplyPGFixture(t, "pinned")
+	fixture.observeIntegration(t, "main", true)
+	ctx := systemTestContext()
+	config, err := pgxpool.ParseConfig(fixture.basis.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := pgx.ConnectConfig(ctx, config.ConnConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+	repo, origin := fixture.basis.repo.ID, fixture.basis.repo.GitRemoteURL
+	for _, commit := range fixture.storage.trees {
+		payload, err := json.Marshal(commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := connection.Exec(ctx, `INSERT INTO git_commit_trees(repo_id,origin,commit_oid,payload) VALUES($1,$2,$3,$4::jsonb)`, repo, origin, commit.Commit, string(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.storage.trees = nil
+	prepared, authorization := fixture.prepare(t)
+	before := fixture.state(t, ctx)
+	commit := prepared.proof.Contribution.IntegrationSHA
+	var original string
+	if err := connection.QueryRow(ctx, `SELECT payload::text FROM git_commit_trees WHERE repo_id=$1 AND origin=$2 AND commit_oid=$3`, repo, origin, commit).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(ctx, `UPDATE git_commit_trees SET payload=jsonb_set(payload,'{parents}','[]'::jsonb) WHERE repo_id=$1 AND origin=$2 AND commit_oid=$3`, repo, origin, commit); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := fixture.storage.ReadRepositoryMetadataGeneration(ctx, repo)
+	if frozen := prepared.snapshot.generation; err != nil || frozen == nil || generation.Epoch != frozen.Epoch || generation.Sequence <= frozen.Sequence {
+		t.Fatal("ancestry mutation did not advance the proof fence", generation, frozen, err)
+	}
+	if current := fixture.state(t, ctx); !reflect.DeepEqual(current, before) {
+		t.Fatal("proof-only mutation changed application counters or ledger")
+	}
+	if _, err := fixture.scans.applyGitContribution(ctx, prepared, authorization); !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("stale ancestry was published as a contribution", err)
+	}
+	if _, err := fixture.scans.prepareGitContribution(ctx, fixture.admission, fixture.head); err == nil {
+		t.Fatal("changed ancestry still proved the original integration")
+	}
+	if current := fixture.state(t, ctx); !reflect.DeepEqual(current, before) {
+		t.Fatal("rejected stale proof changed effects")
+	}
+	if _, err := connection.Exec(ctx, `UPDATE git_commit_trees SET payload=$4::jsonb WHERE repo_id=$1 AND origin=$2 AND commit_oid=$3`, repo, origin, commit, original); err != nil {
+		t.Fatal(err)
+	}
+	prepared, authorization = fixture.prepare(t)
+	if _, err := fixture.scans.applyGitContribution(ctx, prepared, authorization); err != nil {
+		t.Fatal("fresh preparation could not recover", err)
+	}
+	assertGitContributionAppliedOnce(t, before, fixture.state(t, ctx), prepared)
 }
 
 func TestPGGitContributionQueryReusesCoherentHistory(t *testing.T) {

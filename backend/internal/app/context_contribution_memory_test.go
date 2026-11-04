@@ -40,7 +40,7 @@ func TestContributionMemoryNormalizationPreservesPRWireIdentity(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("pin wire identity changed: before=%s after=%s err=%v", before, after, err)
 	}
-	if records[0].record.ID != verified[0].record.ID || records[0].record.IntegrationSHA != verified[0].record.PR.MergeSHA || records[0].valid != verified[0].valid {
+	if records[0].Record.ID != verified[0].Record.ID || records[0].Record.IntegrationSHA != verified[0].Record.PR.MergeSHA || records[0].Valid != verified[0].Valid {
 		t.Fatalf("PR evidence identity changed: %+v", records[0])
 	}
 	corrupt := append([]domain.PRContributionMemory(nil), pins...)
@@ -49,7 +49,7 @@ func TestContributionMemoryNormalizationPreservesPRWireIdentity(t *testing.T) {
 		t.Fatalf("normalization bypassed immutable pin validation: %v", err)
 	}
 	invalid := append([]verifiedPRContribution(nil), verified...)
-	invalid[0].record.OriginalHead = effectiveOID(99)
+	invalid[0].Record.OriginalHead = effectiveOID(99)
 	if _, _, err := normalizePRContributionMemory(ctx, fixture.repo.ID, invalid, pins); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("normalization bypassed contribution identity validation: %v", err)
 	}
@@ -94,13 +94,13 @@ func TestContributionMemorySharedEngineHandlesGenericPins(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pr := verified[0].record
+			pr := verified[0].Record
 			generic := (domain.GitContribution{RepoID: pr.RepoID, GitOrigin: pr.GitOrigin, ProviderRepositoryID: pr.ProviderRepositoryID,
 				DestinationBranchID: pr.DestinationBranchID, SourceBranchID: pr.SourceBranchID, Capture: pr.Capture,
 				OriginalHead: pr.OriginalHead, IntegrationSHA: pr.PR.MergeSHA}).WithID()
 			pin := (domain.GitContributionMemory{RepoID: generic.RepoID, ContributionID: generic.ID, PublicationID: publication.ID,
 				MemoryHash: pins[0].MemoryHash, MemorySource: pins[0].MemorySource, MemoryPinned: true}).WithID()
-			inputs := []verifiedGitContribution{{record: generic, valid: true, publications: verified[0].publications}}
+			inputs := []verifiedGitContribution{{Record: generic, Valid: true, Publications: verified[0].Publications}}
 			records, memories, err := normalizeGitContributionMemory(ctx, fixture.repo.ID, inputs, []domain.GitContributionMemory{pin})
 			if err != nil {
 				t.Fatal(err)
@@ -115,7 +115,7 @@ func TestContributionMemorySharedEngineHandlesGenericPins(t *testing.T) {
 				t.Fatalf("generic memory projection: %+v %v", genericPlan, err)
 			}
 			got, want := genericPlan.Versions[0], prPlan.Versions[0]
-			if got.State != want.State || got.Hash != want.Hash || !reflect.DeepEqual(got.digest, want.digest) || got.Pins[0].ContributionID != generic.ID {
+			if got.State != want.State || got.Hash != want.Hash || !reflect.DeepEqual(got.Digest(), want.Digest()) || got.Pins[0].ContributionID != generic.ID {
 				t.Fatalf("generic projection changed memory semantics: got=%+v want=%+v", got, want)
 			}
 			prRecords, prPins, err := normalizePRContributionMemory(ctx, fixture.repo.ID, verified, pins)
@@ -129,7 +129,7 @@ func TestContributionMemorySharedEngineHandlesGenericPins(t *testing.T) {
 				t.Fatalf("mixed PR/Git evidence duplicated a memory version: %+v %v", mixedPlan, err)
 			}
 			mixed := mixedPlan.Versions[0]
-			if mixed.State != want.State || mixed.Hash != want.Hash || !reflect.DeepEqual(mixed.digest, want.digest) || len(mixed.Pins) != 2 {
+			if mixed.State != want.State || mixed.Hash != want.Hash || !reflect.DeepEqual(mixed.Digest(), want.Digest()) || len(mixed.Pins) != 2 {
 				t.Fatalf("mixed contribution lost independent pins: %+v", mixed)
 			}
 			mixedRecords[0], mixedRecords[1] = mixedRecords[1], mixedRecords[0]

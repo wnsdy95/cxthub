@@ -10,21 +10,19 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, event domain.HistoryEvent) error {
-	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
+func (s *historyRecorder) recordHistoryWithDocumentPreparation(ctx context.Context, event domain.HistoryEvent) error {
+	if s.configurationError != nil {
+		return s.configurationError
+	}
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.supported)
 	repo := domain.ContentHash(event.RepoID)
 	original := func(ctx context.Context) error {
-		return repositoryWriteError(ctx, s, repo, func(tx context.Context) error { return s.recordHistory(tx, event, false, nil) })
+		return s.scope.WithinHistoryWrite(ctx, repo, func(tx context.Context) error { return s.recordHistory(tx, event, false, nil) })
 	}
-	capability, supported := s.meta.(outbound.HistoryDocumentProofStore)
-	tx, transactional := s.meta.(outbound.RepositoryTransactions)
-	state, hasState := s.meta.(outbound.RepositoryTransactionState)
-	history, hasHistory := s.meta.(outbound.HistoryStore)
-	_, hasVerifier := s.blobs.(outbound.StoredDocVerifier)
-	if !supported || !transactional || !hasState || !hasHistory || !hasVerifier {
+	if s.preparation == nil {
 		return original(ctx)
 	}
-	return capability.WithinHistoryDocumentProof(ctx, repo, func(ctx context.Context, proof outbound.HistoryDocumentProof) error {
+	return s.preparation.WithinHistoryDocumentProof(ctx, repo, func(ctx context.Context, proof outbound.HistoryDocumentProof) error {
 		if proof == nil {
 			return original(ctx)
 		}
@@ -32,17 +30,11 @@ func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, even
 		var roots []domain.ContentHash
 		// This authorized lookup is deliberately not repositoryWrite: an
 		// unaccepted preflight must not advance revisions or create audit rows.
-		err := tx.WithinRepository(ctx, repo, func(bound context.Context) error {
-			if err := s.authorizeRepositoryWrite(bound, repo); err != nil {
-				return err
-			}
-			if err := s.checkDocumentIdentity(bound, repo, true); err != nil {
-				return err
-			}
+		err := s.scope.WithinHistoryObservation(ctx, repo, func(bound context.Context) error {
 			if err := domain.ValidateHistoryEvent(event); err != nil {
 				return fmt.Errorf("%w: %v", domain.ErrValidation, err)
 			}
-			accepted, err := history.ListHistoryEvents(bound, repo)
+			accepted, err := s.events.ListHistoryEvents(bound, repo)
 			if err != nil {
 				return err
 			}
@@ -70,13 +62,7 @@ func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, even
 		}
 		wanted := historyRootSet(roots)
 		var snapshots []domain.Snapshot
-		preparationErr := tx.WithinReadSnapshot(ctx, func(read context.Context) error {
-			if !state.InReadOnlyTransaction(read) {
-				return domain.ErrConflict
-			}
-			if err := s.checkDocumentIdentity(read, repo, true); err != nil {
-				return err
-			}
+		preparationErr := s.scope.WithinHistoryRead(ctx, repo, func(read context.Context) error {
 			for _, id := range roots {
 				if id == "" {
 					continue
@@ -85,7 +71,7 @@ func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, even
 					continue
 				}
 				delete(wanted, id)
-				snap, err := s.meta.GetSnapshot(read, repo, id)
+				snap, err := s.metadata.GetSnapshot(read, repo, id)
 				if err != nil {
 					return err
 				}
@@ -97,7 +83,7 @@ func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, even
 			return proof.Capture(read, snapshots)
 		})
 		wanted = historyRootSet(roots)
-		return repositoryWriteError(ctx, s, repo, func(write context.Context) error {
+		return s.scope.WithinHistoryWrite(ctx, repo, func(write context.Context) error {
 			// recordHistoryPrepared checks accepted replay before invoking this
 			// callback: concurrent exact acceptance wins a failed preparation.
 			return s.recordHistoryPrepared(write, event, false, nil, func(write context.Context, current []domain.ContentHash) (historyVerification, error) {

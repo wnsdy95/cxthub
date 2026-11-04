@@ -88,3 +88,12 @@ coordinates and exact version recorded in that lockfile.
 
 When dependencies change, update this file and verify the lockfiles before a
 release. Release archives include `LICENSE`, `NOTICE`, and this file.
+
+## API and MCP native numeric conversion
+
+The API/MCP legacy native binary64 converter adapts Go 1.26.10 standard-library
+code and tables, distributed under the Go Authors' BSD-style license. Complete
+original notices, license, disclaimer and source-profile provenance are retained
+in `backend/internal/domain/legacy_native_float64/NOTICE.md` and `SOURCE.json`.
+These files travel with the backend source export; the API/MCP Dockerfiles also
+copy them into `/usr/share/doc/cxthub/legacy-native-float64/` in the runtime image.

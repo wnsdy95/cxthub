@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "oracle": {
+    "runtime": "Node v22.22.3, installed locally; no network",
+    "expression": "const event = JSON.parse(source); JSON.stringify(event.output, null, 2), or generic call name + newline + JSON.stringify(event.input, null, 2)",
+    "renderer_source": "frontend/web/src/components/EventStream.tsx: ToolCallRow and ToolResultRow; expanded logical text, excluding UI clipping and control labels",
+    "admission_sources": [
+      "backend/internal/domain/cir.go: CIREvent.UnmarshalJSON (float64 interface values and map decoding)",
+      "backend/internal/domain/canonical_verifier.go: CanonicalDocVerifier.eventWithKey and Verify (exact canonical byte admission)",
+      "backend/internal/domain/doc_reference.go: VerifyStoredDocBytes (legacy bytes accepted under normalized content hash)",
+      "backend/internal/domain/hash.go: CanonicalBytes and canonicalJSON",
+      "backend/internal/domain/verified_doc.go: VerifySessionDoc and EventStreamRange (published canonical event bytes)",
+      "schemas/cir.schema.json: toolCallEvent.input and toolResultEvent.output"
+    ],
+    "domains": {
+      "canonical": "Exact event bytes pass CanonicalDocVerifier in a canonical envelope. This is implementation acceptance, not a claim of full JSON Schema validation.",
+      "legacy_normalized": "Exact bytes fail canonical admission; typed decoding and VerifyStoredDocBytes accept the raw document only with its normalized content hash. VerifiedSessionDoc publishes normalized event bytes, not these originals.",
+      "typed_decode_rejected": "Node parses the JSON, but typed CIREvent wire decoding rejects float64 overflow, including an overwritten number. Not accepted even by legacy normalization. This is NOT a claim that every public storage constructor rejects it."
+    },
+    "programmatic_number_caveat": "hash.go canonicalJSON uses UseNumber. An in-memory CIREvent with json.Number(1e400) can pass CanonicalBytes and VerifySessionDoc and retain overflow in its verified event stream, although CanonicalDocVerifier and VerifyStoredDocBytes reject those same bytes. The initial tool oracle also rejected overflow; tool-only display parity now requires JSON.stringify null, with whole-token provenance, without changing wire or storage admission. The programmatic-number admission test also covers underflow and unrounded integers. No HTTP ingress or database acceptance is inferred.",
+    "stored_text": "Optional explicit expectation for display after typed storage normalization. It can differ from text: Go merges repeated struct map fields, replaces lone surrogates with U+FFFD (collapsing formerly distinct keys), and sorts ordinary keys. Local Node also checks normalized sources independently."
+  },
+  "provenance": {
+    "coordinates": "Zero-based, half-open UTF-8 byte offsets in the original source, not JSON.stringify output or normalized storage bytes. A range query returns the min/max hull of participating source runs, even after reordering.",
+    "duplicates": "Compare decoded ECMAScript UTF-16 property names. Last value wins; the first insertion fixes the ordinary-key display slot. The surviving key spelling, colon, and value are attributed to the last member occurrence, not the first or a merged object.",
+    "unicode": "Escaped-equal keys collide; distinct lone surrogate code units and U+FFFD do not. A rendered normalized escape or scalar maps to the complete original escape (12 bytes for a valid surrogate pair). A displayed quoted lone surrogate is a lowercase six-byte escape, not U+FFFD.",
+    "numbers": "A normalized finite number maps to its whole original numeric token. Overflow parity expectations would map rendered null to its entire overflow token; this does not expand typed CIR wire acceptance.",
+    "punctuation": "Original braces, brackets, quotes, and colons retain their own anchors. Synthetic comma/newline/indent uses the byte immediately after the previous surviving value only when it is a comma; otherwise it uses the containing opening delimiter. Closing newline/indent uses the closing delimiter.",
+    "range_assertions": "text selects its first display occurrence; source plus zero-based occurrence selects exact original source bytes, including duplicate tokens. Omitted occurrence means zero. These conventions specify review expectations, not a changed production contract."
+  },
+  "cases": [
+    {
+      "name": "root_kind_last_wins",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_call\",\"kind\":\"tool_result\",\"output\":{\"live\":true},\"seq\":1}",
+      "text": "{\n  \"live\": true\n}",
+      "ranges": [{"text": "\"live\": true", "source": "\"live\":true"}]
+    },
+    {
+      "name": "root_output_last_replaces_object",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"stale\":true},\"output\":{\"live\":true},\"seq\":1}",
+      "text": "{\n  \"live\": true\n}",
+      "ranges": [{"text": "true", "source": "true", "occurrence": 1}]
+    },
+    {
+      "name": "root_input_last_replaces_not_go_map_merge",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"input\":{\"stale\":true},\"input\":{\"live\":true},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"generic\"}",
+      "text": "generic\n{\n  \"live\": true\n}",
+      "stored_text": "generic\n{\n  \"live\": true,\n  \"stale\": true\n}",
+      "ranges": [{"text": "true", "source": "true", "occurrence": 1}]
+    },
+    {
+      "name": "root_escaped_equal_output_last_wins",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":\"old\",\"\\u006futput\":{\"live\":true},\"seq\":1}",
+      "text": "{\n  \"live\": true\n}",
+      "ranges": [{"text": "\"live\": true", "source": "\"live\":true"}]
+    },
+    {
+      "name": "root_escaped_equal_kind_and_provider_name",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"input\":{},\"kind\":\"tool_result\",\"k\\u0069nd\":\"tool_call\",\"provider_tool_name\":\"old\",\"provider_tool_\\u006eame\":\"generic\",\"seq\":0,\"tool_name\":\"fallback\"}",
+      "text": "generic",
+      "ranges": [{"text": "generic", "source": "generic"}]
+    },
+    {
+      "name": "nested_ordinary_duplicate_keeps_first_slot_last_member",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"a\":\"old\",\"b\":\"between\",\"a\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"a\": \"new\",\n  \"b\": \"between\"\n}",
+      "ranges": [
+        {"text": "\"a\": \"new\"", "source": "\"a\":\"new\""},
+        {"text": ",\n  ", "source": "{", "occurrence": 1},
+        {"text": "\"a\": \"new\",\n  \"b\": \"between\"", "source": "{\"a\":\"old\",\"b\":\"between\",\"a\":\"new\""}
+      ]
+    },
+    {
+      "name": "nested_numeric_duplicate_sorted_then_overwritten",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"10\":\"old\",\"2\":\"two\",\"10\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"2\": \"two\",\n  \"10\": \"new\"\n}",
+      "ranges": [
+        {"text": "\"10\": \"new\"", "source": "\"10\":\"new\""},
+        {"text": "\"2\": \"two\",\n  \"10\": \"new\"", "source": "\"2\":\"two\",\"10\":\"new\""}
+      ]
+    },
+    {
+      "name": "nested_escaped_equal_ordinary_key_last_spelling",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"a\":\"old\",\"b\":\"between\",\"\\u0061\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"a\": \"new\",\n  \"b\": \"between\"\n}",
+      "ranges": [
+        {"text": "\"a\": \"new\"", "source": "\"\\u0061\":\"new\""},
+        {"text": "a", "source": "\\u0061"}
+      ]
+    },
+    {
+      "name": "nested_escaped_equal_numeric_key",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"2\":\"old\",\"10\":\"ten\",\"\\u0032\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"2\": \"new\",\n  \"10\": \"ten\"\n}",
+      "ranges": [{"text": "\"2\": \"new\"", "source": "\"\\u0032\":\"new\""}]
+    },
+    {
+      "name": "deep_array_and_generic_input_duplicate_null_is_not_missing",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"input\":{\"rows\":[{\"a\":{\"old\":true},\"b\":false,\"a\":null}]},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"generic\"}",
+      "text": "generic\n{\n  \"rows\": [\n    {\n      \"a\": null,\n      \"b\": false\n    }\n  ]\n}",
+      "ranges": [{"text": "\"a\": null", "source": "\"a\":null"}]
+    },
+    {
+      "name": "distinct_lone_surrogate_keys_are_not_replacement_or_each_other",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"\\ud800\":\"high\",\"\\ud801\":\"other\",\"\\udc00\":\"low\",\"\\ufffd\":\"replacement\"},\"seq\":1}",
+      "text": "{\n  \"\\ud800\": \"high\",\n  \"\\ud801\": \"other\",\n  \"\\udc00\": \"low\",\n  \"�\": \"replacement\"\n}",
+      "stored_text": "{\n  \"�\": \"replacement\"\n}",
+      "ranges": [
+        {"text": "\\ud800", "source": "\\ud800"},
+        {"text": "\\ud801", "source": "\\ud801"},
+        {"text": "�", "source": "\\ufffd"}
+      ]
+    },
+    {
+      "name": "duplicate_high_surrogate_key_preserves_distinct_replacement",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"\\ud800\":\"old\",\"\\ud801\":\"other\",\"\\ufffd\":\"replacement\",\"\\uD800\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"\\ud800\": \"new\",\n  \"\\ud801\": \"other\",\n  \"�\": \"replacement\"\n}",
+      "stored_text": "{\n  \"�\": \"new\"\n}",
+      "ranges": [{"text": "\"\\ud800\": \"new\"", "source": "\"\\uD800\":\"new\""}]
+    },
+    {
+      "name": "duplicate_low_surrogate_key_preserves_distinct_replacement",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"\\udc00\":\"old\",\"�\":\"replacement\",\"\\uDC00\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"\\udc00\": \"new\",\n  \"�\": \"replacement\"\n}",
+      "stored_text": "{\n  \"�\": \"new\"\n}",
+      "ranges": [{"text": "\"\\udc00\": \"new\"", "source": "\"\\uDC00\":\"new\""}]
+    },
+    {
+      "name": "escaped_pair_and_literal_astral_key_are_equal",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"🙂\":\"old\",\"z\":true,\"\\ud83d\\ude42\":\"new\"},\"seq\":1}",
+      "text": "{\n  \"🙂\": \"new\",\n  \"z\": true\n}",
+      "ranges": [{"text": "🙂", "source": "\\ud83d\\ude42"}]
+    },
+    {
+      "name": "quoted_lone_surrogates_replacement_and_valid_pair_values",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":[\"\\uD800\",\"\\uDC00\",\"\\ufffd\",\"�\",\"\\uD83D\\uDE42\"],\"seq\":1}",
+      "text": "[\n  \"\\ud800\",\n  \"\\udc00\",\n  \"�\",\n  \"�\",\n  \"🙂\"\n]",
+      "ranges": [
+        {"text": "\\ud800", "source": "\\uD800"},
+        {"text": "\\udc00", "source": "\\uDC00"},
+        {"text": "�", "source": "\\ufffd"},
+        {"text": "🙂", "source": "\\uD83D\\uDE42"}
+      ]
+    },
+    {
+      "name": "canonical_index_boundaries_and_ordinary_lexical_order",
+      "domain": "canonical",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"-0\":\"minus\",\"0\":\"zero\",\"00\":\"padded\",\"01\":\"leading\",\"10\":\"ten\",\"2\":\"two\",\"4294967294\":\"index\",\"4294967295\":\"ordinary\",\"a\":\"last\"},\"seq\":1}",
+      "text": "{\n  \"0\": \"zero\",\n  \"2\": \"two\",\n  \"10\": \"ten\",\n  \"4294967294\": \"index\",\n  \"-0\": \"minus\",\n  \"00\": \"padded\",\n  \"01\": \"leading\",\n  \"4294967295\": \"ordinary\",\n  \"a\": \"last\"\n}",
+      "ranges": [
+        {"text": "\"0\": \"zero\"", "source": "\"0\":\"zero\""},
+        {"text": "\"2\": \"two\",\n  \"10\": \"ten\"", "source": "\"10\":\"ten\",\"2\":\"two\","}
+      ]
+    },
+    {
+      "name": "canonical_nested_order_and_proto_names_are_ordinary_data",
+      "domain": "canonical",
+      "source": "{\"call_id\":\"c\",\"input\":{\"__proto__\":{\"10\":10,\"2\":2},\"constructor\":true,\"toString\":false},\"kind\":\"tool_call\",\"seq\":0,\"tool_name\":\"generic\"}",
+      "text": "generic\n{\n  \"__proto__\": {\n    \"2\": 2,\n    \"10\": 10\n  },\n  \"constructor\": true,\n  \"toString\": false\n}",
+      "ranges": [{"text": "\"2\": 2", "source": "\"2\":2"}]
+    },
+    {
+      "name": "ordinary_source_order_is_not_alphabetized_by_javascript",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":{\"z\":true,\"10\":10,\"2\":2,\"a\":false},\"seq\":1}",
+      "text": "{\n  \"2\": 2,\n  \"10\": 10,\n  \"z\": true,\n  \"a\": false\n}",
+      "stored_text": "{\n  \"2\": 2,\n  \"10\": 10,\n  \"a\": false,\n  \"z\": true\n}",
+      "ranges": [{"text": "\"z\": true", "source": "\"z\":true"}]
+    },
+    {
+      "name": "canonical_finite_thresholds_and_smallest_subnormal",
+      "domain": "canonical",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":[5e-324,1e-7,0.000001,1000000000000000100,1e+21,9007199254740992,1.7976931348623157e+308],\"seq\":1}",
+      "text": "[\n  5e-324,\n  1e-7,\n  0.000001,\n  1000000000000000100,\n  1e+21,\n  9007199254740992,\n  1.7976931348623157e+308\n]",
+      "ranges": [{"text": "1000000000000000100", "source": "1000000000000000100"}]
+    },
+    {
+      "name": "negative_zero_underflow_and_integer_rounding",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":[-0,1e-400,-1e-400,9007199254740993],\"seq\":1}",
+      "text": "[\n  0,\n  0,\n  0,\n  9007199254740992\n]",
+      "ranges": [
+        {"text": "0", "source": "-0"},
+        {"text": "9007199254740992", "source": "9007199254740993"}
+      ]
+    },
+    {
+      "name": "positive_overflow_stringifies_null_but_cir_rejects",
+      "domain": "typed_decode_rejected",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":1e400,\"seq\":1}",
+      "text": "null",
+      "ranges": [{"text": "null", "source": "1e400"}]
+    },
+    {
+      "name": "nested_signed_overflow_and_underflow",
+      "domain": "typed_decode_rejected",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":[1e400,-1e400,1e-400],\"seq\":1}",
+      "text": "[\n  null,\n  null,\n  0\n]",
+      "ranges": [{"text": "null", "source": "1e400"}]
+    },
+    {
+      "name": "overwritten_root_overflow_is_still_rejected_by_cir",
+      "domain": "typed_decode_rejected",
+      "source": "{\"call_id\":\"c\",\"kind\":\"tool_result\",\"output\":1e400,\"output\":{\"live\":true},\"seq\":1}",
+      "text": "{\n  \"live\": true\n}",
+      "ranges": [{"text": "true", "source": "true"}]
+    },
+    {
+      "name": "ignored_root_overflow_is_legacy_normalizable_but_display_rejects",
+      "domain": "legacy_normalized",
+      "source": "{\"call_id\":\"c\",\"ignored\":1e400,\"kind\":\"tool_result\",\"output\":{\"live\":true},\"seq\":1}",
+      "text": "{\n  \"live\": true\n}",
+      "ranges": [{"text": "true", "source": "true"}]
+    }
+  ]
+}

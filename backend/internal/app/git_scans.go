@@ -2,15 +2,13 @@ package app
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
-	"log"
 	"reflect"
-	"slices"
 	"time"
+
+	"github.com/wnsdy95/cxthub/backend/internal/app/evidencequery"
+	"github.com/wnsdy95/cxthub/backend/internal/app/gitchangeworker"
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // GitScans turns durable observations into immutable evidence. It owns no
@@ -32,36 +30,9 @@ func NewGitScans(core *Service, reader outbound.GitCommitReader) (*GitScans, err
 	return &GitScans{gitScanQuery: &gitScanQuery{core: core, store: st}, reader: reader}, nil
 }
 func (s *Service) queueHistoryGitScan(ctx context.Context, e domain.HistoryEvent) error {
-	st, ok := s.meta.(outbound.GitScanStore)
-	if !ok {
-		return nil
-	}
-	repo, err := s.meta.GetRepo(ctx, domain.ContentHash(e.RepoID))
-	if err != nil {
-		return err
-	}
-	if repo.GitRemoteURL == "" {
-		return nil
-	}
-	// Existing accepted history is also the CLI's durable offline outbox. A
-	// duplicate delivery repairs enqueue after a development-FS process crash.
-	oids := []string{e.GitBefore, e.GitAfter}
-	if e.PR != nil {
-		oids = append(oids, e.PR.MergeSHA, e.PR.HeadSHA)
-	}
-	for _, sha := range oids {
-		if sha == "" {
-			continue
-		}
-		if domain.ValidateGitOID(sha) != nil {
-			continue
-		}
-		if err = st.EnqueueGitScan(ctx, domain.NewGitScan(repo.ID, repo.GitRemoteURL, sha, time.Now().UTC())); err != nil {
-			return err
-		}
-	}
-	return nil
+	return queueHistoryGitScanFromStore(ctx, s.meta, e)
 }
+
 func (g *GitScans) ObservePush(ctx context.Context, origin, ref, before, after string, forced bool, delivery string) (int, error) {
 	repos, err := g.core.meta.ListRepos(ctx, "default")
 	if err != nil {
@@ -91,100 +62,7 @@ func (g *GitScans) ObservePush(ctx context.Context, origin, ref, before, after s
 	return n, nil
 }
 func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
-	work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 90*time.Second)
-	defer cancel()
-	p := domain.GitScanFinish{Job: j}
-	p.Job.LeaseUntil = time.Time{}
-	p.Job.UpdatedAt = time.Now().UTC()
-	p.Job.NextAttempt = p.Job.UpdatedAt
-	p.Job.State = "waiting"
-	repo, err := g.core.workerRepository(work, j.RepoID)
-	if err == nil && repo.GitRemoteURL != j.GitOrigin {
-		err = domain.ErrConflict
-	}
-	var fence GitReadFence
-	if err == nil {
-		fence, err = authorizeGitRead(work, g.sourceAccess, j.RepoID)
-	}
-	if err == nil && !j.TreeIndexed {
-		var evidence domain.GitTreeEvidence
-		evidence, err = g.reader.(outbound.GitTreeReader).ReadCommitTree(work, j.GitOrigin, j.Commit)
-		if err == nil {
-			p.Tree = &evidence
-			p.Job.TreeIndexed = true
-			err = p.Validate()
-		}
-	} else if err == nil && !j.Indexed {
-		var deltas []domain.GitCommitDelta
-		deltas, err = g.reader.ReadCommitDeltas(work, j.GitOrigin, j.Commit)
-		if err == nil {
-			err = planGitIndex(&p, deltas)
-		}
-		if err == nil {
-			err = g.validateIndexTree(work, j, deltas)
-		}
-	} else if err == nil {
-		var candidates []domain.GitInverseCandidate
-		candidates, err = g.store.FindGitInverses(work, j.RepoID, j.GitOrigin, j.Commit, j.Cursor, 51)
-		if err == nil {
-			if len(candidates) <= 50 {
-				p.Job.State = "completed"
-			} else {
-				candidates = candidates[:50]
-			}
-			for _, c := range candidates {
-				p.Job.Cursor = c.Cursor
-				// Arrival order is unrelated to Git ancestry. Both orientations are
-				// verified; at most the ancestor -> descendant orientation can prove true.
-				reverse := domain.GitChangeRequest{Target: c.Request.Commit, TargetParent: c.Request.Parent, Commit: c.Request.Target, Parent: c.Request.TargetParent}
-				for _, r := range []domain.GitChangeRequest{c.Request, reverse} {
-					now := p.Job.UpdatedAt
-					p.Changes = append(p.Changes, domain.GitChangeJob{ID: domain.GitChangeID(j.RepoID, j.GitOrigin, r), RepoID: j.RepoID, GitOrigin: j.GitOrigin, Request: r, State: "waiting", CreatedAt: now, UpdatedAt: now, NextAttempt: now})
-				}
-			}
-		}
-	}
-	if err == nil {
-		err = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
-			r, e := g.core.meta.GetRepo(tx, j.RepoID)
-			if e != nil {
-				return e
-			}
-			if r.GitRemoteURL != j.GitOrigin {
-				return domain.ErrConflict
-			}
-			if e := fence(tx); e != nil {
-				return e
-			}
-			return g.store.FinishGitScan(tx, p)
-		})
-		if err == nil {
-			return nil
-		}
-	}
-	// No candidate/cursor publication on failure. Immutable job identity and
-	// version fence prevent a canceled worker from replacing a newer result.
-	fail := domain.GitScanFinish{Job: j}
-	fail.Job.State = "retrying"
-	fail.Job.Reason = "temporary_provider_or_storage_failure"
-	fail.Job.UpdatedAt = time.Now().UTC()
-	fail.Job.LeaseUntil = time.Time{}
-	fail.Job.NextAttempt = fail.Job.UpdatedAt.Add(time.Second << min(j.Attempts, 9))
-	switch {
-	case errors.Is(err, domain.ErrIntegrity):
-		fail.Job.State = "attention"
-		fail.Job.Reason = "integrity_check_failed"
-	case errors.Is(err, domain.ErrValidation):
-		fail.Job.State = "attention"
-		fail.Job.Reason = "invalid_or_ambiguous_git_evidence"
-	case errors.Is(err, domain.ErrConflict):
-		fail.Job.State = "attention"
-		fail.Job.Reason = "origin_or_lease_changed"
-	}
-	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer done()
-	e := repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return g.store.FinishGitScan(tx, fail) })
-	return errors.Join(err, e)
+	return g.integration().run(ctx, j)
 }
 func planGitIndex(p *domain.GitScanFinish, deltas []domain.GitCommitDelta) error {
 	if len(deltas) == 0 || len(deltas) > 16 {
@@ -216,44 +94,10 @@ func planGitIndex(p *domain.GitScanFinish, deltas []domain.GitCommitDelta) error
 	return p.Validate()
 }
 func (g *GitScans) Process(ctx context.Context, limit int) error {
-	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
-	for i := 0; i < limit; i++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		err := admittedJob(ctx, func(bound context.Context) (domain.GitScanJob, error) {
-			return g.store.ClaimGitScan(bound, "", time.Now().UTC(), 2*time.Minute)
-		}, func(bound context.Context, job domain.GitScanJob) error {
-			if err := g.run(bound, job); err != nil {
-				log.Printf("Git observation %s attempt %d deferred", job.ID, job.Attempts)
-			}
-			return nil
-		})
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return g.integration().Process(ctx, limit)
 }
 func (g *GitScans) Run(ctx context.Context) {
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	for {
-		if err := g.Process(ctx, 2); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Git observation worker: %v", err)
-		}
-		if err := g.ProcessContributions(ctx, 2); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Git contribution worker: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
+	g.integration().Run(ctx)
 }
 
 // Cached evidence is repository-scoped and immutable. It avoids re-reading
@@ -264,46 +108,26 @@ type cachedGitEvidence struct {
 	reader outbound.GitEvidenceReader
 }
 
-func (c cachedGitEvidence) ReadCommitDelta(ctx context.Context, origin, commit, parent string) (domain.GitCommitDelta, error) {
-	d, err := c.store.GetGitDelta(ctx, c.repo, origin, commit, parent)
-	if err == nil {
-		return d, nil
-	}
-	if !errors.Is(err, domain.ErrNotFound) {
-		return d, err
-	}
-	return c.reader.ReadCommitDelta(outbound.WithGitRepository(ctx, c.repo), origin, commit, parent)
+func (cached cachedGitEvidence) readerForRepository() (*evidencequery.CachedReversalReader, error) {
+	return evidencequery.NewCachedReversalReader(evidencequery.CachedReversalConfig{
+		RepoID: cached.repo, Cache: cached.store, Provider: gitchangeworker.RepositoryEvidence(cached.repo, cached.reader),
+	})
 }
-func (c cachedGitEvidence) IsGitAncestor(ctx context.Context, origin, ancestor, descendant string) (bool, error) {
-	// Cached complete parent edges are authoritative immutable evidence. A
-	// missing/ambiguous object is unknown, never proof of non-ancestry.
-	todo := []string{descendant}
-	seen := map[string]bool{}
-	unknown := false
-	for len(todo) > 0 && len(seen) < 256 {
-		sha := todo[len(todo)-1]
-		todo = todo[:len(todo)-1]
-		if sha == ancestor {
-			return true, nil
-		}
-		if seen[sha] {
-			continue
-		}
-		seen[sha] = true
-		d, err := c.store.GetGitDelta(ctx, c.repo, origin, sha, "")
-		if errors.Is(err, domain.ErrNotFound) {
-			unknown = true
-			continue
-		}
-		if err != nil {
-			return false, err
-		}
-		todo = append(todo, d.Parents...)
+
+func (cached cachedGitEvidence) ReadCommitDelta(ctx context.Context, origin, commit, parent string) (domain.GitCommitDelta, error) {
+	reader, err := cached.readerForRepository()
+	if err != nil {
+		return domain.GitCommitDelta{}, err
 	}
-	if len(todo) == 0 && !unknown {
-		return false, nil
+	return reader.ReadCommitDelta(ctx, origin, commit, parent)
+}
+
+func (cached cachedGitEvidence) IsGitAncestor(ctx context.Context, origin, ancestor, descendant string) (bool, error) {
+	reader, err := cached.readerForRepository()
+	if err != nil {
+		return false, err
 	}
-	return c.reader.IsGitAncestor(outbound.WithGitRepository(ctx, c.repo), origin, ancestor, descendant)
+	return reader.IsGitAncestor(ctx, origin, ancestor, descendant)
 }
 
 func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id string) error {
@@ -313,227 +137,23 @@ func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id st
 	return repositoryWriteError(evidenceWriteContext(ctx), g.core, repo, func(tx context.Context) error { return g.store.RetryGitScan(tx, repo, id, time.Now().UTC()) })
 }
 
-// Reconcile observes one durable page per repository on each pass. Failed or
-// canceled reads retain their page; other repositories continue independently.
 func (g *GitScans) Reconcile(ctx context.Context) error {
-	_, err := g.reconcile(ctx)
-	return err
+	return g.integration().Reconcile(ctx)
 }
 
 func (g *GitScans) reconcile(ctx context.Context) (bool, error) {
-	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
-	st, ok := g.core.meta.(outbound.GitHeadScanStore)
-	if !ok {
-		return false, domain.ErrValidation
-	}
-	repos, err := g.core.meta.ListRepos(ctx, "default")
-	if err != nil {
-		return false, err
-	}
-	progress := false
-	var claimErrors []error
-	for _, repo := range repos {
-		if err = ctx.Err(); err != nil {
-			return progress, errors.Join(append(claimErrors, err)...)
-		}
-		if repo.GitRemoteURL == "" {
-			continue
-		}
-		admissionErr := resourceWork(ctx, ResourceBulk, func(ctx context.Context) error {
-			advanced, discoveryErr := g.discoverGitAssociations(ctx, repo)
-			progress = progress || advanced
-			if discoveryErr != nil && !errors.Is(discoveryErr, domain.ErrForbidden) && !errors.Is(discoveryErr, domain.ErrConflict) && !errors.Is(discoveryErr, domain.ErrDocumentIdentityUpgradeRequired) {
-				log.Printf("Git association discovery %s deferred", repo.ID)
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			j, e := st.ClaimGitHeadScan(ctx, repo.ID, repo.GitRemoteURL, time.Now().UTC(), time.Minute)
-			if errors.Is(e, domain.ErrNotFound) || errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
-				return nil
-			}
-			if e != nil {
-				return fmt.Errorf("Git head reconciliation %s claim: %w", repo.ID, e)
-			}
-			work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 30*time.Second)
-			_, e = g.core.workerRepository(work, j.RepoID)
-			var fence GitReadFence
-			var identity *domain.GitProviderObservation
-			if e == nil {
-				identity, fence, e = authorizeGitObservation(work, g.sourceAccess, j.RepoID)
-			}
-			var frozenAdmissions *frozenGitAdmissionBatch
-			if e == nil {
-				var admissionErr error
-				frozenAdmissions, admissionErr = g.freezeGitAdmissionBatch(work, j, identity, fence)
-				if admissionErr != nil {
-					log.Printf("Git admission snapshot %s deferred", j.RepoID)
-				}
-			}
-			var heads []outbound.GitHead
-			var frozenContext *gitAdmissionSnapshot
-			if e == nil {
-				var contextErr error
-				frozenContext, contextErr = g.freezeGitHeadContext(work, j, identity, frozenAdmissions)
-				if contextErr != nil {
-					log.Printf("Git context head snapshot %s deferred", j.RepoID)
-				}
-			}
-			var more bool
-			var sourceHeads []domain.GitRefObservation
-			if e == nil {
-				sourceHeads, e = g.readGitAdmissionSources(work, frozenAdmissions)
-			}
-			if e == nil {
-				heads, more, e = g.reader.ListGitHeads(work, j.GitOrigin, j.Page)
-			}
-			if e == nil {
-				observations := []domain.GitRefObservation{}
-				for _, h := range heads {
-					observations = append(observations, domain.GitRefObservation{RepoID: j.RepoID, GitOrigin: j.GitOrigin, Source: "reconciliation", Ref: h.Ref, After: h.Commit, Provider: identity}.WithID())
-				}
-				var preparedAdmissions *preparedGitAdmissionBatch
-				var boundHeads []domain.GitContextHead
-				receipt, receiptErr := domain.NewGitHeadReceiptWithSources(j, observations, sourceHeads, more)
-				if receiptErr == nil {
-					var contextErr error
-					boundHeads, contextErr = prepareGitContextHeads(frozenContext, receipt)
-					if contextErr != nil {
-						log.Printf("Git context head preparation %s deferred", j.RepoID)
-					}
-				}
-				if frozenAdmissions != nil {
-					admissionErr := receiptErr
-					if admissionErr == nil {
-						preparedAdmissions, admissionErr = g.prepareGitAdmissionBatch(work, frozenAdmissions, receipt)
-					}
-					if admissionErr != nil {
-						log.Printf("Git admission preparation %s deferred", j.RepoID)
-					}
-				}
-				e = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
-					r, e := g.core.meta.GetRepo(tx, j.RepoID)
-					if e != nil {
-						return e
-					}
-					if r.GitRemoteURL != j.GitOrigin {
-						return domain.ErrConflict
-					}
-					if e := fence(tx); e != nil {
-						return e
-					}
-					var finishErr error
-					if len(sourceHeads) > 0 {
-						finishErr = g.core.meta.(outbound.GitHeadSourceScanStore).FinishGitHeadScanWithSources(tx, j, observations, sourceHeads, more, time.Now().UTC())
-					} else {
-						finishErr = st.FinishGitHeadScan(tx, j, observations, more, time.Now().UTC())
-					}
-					if finishErr != nil {
-						return finishErr
-					}
-					var current *gitAdmissionSnapshot
-					if len(boundHeads) > 0 || (preparedAdmissions != nil && len(preparedAdmissions.admissions) > 0) {
-						var err error
-						basis := frozenContext
-						if preparedAdmissions != nil && preparedAdmissions.frozen.snapshot != nil {
-							basis = preparedAdmissions.frozen.snapshot
-						}
-						current, err = g.core.reuseGitAdmissionSnapshot(tx, j.RepoID, basis)
-						if errors.Is(err, domain.ErrConflict) {
-							boundHeads = nil
-							if preparedAdmissions != nil {
-								preparedAdmissions.admissions = nil
-							}
-							err = nil
-						}
-						if err != nil {
-							return err
-						}
-					}
-					if err := g.persistGitContextHeads(tx, receipt, boundHeads, current); err != nil {
-						return err
-					}
-					return g.persistGitAdmissionBatch(tx, preparedAdmissions, current)
-				})
-			}
-			cancel()
-			if e != nil {
-				finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				_ = repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return st.FailGitHeadScan(tx, j, time.Now().UTC()) })
-				done()
-				log.Printf("Git head reconciliation %s page %d deferred", j.RepoID, j.Page)
-			}
-			return nil
-		})
-		if admissionErr != nil {
-			claimErrors = append(claimErrors, admissionErr)
-			if errors.Is(admissionErr, domain.ErrResourceOverloaded) || ctx.Err() != nil {
-				return progress, errors.Join(append(claimErrors, ctx.Err())...)
-			}
-		}
-	}
-	return progress, errors.Join(append(claimErrors, ctx.Err())...)
+	return g.integration().reconcile(ctx)
 }
 func (g *GitScans) RunReconciler(ctx context.Context) {
-	for {
-		progress, err := g.reconcile(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Git reconciliation: %v", err)
-		}
-		delay := time.Minute
-		if progress {
-			delay = time.Second
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
+	g.integration().RunReconciler(ctx)
 }
 
 func (s *Service) queuePRGitScans(ctx context.Context, repo domain.ContentHash, origin string, pr domain.PullRequestMerge) error {
-	st, ok := s.meta.(outbound.GitScanStore)
-	if !ok {
-		return nil
-	}
-	for _, sha := range []string{pr.HeadSHA, pr.MergeSHA} {
-		if domain.ValidateGitOID(sha) != nil {
-			continue
-		}
-		if err := st.EnqueueGitScan(ctx, domain.NewGitScan(repo, origin, sha, time.Now().UTC())); err != nil {
-			return err
-		}
-	}
-	return nil
+	return queuePRGitScansFromStore(ctx, s.meta, repo, origin, pr)
 }
 
-// Index and tree come from separate bounded reads. Verify their common
-// immutable identity before marking the index complete.
 func (g *GitScans) validateIndexTree(ctx context.Context, j domain.GitScanJob, deltas []domain.GitCommitDelta) error {
-	st := g.core.meta.(outbound.GitTreeStore)
-	c, err := st.GetGitCommitTree(ctx, j.RepoID, j.GitOrigin, j.Commit)
-	if err != nil {
-		return err
-	}
-	cache := map[string]domain.GitTreeNode{}
-	for _, d := range deltas {
-		if !slices.Equal(c.Parents, d.Parents) {
-			return domain.ErrIntegrity
-		}
-		for _, change := range d.Changes {
-			entry, err := cachedGitEntry(ctx, st, j.RepoID, j.GitOrigin, c.Tree, change.Path, cache)
-			if err != nil {
-				return err
-			}
-			if entry != change.After {
-				return domain.ErrIntegrity
-			}
-		}
-	}
-	return nil
+	return g.integration().validateIndexTree(ctx, j, deltas)
 }
 
 // SetSourceAuthorizer configures source policy before workers start.

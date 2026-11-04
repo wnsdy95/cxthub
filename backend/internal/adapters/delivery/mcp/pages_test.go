@@ -48,6 +48,7 @@ func TestRenamedBranchPagesPreserveIdentityAndExcludeReusedName(t *testing.T) {
 		{ID: a, RepoID: repo.ID, Branch: "old"}, {ID: b, RepoID: repo.ID, Branch: "old", Parents: []domain.ContentHash{a}}, {ID: c, RepoID: repo.ID, Branch: "old"},
 	}}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "new", Target: b}, {Kind: domain.RefBranch, Name: "old", Target: c}}, events: []domain.HistoryEvent{reuse, rename, birth}}
 	s := &Server{context: f}
+	setContextQueryTestPort(t, s, f)
 	for _, name := range []string{"new", "old"} {
 		got, err := s.scopeSnapshots(systemTestContext(), repo, toolArgs{Branch: name}, &pageCursor{})
 		if err != nil {
@@ -89,7 +90,7 @@ func TestMemoryPagesPinTheFirstVersionAndReassembleUnicode(t *testing.T) {
 	snaps := []domain.Snapshot{{ID: id, RepoID: repo.ID, MemoryHash: hash}}
 	memories := map[domain.ContentHash]domain.MemoryDigest{hash: memory}
 	f := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}, memories: memories}}
-	s := &Server{context: f}
+	s := &Server{context: f, memorySnapshots: f}
 	a := toolArgs{Repository: string(repo.ID), Ref: string(id), Mode: "stored"}
 	var combined strings.Builder
 	for calls := 0; calls < 100; calls++ {
@@ -130,12 +131,12 @@ func TestSearchContinuesPastEmptyPagesAndMidDocument(t *testing.T) {
 	repo := domain.Repo{ID: pageHash(1)}
 	var snaps []domain.Snapshot
 	docs := map[domain.ContentHash]domain.SessionDoc{}
-	for i := 0; i < 102; i++ {
-		id := pageHash(i + 2)
-		snap := domain.Snapshot{ID: id, RepoID: repo.ID, DocHash: id, CreatedAt: time.Unix(int64(200-i), 0)}
+	for snapshotIndex := 0; snapshotIndex < 202; snapshotIndex++ {
+		id := pageHash(snapshotIndex + 2)
+		snap := domain.Snapshot{ID: id, RepoID: repo.ID, DocHash: id, CreatedAt: time.Unix(int64(300-snapshotIndex), 0)}
 		snaps = append(snaps, snap)
 		doc := domain.SessionDoc{}
-		if i == 101 {
+		if snapshotIndex == 201 {
 			for j := 0; j < 5004; j++ {
 				text := "unrelated"
 				if j >= 5000 {
@@ -146,12 +147,14 @@ func TestSearchContinuesPastEmptyPagesAndMidDocument(t *testing.T) {
 		}
 		docs[id] = doc
 	}
-	s := &Server{context: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, docs: docs}}
+	backend := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, docs: docs}
+	server := &Server{context: backend}
+	setPageDocumentEventQueries(t, server, repo.ID, backend)
 	a := toolArgs{Repository: string(repo.ID), Query: "needle", Limit: 2}
 	seen := map[int]bool{}
 	emptyPages := 0
 	for calls := 0; calls < 20; calls++ {
-		raw, err := s.searchPage(systemTestContext(), repo, a)
+		raw, err := server.searchPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,6 +192,7 @@ func TestBranchScopeIncludesSharedContentAndRetainedAncestors(t *testing.T) {
 	snaps := []domain.Snapshot{{ID: a, RepoID: repo.ID, Branch: "main"}, {ID: b, RepoID: repo.ID, Branch: "another", Parents: []domain.ContentHash{a}}, {ID: c, RepoID: repo.ID, Branch: "another", Parents: []domain.ContentHash{a}}}
 	f := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "shared", Target: b}}, events: []domain.HistoryEvent{{Branch: "shared", Source: c, Target: b}}}
 	s := &Server{context: f}
+	setContextQueryTestPort(t, s, f)
 	cur := pageCursor{}
 	got, err := s.scopeSnapshots(systemTestContext(), repo, toolArgs{Branch: "shared"}, &cur)
 	if err != nil || len(got) != 3 {
@@ -202,7 +206,9 @@ func TestContextPaginationVisitsBeyond100WithStableTieOrder(t *testing.T) {
 	for i := 0; i < 137; i++ {
 		snaps = append(snaps, domain.Snapshot{ID: pageHash(i + 2), RepoID: repo.ID, CreatedAt: time.Unix(100, 0), Message: "hook: retained", Branch: "main"})
 	}
-	s := &Server{context: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}}}
+	backend := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}}
+	s := &Server{context: backend}
+	setContextQueryTestPort(t, s, backend)
 	a := toolArgs{Repository: string(repo.ID), Limit: 17}
 	seen := map[domain.ContentHash]bool{}
 	for calls := 0; calls < 20; calls++ {
@@ -261,12 +267,14 @@ func TestEventPagesReassembleEveryOldAndOversizedEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap := domain.Snapshot{ID: id, DocHash: id, RepoID: repo.ID, Branch: "main"}
-	s := &Server{context: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snap}}}, docs: map[domain.ContentHash]domain.SessionDoc{id: doc}}}
+	backend := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snap}}}, docs: map[domain.ContentHash]domain.SessionDoc{id: doc}}
+	server := &Server{context: backend}
+	setPageDocumentEventQueries(t, server, repo.ID, backend)
 	a := toolArgs{Ref: string(id), Events: 11}
 	reassembled := make([]string, len(doc.CIR.Events))
 	completed := 0
 	for calls := 0; calls < 100; calls++ {
-		raw, err := s.eventPage(systemTestContext(), repo, a)
+		raw, err := server.eventPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -299,10 +307,19 @@ func TestEventPagesReassembleEveryOldAndOversizedEvent(t *testing.T) {
 	if completed != 125 {
 		t.Fatalf("completed %d events", completed)
 	}
-	for i, event := range doc.CIR.Events {
-		raw, _ := json.Marshal(event)
-		if reassembled[i] != string(raw) {
-			t.Fatalf("event %d did not roundtrip", i)
+	canonical, err := domain.CanonicalBytes(doc.CIR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(canonical, &encoded); err != nil || len(encoded.Events) != len(doc.CIR.Events) {
+		t.Fatal("canonical event oracle changed", err)
+	}
+	for eventIndex, event := range encoded.Events {
+		if reassembled[eventIndex] != string(event) {
+			t.Fatalf("canonical event %d did not roundtrip", eventIndex)
 		}
 	}
 }
@@ -311,7 +328,9 @@ func TestPreviousScopeRequiresPositionAndPreservesRealReachability(t *testing.T)
 	repo := domain.Repo{ID: pageHash(1)}
 	a, b, d := pageHash(2), pageHash(3), pageHash(4)
 	snaps := []domain.Snapshot{{ID: a, RepoID: repo.ID}, {ID: b, RepoID: repo.ID, Parents: []domain.ContentHash{a}}, {ID: d, RepoID: repo.ID, Parents: []domain.ContentHash{a}}}
-	s := &Server{context: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "main", Target: d}, {Kind: domain.RefTag, Name: "cxt/history/v1/retained/source", Target: b}}}}
+	backend := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "main", Target: d}, {Kind: domain.RefTag, Name: "cxt/history/v1/retained/source", Target: b}}}
+	s := &Server{context: backend}
+	setContextQueryTestPort(t, s, backend)
 	if _, err := s.contextPage(systemTestContext(), repo, toolArgs{Scope: "previous"}); err == nil {
 		t.Fatal("inferred local HEAD")
 	}

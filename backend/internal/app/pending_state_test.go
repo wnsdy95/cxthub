@@ -81,7 +81,7 @@ func TestPendingStateIndependentOfGraphEvidenceAndBulkWork(t *testing.T) {
 	if err != nil || changed.Revision != (domain.RepositoryRevision{Graph: 1, Pending: 2, Evidence: 1}) || len(changed.OrphanSessions) != 0 || len(changed.HoldCounts) != 0 {
 		t.Fatalf("fresh publication generation not classified: %+v %v", changed, err)
 	}
-	if spy.snapshotLists != 3 || spy.snapshotReads != 0 || spy.evidenceReads != 0 || len(svc.graphCache.entries) != 0 {
+	if spy.snapshotLists != 3 || spy.snapshotReads != 0 || spy.evidenceReads != 0 || svc.graphCache.Stats().Entries != 0 {
 		t.Fatalf("not one metadata scan per independent projection: %+v", spy)
 	}
 	release()

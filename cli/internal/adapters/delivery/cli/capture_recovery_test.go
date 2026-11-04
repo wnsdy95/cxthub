@@ -34,7 +34,7 @@ func TestCaptureRecoveryJournalAcknowledgmentIsImmutableAndReplaySafe(t *testing
 		return c.CaptureRecovery.Inspect(ctx, repo)
 	}
 	var doctor bytes.Buffer
-	if err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &doctor, inspect); err == nil || !bytes.Contains(doctor.Bytes(), []byte("needs-review")) {
+	if err := RunDiagnostics(ctx, inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &doctor, inspect); err == nil || !bytes.Contains(doctor.Bytes(), []byte("needs-review")) {
 		t.Fatalf("missing capture diagnostic: %s %v", doctor.String(), err)
 	}
 	expect := domain.CaptureAttempt(*p).Fingerprint()
@@ -63,7 +63,7 @@ func TestCaptureRecoveryJournalAcknowledgmentIsImmutableAndReplaySafe(t *testing
 		}
 	}
 	doctor.Reset()
-	if err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &doctor, inspect); err != nil || !bytes.Contains(doctor.Bytes(), []byte("acknowledged-gap")) {
+	if err := RunDiagnostics(ctx, inspectionReaderForTest{}, cwd, []string{"doctor", "--json"}, &doctor, inspect); err != nil || !bytes.Contains(doctor.Bytes(), []byte("acknowledged-gap")) {
 		t.Fatalf("acknowledged gap hidden or retried: %s %v", doctor.String(), err)
 	}
 	after, _ := os.ReadFile(path)

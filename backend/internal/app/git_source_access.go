@@ -5,15 +5,14 @@ import (
 	"errors"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // GitReadFence is a local policy check executed inside the publication transaction.
 // It must not perform provider I/O or acquire an identity write transaction.
-type GitReadFence func(context.Context) error
+type GitReadFence = outbound.GitReadFence
 
-type GitSourceAuthorizer interface {
-	AuthorizeGitRead(context.Context, domain.ContentHash) (GitReadFence, error)
-}
+type GitSourceAuthorizer = outbound.GitSourceAuthorizer
 
 type GitObservationAuthorizer interface {
 	AuthorizeGitObservation(context.Context, domain.ContentHash) (*domain.GitProviderObservation, GitReadFence, error)
@@ -42,48 +41,60 @@ func authorizeGitRead(ctx context.Context, policy GitSourceAuthorizer, repo doma
 	if policy == nil {
 		return func(context.Context) error { return nil }, nil
 	}
-	return policy.AuthorizeGitRead(ctx, repo)
-}
-
-func (g *GitHubConnections) AuthorizeGitRead(ctx context.Context, repoID domain.ContentHash) (GitReadFence, error) {
-	_, fence, err := g.AuthorizeGitObservation(ctx, repoID)
+	fence, err := policy.AuthorizeGitRead(ctx, repo)
+	if err == nil && fence == nil {
+		return nil, domain.ErrIntegrity
+	}
 	return fence, err
 }
 
-func (g *GitHubConnections) AuthorizeGitObservation(ctx context.Context, repoID domain.ContentHash) (*domain.GitProviderObservation, GitReadFence, error) {
-	repo, err := g.core.meta.GetRepo(ctx, repoID)
+func (connections *GitHubConnections) AuthorizeGitRead(ctx context.Context, repoID domain.ContentHash) (GitReadFence, error) {
+	return connections.worker().AuthorizeGitRead(ctx, repoID)
+}
+
+func (connections *GitHubConnections) AuthorizeGitObservation(ctx context.Context, repoID domain.ContentHash) (*domain.GitProviderObservation, GitReadFence, error) {
+	return connections.worker().AuthorizeGitObservation(ctx, repoID)
+}
+
+func (worker *GitHubWorker) AuthorizeGitRead(ctx context.Context, repoID domain.ContentHash) (GitReadFence, error) {
+	_, fence, err := worker.AuthorizeGitObservation(ctx, repoID)
+	return fence, err
+}
+
+func (worker *GitHubWorker) AuthorizeGitObservation(ctx context.Context, repoID domain.ContentHash) (*domain.GitProviderObservation, GitReadFence, error) {
+	repo, err := worker.metadata.GetRepo(ctx, repoID)
 	if err != nil {
 		return nil, nil, err
 	}
-	local, err := g.id.repositories.GetRepository(ctx, repo.RepositoryID)
+	local, err := worker.repositories.GetRepository(ctx, repo.RepositoryID)
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := g.store.GetGitHubConnection(ctx, local.OwnerNamespaceID)
+	connection, err := worker.store.GetGitHubConnection(ctx, local.OwnerNamespaceID)
 	if errors.Is(err, domain.ErrNotFound) {
 		// Installing a connection while an operator-token request is in flight also
 		// changes the source contract; retry through the new explicit binding.
 		return nil, func(tx context.Context) error {
-			current, e := g.core.meta.GetRepo(tx, repoID)
-			if e != nil {
-				return e
+			current, lookupError := worker.metadata.GetRepo(tx, repoID)
+			if lookupError != nil {
+				return lookupError
 			}
 			if current.RepositoryID != repo.RepositoryID {
 				return domain.ErrConflict
 			}
-			now, e := g.id.repositories.GetRepository(tx, local.ID)
-			if e != nil {
-				return e
+			currentLocal, lookupError := worker.repositories.GetRepository(tx, local.ID)
+			if lookupError != nil {
+				return lookupError
 			}
-			if now.OwnerNamespaceID != local.OwnerNamespaceID {
+			if currentLocal.OwnerNamespaceID != local.OwnerNamespaceID {
 				return domain.ErrConflict
 			}
-			_, e = g.store.GetGitHubConnection(tx, local.OwnerNamespaceID)
-			if errors.Is(e, domain.ErrNotFound) {
+			_, lookupError = worker.store.GetGitHubConnection(tx, local.OwnerNamespaceID)
+			if errors.Is(lookupError, domain.ErrNotFound) {
 				return nil
 			}
-			if e != nil {
-				return e
+			if lookupError != nil {
+				return lookupError
 			}
 			return domain.ErrConflict
 		}, nil
@@ -91,18 +102,18 @@ func (g *GitHubConnections) AuthorizeGitObservation(ctx context.Context, repoID 
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, b := range c.Bindings {
-		if b.ContextRepoID != repoID {
+	for _, binding := range connection.Bindings {
+		if binding.ContextRepoID != repoID {
 			continue
 		}
-		if _, err := g.binding(ctx, c, b); err != nil {
+		if _, err := worker.binding(ctx, connection, binding); err != nil {
 			return nil, nil, err
 		}
-		identity := domain.GitProviderObservation{InstallationID: c.Installation.ID, RepositoryID: b.ExternalID}
+		identity := domain.GitProviderObservation{InstallationID: connection.Installation.ID, RepositoryID: binding.ExternalID}
 		if err := identity.Validate(); err != nil {
 			return nil, nil, err
 		}
-		return &identity, func(tx context.Context) error { _, err := g.binding(tx, c, b); return err }, nil
+		return &identity, func(tx context.Context) error { _, err := worker.binding(tx, connection, binding); return err }, nil
 	}
 	return nil, nil, domain.ErrForbidden
 }

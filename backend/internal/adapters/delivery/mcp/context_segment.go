@@ -24,7 +24,7 @@ func (s *Server) contextSegmentPage(ctx context.Context, repo domain.Repo, a too
 	if cur.ContextBranch != "" {
 		branch = cur.ContextBranch
 	}
-	view, err := s.context.QueryContext(ctx, repo.ID, domain.ContextSelection{Branch: branch, Position: position, Scope: a.Scope, CodeCommit: a.CodeCommit, SegmentLimit: 1, SegmentOffset: cur.Index, SegmentStateHash: cur.Projection})
+	view, err := s.queryContext(ctx, repo.ID, domain.ContextSelection{Branch: branch, Position: position, Scope: a.Scope, CodeCommit: a.CodeCommit, SegmentLimit: 1, SegmentOffset: cur.Index, SegmentStateHash: cur.Projection})
 	if err != nil {
 		return "", err
 	}
