@@ -36,7 +36,9 @@ jobs:
         run: go build -tags "$GO_BUILD_TAGS" ./...
       - name: Vet all packages
         working-directory: backend
-        run: go vet -tags "$GO_BUILD_TAGS" ./...
+        env:
+          GOMEMLIMIT: 4GiB
+        run: go vet -p 1 -tags "$GO_BUILD_TAGS" ./...
       - name: Build production binary
         if: matrix.variant == 'postgres'
         working-directory: backend

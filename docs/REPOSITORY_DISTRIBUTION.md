@@ -94,6 +94,14 @@ Mirror CI validates distribution packaging; it does not replace source CI.
 Backend and MCP keep test files but do not pretend their complete test suites
 can run without monorepo-only peers. Their READMEs explicitly explain this.
 
+Backend and MCP vet steps serialize package compilation (`-p 1`) and set
+`GOMEMLIMIT=4GiB` for that step only. Cold PostgreSQL test-package compilation
+otherwise exhausted a private runner's RAM and swap before vet completed.
+This is a soft Go runtime memory budget, not a process RSS cap. All packages,
+test files, and default vet analyzers remain included; optimized production
+builds, Docker builds, and the 20-minute packaging job limits are unchanged.
+Do not replace this with skipped checks or a timeout increase.
+
 ## Authentication and owner bootstrap
 
 The dedicated `cxthub-repository-sync` GitHub App is installed on the four target
