@@ -215,7 +215,7 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 	if err != nil {
 		return domain.HistoryEvent{}, err
 	}
-	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return domain.HistoryEvent{}, err
 	}
@@ -332,7 +332,7 @@ func checkpointBranchSource(ctx context.Context, c *Container, cwd, from, to str
 	if c.Save == nil || from == "" {
 		return ""
 	}
-	target, err := branchCheckpointTarget(ctx, cwd)
+	target, err := c.branchCheckpointTarget(ctx, cwd)
 	if err != nil {
 		if !errors.Is(err, domain.ErrNoActiveSession) {
 			hookWarn("branch source session unavailable; using verified saved context: %v", err)
@@ -399,8 +399,8 @@ func branchCheckpointAncestor(ctx context.Context, c *Container, baseline domain
 	return false, nil
 }
 
-func branchCheckpointTarget(ctx context.Context, cwd string) (commandCaptureTarget, error) {
-	provider, managed := supervisedProvider(ctx, cwd)
+func (c *Container) branchCheckpointTarget(ctx context.Context, cwd string) (commandCaptureTarget, error) {
+	provider, managed := c.supervisedProvider(ctx, cwd)
 	active := capture.ActiveAppSessions(cwd)
 	if managed || strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")) != "" || strings.TrimSpace(os.Getenv("CODEX_SESSION_ID")) != "" {
 		// An identified owner takes precedence over every registered sibling.
@@ -428,7 +428,7 @@ func branchCheckpointTarget(ctx context.Context, cwd string) (commandCaptureTarg
 				}
 			}
 		}
-		target, err := commandCapture(ctx, cwd, "")
+		target, err := c.commandCapture(ctx, cwd, "")
 		if err != nil {
 			return commandCaptureTarget{}, err
 		}
@@ -477,7 +477,7 @@ func replayBranchOperationsForRefWithPublication(ctx context.Context, c *Contain
 	if err != nil || len(ops) == 0 {
 		return err
 	}
-	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

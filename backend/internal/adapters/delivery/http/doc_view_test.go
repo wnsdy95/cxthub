@@ -43,7 +43,9 @@ func TestDocViewHTTPAuthorizationAndLazyContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := app.NewService(storage, storage, nil, nil, storage)
-	server := httptest.NewServer(NewServer(service, identity).Handler())
+	delivery := NewServer(service, identity)
+	setServiceDocumentEventQueries(t, delivery, service)
+	server := httptest.NewServer(delivery.Handler())
 	defer server.Close()
 	base := server.URL + "/api/v1/repos/" + string(repo) + "/docs/" + string(hash)
 	var page struct {

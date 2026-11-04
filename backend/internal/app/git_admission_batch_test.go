@@ -82,8 +82,7 @@ func resumeAdmissionBatchPlan(batch *preparedGitAdmissionBatch) *frozenGitAdmiss
 }
 
 func freshAdmissionBatchEvidence(evidence *codeEvidence) *codeEvidence {
-	return &codeEvidence{repo: evidence.repo, origin: evidence.origin, trees: evidence.trees,
-		commits: map[string]evidenceValue[domain.GitCommitTree]{}}
+	return &codeEvidence{repo: evidence.repo, origin: evidence.origin, trees: evidence.trees}
 }
 
 func TestGitAdmissionBatchPlanSelectsCarriedHeadFromFrozenView(t *testing.T) {
@@ -313,9 +312,9 @@ func TestGitAdmissionBatchPlanEvidenceLimitAdvancesCurrentPair(t *testing.T) {
 	receipt = admissionBatchDestinations(t, fixture, frozen, receipt, gitAdmissionBatchLimit+2)
 	for attempt := 0; attempt < 3; attempt++ {
 		limited := freshAdmissionBatchEvidence(evidence)
-		limited.reads = maxCodeEvidenceReads
+		exhaustCodeEvidenceReads(t, limited)
 		batch, err := planGitAdmissionBatch(systemTestContext(), frozen, receipt, limited)
-		if err != nil || batch == nil || len(batch.admissions) != 0 || !limited.limited {
+		if err != nil || batch == nil || len(batch.admissions) != 0 || !limited.Limited() {
 			t.Fatalf("evidence limit lost resumable planning: %+v %v", batch, err)
 		}
 		if batch.next.AfterPublicationID != "" || batch.next.AfterDestination != fmt.Sprintf("destination/%02d", attempt) || batch.next.ThroughPublicationID != frozen.next.ThroughPublicationID || batch.next.Validate() != nil {

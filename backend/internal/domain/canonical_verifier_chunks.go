@@ -59,16 +59,9 @@ func (v *CanonicalDocVerifier) verifyChunkDocument(ctx context.Context, want Con
 	if err != nil || len(encoded) > MaxDocJobManifestBytes {
 		return zero, ErrIntegrity
 	}
-	var envelope CIREnvelope
-	if json.Unmarshal(manifest.Envelope, &envelope) != nil {
-		return zero, ErrIntegrity
-	}
-	if err := ValidateCIRVersion(CIRDocument{Envelope: envelope}); err != nil {
+	envelope, err := decodeCanonicalCIREnvelope(manifest.Envelope)
+	if err != nil {
 		return zero, err
-	}
-	canonical, err := canonicalJSON(envelope)
-	if err != nil || !bytes.Equal(canonical, manifest.Envelope) {
-		return zero, ErrIntegrity
 	}
 	v2 := normalizeChunkFormat(manifest.Format) == ChunkFormatV2
 	owned := &verifiedDocChunks{envelope: string(manifest.Envelope)}

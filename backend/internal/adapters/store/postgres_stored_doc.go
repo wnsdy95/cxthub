@@ -17,6 +17,10 @@ const (
 // Ownership is checked through the caller's transaction for documents and
 // chunks alike, even when a disposable physical proof is already cached.
 func (s *PostgresStore) readOwnedDocObject(ctx context.Context, repo domain.ContentHash, kind string, hash domain.ContentHash) ([]byte, error) {
+	return s.readOwnedDocObjectBounded(ctx, repo, kind, hash, ownedDocChunkBytesPG)
+}
+
+func (s *PostgresStore) readOwnedDocObjectBounded(ctx context.Context, repo domain.ContentHash, kind string, hash domain.ContentHash, limit int) ([]byte, error) {
 	if err := validateHashes(repo, hash); err != nil {
 		return nil, err
 	}
@@ -25,14 +29,17 @@ func (s *PostgresStore) readOwnedDocObject(ctx context.Context, repo domain.Cont
 	}
 	var raw []byte
 	if kind == "chunk" {
+		if limit <= 0 || limit > ownedDocChunkBytesPG {
+			return nil, domain.ErrIntegrity
+		}
 		var size int
 		if err := s.db(ctx).QueryRow(ctx, `SELECT octet_length(b.bytes),
  CASE WHEN octet_length(b.bytes)<=$4 THEN substring(b.bytes FROM 1 FOR $4) END
  FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
- WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, string(repo), kind, string(hash), ownedDocChunkBytesPG).Scan(&size, &raw); err != nil {
+ WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, string(repo), kind, string(hash), limit).Scan(&size, &raw); err != nil {
 			return nil, mapNoRows(err)
 		}
-		if size > ownedDocChunkBytesPG {
+		if size > limit {
 			return nil, domain.ErrDocumentResourceLimit
 		}
 		if len(raw) != size {

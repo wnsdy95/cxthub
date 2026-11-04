@@ -85,6 +85,10 @@ func TestResolveRepositoryRootsSharesPrimaryContextWithLinkedWorktree(t *testing
 	if root, ok := ContextRoot(context.Background(), subdir); !ok || root != primary {
 		t.Fatalf("context root=%q ok=%v, want primary %q", root, ok, primary)
 	}
+	state := InspectContextRoot(context.Background(), subdir)
+	if !state.Initialized || !state.GitRepository || state.Root != primary || state.WorktreeRoot != linked {
+		t.Fatalf("context inspection lost the paired shared/worktree roots: %+v", state)
+	}
 
 	repo, err := NewGitContextAdapter().CurrentRepo(context.Background(), subdir)
 	if err != nil {

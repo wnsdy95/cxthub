@@ -37,7 +37,7 @@ func locateGitContributionIntroduction(ctx context.Context, evidence *codeEviden
 	}
 	if _, err := read(source); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			if evidence.limited {
+			if evidence.Limited() {
 				return "", errGitContributionEvidenceLimit
 			}
 			return "", errGitContributionEvidencePending
@@ -98,7 +98,7 @@ func locateGitContributionIntroduction(ctx context.Context, evidence *codeEviden
 		return "", domain.ErrNotFound
 	}
 	if reach == gitIntroductionUnknown {
-		if truncated || evidence.limited {
+		if truncated || evidence.Limited() {
 			return "", errGitContributionEvidenceLimit
 		}
 		return "", errGitContributionEvidencePending
@@ -117,7 +117,7 @@ func locateGitContributionIntroduction(ctx context.Context, evidence *codeEviden
 		parent := proof.Parents[0]
 		parentReach, known := memo[parent]
 		if !known {
-			if truncated || evidence.limited {
+			if truncated || evidence.Limited() {
 				return "", errGitContributionEvidenceLimit
 			}
 			return "", errGitContributionEvidencePending
@@ -126,7 +126,7 @@ func locateGitContributionIntroduction(ctx context.Context, evidence *codeEviden
 		case gitIntroductionAbsent:
 			return current, nil
 		case gitIntroductionUnknown:
-			if truncated || evidence.limited {
+			if truncated || evidence.Limited() {
 				return "", errGitContributionEvidenceLimit
 			}
 			return "", errGitContributionEvidencePending
@@ -172,7 +172,7 @@ func locateGitContributionInRange(ctx context.Context, evidence *codeEvidence, s
 		introduced = introduced || current == introduction
 		proof, err := evidence.GetGitCommitTree(ctx, evidence.repo, evidence.origin, current)
 		if errors.Is(err, domain.ErrNotFound) {
-			if evidence.limited {
+			if evidence.Limited() {
 				return "", errGitContributionEvidenceLimit
 			}
 			return "", errGitContributionEvidencePending

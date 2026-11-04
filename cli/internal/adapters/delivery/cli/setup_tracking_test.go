@@ -59,6 +59,7 @@ func setupTrackingFixture(t *testing.T) *tracking290Fixture {
 		f.remote.history[i].RepoID = repo.ID
 	}
 	f.c.Init = app.NewInitRepoService(gc, f.store)
+	f.c.ResolveRepo = gc.CurrentRepo
 	f.c.Sync = &setupConnection{tracking290Sync: f.sync, repo: repo}
 	return f
 }

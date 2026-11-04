@@ -9,9 +9,8 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type syncStatus struct {
@@ -42,13 +41,15 @@ type mergeDeliveryStatus struct {
 // RunSyncStatus reads only durable queue metadata. No document/memory bodies,
 // network, replay, provider discovery, mutation locks or repair are involved.
 // A zero queue is not a claim of server acknowledgement or replica integrity.
-func RunSyncStatus(ctx context.Context, cwd string, asJSON bool, w io.Writer) error {
+func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, cwd string, asJSON bool, w io.Writer) error {
 	report := syncStatus{ObservedAt: time.Now().UTC(), Historical: []domain.SnapshotBackfill{}, Branches: []branchOperationStatus{}, Issues: []string{}}
 	state := gitctx.InspectContextRoot(ctx, cwd)
 	if !state.Initialized {
 		report.Issues = append(report.Issues, "no initialized local replica; use cxt doctor to inspect registration and damage")
+	} else if reader == nil {
+		report.Issues = append(report.Issues, "local synchronization inspector unavailable")
 	} else {
-		repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		repo, err := reader.ResolveRepo(ctx, state.Root, cwd)
 		if err != nil {
 			report.Issues = append(report.Issues, "repository identity: "+err.Error())
 		} else {
@@ -64,7 +65,7 @@ func RunSyncStatus(ctx context.Context, cwd string, asJSON bool, w io.Writer) er
 				report.Merges = append(report.Merges, mergeDeliveryStatus{ID: key, Repository: job.Evidence.RepoID, Branch: job.Evidence.Branch, BranchID: job.Evidence.BranchID, Before: job.Evidence.Before, After: job.Evidence.After, Attempts: job.Attempts, Reason: job.Reason, LeaseUntil: job.LeaseUntil})
 			}
 			sort.Slice(report.Merges, func(left, right int) bool { return report.Merges[left].ID < report.Merges[right].ID })
-			jobs, err := storage.NewFileStore(state.Root).ListBackfills(ctx, report.Repository)
+			jobs, err := reader.ListBackfills(ctx, state.Root, report.Repository)
 			if err != nil {
 				report.Issues = append(report.Issues, "historical upload queue: "+err.Error())
 			} else {

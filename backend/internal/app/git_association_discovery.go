@@ -11,23 +11,23 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (g *GitScans) discoverGitAssociations(ctx context.Context, repo domain.Repo) (bool, error) {
-	store, supported := g.core.meta.(outbound.GitAssociationDiscoveryStore)
-	catalog, catalogSupported := g.core.meta.(outbound.CatalogStore)
-	_, atomic := g.core.meta.(outbound.RepositoryTransactions)
+func (workers *GitIntegrationWorkers) discoverGitAssociations(ctx context.Context, repo domain.Repo) (bool, error) {
+	store, supported := workers.work.meta.(outbound.GitAssociationDiscoveryStore)
+	catalog, catalogSupported := workers.work.meta.(outbound.CatalogStore)
+	_, atomic := workers.work.meta.(outbound.RepositoryTransactions)
 	if !supported || !catalogSupported || !atomic {
 		return false, nil
 	}
 	work, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	currentRepo, err := g.core.workerRepository(work, repo.ID)
+	currentRepo, err := workers.workerRepository(work, repo.ID)
 	if err != nil {
 		return false, err
 	}
 	if currentRepo.GitRemoteURL != repo.GitRemoteURL {
 		return false, domain.ErrConflict
 	}
-	authorization, err := authorizeGitAdmission(work, g.sourceAccess, repo.ID)
+	authorization, err := authorizeGitAdmission(work, workers.sourceAccess, repo.ID)
 	if err != nil {
 		return false, err
 	}
@@ -61,8 +61,8 @@ func (g *GitScans) discoverGitAssociations(ctx context.Context, repo domain.Repo
 	if reflect.DeepEqual(previous, unchanged) {
 		return false, nil
 	}
-	err = repositoryWriteError(context.WithValue(work, revisionScopeKey{}, "none"), g.core, repo.ID, func(write context.Context) error {
-		current, err := g.core.meta.GetRepo(write, repo.ID)
+	err = repositoryWriteErrorWithWork(context.WithValue(work, revisionScopeKey{}, "none"), workers.work, repo.ID, func(write context.Context) error {
+		current, err := workers.work.meta.GetRepo(write, repo.ID)
 		if err != nil {
 			return err
 		}

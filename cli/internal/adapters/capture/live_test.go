@@ -5,12 +5,89 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
+
+func TestLiveSessionWatchPreservesCommandScopeAndIndependentPhases(test *testing.T) {
+	cwd := test.TempDir()
+	record := filepath.Join(test.TempDir(), "invocation")
+	test.Setenv("CXT_TEST_LIVE_RECORD", record)
+	executable := filepath.Join(test.TempDir(), "observer child")
+	script := "#!/bin/sh\n{ pwd -P; printf '%s\\n' \"$@\"; } > \"$CXT_TEST_LIVE_RECORD\"\nif [ \"$2\" = live-capture ]; then exit 7; fi\n"
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		test.Fatal(err)
+	}
+	canonicalCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		test.Fatal(err)
+	}
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		const sessionID = "11111111-1111-4111-8111-111111111111"
+		wakes := 0
+		watch := liveSessionWatch(executable, cwd, provider, sessionID, func(observedCwd string) {
+			wakes++
+			if observedCwd != cwd {
+				test.Fatal("observer changed discovery worktree", observedCwd)
+			}
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		watch.Wake(ctx)
+		var failure *exec.ExitError
+		if err := watch.Poll(ctx); !errors.As(err, &failure) || failure.ExitCode() != 7 {
+			test.Fatal("capture child failure was hidden", err)
+		}
+		want := fmt.Sprintf("%s\ngit-hook\nlive-capture\n%s\n%s\n", canonicalCwd, provider, sessionID)
+		if raw, err := os.ReadFile(record); err != nil || string(raw) != want {
+			test.Fatalf("capture invocation=%q want=%q err=%v", raw, want, err)
+		}
+		if err := watch.Publish(ctx); err != nil || ctx.Err() != nil || wakes != 1 {
+			test.Fatal("capture failure canceled publication or duplicated discovery", err, ctx.Err(), wakes)
+		}
+		want = fmt.Sprintf("%s\ngit-hook\nlive-publish\n%s\n%s\n", canonicalCwd, provider, sessionID)
+		if raw, err := os.ReadFile(record); err != nil || string(raw) != want {
+			test.Fatalf("publication invocation=%q want=%q err=%v", raw, want, err)
+		}
+		cancel()
+		if err := watch.Poll(ctx); !errors.Is(err, context.Canceled) {
+			test.Fatal("capture ignored parent cancellation", err)
+		}
+		if err := watch.Publish(ctx); !errors.Is(err, context.Canceled) {
+			test.Fatal("publication ignored parent cancellation", err)
+		}
+		if raw, err := os.ReadFile(record); err != nil || string(raw) != want {
+			test.Fatal("canceled observer started another child", err)
+		}
+	}
+}
+
+func TestLiveSessionWatchCancelsRunningChildren(test *testing.T) {
+	executable := filepath.Join(test.TempDir(), "observer child")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexec sleep 60\n"), 0700); err != nil {
+		test.Fatal(err)
+	}
+	watch := liveSessionWatch(executable, test.TempDir(), domain.ProviderCodex, "registered", nil)
+	watch.Wake(context.Background())
+	for _, phase := range []struct {
+		name string
+		run  func(context.Context) error
+	}{{"capture", watch.Poll}, {"publication", watch.Publish}} {
+		test.Run(phase.name, func(test *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			err := phase.run(ctx)
+			if err == nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) || time.Since(started) > 5*time.Second {
+				test.Fatal("observer child outlived parent deadline", err, ctx.Err())
+			}
+		})
+	}
+}
 
 func TestObserverCapturesEqualStatRolloverAfterPublicationAndRetries(t *testing.T) {
 	home := t.TempDir()

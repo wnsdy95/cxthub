@@ -4,6 +4,7 @@ const port = 4174;
 const backendPort = 18_907;
 const mcpPort = 18_908;
 const fullStack = Boolean(process.env.CXT_E2E_FULLSTACK);
+const documentWindow = process.env.CXT_DOCUMENT_WINDOW === '1' || process.env.CXT_DOCUMENT_BASELINE === '1';
 
 export default defineConfig({
   testDir: './e2e',
@@ -42,7 +43,7 @@ export default defineConfig({
       : []),
     {
       name: 'web',
-      command: `${fullStack ? `VITE_DEV_PROXY=http://127.0.0.1:${backendPort} VITE_DEV_MCP_PROXY=http://127.0.0.1:${mcpPort} ` : ''}npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+      command: `VITE_DOCUMENT_RENDER_WINDOW=${documentWindow ? '1' : '0'} ${fullStack ? `VITE_DEV_PROXY=http://127.0.0.1:${backendPort} VITE_DEV_MCP_PROXY=http://127.0.0.1:${mcpPort} ` : ''}npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
       url: `http://127.0.0.1:${port}`,
       // Full-stack mode must own the Vite process so its proxy cannot silently
       // reuse a developer server pointed at a different backend.

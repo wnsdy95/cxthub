@@ -1,10 +1,13 @@
 package store
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -81,6 +84,116 @@ func TestDocRangeSpoolBoundedReadsAndCleanup(t *testing.T) {
 	if _, err := spool.Read(ctx, 0); err == nil {
 		t.Fatal("closed spool accepted a read")
 	}
+}
+
+type docRangeSpoolTestWriter struct {
+	writer io.Writer
+	calls  int
+	short  bool
+}
+
+func (writer *docRangeSpoolTestWriter) Write(raw []byte) (int, error) {
+	writer.calls++
+	if writer.short {
+		return len(raw) - 1, nil
+	}
+	return writer.writer.Write(raw)
+}
+
+func TestDocRangeSpoolBuffersBoundedWritesAndInterleavedReads(t *testing.T) {
+	directory := rangeSpoolTempDir(t)
+	spool, err := newDocRangeSpool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close()
+	writer := &docRangeSpoolTestWriter{writer: spool.file}
+	spool.writer = bufio.NewWriterSize(writer, domain.MaxDocRangePageBytes)
+	ctx := context.Background()
+	pages := [][]byte{bytes.Repeat([]byte("a"), 100), bytes.Repeat([]byte("b"), 200)}
+	for _, raw := range pages {
+		if err := spool.Append(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if writer.calls != 0 || spool.writer.Buffered() != 300 || spool.writer.Size() != domain.MaxDocRangePageBytes {
+		t.Fatal("small pages were not coalesced within the bounded buffer")
+	}
+	if _, err := spool.Read(ctx, len(pages)); !errors.Is(err, domain.ErrIntegrity) || writer.calls != 0 {
+		t.Fatal("invalid read flushed staged bytes", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := spool.Flush(canceled); !errors.Is(err, context.Canceled) || writer.calls != 0 {
+		t.Fatal("canceled flush wrote staged bytes", err)
+	}
+	first, err := spool.Read(ctx, 0)
+	if err != nil || !bytes.Equal(first, pages[0]) || writer.calls != 1 {
+		t.Fatal("read did not flush exactly once", err)
+	}
+	pages = append(pages, bytes.Repeat([]byte("c"), domain.MaxDocRangePageBytes), []byte("tail"))
+	for _, raw := range pages[2:] {
+		if err := spool.Append(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := spool.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for position, want := range pages {
+		got, err := spool.Read(ctx, position)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatal("append after read changed page", position, err)
+		}
+	}
+	if writer.calls != 3 || spool.writer.Buffered() != 0 {
+		t.Fatal("unexpected write batching", writer.calls)
+	}
+	if _, err := spool.file.WriteAt([]byte("z"), 0); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := spool.Read(ctx, 0)
+	if err != nil || changed[0] != 'z' || first[0] != 'a' {
+		t.Fatal("read masked current bytes or aliased earlier result", err)
+	}
+	if err := spool.Append(ctx, []byte("discarded")); err != nil {
+		t.Fatal(err)
+	}
+	if err := spool.Close(); err != nil || writer.calls != 3 {
+		t.Fatal("close wrote unused staged bytes", err)
+	}
+	if err := spool.Flush(ctx); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("closed spool accepted flush", err)
+	}
+	assertRangeSpoolsRemoved(t, directory)
+}
+
+func TestDocRangeSpoolFlushFailureRemainsFailed(t *testing.T) {
+	directory := rangeSpoolTempDir(t)
+	spool, err := newDocRangeSpool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close()
+	writer := &docRangeSpoolTestWriter{short: true}
+	spool.writer = bufio.NewWriterSize(writer, domain.MaxDocRangePageBytes)
+	ctx := context.Background()
+	if err := spool.Append(ctx, []byte("staged")); err != nil {
+		t.Fatal(err)
+	}
+	if err := spool.Flush(ctx); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatal("flush hid short write", err)
+	}
+	if err := spool.Append(ctx, []byte("later")); !errors.Is(err, io.ErrShortWrite) || len(spool.offsets) != 2 {
+		t.Fatal("failed spool accepted another page", err)
+	}
+	if _, err := spool.Read(ctx, 0); !errors.Is(err, io.ErrShortWrite) || writer.calls != 1 {
+		t.Fatal("failed spool returned partially flushed bytes", err)
+	}
+	if err := spool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertRangeSpoolsRemoved(t, directory)
 }
 
 func manyShortRangeFixture(t *testing.T) rootReaderFixture {

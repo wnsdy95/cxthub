@@ -1,13 +1,9 @@
 import type { DocViewEventPage } from './api';
-import type { DocFragmentPage, DocViewMode } from './types';
+import type { DocFragmentPage } from './types';
 import { DOCUMENT_FRAGMENT_BYTES } from './documentReads';
 
 export const DOCUMENT_VISIBLE_MESSAGES = 20;
 export const DOCUMENT_TRAVERSED_EVENTS = 512;
-
-export function docPageKey(repoId: string | null, hash: string | null, base: string | undefined, start: number, mode: DocViewMode) {
-  return ['doc-events', repoId, hash, base ?? '', start, mode] as const;
-}
 
 export function validateDocViewPage(page: DocViewEventPage, hash: string, requested: number): DocViewEventPage {
   if (!Array.isArray(page.events)) throw new Error('Invalid document events');

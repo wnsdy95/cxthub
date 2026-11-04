@@ -16,20 +16,21 @@ const MaxPendingDocJobs = 32
 // manifest is part of its identity so a bad upload cannot poison another upload
 // claiming the same document hash. Version fences expired workers.
 type DocFinalizationJob struct {
-	DocIdentity  DocumentIdentity `json:"doc_identity,omitempty"`
-	RootManifest json.RawMessage  `json:"root_manifest,omitempty"`
-	ID           string           `json:"id"`
-	RepoID       ContentHash      `json:"repo_id"`
-	DocHash      ContentHash      `json:"doc_hash"`
-	Manifest     DocChunkManifest `json:"manifest"`
-	State        string           `json:"state"`
-	Reason       string           `json:"reason,omitempty"`
-	Attempts     int              `json:"attempts"`
-	Version      int64            `json:"version"`
-	CreatedAt    time.Time        `json:"created_at"`
-	UpdatedAt    time.Time        `json:"updated_at"`
-	NextAttempt  time.Time        `json:"next_attempt"`
-	LeaseUntil   time.Time        `json:"lease_until"`
+	RepositoryEpoch string           `json:"-"`
+	DocIdentity     DocumentIdentity `json:"doc_identity,omitempty"`
+	RootManifest    json.RawMessage  `json:"root_manifest,omitempty"`
+	ID              string           `json:"id"`
+	RepoID          ContentHash      `json:"repo_id"`
+	DocHash         ContentHash      `json:"doc_hash"`
+	Manifest        DocChunkManifest `json:"manifest"`
+	State           string           `json:"state"`
+	Reason          string           `json:"reason,omitempty"`
+	Attempts        int              `json:"attempts"`
+	Version         int64            `json:"version"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	NextAttempt     time.Time        `json:"next_attempt"`
+	LeaseUntil      time.Time        `json:"lease_until"`
 }
 
 func NewDocFinalizationJob(repo, hash ContentHash, manifest DocChunkManifest, now time.Time) (DocFinalizationJob, error) {
@@ -95,7 +96,7 @@ func (j DocFinalizationJob) Fences(claim DocFinalizationJob, now time.Time) bool
 		}
 	}
 
-	return j.ID == claim.ID && j.RepoID == claim.RepoID && j.Version == claim.Version && j.State == "running" && j.LeaseUntil.After(now)
+	return j.ID == claim.ID && j.RepoID == claim.RepoID && j.RepositoryEpoch == claim.RepositoryEpoch && j.Version == claim.Version && j.State == "running" && j.LeaseUntil.After(now)
 }
 
 // NewDocFinalizationJobForRepresentation owns descriptor metadata only. Root

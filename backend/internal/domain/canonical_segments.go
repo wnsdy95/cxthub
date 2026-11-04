@@ -130,6 +130,22 @@ func (d VerifiedSessionDoc) segmented() (string, canonicalSegments, error) {
 	return string(env), stream, nil
 }
 
+func (document VerifiedSessionDoc) segmentedContext(ctx context.Context) (string, canonicalSegments, error) {
+	if err := ctx.Err(); err != nil {
+		return "", canonicalSegments{}, err
+	}
+	if document.chunks != nil {
+		return document.chunks.envelope, document.chunks.stream, nil
+	}
+	envelope, body, err := canonicalFrameParts(ctx, document.canonical)
+	if err != nil {
+		return "", canonicalSegments{}, err
+	}
+	var stream canonicalSegments
+	stream.add(body)
+	return envelope, stream, nil
+}
+
 // visit scans compact array framing across arbitrary byte boundaries. Each
 // completed object still needs exact typed canonical verification (or an exact
 // cached proof). That check rejects malformed JSON, duplicate keys, unknown

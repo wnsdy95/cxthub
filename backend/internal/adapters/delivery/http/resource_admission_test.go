@@ -85,6 +85,15 @@ func (admissionReadBackend) QueryGraphState(ctx context.Context, _ domain.Conten
 	return domain.GraphState{Version: 1}, nil
 }
 
+func (admissionReadBackend) GetRepositoryView(ctx context.Context, _ domain.ContentHash) (domain.RepositoryView, error) {
+	_, release, err := app.AcquireResources(ctx, app.ResourceBulk)
+	if err != nil {
+		return domain.RepositoryView{}, err
+	}
+	defer release()
+	return domain.RepositoryView{Graph: &domain.GraphState{Version: 1}}, nil
+}
+
 type admissionUnreadBody struct{ reads int }
 
 func (body *admissionUnreadBody) Read([]byte) (int, error) { body.reads++; return 0, io.EOF }
@@ -97,6 +106,9 @@ func TestResourceAdmissionHTTPRejectsBeforeUploadDecode(t *testing.T) {
 	}
 	defer release()
 	server := &Server{b: admissionReadBackend{}}
+	if err := server.SetRepositoryGraphQueries(admissionReadBackend{}, inbound.RepositoryGraphCompatibility); err != nil {
+		t.Fatal(err)
+	}
 	for _, handler := range []http.HandlerFunc{server.pushObjects, server.pushChunks} {
 		body := &admissionUnreadBody{}
 		request := httptest.NewRequest(http.MethodPost, "/", body)
@@ -153,7 +165,12 @@ func TestResourceAdmissionHTTPWholeDocumentPermitThroughResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := app.NewService(storage, storage, nil, nil, storage)
-	handler := NewServer(admissionReadBackend{Backend: service}, identity).Handler()
+	backend := admissionReadBackend{Backend: service}
+	server := NewServer(backend, identity)
+	if err := server.SetDocumentEventQueries(&documentEventHTTPQueries{read: backend.ReadDocEvents}, inbound.DocumentQueryCompatibility); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Handler()
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/docs/" + string(repo)},
 		{http.MethodGet, "/docs/" + string(repo) + "/events"},
@@ -187,6 +204,9 @@ func TestResourceAdmissionHTTPWholeDocumentPermitThroughResponse(t *testing.T) {
 
 func TestResourceAdmissionHTTPHeldThroughGraphEncoding(t *testing.T) {
 	server := &Server{b: admissionReadBackend{}}
+	if err := server.SetRepositoryGraphQueries(admissionReadBackend{}, inbound.RepositoryGraphCompatibility); err != nil {
+		t.Fatal(err)
+	}
 	writer := &admissionResponseWriter{ResponseRecorder: httptest.NewRecorder()}
 	server.graphState(writer, httptest.NewRequest(http.MethodGet, "/?graph_encoding=indexed-v2", nil))
 	if writer.Code != http.StatusOK || !writer.checked || !errors.Is(writer.err, context.DeadlineExceeded) {
@@ -209,10 +229,22 @@ func TestResourceAdmissionHTTPRetryableErrors(t *testing.T) {
 			t.Fatalf("not retryable: %v code=%d headers=%v", sentinel, response.Code, response.Header())
 		}
 	}
+	response := httptest.NewRecorder()
+	(&Server{}).respond(response, nil, fmt.Errorf("wrapped: %w", domain.ErrDocRangeIndexPending))
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "3" || !strings.Contains(response.Body.String(), "doc_range_index_pending") {
+		t.Fatalf("pending range retry contract: code=%d headers=%v body=%s", response.Code, response.Header(), response.Body)
+	}
 }
 
 func TestPendingStateHTTPOptInNeverMasqueradesAsCompleteGraph(t *testing.T) {
 	server := &Server{b: admissionReadBackend{}}
+	if err := server.SetRepositoryGraphQueries(admissionReadBackend{}, inbound.RepositoryGraphCompatibility); err != nil {
+		t.Fatal(err)
+	}
+	queries := &repositoryStateHTTPQueries{pending: domain.PendingStateView{Projection: "on-hold-v1", Pending: []domain.Pending{}, Snapshots: []domain.Snapshot{}, Hold: []domain.GraphHoldCluster{}, OrphanSessions: []string{}, HoldCounts: map[string]int{}}}
+	if err := server.SetRepositoryStateQueries(queries, inbound.RepositoryStateCompatibility); err != nil {
+		t.Fatal(err)
+	}
 	for _, projection := range []string{"", "on-hold-v1", "unknown"} {
 		response := httptest.NewRecorder()
 		server.pendingView(response, httptest.NewRequest(http.MethodGet, "/?projection="+projection, nil))
@@ -247,6 +279,10 @@ func TestResourceAdmissionHTTPStrictEventsBulkButViewIndependent(t *testing.T) {
 	}
 	defer release()
 	server := &Server{b: admissionReadBackend{}}
+	configureDocumentViewTestServer(server)
+	if err := server.SetDocumentEventQueries(&documentEventHTTPQueries{read: admissionReadBackend{}.ReadDocEvents}, inbound.DocumentQueryCompatibility); err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
 	server.getDocEvents(response, httptest.NewRequest(http.MethodGet, "/?view=chat", nil))
 	if response.Code != http.StatusOK {

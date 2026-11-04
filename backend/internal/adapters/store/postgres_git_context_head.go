@@ -36,12 +36,11 @@ func (row gitContextHeadRowPG) decode(repo domain.ContentHash) (domain.GitContex
 	if err != nil {
 		return head, domain.GitHeadReceipt{}, err
 	}
-	destination := head.Destination
-	if head.ID != row.id || destination.RepoID != repo || destination.GitOrigin != row.origin || destination.DestinationBranchID != row.branchID || destination.DestinationBranch != row.branch || destination.ReadVersion != row.version || destination.ReadReceiptID != row.receiptID {
-		return domain.GitContextHead{}, domain.GitHeadReceipt{}, domain.ErrIntegrity
+	if err := validateGitContextHeadIdentity(head, repo, row.id, row.origin, row.branchID, row.branch, row.version, row.receiptID); err != nil {
+		return domain.GitContextHead{}, domain.GitHeadReceipt{}, err
 	}
 	receipt, err := decodePRHistory[domain.GitHeadReceipt](row.receiptRaw)
-	if err != nil || validateGitHeadReceiptIdentity(receipt, repo, row.receiptOrigin, row.receiptVersion) != nil || receipt.ID != row.receiptID || !destination.MatchesReceipt(receipt) {
+	if err != nil || validateGitContextHeadReceipt(head, receipt, repo, row.receiptOrigin, row.receiptVersion, row.receiptID) != nil {
 		return domain.GitContextHead{}, domain.GitHeadReceipt{}, domain.ErrIntegrity
 	}
 	return head, receipt, nil
@@ -201,15 +200,15 @@ func scanGitContributionProofPG(row pgx.Row, repo domain.ContentHash) (domain.Gi
 	if err != nil {
 		return proof, err
 	}
-	if proof.ID != id || proof.AdmissionID != admissionID || proof.ContextHeadID != headID || proof.Contribution.RepoID != repo || proof.Contribution.ID != contributionID {
-		return domain.GitContributionProof{}, domain.ErrIntegrity
+	if err := validateGitContributionProofIdentity(proof, repo, id, admissionID, headID, contributionID); err != nil {
+		return domain.GitContributionProof{}, err
 	}
 	admission, err := decodeGitContributionAdmissionPG(admissionRaw, repo, admissionID, key, origin, baselineID)
 	if err != nil {
 		return domain.GitContributionProof{}, err
 	}
 	baseline, err := decodePRHistory[domain.GitHeadReceipt](baselineRaw)
-	if err != nil || validateGitHeadReceiptIdentity(baseline, repo, baselineOrigin, baselineVersion) != nil || baseline.ID != baselineID || !admission.MatchesBaseline(baseline) {
+	if err != nil || validateGitContributionProofBaseline(admission, baseline, repo, baselineOrigin, baselineVersion, baselineID) != nil {
 		return domain.GitContributionProof{}, domain.ErrIntegrity
 	}
 	head, receipt, err := headRow.decode(repo)
@@ -217,7 +216,7 @@ func scanGitContributionProofPG(row pgx.Row, repo domain.ContentHash) (domain.Gi
 		return domain.GitContributionProof{}, err
 	}
 	contribution, err := decodePRHistory[domain.GitContribution](contributionRaw)
-	if err != nil || contribution != proof.Contribution || !proof.MatchesInputs(admission, head, receipt) {
+	if err != nil || validateGitContributionProofInputs(proof, admission, head, receipt, contribution) != nil {
 		return domain.GitContributionProof{}, domain.ErrIntegrity
 	}
 	return proof, nil

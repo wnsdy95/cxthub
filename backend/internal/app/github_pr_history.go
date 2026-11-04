@@ -27,9 +27,9 @@ type prHistoryAttemptError struct{ cause error }
 func (failure *prHistoryAttemptError) Error() string { return failure.cause.Error() }
 func (failure *prHistoryAttemptError) Unwrap() error { return failure.cause }
 
-func (g *GitHubConnections) reconcilePRHistories(ctx context.Context, limit int) error {
+func (g *GitHubWorker) reconcilePRHistories(ctx context.Context, limit int) error {
 	reader, supported := g.remote.(outbound.GitHubPRHistory)
-	storage, available := g.core.meta.(outbound.PRHistoryStore)
+	storage, available := g.metadata.(outbound.PRHistoryStore)
 	if !supported || !available {
 		return nil
 	}
@@ -44,7 +44,7 @@ func (g *GitHubConnections) reconcilePRHistories(ctx context.Context, limit int)
 			continue
 		}
 		for _, binding := range connection.Bindings {
-			if err := g.core.checkDocumentIdentity(ctx, binding.ContextRepoID, true); err != nil {
+			if err := g.work.checkDocumentIdentity(ctx, binding.ContextRepoID, true); err != nil {
 				continue
 			}
 			if _, err := g.binding(ctx, connection, binding); err != nil {
@@ -124,20 +124,20 @@ func (g *GitHubConnections) reconcilePRHistories(ctx context.Context, limit int)
 	return nil
 }
 
-func (g *GitHubConnections) reconcilePRHistory(ctx context.Context, reader outbound.GitHubPRHistory, storage outbound.PRHistoryStore, item githubPRHistoryWork) (result error) {
+func (g *GitHubWorker) reconcilePRHistory(ctx context.Context, reader outbound.GitHubPRHistory, storage outbound.PRHistoryStore, item githubPRHistoryWork) (result error) {
 	started := false
 	defer func() {
 		if started && result != nil {
 			result = &prHistoryAttemptError{cause: result}
 		}
 	}()
-	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
+	ctx = g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
 	checkpoint := item.checkpoint
 	now := time.Now().UTC()
 	if checkpoint.RepoID != item.binding.ContextRepoID || checkpoint.GitOrigin != item.binding.GitOrigin || checkpoint.ProviderRepositoryID != item.binding.ExternalID || checkpoint.ProviderRepositoryID != item.remote.ID {
 		return domain.ErrIntegrity
 	}
-	err := repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), g.core, checkpoint.RepoID, func(tx context.Context) error {
+	err := repositoryWriteErrorWithWork(context.WithValue(ctx, revisionScopeKey{}, "none"), g.work, checkpoint.RepoID, func(tx context.Context) error {
 		if _, err := g.binding(tx, item.connection, item.binding); err != nil {
 			return err
 		}
@@ -206,11 +206,11 @@ func (g *GitHubConnections) reconcilePRHistory(ctx context.Context, reader outbo
 	if err != nil {
 		return err
 	}
-	err = repositoryReadForContribution(ctx, g.core, next, &prepared)
+	err = repositoryReadForContributionWithPublications(ctx, g.publications, next, &prepared)
 	if err != nil {
 		return err
 	}
-	writeErr := repositoryWriteError(evidenceWriteContext(ctx), g.core, checkpoint.RepoID, func(tx context.Context) error {
+	writeErr := repositoryWriteErrorWithWork(evidenceWriteContext(ctx), g.work, checkpoint.RepoID, func(tx context.Context) error {
 		if _, err := g.binding(tx, item.connection, item.binding); err != nil {
 			return err
 		}
@@ -223,7 +223,7 @@ func (g *GitHubConnections) reconcilePRHistory(ctx context.Context, reader outbo
 		if current != checkpoint {
 			return domain.ErrConflict
 		}
-		revisions := g.core.meta.(outbound.RepositoryRevisions)
+		revisions := g.metadata.(outbound.RepositoryRevisions)
 		revision, err := revisions.RepositoryRevision(tx, checkpoint.RepoID)
 		if err != nil {
 			return err
@@ -232,7 +232,7 @@ func (g *GitHubConnections) reconcilePRHistory(ctx context.Context, reader outbo
 			return domain.ErrConflict
 		}
 		if page != nil {
-			scans, ok := g.core.meta.(outbound.GitScanStore)
+			scans, ok := g.metadata.(outbound.GitScanStore)
 			if !ok {
 				return domain.ErrNotFound
 			}
@@ -243,14 +243,14 @@ func (g *GitHubConnections) reconcilePRHistory(ctx context.Context, reader outbo
 			}
 		}
 		for _, participation := range prepared.participations {
-			if _, err := g.core.meta.GetSnapshot(tx, checkpoint.RepoID, participation.Capture); err != nil {
+			if _, err := g.metadata.GetSnapshot(tx, checkpoint.RepoID, participation.Capture); err != nil {
 				return err
 			}
 			if err := storage.PutPRParticipation(tx, participation); err != nil {
 				return err
 			}
 		}
-		if err := g.core.applyPreparedPRContributions(tx, next, prepared); err != nil {
+		if err := g.publications.applyPreparedPRContributions(tx, next, prepared); err != nil {
 			return err
 		}
 		return storage.SavePRHistoryCheckpoint(tx, next, checkpoint.Version)
@@ -276,9 +276,9 @@ type preparedPRParticipations struct {
 	memories       []domain.PRContributionMemory
 }
 
-func (g *GitHubConnections) preparePRParticipations(ctx context.Context, storage outbound.PRHistoryStore, checkpoint *domain.PRHistoryCheckpoint, fresh []domain.GitRefObservation) (preparedPRParticipations, error) {
+func (g *GitHubWorker) preparePRParticipations(ctx context.Context, storage outbound.PRHistoryStore, checkpoint *domain.PRHistoryCheckpoint, fresh []domain.GitRefObservation) (preparedPRParticipations, error) {
 	var prepared preparedPRParticipations
-	revisions, ok := g.core.meta.(outbound.RepositoryRevisions)
+	revisions, ok := g.metadata.(outbound.RepositoryRevisions)
 	if !ok {
 		return prepared, domain.ErrNotFound
 	}
@@ -287,12 +287,12 @@ func (g *GitHubConnections) preparePRParticipations(ctx context.Context, storage
 		history      []domain.HistoryEvent
 		observations []domain.GitRefObservation
 	}
-	read, err := repositoryReadForRepo(ctx, g.core, checkpoint.RepoID, func(tx context.Context) (inputs, error) {
+	read, err := repositoryReadForRepoWithWork(ctx, g.work, checkpoint.RepoID, func(tx context.Context) (inputs, error) {
 		var result inputs
 		var err error
 		result.revision, err = revisions.RepositoryRevision(tx, checkpoint.RepoID)
 		if err == nil {
-			result.history, err = g.core.ListHistory(tx, checkpoint.RepoID)
+			result.history, err = g.ListHistory(tx, checkpoint.RepoID)
 		}
 		if err == nil {
 			result.observations, err = storage.ListPRRefObservations(tx, checkpoint.RepoID, checkpoint.GitOrigin, checkpoint.ProviderRepositoryID, checkpoint.PR.Number, checkpoint.EvidenceCursor, 101)

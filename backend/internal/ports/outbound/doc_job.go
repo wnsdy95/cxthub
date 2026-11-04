@@ -40,6 +40,17 @@ type PreparedRootDocPublication interface {
 	Close() error
 }
 
+type RootPublicationResources struct {
+	HeapBytes  int64
+	SpoolBytes int64
+	KeepPermit bool
+}
+
+type BoundedRootDocPublication interface {
+	PreparedRootDocPublication
+	RetainedResources() (RootPublicationResources, error)
+}
+
 type StreamingLegacyJobStore interface {
 	PrepareLegacyDocJob(context.Context, domain.DocFinalizationJob) (PreparedRootDocPublication, error)
 }

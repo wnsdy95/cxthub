@@ -52,17 +52,18 @@ func appSessionRelativePath(provider domain.ProviderKind, worktree, sessionID st
 }
 
 func appSessionRoots(ctx context.Context, cwd string) (string, string, bool) {
-	root, enabled := gitctx.ContextRoot(ctx, cwd)
-	if !enabled {
+	state := gitctx.InspectContextRoot(ctx, cwd)
+	if !state.Initialized {
 		return "", "", false
 	}
-	worktree := cwd
-	if roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd); err == nil {
-		worktree = roots.WorktreeRoot
-	} else if abs, err := filepath.Abs(cwd); err == nil {
-		worktree = abs
+	worktree := state.WorktreeRoot
+	if worktree == "" {
+		worktree = cwd
+		if abs, err := filepath.Abs(cwd); err == nil {
+			worktree = abs
+		}
 	}
-	return root, filepath.Clean(worktree), true
+	return state.Root, filepath.Clean(worktree), true
 }
 
 func validHookSessionID(sessionID string) bool {
