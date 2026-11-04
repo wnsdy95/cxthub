@@ -241,6 +241,30 @@ class DistributionTests(unittest.TestCase):
             self.assertIn(f"GIT_{role}_EMAIL: ${{{{ steps.publisher.outputs.email }}}}", workflow)
         self.assertNotIn("distribution@users.noreply.github.com", workflow)
 
+    def test_server_packaging_preserves_variants_and_fail_closed_gate(self):
+        root = Path(__file__).resolve().parents[1]
+        for component, binary in [("backend", "cxtd"), ("mcp", "cxt-mcp")]:
+            with self.subTest(component=component):
+                workflow = (root / "distrib/repository-templates" / component / ".github/workflows/ci.yml").read_text()
+                checks, packaging = workflow.split("\n  container:\n")
+                container, gate = packaging.split(f"\n  {component}:\n")
+                self.assertIn("fail-fast: false", checks)
+                self.assertIn('variant: default\n            tags: ""', checks)
+                self.assertIn("variant: postgres\n            tags: postgres", checks)
+                self.assertIn("GO_BUILD_TAGS: ${{ matrix.tags }}", checks)
+                self.assertIn('run: go build -tags "$GO_BUILD_TAGS" ./...', checks)
+                self.assertIn('run: go vet -tags "$GO_BUILD_TAGS" ./...', checks)
+                self.assertIn("if: matrix.variant == 'postgres'", checks)
+                self.assertIn(f"go build -tags postgres -o ../bin/{binary} ./cmd/{binary}", checks)
+                self.assertIn("docker build -f Dockerfile", container)
+                self.assertIn("if: ${{ always() }}", gate)
+                self.assertIn("needs: [build-vet, container]", gate)
+                self.assertIn('NEEDS_JSON: ${{ toJSON(needs) }}', gate)
+                self.assertIn('keys == ["build-vet", "container"] and all(.[]; .result == "success")', gate)
+                self.assertEqual(workflow.count("timeout-minutes: 20"), 3)
+                self.assertEqual(workflow.count("persist-credentials: false"), 2)
+                self.assertNotIn("continue-on-error", workflow)
+
     def test_frontend_export_carries_the_shared_markdown_display_fixture(self):
         root = Path(__file__).resolve().parents[1]
         config = json.loads((root / distribution.CONFIG).read_text())
