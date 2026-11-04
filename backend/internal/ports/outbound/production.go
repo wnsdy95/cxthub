@@ -10,6 +10,7 @@ type ProductionStore interface {
 	BlobStore
 	VerifiedDocStore
 	RepositoryStore
+	UserPreferencesStore
 	OrganizationStore
 	RepositoryOrganizationAccess
 	EnterpriseStore

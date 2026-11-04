@@ -9,25 +9,33 @@ import (
 )
 
 func repositoryReadForContribution(ctx context.Context, service *Service, checkpoint domain.PRHistoryCheckpoint, prepared *preparedPRParticipations) error {
-	_, err := repositoryReadForRepo(ctx, service, checkpoint.RepoID, func(read context.Context) (struct{}, error) {
-		revision, err := service.RepositoryRevision(read, checkpoint.RepoID)
+	return repositoryReadForContributionWithPublications(ctx, service.prPublications(), checkpoint, prepared)
+}
+
+func repositoryReadForContributionWithPublications(ctx context.Context, commands *prPublicationCommands, checkpoint domain.PRHistoryCheckpoint, prepared *preparedPRParticipations) error {
+	_, err := repositoryReadForRepoWithWork(ctx, commands.work, checkpoint.RepoID, func(read context.Context) (struct{}, error) {
+		revision, err := commands.RepositoryRevision(read, checkpoint.RepoID)
 		if err != nil {
 			return struct{}{}, err
 		}
 		if revision.Graph != prepared.revision.Graph || revision.Evidence != prepared.revision.Evidence {
 			return struct{}{}, domain.ErrConflict
 		}
-		prepared.contributions, prepared.memories, err = service.preparePRContributions(read, checkpoint, prepared.participations, prepared.history)
+		prepared.contributions, prepared.memories, err = commands.preparePRContributions(read, checkpoint, prepared.participations, prepared.history)
 		return struct{}{}, err
 	})
 	return err
 }
 
 func (s *Service) applyPreparedPRContributions(ctx context.Context, checkpoint domain.PRHistoryCheckpoint, prepared preparedPRParticipations) error {
+	return s.prPublications().applyPreparedPRContributions(ctx, checkpoint, prepared)
+}
+
+func (commands *prPublicationCommands) applyPreparedPRContributions(ctx context.Context, checkpoint domain.PRHistoryCheckpoint, prepared preparedPRParticipations) error {
 	if len(prepared.contributions) == 0 {
 		return nil
 	}
-	ledger, ok := s.meta.(outbound.PRContributionStore)
+	ledger, ok := commands.work.meta.(outbound.PRContributionStore)
 	if !ok {
 		return domain.ErrIntegrity
 	}
@@ -41,7 +49,7 @@ func (s *Service) applyPreparedPRContributions(ctx context.Context, checkpoint d
 			return err
 		}
 	}
-	jobs, err := s.prJobs()
+	jobs, err := commands.prJobs()
 	if err != nil {
 		return err
 	}

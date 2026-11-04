@@ -3,6 +3,7 @@ package domain
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -73,12 +74,15 @@ func TestLegacyCanonicalPublicGoValuesRemainGeneric(t *testing.T) {
 		Z string `json:"z"`
 		A string `json:"a"`
 	}
-	for _, value := range []any{
-		nested{Z: "last", A: "first"},
-		map[string]any{"typed": nested{}, "custom": legacyCanonicalCustomValue{}, "number": json.Number("9007199254740993")},
-		[]any{legacyCanonicalCustomValue{}, &nested{}},
+	for _, scenario := range []struct {
+		value    any
+		readable bool
+	}{
+		{nested{Z: "last", A: "first"}, true},
+		{map[string]any{"typed": nested{}, "custom": legacyCanonicalCustomValue{}, "number": json.Number("9007199254740993")}, false},
+		{[]any{legacyCanonicalCustomValue{}, &nested{}}, false},
 	} {
-		doc := CIRDocument{Events: []CIREvent{{Kind: EventToolResult, Output: value}}}
+		doc := CIRDocument{Events: []CIREvent{{Kind: EventToolResult, Output: scenario.value}}}
 		want, err := canonicalJSON(doc)
 		if err != nil {
 			t.Fatal(err)
@@ -88,7 +92,14 @@ func TestLegacyCanonicalPublicGoValuesRemainGeneric(t *testing.T) {
 			t.Fatal("public arbitrary-Go-value normalization changed", err)
 		}
 		validated, err := ValidatedSessionDocBytes(SessionDoc{Hash: HashContent(want), CIR: doc})
-		if err != nil || !bytes.Equal(validated, want) {
+		reference, readErr := VerifyStoredDocBytes(HashContent(want), want)
+		if !scenario.readable {
+			if !errors.Is(err, ErrIntegrity) || len(validated) != 0 || !errors.Is(readErr, ErrIntegrity) || reference.Valid() {
+				t.Fatal("public validated writer admitted an unreadable numeric representation", err)
+			}
+			continue
+		}
+		if err != nil || !bytes.Equal(validated, want) || readErr != nil || !reference.Valid() {
 			t.Fatal("public validated writer changed", err)
 		}
 	}

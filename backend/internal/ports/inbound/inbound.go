@@ -324,6 +324,7 @@ type SearchHit struct {
 	Kind       string             `json:"kind"`
 	Role       string             `json:"role,omitempty"` // Speaker (user/assistant ...) in event match
 	Seq        int                `json:"seq,omitempty"`  // CIR seq in event match
+	EventIndex *int               `json:"event_index,omitempty"`
 	Snippet    string             `json:"snippet"`
 	CreatedAt  string             `json:"created_at"`
 }

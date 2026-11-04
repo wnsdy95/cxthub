@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,10 @@ func TestMemoryLoadBranchUsesCloudInclusionButHashReadsArchive(t *testing.T) {
 	repo := domain.Repo{ID: pageHash(1), DefaultBranch: "main"}
 	id := pageHash(2)
 	f := &branchPageBackend{ref: domain.Ref{Kind: domain.RefBranch, Name: "main", Target: id}, pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {{ID: id, RepoID: repo.ID}}}}}}
-	s := &Server{context: f}
+	s := &Server{context: f, memorySnapshots: f}
+	if err := s.SetBranchMemory(f); err != nil {
+		t.Fatal(err)
+	}
 	code := ""
 	raw, err := s.memoryPage(systemTestContext(), repo, toolArgs{Ref: "main"})
 	if err != nil {
@@ -57,6 +61,7 @@ func TestContextListUsesGitOrderCursorInsteadOfCaptureClock(t *testing.T) {
 	repo := domain.Repo{ID: pageHash(1)}
 	f := &branchPageBackend{ref: domain.Ref{Target: pageHash(2)}, generation: "one"}
 	s := &Server{context: f}
+	setContextQueryTestPort(t, s, f)
 	a := toolArgs{Scope: "current", Position: "main", Limit: 1}
 	var ids []domain.ContentHash
 	var first string
@@ -96,6 +101,9 @@ type indexedBranchBackend struct{ *branchPageBackend }
 func (b indexedBranchBackend) ReadDocEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int, int) (domain.DocEventPage, error) {
 	return domain.DocEventPage{}, nil
 }
+func (backend indexedBranchBackend) ReadDocFragments(context.Context, domain.ContentHash, domain.ContentHash, int, int, int, int) (domain.DocFragmentPage, error) {
+	return domain.DocFragmentPage{}, nil
+}
 func (b indexedBranchBackend) SearchDocEvents(context.Context, domain.ContentHash, domain.ContentHash, string, int, int) ([]domain.DocEventIndex, error) {
 	return nil, nil
 }
@@ -103,8 +111,12 @@ func TestBranchSearchKeepsIncludedSourcesAcrossPages(t *testing.T) {
 	for _, indexed := range []bool{false, true} {
 		f := &branchPageBackend{ref: domain.Ref{Target: pageHash(2)}, generation: "one", pageBackend: pageBackend{docs: map[domain.ContentHash]domain.SessionDoc{pageHash(3): {}, pageHash(4): {}, pageHash(5): {}}}}
 		s := &Server{context: f}
+		setContextQueryTestPort(t, s, f)
 		if indexed {
 			s.context = indexedBranchBackend{f}
+		}
+		if err := s.SetDocumentEventQueries(indexedBranchBackend{f}, inbound.DocumentQueryCompatibility); err != nil {
+			t.Fatal(err)
 		}
 		a := toolArgs{Scope: "current", Position: "main", Query: "needle", Limit: 1}
 		var found []domain.ContentHash

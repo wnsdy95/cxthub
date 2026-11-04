@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
+	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -211,6 +212,33 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := server.SetMemorySnapshotQueries(memorySnapshotQueriesForTest(t, svc)); err != nil {
+		t.Fatal(err)
+	}
+	contextQueries, err := svc.ContextQueriesForProfile(inbound.ContextQueryPinnedSnapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetContextQuery(contextQueries, inbound.ContextQueryPinnedSnapshots); err != nil {
+		t.Fatal(err)
+	}
+	queries, err := svc.DocumentEventQueriesForProfile(documentquery.VerifiedRoots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetDocumentEventQueries(queries, inbound.DocumentQueryVerifiedRoots); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := identity.IssueMCPTokenPair(sys, owner.ID, "root-projection-query-client", server.resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documentContext := inbound.WithDocumentReadAuthorizer(user, server.memoryReadAuthorizer(owner,
+		func(bound context.Context) (domain.User, error) {
+			return identity.ResolveMCPUser(bound, pair.AccessToken, server.resource)
+		}, func(bound context.Context) (domain.User, error) {
+			return identity.ResolveMCPUserForSnapshot(bound, pair.AccessToken, server.resource)
+		}))
 	args := func(query, cursor string) json.RawMessage {
 		b, e := json.Marshal(toolArgs{Repository: string(repo.ID), Ref: string(snap.ID), Scope: "all", Query: query, Cursor: cursor, Limit: 40})
 		if e != nil {
@@ -222,9 +250,9 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 	count := 0
 	seen := map[string]bool{}
 	for calls := 0; calls < 10; calls++ {
-		raw, e := server.runTool(user, owner, "context_search", args("needle", cursor))
-		if e != nil {
-			t.Fatal("MCP search", e)
+		raw, readErr := server.runTool(documentContext, owner, "context_search", args("needle", cursor))
+		if readErr != nil {
+			t.Fatal("MCP search", readErr)
 		}
 		var out struct {
 			Hits []struct {
@@ -234,8 +262,8 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 			} `json:"hits"`
 			Next string `json:"next_cursor"`
 		}
-		if e = json.Unmarshal([]byte(raw), &out); e != nil {
-			t.Fatal(e)
+		if readErr = json.Unmarshal([]byte(raw), &out); readErr != nil {
+			t.Fatal(readErr)
 		}
 		for _, hit := range out.Hits {
 			key := fmt.Sprintf("%s/%d", hit.Snapshot, hit.Seq)
@@ -259,11 +287,11 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 	if cursor != "" || count != 265 {
 		t.Fatalf("MCP completeness: %d next=%q", count, cursor)
 	}
-	raw, err := server.runTool(user, owner, "context_history", args("", ""))
+	raw, err := server.runTool(documentContext, owner, "context_history", args("", ""))
 	if err != nil || !strings.Contains(raw, event.ID) {
 		t.Fatal("MCP history", err)
 	}
-	raw, err = server.runTool(user, owner, "context_fetch", args("", ""))
+	raw, err = server.runTool(documentContext, owner, "context_fetch", args("", ""))
 	if err != nil || !strings.Contains(raw, string(snap.ID)) {
 		t.Fatal("MCP fetch", err)
 	}
@@ -274,7 +302,7 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 	if _, err = svc.PutMemoryDigestCAS(user, repo.ID, domain.MemoryDigest{SnapshotID: snap.ID, Summary: "synthetic root memory"}); err != nil {
 		t.Fatal("root memory publication", err)
 	}
-	raw, err = server.runTool(user, owner, "memory_load", args("", ""))
+	raw, err = server.runTool(documentContext, owner, "memory_load", args("", ""))
 	if err != nil || !strings.Contains(raw, "synthetic root memory") {
 		t.Fatal("MCP root memory", err)
 	}

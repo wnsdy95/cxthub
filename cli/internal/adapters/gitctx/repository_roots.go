@@ -61,18 +61,18 @@ func ResolveRepositoryRoots(ctx context.Context, cwd string) (RepositoryRoots, e
 // contextRootCandidates returns the primary and linked-worktree locations that
 // may own cxt state. The primary worktree is checked first so repository-wide
 // state cannot silently split across linked worktrees.
-func contextRootCandidates(ctx context.Context, cwd string) ([]string, bool) {
+func contextRootCandidates(ctx context.Context, cwd string) ([]string, bool, string) {
 	candidates := []string{}
 	if roots, err := ResolveRepositoryRoots(ctx, cwd); err == nil {
 		candidates = append(candidates, roots.SharedRoot)
 		if roots.WorktreeRoot != roots.SharedRoot {
 			candidates = append(candidates, roots.WorktreeRoot)
 		}
-		return candidates, true
+		return candidates, true, roots.WorktreeRoot
 	} else {
 		candidates = append(candidates, canonicalRoot(cwd))
 	}
-	return candidates, false
+	return candidates, false, ""
 }
 
 func regularPath(path string) bool {
@@ -89,6 +89,7 @@ func contextDirectory(root string) bool {
 // context store without resolving Git roots more than once on hook hot paths.
 type ContextRootState struct {
 	Root          string
+	WorktreeRoot  string
 	Exists        bool
 	Initialized   bool
 	GitRepository bool
@@ -98,22 +99,22 @@ type ContextRootState struct {
 // directory-only residue location for ignore migration. Outside Git, an
 // existing directory retains the isolated-adapter opt-in behavior.
 func InspectContextRoot(ctx context.Context, cwd string) ContextRootState {
-	candidates, gitRepo := contextRootCandidates(ctx, cwd)
+	candidates, gitRepo, worktree := contextRootCandidates(ctx, cwd)
 	if gitRepo {
 		for _, root := range candidates {
 			if contextDirectory(root) && regularPath(filepath.Join(root, ".cxt", "HEAD")) {
-				return ContextRootState{Root: root, Exists: true, Initialized: true, GitRepository: true}
+				return ContextRootState{Root: root, WorktreeRoot: worktree, Exists: true, Initialized: true, GitRepository: true}
 			}
 		}
 	}
 	for _, root := range candidates {
 		if contextDirectory(root) {
 			return ContextRootState{
-				Root: root, Exists: true, Initialized: !gitRepo, GitRepository: gitRepo,
+				Root: root, WorktreeRoot: worktree, Exists: true, Initialized: !gitRepo, GitRepository: gitRepo,
 			}
 		}
 	}
-	return ContextRootState{GitRepository: gitRepo}
+	return ContextRootState{WorktreeRoot: worktree, GitRepository: gitRepo}
 }
 
 // ExistingContextRoot returns a real .cxt directory even when it is only

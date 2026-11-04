@@ -28,19 +28,29 @@ import (
 )
 
 type Config struct{ AppID, ClientID, ClientSecret, Slug, PrivateKey, CallbackURL string }
+
+const (
+	optionalCacheTokenSlots      = 4096
+	optionalCacheCooldownEntries = 4096
+	optionalCacheRetainedBytes   = 8 << 20
+)
+
 type tokenSlot struct {
-	mu      sync.Mutex
-	token   string
-	expires time.Time
+	mu          sync.Mutex
+	token       string
+	expires     time.Time
+	users       int
+	invalidated bool
 }
 type Client struct {
-	cfg      Config
-	key      *rsa.PrivateKey
-	http     *http.Client
-	api, web string
-	mu       sync.Mutex
-	tokens   map[int64]*tokenSlot
-	limits   map[string]time.Time
+	cfg                Config
+	key                *rsa.PrivateKey
+	http               *http.Client
+	api, web           string
+	mu                 sync.Mutex
+	tokens             map[int64]*tokenSlot
+	limits             map[string]time.Time
+	limitOverflowUntil time.Time
 }
 
 var _ outbound.GitHubApp = (*Client)(nil)
@@ -94,7 +104,9 @@ func (c *Client) request(ctx context.Context, method, target, token, bucket stri
 		resource = bucket + ":graphql"
 	}
 	c.mu.Lock()
-	blocked := time.Now().Before(c.limits[bucket]) || time.Now().Before(c.limits[resource])
+	now := time.Now()
+	c.pruneCachesLocked(now)
+	blocked := now.Before(c.limitOverflowUntil) || now.Before(c.limits[bucket]) || now.Before(c.limits[resource])
 	c.mu.Unlock()
 	if blocked {
 		return errors.New("GitHub request is rate limited; retry later")
@@ -167,9 +179,23 @@ func (c *Client) deferRequests(bucket string, headers http.Header) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if until.After(c.limits[bucket]) {
-		c.limits[bucket] = until
+	c.pruneCachesLocked(time.Now())
+	if previous, exists := c.limits[bucket]; exists {
+		if until.After(previous) {
+			c.limits[bucket] = until
+		}
+		return
 	}
+	if len(c.limits) >= optionalCacheCooldownEntries || !c.makeCacheRoomLocked(len(bucket)) {
+		if until.After(c.limitOverflowUntil) {
+			c.limitOverflowUntil = until
+		}
+		return
+	}
+	if c.limits == nil {
+		c.limits = make(map[string]time.Time)
+	}
+	c.limits[strings.Clone(bucket)] = until
 }
 
 func graphQLRateLimited(data []byte, headers http.Header) bool {
@@ -192,26 +218,139 @@ func graphQLRateLimited(data []byte, headers http.Header) bool {
 	return false
 }
 func (c *Client) slot(id int64) *tokenSlot {
+	return c.acquireSlot(id, false)
+}
+
+func (client *Client) pruneCachesLocked(now time.Time) {
+	for installationID, cached := range client.tokens {
+		if cached.users == 0 && (cached.invalidated || cached.token == "" || !now.Add(time.Minute).Before(cached.expires)) {
+			cached.token = ""
+			cached.expires = time.Time{}
+			delete(client.tokens, installationID)
+		}
+	}
+	for bucket, until := range client.limits {
+		if !now.Before(until) {
+			delete(client.limits, bucket)
+		}
+	}
+	if !now.Before(client.limitOverflowUntil) {
+		client.limitOverflowUntil = time.Time{}
+	}
+}
+
+func (client *Client) retainedCacheBytesLocked() int {
+	retained := len(client.tokens) * 8
+	for _, cached := range client.tokens {
+		retained += len(cached.token)
+	}
+	for bucket := range client.limits {
+		retained += len(bucket)
+	}
+	return retained
+}
+
+func (client *Client) evictIdleSlotLocked() bool {
+	for installationID, cached := range client.tokens {
+		if cached.users == 0 {
+			cached.token = ""
+			cached.expires = time.Time{}
+			delete(client.tokens, installationID)
+			return true
+		}
+	}
+	return false
+}
+
+func (client *Client) makeCacheRoomLocked(additional int) bool {
+	if additional > optionalCacheRetainedBytes {
+		return false
+	}
+	for client.retainedCacheBytesLocked() > optionalCacheRetainedBytes-additional {
+		if !client.evictIdleSlotLocked() {
+			return false
+		}
+	}
+	return true
+}
+
+func (client *Client) acquireSlot(id int64, reserve bool) *tokenSlot {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.pruneCachesLocked(time.Now())
+	cached := client.tokens[id]
+	if cached != nil {
+		if reserve {
+			cached.users++
+		}
+		return cached
+	}
+	if len(client.tokens) >= optionalCacheTokenSlots && !client.evictIdleSlotLocked() {
+		return nil
+	}
+	if !client.makeCacheRoomLocked(8) {
+		return nil
+	}
+	cached = &tokenSlot{}
+	if reserve {
+		cached.users = 1
+	}
+	if client.tokens == nil {
+		client.tokens = make(map[int64]*tokenSlot)
+	}
+	client.tokens[id] = cached
+	return cached
+}
+
+func (client *Client) releaseSlot(id int64, cached *tokenSlot) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	cached.users--
+	if cached.users == 0 && (cached.invalidated || cached.token == "" || !time.Now().Add(time.Minute).Before(cached.expires)) {
+		cached.token = ""
+		cached.expires = time.Time{}
+		delete(client.tokens, id)
+	}
+}
+
+func (c *Client) Invalidate(id int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := c.tokens[id]
-	if s == nil {
-		s = &tokenSlot{}
-		c.tokens[id] = s
+	if cached := c.tokens[id]; cached != nil {
+		cached.token = ""
+		cached.expires = time.Time{}
+		cached.invalidated = true
+		if cached.users == 0 {
+			delete(c.tokens, id)
+		}
 	}
-	return s
 }
-func (c *Client) Invalidate(id int64) { c.mu.Lock(); delete(c.tokens, id); c.mu.Unlock() }
 func (c *Client) InstallationToken(ctx context.Context, id int64) (string, error) {
 	if id <= 0 {
 		return "", domain.ErrValidation
 	}
-	s := c.slot(id)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.token != "" && time.Now().Add(time.Minute).Before(s.expires) {
-		return s.token, nil
+	cached := c.acquireSlot(id, true)
+	if cached == nil {
+		return "", errors.New("GitHub credential cache is busy; retry later")
 	}
+	cached.mu.Lock()
+	defer func() {
+		cached.mu.Unlock()
+		c.releaseSlot(id, cached)
+	}()
+	c.mu.Lock()
+	if cached.invalidated {
+		c.mu.Unlock()
+		return "", domain.ErrForbidden
+	}
+	if cached.token != "" && time.Now().Add(time.Minute).Before(cached.expires) {
+		token := cached.token
+		c.mu.Unlock()
+		return token, nil
+	}
+	cached.token = ""
+	cached.expires = time.Time{}
+	c.mu.Unlock()
 	jwt, err := c.jwt()
 	if err != nil {
 		return "", err
@@ -227,9 +366,17 @@ func (c *Client) InstallationToken(ctx context.Context, id int64) (string, error
 	if out.Token == "" || !out.Expires.After(time.Now()) {
 		return "", domain.ErrIntegrity
 	}
-	s.token = out.Token
-	s.expires = out.Expires
-	return s.token, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached.invalidated {
+		return "", domain.ErrForbidden
+	}
+	c.pruneCachesLocked(time.Now())
+	if c.makeCacheRoomLocked(len(out.Token)) {
+		cached.token = strings.Clone(out.Token)
+		cached.expires = out.Expires
+	}
+	return out.Token, nil
 }
 
 type account struct {

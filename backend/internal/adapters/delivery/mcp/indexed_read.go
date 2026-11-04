@@ -3,35 +3,13 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"strings"
+
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
-type indexedContextReader interface {
-	ReadDocEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int, int) (domain.DocEventPage, error)
-	SearchDocEvents(context.Context, domain.ContentHash, domain.ContentHash, string, int, int) ([]domain.DocEventIndex, error)
-}
-
-func (s *Server) readEventPage(ctx context.Context, repo, hash domain.ContentHash, offset, limit int) (domain.DocEventPage, error) {
-	if reader, ok := s.context.(indexedContextReader); ok {
-		return reader.ReadDocEvents(ctx, repo, hash, "", offset, limit)
-	}
-	doc, err := s.context.GetDoc(ctx, repo, hash)
-	if err != nil {
-		return domain.DocEventPage{}, err
-	}
-	page := domain.DocEventPage{Total: len(doc.CIR.Events), Offset: offset, Next: -1}
-	if offset <= page.Total {
-		end := min(offset+limit, page.Total)
-		page.Events = doc.CIR.Events[offset:end]
-		if end < page.Total {
-			page.Next = end
-		}
-	}
-	return page, nil
-}
-
-func (s *Server) indexedSearchPage(ctx context.Context, repo domain.Repo, a toolArgs, reader indexedContextReader) (string, error) {
+func (s *Server) indexedSearchPage(ctx context.Context, repo domain.Repo, a toolArgs, reader inbound.DocumentEventQueries) (string, error) {
 	cur, err := cursorFor(string(repo.ID), "context_search", a)
 	if err != nil {
 		return "", err

@@ -148,6 +148,24 @@ func newPRContributionParityFixture(t *testing.T) *prContributionParityFixture {
 		t.Fatal(err)
 	}
 	api := httpdelivery.NewServer(service, identity)
+	snapshots := memorySnapshotQueriesForTest(t, service)
+	if err := api.SetMemorySnapshotQueries(snapshots); err != nil {
+		t.Fatal(err)
+	}
+	contextQueries, err := service.ContextQueriesForProfile(inbound.ContextQueryPinnedSnapshots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.SetContextQuery(contextQueries, inbound.ContextQueryPinnedSnapshots); err != nil {
+		t.Fatal(err)
+	}
+	repositoryStates, err := service.RepositoryStateQueries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.SetRepositoryStateQueries(repositoryStates, inbound.RepositoryStatePinnedSnapshots); err != nil {
+		t.Fatal(err)
+	}
 	api.SetEffectiveMemory(service)
 	api.SetMemoryPositions(service)
 	fixture.httpHandler = api.Handler()
@@ -155,7 +173,13 @@ func newPRContributionParityFixture(t *testing.T) *prContributionParityFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.SetEffectiveMemory(service)
+	setLiveMemoryFixture(t, server, service, service)
+	if err := server.SetMemorySnapshotQueries(snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetContextQuery(contextQueries, inbound.ContextQueryPinnedSnapshots); err != nil {
+		t.Fatal(err)
+	}
 	fixture.mcpHandler = server.Handler()
 	for _, account := range []struct {
 		user  domain.User

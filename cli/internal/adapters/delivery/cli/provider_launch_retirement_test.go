@@ -53,7 +53,11 @@ func TestRetireOwnedCodexSessionVerifiesEveryGeneration(t *testing.T) {
 			}
 		}
 	}
-	retireOwnedProviderSession(context.Background(), cwd, domain.ProviderCodex, sessionID)
+	inventory := &recordingSessionInventory{ProviderSessionInventory: captureSelectionForTest()}
+	retireOwnedProviderSession(context.Background(), inventory, cwd, domain.ProviderCodex, sessionID)
+	if inventory.files != 1 {
+		t.Fatalf("retirement bypassed its session inventory: %d", inventory.files)
+	}
 	for _, fixture := range fixtures {
 		original := filepath.Join(dir, "rollout-"+fixture.name+"-"+fixture.filenameID+".jsonl")
 		path := original
@@ -96,7 +100,7 @@ func TestCodexRetirementTargetRejectsUnverifiedHeaders(t *testing.T) {
 			if err := os.WriteFile(path, []byte(fixture.raw), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if validCodexRetirementTarget(cwd, sessionID, path) {
+			if captureSelectionForTest().MatchesSession(cwd, domain.ProviderCodex, sessionID, path) {
 				t.Fatal("unverified retirement header accepted")
 			}
 		})
@@ -105,14 +109,14 @@ func TestCodexRetirementTargetRejectsUnverifiedHeaders(t *testing.T) {
 	if err := os.WriteFile(path, []byte(valid), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if !validCodexRetirementTarget(cwd, sessionID, path) {
+	if !captureSelectionForTest().MatchesSession(cwd, domain.ProviderCodex, sessionID, path) {
 		t.Fatal("verified retirement header rejected")
 	}
 	link := filepath.Join(t.TempDir(), "rollout-link-"+sessionID+".jsonl")
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	if validCodexRetirementTarget(cwd, sessionID, link) {
+	if captureSelectionForTest().MatchesSession(cwd, domain.ProviderCodex, sessionID, link) {
 		t.Fatal("symlink retirement target accepted")
 	}
 }

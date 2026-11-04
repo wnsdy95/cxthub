@@ -70,6 +70,31 @@ const firebaseClockSkew = 5 * time.Minute
 
 // Verify validates a Firebase ID token and returns a User. Invalid → domain.ErrUnauthorized.
 func (v *FirebaseVerifier) Verify(ctx context.Context, token string) (domain.User, error) {
+	return v.verify(ctx, token, v.keyForKid)
+}
+
+func (v *FirebaseVerifier) VerifyCached(ctx context.Context, token string) (domain.User, error) {
+	return v.verify(ctx, token, v.cachedKeyForKid)
+}
+
+func (v *FirebaseVerifier) cachedKeyForKid(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !v.mu.TryLock() {
+		return nil, domain.ErrUnauthorized
+	}
+	defer v.mu.Unlock()
+	if !time.Now().Before(v.certExp) || v.certs[kid] == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	return v.certs[kid], nil
+}
+
+func (v *FirebaseVerifier) verify(ctx context.Context, token string, key func(context.Context, string) (*rsa.PublicKey, error)) (domain.User, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.User{}, err
+	}
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 3 {
 		return domain.User{}, domain.ErrUnauthorized
@@ -83,7 +108,7 @@ func (v *FirebaseVerifier) Verify(ctx context.Context, token string) (domain.Use
 		return domain.User{}, domain.ErrUnauthorized
 	}
 
-	pub, err := v.keyForKid(ctx, hdr.Kid)
+	pub, err := key(ctx, hdr.Kid)
 	if err != nil {
 		return domain.User{}, domain.ErrUnauthorized
 	}

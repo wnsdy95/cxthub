@@ -628,6 +628,24 @@ func (s *PostgresStore) CreateBreakGlassGrantWithAudit(ctx context.Context, gran
 	return tx.Commit(ctx)
 }
 
+func (s *PostgresStore) GetBreakGlassGrant(ctx context.Context, organizationID, repositoryID, userID, grantID string) (domain.BreakGlassGrant, error) {
+	if err := validateBreakGlassRead(organizationID, repositoryID, userID, grantID); err != nil {
+		return domain.BreakGlassGrant{}, err
+	}
+	var grant domain.BreakGlassGrant
+	err := s.db(ctx).QueryRow(ctx, `SELECT id,organization_id,repository_id,user_id,reason,created_at,expires_at
+		FROM organization_break_glass_grants WHERE id=$1 AND organization_id=$2 AND repository_id=$3 AND user_id=$4`,
+		grantID, organizationID, repositoryID, userID).
+		Scan(&grant.ID, &grant.OrganizationID, &grant.RepositoryID, &grant.UserID, &grant.Reason, &grant.CreatedAt, &grant.ExpiresAt)
+	if err != nil {
+		return domain.BreakGlassGrant{}, mapNoRows(err)
+	}
+	if domain.ValidateBreakGlassGrant(grant) != nil {
+		return domain.BreakGlassGrant{}, domain.ErrIntegrity
+	}
+	return grant, nil
+}
+
 func (s *PostgresStore) GetActiveBreakGlassGrant(ctx context.Context, organizationID, repositoryID, userID string, now time.Time) (domain.BreakGlassGrant, error) {
 	if err := domain.ValidateOrganizationID(organizationID); err != nil {
 		return domain.BreakGlassGrant{}, err

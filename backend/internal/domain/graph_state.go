@@ -11,6 +11,7 @@ import (
 // GraphState is an identifier-only business projection, not stored graph edges.
 // Consumers own selection/folding/coordinates, never publication or identity.
 type GraphState struct {
+	ReadGeneration  *GraphReadGeneration       `json:"read_generation,omitempty"`
 	Integrations    []GraphIntegration         `json:"integrations"`
 	BranchContexts  map[string]BranchContext   `json:"branch_contexts"`
 	BranchSnapshots map[string][]ContentHash   `json:"branch_snapshots"`

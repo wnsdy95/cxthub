@@ -80,7 +80,7 @@ func TestP6SSEClassesDoNotShareOptInState(t *testing.T) {
 	var opted atomic.Bool
 	h := repositoryChangeHub{}
 	repo := domain.HashContent([]byte(t.Name()))
-	read := func(ctx context.Context, _ domain.ContentHash) (domain.RepositoryRevision, error) {
+	read := func(ctx context.Context, _ domain.ContentHash) (domain.RepositoryChangeState, error) {
 		if user, system := inbound.RepositoryActor(ctx); user != "" || system {
 			t.Error("watcher borrowed subscriber authority")
 		}
@@ -88,11 +88,11 @@ func TestP6SSEClassesDoNotShareOptInState(t *testing.T) {
 		root := len(ids) == 1 && ids[0] == domain.DocumentIdentityRootV1
 		if opted.Load() {
 			if !root {
-				return domain.RepositoryRevision{}, domain.ErrDocumentIdentityUpgradeRequired
+				return domain.RepositoryChangeState{}, domain.ErrDocumentIdentityUpgradeRequired
 			}
-			return domain.RepositoryRevision{Graph: 7}, nil
+			return domain.RepositoryChangeState{RepositoryRevision: domain.RepositoryRevision{Graph: 7}}, nil
 		}
-		return domain.RepositoryRevision{Graph: 1}, nil
+		return domain.RepositoryChangeState{RepositoryRevision: domain.RepositoryRevision{Graph: 1}}, nil
 	}
 	old, releaseOld := h.subscribe(repo, read)
 	defer releaseOld()
@@ -127,18 +127,16 @@ func TestP6SSEClassesDoNotShareOptInState(t *testing.T) {
 	}
 }
 
-type p6StreamBackend struct{ Backend }
-
-func (*p6StreamBackend) RepositoryRevision(context.Context, domain.ContentHash) (domain.RepositoryRevision, error) {
-	return domain.RepositoryRevision{}, domain.ErrDocumentIdentityUpgradeRequired
-}
-func TestP6SSEAdmissionBeforeSubscription(t *testing.T) {
-	s := NewServer(&p6StreamBackend{}, nil)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/v1/repos/example/changes", nil)
-	s.repositoryChanges(w, r)
-	if w.Code != 409 || len(s.changes.repos) != 0 || strings.Contains(w.Body.String(), "event: revision") {
-		t.Fatal("subscribed before compatibility admission", w.Code, w.Body.String())
+func TestP6SSEAdmissionBeforeSubscription(test *testing.T) {
+	server := NewServer(nil, nil)
+	if err := server.SetRepositoryStateQueries(&repositoryStateHTTPQueries{err: domain.ErrDocumentIdentityUpgradeRequired}, inbound.RepositoryStateCompatibility); err != nil {
+		test.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/v1/repos/example/changes", nil)
+	server.repositoryChanges(response, request)
+	if response.Code != 409 || len(server.changes.repos) != 0 || strings.Contains(response.Body.String(), "event: revision") {
+		test.Fatal("subscribed before compatibility admission", response.Code, response.Body.String())
 	}
 }
 

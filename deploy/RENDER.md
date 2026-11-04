@@ -34,7 +34,22 @@ sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
   the services do not replicate business rules or communicate over a private
   REST hop. Each has its own connection pool and shutdown lifecycle.
 - OAuth/rate-limit records are writable operational data. Read-only MCP tools
-  do not imply a read-only database account. Startup migrations also need DDL.
+  do not imply a read-only database account. Schema startup is verification-only;
+  DDL belongs to the separate operator migration image and credential.
+
+Before starting API, MCP, or worker processes, follow the
+[explicit migration procedure](../docs/DATABASE_MIGRATIONS.md): drain the old
+release, review the backup and compatible image/schema pair, apply with the
+operator image using `--apply`, verify, then start runtime services with their
+separate DML credentials. An unprepared or mismatched schema refuses startup.
+This is a release requirement, not an automatically provisioned Render service
+or pre-deploy hook. No new resources or credential grants are activated here.
+
+Use the complete **160-migration** bundle and digest in the
+[current release catalog](../docs/DATABASE_MIGRATIONS.md#current-release-catalog).
+Bounded API, MCP, and worker roles use process admission **protocol 7**. The
+historical schema-152 and protocol-v2/v3 qualifications are not current release
+identities or evidence of production compatibility.
 
 ## Provision
 
@@ -120,8 +135,11 @@ References: [Render free limits](https://render.com/docs/free),
    replacement or database identity rewrites.
 3. The Blueprint injects the same internal PostgreSQL connection string into
    both services. External DB access is disabled (`ipAllowList: []`). Docker
-   images enforce PostgreSQL and bundle the migration directory. Concurrent
-   starts serialize migrations using the existing PostgreSQL advisory lock.
+   images enforce PostgreSQL and bundle the exact release migration directory.
+   Startup performs read-only schema verification under the existing PostgreSQL
+   advisory lock; it never applies migrations. Complete the explicit operator
+   application and verification above before starting services with runtime DML
+   credentials, not the operator credential.
 4. Add GitHub App secrets and optional Resend settings **only to API**, following
    [GitHub connections](../docs/GITHUB_CONNECTIONS.md) and `.env.example`. Empty
    integration settings leave those optional features disabled. Server workers

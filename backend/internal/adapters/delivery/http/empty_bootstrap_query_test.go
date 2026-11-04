@@ -13,13 +13,22 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 func TestEmptyBootstrapFullCatalogWireAndAuthorization(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	ids := app.NewIdentityService(auth.NewDevVerifier(), st)
-	ts := httptest.NewServer(NewServer(svc, ids).Handler())
+	delivery := NewServer(svc, ids)
+	queries, err := svc.ContextQueriesForProfile(inbound.ContextQueryCompatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.SetContextQuery(queries, inbound.ContextQueryCompatibility); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(delivery.Handler())
 	defer ts.Close()
 	var me struct{ Username string }
 	if doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me) != 200 {

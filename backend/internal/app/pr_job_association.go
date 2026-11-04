@@ -7,20 +7,19 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (s *Service) projectPRJobAssociations(ctx context.Context, repo domain.ContentHash, jobs []domain.PRPromotionJob) ([]domain.PRPromotionJob, error) {
+func (commands *prCoordinationCommands) projectPRJobAssociations(ctx context.Context, repo domain.ContentHash, jobs []domain.PRPromotionJob) ([]domain.PRPromotionJob, error) {
 	if len(jobs) == 0 {
 		return jobs, ctx.Err()
 	}
 	var evidence outbound.PRJobAssociationEvidence
-	storage, supported := s.meta.(outbound.PRJobAssociationStore)
 	available := false
-	if supported {
+	if commands.associations != nil {
 		numbers := make([]int, 0, len(jobs))
 		for _, job := range jobs {
 			numbers = append(numbers, job.PR.Number)
 		}
 		var err error
-		evidence, err = storage.ReadPRJobAssociationEvidence(ctx, repo, numbers)
+		evidence, err = commands.associations.ReadPRJobAssociationEvidence(ctx, repo, numbers)
 		available = err == nil
 	}
 	checkpoints := map[int][]domain.PRHistoryCheckpoint{}

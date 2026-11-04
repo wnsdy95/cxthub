@@ -13,6 +13,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type docViewCountStore struct {
@@ -33,6 +34,81 @@ func (storage *docViewCountStore) ReadVerifiedDoc(ctx context.Context, repo, has
 func (storage *docViewCountStore) DocRangePage(ctx context.Context, repo domain.ContentHash, index domain.DocRangeIndex, page int) ([]domain.DocRangeEntry, error) {
 	storage.pageReads++
 	return storage.FSStore.DocRangePage(ctx, repo, index, page)
+}
+
+type docViewSnapshotStore struct {
+	*docViewCountStore
+	readonly bool
+	opens    int
+	pages    int
+	openErr  error
+}
+
+type docViewSnapshotRead struct {
+	store  *docViewSnapshotStore
+	repo   domain.ContentHash
+	header domain.DocRangeIndex
+}
+
+func (storage *docViewSnapshotStore) InReadOnlyTransaction(context.Context) bool {
+	return storage.readonly
+}
+
+func (storage *docViewSnapshotStore) OpenDocRange(ctx context.Context, repo, hash domain.ContentHash) (outbound.DocRangeRead, error) {
+	storage.opens++
+	if storage.openErr != nil {
+		return nil, storage.openErr
+	}
+	header, err := storage.FSStore.DocRangeIndex(ctx, repo, hash)
+	return &docViewSnapshotRead{store: storage, repo: repo, header: header}, err
+}
+
+func (read *docViewSnapshotRead) Header() domain.DocRangeIndex { return read.header }
+
+func (read *docViewSnapshotRead) ReadPage(ctx context.Context, page int) ([]domain.DocRangeEntry, error) {
+	read.store.pages++
+	return read.store.FSStore.DocRangePage(ctx, read.repo, read.header, page)
+}
+
+func TestDocViewUsesPinnedRangeOnlyForReadSnapshots(t *testing.T) {
+	ctx, repo, dir := systemTestContext(), h('1'), t.TempDir()
+	storage := store.NewFSStore(dir)
+	var events []domain.CIREvent
+	for position := 0; position < 200; position++ {
+		events = append(events, historyMessage(domain.RoleUser, "range reader message"))
+	}
+	doc, _ := seedRootReadDoc(t, dir, storage, repo, events...)
+	if err := storage.EnsureDocRangeIndex(ctx, repo, doc.Hash); err != nil {
+		t.Fatal(err)
+	}
+	for _, readonly := range []bool{false, true} {
+		reader := &docViewSnapshotStore{docViewCountStore: &docViewCountStore{FSStore: storage}, readonly: readonly}
+		service := NewService(storage, reader, nil, nil, nil)
+		page, err := service.ReadDocViewEvents(ctx, repo, doc.Hash, "", 100, 60, "chat")
+		if err != nil || len(page.Events) != 60 || page.Next != 160 {
+			t.Fatal("range selection changed", err)
+		}
+		for offset, event := range page.Events {
+			if event.Index != offset+100 || !reflect.DeepEqual(event.Event, doc.CIR.Events[offset+100]) {
+				t.Fatal("event changed", offset)
+			}
+		}
+		if readonly {
+			if reader.opens != 1 || reader.pages != 2 || reader.pageReads != 0 {
+				t.Fatal("pinned reader bypassed", reader.opens, reader.pages, reader.pageReads)
+			}
+		} else if reader.opens != 0 || reader.pages != 0 || reader.pageReads != 2 {
+			t.Fatal("unpinned reader bypassed revalidation", reader.opens, reader.pages, reader.pageReads)
+		}
+	}
+	reader := &docViewSnapshotStore{docViewCountStore: &docViewCountStore{FSStore: storage}, readonly: true, openErr: domain.ErrIntegrity}
+	service := NewService(storage, reader, nil, nil, nil)
+	if _, err := service.ReadDocViewEvents(ctx, repo, doc.Hash, "", 100, 60, "chat"); !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatal("pinned failure silently fell back", err)
+	}
+	if reader.pageReads != 0 || reader.chunkReads != 0 {
+		t.Fatal("read proceeded after failure")
+	}
 }
 
 func TestDocViewPageReadsDoNotGrowWithArchive(t *testing.T) {

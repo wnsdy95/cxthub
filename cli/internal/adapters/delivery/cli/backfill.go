@@ -2,13 +2,13 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
@@ -48,9 +48,12 @@ func runHistoricalSync(ctx context.Context, c *Container, cwd string) error {
 	if _, ok := remotecfg.Origin(root); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return nil
 	}
+	if c.WithBackfillDaemon == nil {
+		return fmt.Errorf("historical synchronization lock unavailable")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	_, err := storage.NewFileStore(root).WithBackfillDaemon(ctx, func() error {
+	_, err := c.WithBackfillDaemon(ctx, root, func() error {
 		for {
 			out, err := syncer.SyncHistorical(ctx, inbound.SyncInput{Cwd: cwd}, 8)
 			if err != nil {
