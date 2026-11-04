@@ -8,7 +8,7 @@ make a page query proportional to its selected range.
 | Request | Verification | Intended consumer |
 | --- | --- | --- |
 | `GET .../docs/{hash}/events` without `view` | Existing strict root verification, including every current chunk | Compatibility and full dependency audit |
-| `GET .../docs/{hash}/events?view=chat` | Repository ownership, current root descriptor, published range-index pages and selected chunk hashes | Conversation viewer |
+| `GET .../docs/{hash}/events?view=chat` | Repository ownership, live verified generation binding, authenticated selected index paths/pages and selected chunk hashes; FS retains current root/header verification | Conversation viewer |
 | `GET .../docs/{hash}/event-fragments?index=N` | Same range proof, reading only the selected bytes | Explicit expansion of oversized events |
 
 A successful range read does **not** certify unselected chunks. A successful
@@ -21,8 +21,10 @@ viewer projection.
 
 ## Publication and older roots
 
-The range projection contains a manifest-bound header and hash-checked pages of
-128 event descriptors. Descriptors carry canonical byte locations, event hashes,
+The v1 range projection contains a manifest-bound header and hash-checked pages of
+128 event descriptors. PostgreSQL additionally publishes a compact v2 generation
+with hierarchical directories; the viewer uses that generation without loading
+the complete v1 header. Event descriptors carry canonical byte locations, event hashes,
 sequence, kind, role and the existing compaction flag. They contain no tool output
 or conversation body.
 
@@ -32,9 +34,12 @@ or conversation body.
 - FS writes pages before the header and completed job receipt. Individual files
   are atomically replaced; this is not a multi-file database transaction. Interrupted
   publication remains retryable, and an absent header is never treated as proof.
-- A missing projection on an older root is built after a complete streaming
-  verification, under the bulk-work limiter. The archive, refs, snapshot IDs and
-  activity revision do not change. The first read can therefore take longer.
+- A missing projection on an older PostgreSQL root is durably queued by the
+  viewer and built after complete streaming verification under the bulk-work
+  limiter. The viewer returns `doc_range_index_pending` (503, `Retry-After: 3`)
+  without building the index inside that request. The API process runs the worker;
+  the MCP process does not. FS compatibility retains synchronous bounded work.
+  The archive, refs, snapshot IDs and activity revision do not change.
 - Cold verification and root-job preparation spool descriptor pages to an
   adapter-owned temporary file. Root jobs validate the entire event stream one
   chunk at a time without retaining an owned copy of the complete conversation.
@@ -59,19 +64,319 @@ or conversation body.
   manifest-identity roots, not to every historical storage format.
 
 PostgreSQL projections are globally deduplicated by document hash, but every
-header/page/body read still requires that repository's ownership grant. A cache
+descriptor/page/body read still requires that repository's ownership grant. A cache
 or shared derivative is never an authorization grant.
 
-Roll out migration `0093_doc_range_index.sql` and the API before the new viewer.
+### Compact PostgreSQL generations (local implementation, 2026-10-19)
+
+`0095_doc_range_generation.sql` adds a compact descriptor and document-scoped,
+hash-addressed derived objects. Separate fanout-128 directories authenticate event
+pages and pages of 128 chunk descriptors. Opening a viewer reads one bounded
+descriptor, not the root bytes, manifest chunk list or all event-page hashes.
+Selected metadata walks are logarithmic in the page count; each fetched page has
+a fixed byte/count limit. Per-read caches are bounded. Body reads keep their
+existing byte budget and current chunk ownership/hash checks.
+
+The generation is a publication receipt, not a self-authenticating replacement
+document identity. The publisher accepts only an opaque fully verified range
+proof while retaining current source and ownership rows through the transaction.
+Descriptor, directories, event pages and job completion become visible atomically.
+The original document hash and bytes remain unchanged. A descriptor checksum
+alone would not prove that its mapping came from that document.
+The compatibility increment retains v1 event pages alongside v2 objects, so it
+adds derived metadata storage/writes, not transcript copies. It does not yet
+shorten publication transactions; write-cost reduction remains a separate D4 gate.
+
+Every blob-row update advances a trigger-controlled monotonic source version in
+the same transaction, including attempts to reset just that version field.
+Publication records that version while retaining the verified source lock; open,
+readiness and completed-job reuse require the current source version to match.
+An UPDATE trigger also deletes that root's v2 generation and derived objects,
+but deletion alone is insufficient: an older writable REPEATABLE READ snapshot
+may not see a subsequently published generation. The version fence rejects any
+such retained stale row. DELETE cascades through restrictive root/generation
+foreign keys. Even a no-op byte update advances the version, without comparing
+large values or blocking legacy re-encoding. The v1 index and authoritative
+content identities are unaffected. Selected chunk updates are caught by
+current-byte checks; unselected corruption remains the strict audit's concern.
+This relies on the publisher and database constraints, not protection against
+privileged coordinated rewriting of the authoritative binding and all hashes.
+
+The optional `DocRangeGenerationStore` port accepts only its own read-only
+REPEATABLE READ scope. It verifies current repository ownership, root existence,
+the descriptor commitment and requested identity together; selected paths and
+pages are verified within that same scope. Returned descriptors are owned copies.
+An old pinned snapshot may finish coherently; fresh snapshots observe invalidation.
+Closed, foreign or writable transactions cannot reopen through the pool.
+
+Readiness and completed-job reuse now require a source-version-matched v2 generation. A v1-only document
+is queued for complete current-source verification, not upgraded by trusting its
+persisted v1 metadata. Missing or source-version-mismatched v2 means unavailable/pending; malformed current v2
+fails closed without a repair or full-header fallback during the request.
+
+### Persisted exact inherited boundaries (local implementation, 2026-10-19)
+
+For PostgreSQL manifest-identity pairs, the viewer uses a separately persisted
+exact-prefix result. The key contains repository, selected document, base
+document and comparison algorithm. It also binds both current root source
+versions and both validated generation descriptor hashes. The request checks
+both documents' current ownership and snapshot identity, even for a completed
+boundary. A different generation or source version cannot reuse old progress.
+
+A missing result ends the owned read transaction and releases its interactive
+permit before queueing. The existing durable range queue distinguishes a
+document-index job from a document/base comparison job; both share the maximum
+32 active jobs and single running job per repository. The API returns the same
+503 `doc_range_index_pending`/`Retry-After: 3` contract. Explicit read-only callers
+do not enqueue. Borrowed transactions cannot escape to a separate write through
+the pool. Pages and event fragments share a preparation coordinator with at most
+two actual reads. An already completed receipt permits a fresh read, not trust
+in the receipt as a content proof. If a generation disappears between readiness
+and opening, or a pair becomes stale after its completed receipt, release the
+read and repair the current sources again. Root pairs also require a new boundary
+enqueue/validated receipt, including when a concurrent worker has already rebuilt
+the generation. Exhaustion returns Pending only after this recovery handoff;
+it does not leak a terminal unavailable sentinel or an empty successful page.
+Integrity, ownership, unrelated unavailable errors and explicit read-only failures
+are not treated as these preparation races.
+
+Foreground enqueue uses a 500ms context budget covering pool acquisition, the
+transaction and its rollback, plus a 250ms per-lock PostgreSQL timeout. A timed-out
+lock or internal enqueue deadline returns `resource_overloaded`, not a fictitious
+Pending receipt. Parent cancellation/deadlines remain distinct, and cleanup
+cannot turn an established integrity/not-found error into overload. An existing
+receipt is checked before acquiring source/advisory locks. Worker verification,
+source-lock lifetimes and publication fences are not shortened by this bound.
+HTTP views and fragments carry one request/transport deadline across preparation
+and retries, without an outer permit that would prevent releasing capacity.
+
+Each comparison batch examines at most 64 event pages (8,192 original events).
+Matching authenticated page hashes skip per-event reads; unequal pages compare
+exact canonical event hashes until the first difference. This is not semantic
+deduplication. Comparison opens a coherent read snapshot, then closes it before
+the short write transaction. Publication locks both roots and ownership rows in
+stable order, rechecks source versions, generation bindings and the live job
+lease/version, and commits the checkpoint with its waiting/completed state.
+A stale worker or changed source cannot advance the checkpoint.
+
+Incomplete checkpoints are internal worker state, never a partial `inherited`
+answer. The next claim resumes at its verified page boundary; service restarts
+do not restart a valid prefix from zero. When a binding changes, the old
+checkpoint is discarded for comparison and the new generation starts from zero.
+Completed reads load the small bindings and boundary record, not every prefix
+page. Identical document/base IDs need no comparison job after scoped validation.
+
+Source transcripts, snapshots, refs, memory and activity revisions are not
+rewritten by this work. Reusing a prefix is not an audit of the omitted current
+chunk bytes. Strict archive verification and FS/legacy comparison retain their
+existing contracts. Visible-message filtering still has the 512-event scan
+ceiling; persisting an inherited boundary alone does not fix tool-heavy paging.
+
+This migration changes the range-job identity from `(repo, doc)` to
+`(repo, doc, base)`; an empty base retains document-index work. Drain old queue
+workers before migrating and start only compatible API workers afterward.
+An older binary's enqueue conflict target is not compatible with this schema.
+Do not treat a binary-only downgrade as a validated rollback. The D5 rollout
+and reader-path rollback gates remain open; no production migration is implied
+by the local tests.
+The public v1 reader and FS contract remain available for compatibility/audit.
+HTTP success bodies and document IDs do not change. Persistent inherited
+boundaries and the separately negotiated visible-unit contract are implemented
+locally; release verification remains unfinished D5 work.
+
+Rollout must install the migration first and stop/drain any old range-backfill
+worker before enabling v2-serving instances. An old v1-only worker could consume
+the same job and mark it completed without producing v2. New readiness checks
+would prevent false success, but repeated reclamation could delay availability.
+Mixed worker versions are not a supported rolling-upgrade contract; a target
+column alone would not exclude workers that do not understand it. Rollback must
+keep the migration's lifetime guards and switch readers/workers together.
+
+### Transaction-scoped v1 header reuse (preceding D2a checkpoint)
+
+The optional `DocRangeSnapshotStore` port opens an adapter-owned reader in a
+positively identified read-only PostgreSQL snapshot. Opening verifies the current
+root and full index header once. Each page then selects only its descriptor bytes,
+checks repository ownership in that same snapshot, and verifies the page hash
+against the privately retained header. Returned header slices are defensive
+copies, not a caller-controlled proof. The reader requires its originating
+transaction context and cannot reopen a closed transaction through the pool.
+
+At the D2b checkpoint, PostgreSQL preparation used a constant-width owned-document/index-existence
+probe instead of fetching the complete root/header a second time. Existence is
+not a validation receipt: the actual read still verifies the current root/header,
+pages and selected bytes. A present corrupt header is never silently rebuilt.
+
+The page and header therefore describe the same MVCC generation. A later request
+rechecks the current root/header/ownership and observes committed damage or
+revocation; the reader is not a cross-request validation cache. FS, unknown and
+write transactions retain the existing per-page revalidation behavior. Selected
+content bytes are still independently hash-checked, and strict archive readers
+still inspect all required chunks.
+
+This removed repeated header SQL/validation within a v1 read. The preparation
+check remains but no longer transfers the complete header in PostgreSQL. It
+does not bound the first validated header read or create a persistent
+inherited-boundary cache. Those are separate stages of the
+[incremental read plan](INCREMENTAL_READ_PUBLICATION_PLAN.md).
+
+### Durable missing-index preparation (local implementation, 2026-10-18)
+
+`doc_range_jobs_v1` deduplicates requests by repository and document hash. A short
+enqueue transaction accepts only an existing repository-owned RootV1 snapshot
+whose ID matches the document hash. It stores no transcript or manifest. There
+can be at most 32 waiting/running/retrying jobs per repository and one running
+job per repository. Queue capacity returns the existing bounded overload error.
+Existing owned receipts are read without source-row locks. A cold miss is
+rechecked after enqueue serialization and before source pinning, so concurrent
+enqueue/build cannot turn a pending poll into a wait for full verification.
+
+The API worker obtains bulk admission before claiming a job. Claims are leased
+and versioned; renewal, failure recording and publication reject stale or
+expired claims. Complete current-byte verification pins the source rows while
+building. The index and completion receipt commit together, without changing
+source content, refs or repository activity revision. A crashed process leaves
+a durable claim that another process can recover after lease expiry. This is
+restartable work, not persisted progress inside a partially built index: a new
+claim verifies the document from the beginning.
+Canceled or timed-out verification stays retryable even when wrapped in a
+manifest-validation error. A genuine invalid or no-longer-owned source is
+terminal and is never silently repaired by the viewer.
+
+The browser retries only the explicit preparation response in document-page and
+event-detail queries. At most nine automatic retries use bounded exponential
+backoff, jitter and the server hint, with at most 90 seconds of waiting in total
+(network request time is additional). Errors then retain the existing manual
+retry. Graph retries are unchanged; corruption, missing sources, denied access
+and `doc_range_index_unavailable` are not preparation retries. Read-only callers
+cannot enqueue work or escape into a writable pool connection.
+
+Roll out migrations `0093_doc_range_index.sql` and `0094_doc_range_jobs.sql`
+and the API before the new viewer.
 The old no-`view` endpoint remains compatible. Do not assume an older server that
 ignores `view` implements range reads. These tables are derived indexes, not new
 conversation IDs, branch edges or a migration of the original archive. No
 production migration, deployment or resource-plan change is performed by the
 local regression script.
 
-## Screenful pagination
+## Visible-unit index foundation (local implementation, 2026-10-19)
 
-The viewer opts into `view=chat`, `prompts` or `all`. The default batch aims for
+Sealed range metadata now includes bounded seed-summary/empty-reasoning
+classification and cumulative rendered ranks. Derived metadata changes neither
+canonical event bytes nor document identity. Old metadata remains decodable,
+but absent flags/ranks are not treated as a verified presentation proof.
+
+The `DocVisibleGeneration` projection stores mode-specific unit pages and
+authenticated directories. Its builder takes a sealed generation/index binding,
+not a caller-supplied descriptor hash. Units preserve original ordinal coverage,
+optional anchors, originating prompt indices and folded counts, including leading work,
+empty reasoning and unanswered tails. Source bodies are not copied into the
+index. Its bounded paths seek either a raw event or a display unit without
+walking every hidden descriptor. Supplied clipping ranks are trusted only when
+obtained from the matching verified range metadata; structural validity alone
+does not authenticate a rank.
+
+Migration 0097 binds the visible descriptor to the current root source version
+and v2 generation hash. Publication uses the same transaction as range metadata
+and the worker receipt. Root jobs build both projections, while explicit visible
+preparation can upgrade an existing range-only completed job without creating a
+second queue or bypassing capacity limits. Current corrupt metadata is not an
+automatic missing-index rebuild. The reader accepts only its originating
+read-only REPEATABLE READ transaction, preserves current source/ownership checks
+on subsequent requests and validates selected objects within fixed size bounds.
+
+The local implementation now exposes the explicitly negotiated `visible-v1`
+HTTP capability below. Existing event pages, fragment reads and strict audits
+retain their contracts. Web uses a separate unit/fold validator rather than
+passing sparse anchors to the old contiguous-event renderer.
+Keep incompatible old/new backfill workers drained during migration/cutover;
+the full release/rollback rehearsal remains a D5 gate, not local test evidence.
+
+Old range generations may omit the new ranks/classification. Their existing
+contiguous reads remain valid, but visible preparation must verify the source
+and publish a new generation. That descriptor change invalidates dependent
+prefix receipts even though source identity/version is unchanged. Prefix work
+is requeued against the new pair and must recover the same exact inherited
+ordinal; the viewer must not skip readiness because the root job just completed.
+
+## Explicit unit/fold pagination (`visible-v1`)
+
+The existing events route accepts these mutually exclusive shapes:
+
+```text
+?projection=visible-v1&view=chat&offset=-1&limit=20&base=<hash>
+?projection=visible-v1&cursor=<selection>
+?projection=visible-v1&expand=<fold-selection>
+```
+
+Initial `view` is required (`all`, `chat`, `prompts`); offset defaults to -1,
+limit to 20, maximum 100. Initial base is optional. Cursor/expand requests must
+not repeat initial parameters. Unknown, duplicate, empty or malformed parameters
+are rejected; cursor purpose and route scope are checked before querying data.
+
+Responses identify projection, kind (`units` or `fold`), hash, base, generation,
+rules, view, total, inherited prefix and selection start. `from`/`to` are original
+half-open archive ordinals. `next_cursor: null` is terminal. Unit anchors carry
+their original `event_index` and explicit `seed_summary`/`empty_reasoning` flags;
+the optional fold and anchor partition the unit without reordering its contents.
+The whole selection remains bound on every continuation, including the base.
+
+The binding includes the range generation's lifetime UUID, current source version
+and authenticated descriptor. Migration `0098_doc_read_source_incarnation.sql`
+adds the UUID to the small derived generation table, not `blobs`. A deleted and
+rebuilt generation receives a new UUID, even if source bytes and the descriptor
+hash are unchanged; ordinary metadata updates preserve it. This prevents an old
+cursor becoming valid again after delete/reinsert resets a source counter. The
+selected and base lifetimes both participate. Conversation IDs remain unchanged.
+
+The unsigned base64url cursor is a bounded canonical selection, not a capability
+or proof of previous issuance. Valid editing may choose another authorized
+location. The server opens the current owned generation, derives the selected
+unit and clipped fold bounds, and checks all claimed scope/counts/positions.
+It does not trust a cursor-supplied descriptor, rank or fold end. The browser
+independently rejects changed selection context, skipped or overlapping ranges,
+wrong kinds and repeated continuation tokens before appending anything.
+
+After each admission wait, visible reads reauthorize before opening a read
+snapshot or enqueueing preparation. Credentials, public visibility, repository
+role and break-glass policy reuse the HTTP role gate. Trusted internal callers
+must explicitly identify a system actor; an absent authorizer does not silently
+grant access. Break-glass audit work stays outside the read-only transaction.
+Every page then checks current document/base ownership and pinned generation
+bindings, and verifies selected metadata and source chunks.
+
+Main pages cap unit count and serialized payload (128 KiB). Fold pages cap raw
+events at 128 and use the same byte budget; fold pagination never appends hidden
+work to the main stream. Tools, reasoning, summaries and oversized anchors stay
+deferred. Opening a fold fetches bounded metadata plus ordinary messages, not
+one raw-detail request per event. Raw/fragment detail remains explicitly selected.
+These are upper bounds, not a guarantee that a byte-heavy or empty page contains
+exactly one viewport of rendered text.
+
+Unsupported legacy/FS projections use explicit `doc_visible_projection_unsupported`
+(409), allowing a whole-stream compatibility fallback. Auth failures, corrupt
+metadata, stale selections and pending indexes must not trigger that fallback.
+Unavailable current metadata follows the existing bounded durable preparation
+contract (503), never a foreground full verification. After rebuilding, an old
+generation returns `doc_visible_generation_stale` (409), requiring restart;
+neither the API nor Web silently splices a replacement generation into a stream.
+
+Web keeps one bottom sentinel for main pages and local pagination inside an
+explicitly opened fold. Empty units render no placeholder spacing. Automatic
+advancement across zero-row pages stops after two pages per burst and exposes
+only bottom continuation, so a long empty-reasoning history cannot trigger an
+unbounded request chain. Shared cursor-history nodes keep retained history linear
+in loaded pages. Restart isolates the complete selection and its fold caches.
+
+Local verification includes synthetic PostgreSQL output through the actual Web
+validators and separate browser fixture regressions. It does not certify deployed
+mixed-load behavior. Drain old workers and migrate through 0098 before enabling
+the new reader/worker pair; a reader fallback does not make an incompatible old
+queue writer safe. Original transcript data is not rewritten during this rollout.
+
+## Compatibility screenful pagination
+
+The compatibility viewer opts into `view=chat`, `prompts` or `all`. Its default batch aims for
 20 visible items, with a 128 KiB soft payload budget and a 512-event traversal
 ceiling. `next` always denotes the next absolute archive ordinal, not a count of
 visible messages. Tool-heavy spans can contain metadata placeholders and fewer

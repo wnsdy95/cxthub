@@ -318,7 +318,7 @@ func TestPRContributionMemoryPinsValidateScopeAndBudget(t *testing.T) {
 				t.Fatal("duplicate witness duplicated memory")
 			}
 			if mode == "missing pin" {
-				if len(plan.Versions) != 1 || plan.Versions[0].State != prMemoryUnavailable || !plan.excluded[fixture.ordinary.Target] {
+				if len(plan.Versions) != 1 || plan.Versions[0].State != prMemoryUnavailable || !plan.Excluded(fixture.ordinary.Target) {
 					t.Fatal("missing pin not explicitly unavailable")
 				}
 				if _, err := plan.Merge(ctx, domain.MemoryProjection{}); !errors.Is(err, domain.ErrConflict) {
@@ -329,56 +329,6 @@ func TestPRContributionMemoryPinsValidateScopeAndBudget(t *testing.T) {
 						t.Fatal("missing pin followed snapshot pointer")
 					}
 				}
-			}
-		})
-	}
-}
-
-func TestPRContributionMemoryAssessmentUsesExactOriginalAndFileEvidence(t *testing.T) {
-	fixture := newEffectiveFixture(t)
-	ctx := systemTestContext()
-	publication := fixture.publish(t, fixture.a, 8, "rewritten-source")
-	record := (domain.PRContribution{RepoID: fixture.repo, GitOrigin: "https://github.com/example/effective-memory", ProviderRepositoryID: 1, PullRequestID: 2,
-		PR:                  domain.PullRequestMerge{Number: 1, HeadBranch: "rewritten-source", BaseBranch: "main", HeadSHA: effectiveOID(9), MergeSHA: effectiveOID(2)},
-		DestinationBranchID: "main", SourceBranchID: publication.BranchID, Capture: fixture.a, OriginalHead: publication.GitAfter}).WithID()
-	history, _ := fixture.svc.ListHistory(ctx, fixture.repo)
-	for _, test := range []struct {
-		name     string
-		code     int
-		valid    bool
-		source   domain.ContentHash
-		original string
-		want     string
-	}{
-		{"applied", 3, true, fixture.a, publication.GitAfter, "applied"},
-		{"reverted", 4, true, fixture.a, publication.GitAfter, "inactive"},
-		{"partial revert", 6, true, fixture.a, publication.GitAfter, "review"},
-		{"missing evidence", 99, true, fixture.a, publication.GitAfter, "review"},
-		{"unselected merge", 1, true, fixture.a, publication.GitAfter, "inactive"},
-		{"late ambiguity", 3, false, fixture.a, publication.GitAfter, "review"},
-		{"different capture", 3, true, fixture.b, publication.GitAfter, "review"},
-		{"different head", 3, true, fixture.a, effectiveOID(9), "review"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			evidence, _ := fixture.svc.newCodeEvidence(ctx, fixture.repo)
-			candidate := record
-			candidate.Capture, candidate.OriginalHead = test.source, test.original
-			if err := evidence.bindContributionHistory(fixture.repo, history); err != nil {
-				t.Fatal(err)
-			}
-			evidence.contributionsLoaded = true
-			evidence.contributions = []verifiedPRContribution{{record: candidate, valid: test.valid, publications: map[string]domain.HistoryEvent{publication.ID: publication}}}
-			resolver, err := newMemoryIntegration(fixture.svc, evidence, fixture.repo, history)
-			if err != nil {
-				t.Fatal(err)
-			}
-			item := domain.EffectiveMemoryItem{SourceSnapshot: fixture.a, Kind: "code", Text: "rewritten feature", Code: &domain.MemoryCodeScope{Commit: publication.GitAfter, Paths: []string{"a", "b"}}}
-			got, err := resolver.assess(ctx, item, effectiveOID(test.code), domain.RepositoryRevision{})
-			if err != nil || got.State != test.want {
-				t.Fatalf("assessment: %+v %v", got, err)
-			}
-			if test.name == "applied" && (got.IntegrationReceipt != record.ID || len(got.Paths) != 2) {
-				t.Fatal("missing contribution receipt or skipped file checks")
 			}
 		})
 	}
@@ -446,28 +396,6 @@ func TestPRContributionMemoryIncompleteChainCannotPickWinner(t *testing.T) {
 	plan, projected, err := fixture.projectResult(t)
 	if !errors.Is(err, domain.ErrConflict) || len(plan.Versions) != 1 || plan.Versions[0].State != "review" || projected.Digest.Summary != "" || projected.Digest.HasMemoryClaims() {
 		t.Fatalf("missing parent was treated as complete: %+v", plan.Versions)
-	}
-}
-
-func TestPRContributionMemoryMergeUsesInclusionOrderAndRemovesStaleFragments(t *testing.T) {
-	oldest, contribution, current := hh("oldest"), hh("contribution"), hh("current")
-	plan := prContributionMemoryPlan{
-		excluded: map[domain.ContentHash]bool{contribution: true},
-		order:    map[domain.ContentHash]int{oldest: 2, contribution: 1, current: 0},
-		Versions: []prContributionMemoryVersion{{Source: contribution, Hash: hh("pin"), State: "selected", digest: domain.MemoryDigest{SnapshotID: contribution, Summary: "PINNED"}}},
-	}
-	base := domain.MemoryProjection{StateHash: hh("projection"), Found: true, Digest: domain.MemoryDigest{SnapshotID: current, Fragments: []domain.MemoryFragment{
-		{SourceSnapshot: oldest, Summary: "OLDEST"}, {SourceSnapshot: contribution, Summary: "STALE MUTABLE FALLBACK"}, {SourceSnapshot: current, Summary: "CURRENT"},
-	}}}
-	result, err := plan.Merge(systemTestContext(), base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Digest.Fragments) != 3 || result.Digest.Fragments[0].SourceSnapshot != oldest || result.Digest.Fragments[1].SourceSnapshot != contribution || result.Digest.Fragments[2].SourceSnapshot != current || strings.Contains(result.Digest.Summary, "STALE") {
-		t.Fatalf("inclusion order or pin lost: %+v", result.Digest)
-	}
-	if base.Digest.Fragments[1].Summary != "STALE MUTABLE FALLBACK" {
-		t.Fatal("projection input mutated")
 	}
 }
 

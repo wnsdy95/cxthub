@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
@@ -18,6 +19,19 @@ func queryGitStatus(t *testing.T, fixture *gitContributionQueryPGFixture, kind, 
 	page, err := fixture.scans.core.GetGitAssociationStatus(systemTestContext(), fixture.basis.repo.ID, domain.GitAssociationStatusRequest{Kind: kind, State: state, Cursor: cursor, Limit: limit})
 	if err != nil || page.Items == nil || page.RepoID != fixture.basis.repo.ID || page.Kind != kind || page.Filter != state || page.CurrentApplicability != "not_evaluated" {
 		t.Fatalf("status contract: %+v %v", page, err)
+	}
+	service := fixture.scans.core
+	reads, err := NewReadServices(ReadServicesConfig{
+		Metadata: service.meta, Blobs: service.blobs, DocumentProfile: inbound.DocumentQueryCompatibility,
+		ContextProfile: inbound.ContextQueryPinnedSnapshots, SupportedDocumentIdentities: service.DocumentIdentitiesSupported(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := reads.GitAssociationStatus.GetGitAssociationStatus(systemTestContext(), fixture.basis.repo.ID,
+		domain.GitAssociationStatusRequest{Kind: kind, State: state, Cursor: cursor, Limit: limit})
+	if err != nil || !reflect.DeepEqual(standalone, page) {
+		t.Fatal("standalone read composition changed the legacy projection", standalone, page, err)
 	}
 	return page
 }

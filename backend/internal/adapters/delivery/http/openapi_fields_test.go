@@ -20,6 +20,9 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		schema string
 		typ    reflect.Type
 	}{
+		{"DocFindMatch", reflect.TypeOf(domain.DocFindMatch{})},
+		{"DocFindPage", reflect.TypeOf(domain.DocFindPage{})},
+		{"DocFindFragmentPage", reflect.TypeOf(domain.DocFindFragmentPage{})},
 		{"Repository", reflect.TypeOf(repositoryAccessView{})},
 		{"Team", reflect.TypeOf(teamView{})},
 		{"Organization", reflect.TypeOf(organizationAccessView{})},
@@ -74,6 +77,9 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"MemoryCodePosition", reflect.TypeOf(domain.MemoryCodePosition{})},
 		{"MemoryCodeScope", reflect.TypeOf(domain.MemoryCodeScope{})},
 		{"EffectiveMemoryPage", reflect.TypeOf(domain.EffectiveMemoryPage{})},
+		{"MemoryReadPage", reflect.TypeOf(domain.MemoryReadPage{})},
+		{"MemoryReadStatus", reflect.TypeOf(domain.MemoryReadStatus{})},
+		{"MemoryReadSourceGeneration", reflect.TypeOf(domain.RepositoryMemorySourceGeneration{})},
 		{"EffectiveMemoryItem", reflect.TypeOf(domain.EffectiveMemoryItem{})},
 		{"CodeSelection", reflect.TypeOf(domain.CodeSelection{})},
 		{"CodeApplicability", reflect.TypeOf(domain.CodeApplicability{})},

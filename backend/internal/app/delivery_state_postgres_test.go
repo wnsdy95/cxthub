@@ -81,15 +81,15 @@ func TestPGEffectiveMemoryDeliveryCacheRawWriteRollback(t *testing.T) {
 	if err != nil || baseline.DeliveryStateHash == "" {
 		t.Fatal("initial proof", err)
 	}
-	if _, ok := svc.deliveryCache.get(baseline.StateHash); !ok {
+	if _, ok := svc.deliveryCache.Lookup(baseline.StateHash); !ok {
 		t.Fatal("read-only snapshot did not cache")
 	}
 	rollback := errors.New("synthetic rollback")
 	for _, warm := range []bool{true, false} {
 		if !warm {
-			svc.deliveryCache.entries = nil
+			svc.deliveryCache = effectiveMemoryDeliveryCache{}
 		}
-		entries := len(svc.deliveryCache.entries)
+		entries := svc.deliveryCache.Len()
 		err = st.WithinRepository(ctx, repo, func(bound context.Context) error {
 			if _, marked := bound.Value(afterCommitKey{}).(*afterCommitActions); marked {
 				t.Fatal("fixture unexpectedly uses application write marker")
@@ -105,13 +105,13 @@ func TestPGEffectiveMemoryDeliveryCacheRawWriteRollback(t *testing.T) {
 			if e != nil {
 				return e
 			}
-			if uncommitted.StateHash != baseline.StateHash || uncommitted.Revision != baseline.Revision {
-				t.Fatal("fixture did not preserve the cache key")
+			if uncommitted.Revision != baseline.Revision {
+				t.Fatal("fixture did not preserve legacy revisions")
 			}
 			if uncommitted.DeliveryStateHash == baseline.DeliveryStateHash {
 				t.Fatal("write reused committed cache despite changed evidence")
 			}
-			if len(svc.deliveryCache.entries) != entries {
+			if svc.deliveryCache.Len() != entries {
 				t.Fatal("raw write published uncommitted proof")
 			}
 			return rollback

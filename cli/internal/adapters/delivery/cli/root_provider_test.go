@@ -20,6 +20,10 @@ type recordingSave struct {
 	in inbound.SaveInput
 }
 
+func captureSelectionForTest() *capture.CommandSessionResolver {
+	return capture.NewCommandSessionResolver(capture.NewClaudeCapture(), capture.NewCodexCapture())
+}
+
 func (r *recordingSave) Save(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
 	r.in = in
 	return inbound.SaveOutput{
@@ -74,7 +78,7 @@ func TestAppCommitUsesExactSessionAcrossRelatedWorktrees(t *testing.T) {
 	newer := "22222222-2222-4222-8222-222222222222"
 	writeCodexRollout(t, home, linked, newer, time.Now().Add(time.Minute))
 	save := &recordingSave{}
-	if _, err := snapshotForCommit(context.Background(), &Container{Save: save, Memorize: noOpMemorize{}}, linked, "test commit"); err != nil {
+	if _, err := snapshotForCommit(context.Background(), &Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, linked, "test commit"); err != nil {
 		t.Fatal(err)
 	}
 	if save.in.SessionPath != owned || save.in.Cwd != linked {
@@ -88,7 +92,7 @@ func TestAppCommitUsesExactSessionAcrossRelatedWorktrees(t *testing.T) {
 		t.Fatal("captured a session from a different Git repository")
 	}
 	t.Setenv("CODEX_THREAD_ID", "33333333-3333-4333-8333-333333333333")
-	target, err := commandCapture(context.Background(), linked, "codex")
+	target, err := captureSelectionForTest().ResolveCommandSession(context.Background(), linked, "codex")
 	if !errors.Is(err, domain.ErrNoActiveSession) || target.SessionPath != "" {
 		t.Fatalf("unknown ID captured sibling session: %+v %v", target, err)
 	}
@@ -107,7 +111,7 @@ func TestSaveAndStashImplicitProviderFollowOwningWrapper(t *testing.T) {
 	owned := writeCodexRollout(t, home, cwd, sessionID, time.Now())
 
 	save := &recordingSave{}
-	if err := Run(&Container{Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
 		t.Fatal(err)
 	}
 	if save.in.Provider != domain.ProviderCodex {
@@ -118,7 +122,7 @@ func TestSaveAndStashImplicitProviderFollowOwningWrapper(t *testing.T) {
 	}
 
 	stash := &recordingStash{}
-	if err := Run(&Container{Stash: stash}, []string{"cxt", "stash", "push"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Stash: stash}, []string{"cxt", "stash", "push"}); err != nil {
 		t.Fatal(err)
 	}
 	if stash.in.Provider != domain.ProviderCodex {
@@ -136,7 +140,7 @@ func TestSaveExplicitProviderOverridesOwningWrapper(t *testing.T) {
 	t.Setenv("CXT_WRAPPER_PID", strconv.Itoa(os.Getppid()))
 
 	save := &recordingSave{}
-	if err := Run(&Container{Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save", "--provider", "claude"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save", "--provider", "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	if save.in.Provider != domain.ProviderClaude {
@@ -151,7 +155,7 @@ func TestStashExplicitProviderOverridesOwningWrapper(t *testing.T) {
 	t.Setenv("CXT_WRAPPER_PID", strconv.Itoa(os.Getppid()))
 
 	stash := &recordingStash{}
-	if err := Run(&Container{Stash: stash}, []string{"cxt", "stash", "push", "--provider", "claude"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Stash: stash}, []string{"cxt", "stash", "push", "--provider", "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	if stash.in.Provider != domain.ProviderClaude {
@@ -180,7 +184,7 @@ func TestSaveStaleWrapperFallsBackToNewestCaptureEligibleProvider(t *testing.T) 
 	}
 
 	save := &recordingSave{}
-	if err := Run(&Container{Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
 		t.Fatal(err)
 	}
 	if save.in.Provider != domain.ProviderCodex {
@@ -203,7 +207,7 @@ func TestSaveOwningWrapperUsesItsExactSessionInsteadOfNewerSibling(t *testing.T)
 	writeCodexRollout(t, home, cwd, "22222222-2222-4222-8222-222222222222", time.Now())
 
 	save := &recordingSave{}
-	if err := Run(&Container{Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
 		t.Fatal(err)
 	}
 	if save.in.SessionPath != owned {
@@ -231,7 +235,7 @@ func TestSaveOwningWrapperUsesTerminalAffinityForPreUpgradeWrapper(t *testing.T)
 	capture.RecordSessionAffinity(cwd, domain.ProviderCodex, ownedID)
 
 	save := &recordingSave{}
-	if err := Run(&Container{Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
+	if err := Run(&Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"}); err != nil {
 		t.Fatal(err)
 	}
 	if save.in.SessionPath != owned {
@@ -252,7 +256,7 @@ func TestSaveOwningWrapperFailsClosedWithoutExactSessionIdentity(t *testing.T) {
 	writeCodexRollout(t, home, cwd, "55555555-5555-4555-8555-555555555555", time.Now())
 
 	save := &recordingSave{}
-	err := Run(&Container{Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"})
+	err := Run(&Container{SessionSelection: captureSelectionForTest(), Save: save, Memorize: noOpMemorize{}}, []string{"cxt", "save"})
 	if err == nil || !strings.Contains(err.Error(), "cannot identify the codex session") {
 		t.Fatalf("save error = %v, want exact-session fail-closed error", err)
 	}

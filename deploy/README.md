@@ -28,6 +28,10 @@ Every externally bound `cxtd` process requires PostgreSQL. Cloud Run also sets
 therefore refuses to start if the PostgreSQL build tag, DSN, live database
 connection, or migration directory is missing; it never falls back to the
 container filesystem.
+All PostgreSQL API/MCP/worker startup is now schema-verification-only. Run the
+separate operator image with explicit `--apply` before starting a compatible
+release; do not give its migration credential to runtime services. Follow
+[database migration ownership](../docs/DATABASE_MIGRATIONS.md) before rollout.
 It also sets `CXT_PUBLIC_URL=https://<domain>`, which is the OAuth issuer and
 protected-resource origin for the remote read-only MCP connector.
 

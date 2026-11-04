@@ -33,8 +33,10 @@ Cloud PostgreSQL
 `cxt-mcp` and `cxtd` are independent executables, HTTP listeners, container
 images, and Render services. They use the same application query rules,
 identity policy, and PostgreSQL database through separate connection pools.
-Neither process calls the other for context reads. API downtime therefore does
-not stop already-authorized MCP reads; new web logins still require the API.
+Ready context reads use shared storage without an API round trip. API downtime
+does not stop those authorized reads; new web logins still require the API.
+The opt-in prepared-memory path also depends on the API to register and process
+cold selections, as described below. It never proxies the memory body via API.
 
 Vercel routes `/mcp`, `/oauth/*`, `/.well-known/*`, and
 `/api/v1/oauth/requests/*` to MCP. Other `/api/*` traffic goes to `cxtd`.
@@ -48,6 +50,45 @@ rate limits still write their operational records to PostgreSQL. MCP always
 requires the PostgreSQL build and DSN, including during local development.
 See [Render deployment](../deploy/RENDER.md) for setup and migration steps.
 
+### Prepared-memory cold selections (default off)
+
+`memory_load` with `mode=effective, read_version=1` can use verified durable
+memory pages. Both services require the same exact repository allowlist in
+`CXT_MEMORY_READ_REPOS`; API preparation is separately scoped by
+`CXT_MEMORY_PREPARATION_REPOS`. This is staged infrastructure, not a declaration
+that frontend adoption, load qualification or production rollout is complete.
+
+For MCP-only cold selections, configure:
+
+- API and MCP: the same explicit `CXT_MCP_PUBLIC_URL`, such as
+  `https://mcp.cxthub.io`, identifying the protected MCP resource.
+- MCP only: `CXT_READ_PREPARATION_API_ORIGIN`, such as `https://api.cxthub.io`,
+  naming the trusted API component that owns preparation. Enabling prepared
+  reads without this destination fails MCP startup instead of silently stranding
+  first-time selections. No frontend/public build receives these server settings.
+
+`CXT_MEMORY_PREPARATION_API_ORIGIN` remains a compatibility alias. If both names
+are set they must agree; conflicting destinations stop startup. The generic
+origin also supplies conversation-find preparation without enabling effective
+memory reads or changing their repository allowlists.
+
+After a permitted cold read releases its DB snapshot and processing slot, MCP
+sends the fixed minimum cursor and selection to the API's authenticated
+`POST /internal/mcp/memory-preparation`. The API validates the MCP audience,
+current token and repository authority, then records bounded derived work.
+It returns only an acknowledgment. MCP starts no worker and writes no work row.
+The normal API authentication path still rejects MCP credentials; this endpoint
+is an explicit component of the same resource, not generic token passthrough.
+
+Only HTTPS is allowed outside loopback development. Redirects, environment
+proxies, cookies and automatic transport retries are disabled; body sizes and
+deadlines are bounded. Never configure an unrelated destination. A transient
+forwarding error retains `retry_cursor`; retry with the same selection and
+cursor. Permission, integrity, expiry and reset failures are terminal, not
+preparation acknowledgments. Every successful page still checks current access.
+HTTP cancellation does not delete already committed derived work, and this path
+does not add protocol-level `notifications/cancelled` handling.
+
 ## Read-only tools
 
 | Tool | Purpose |
@@ -56,6 +97,7 @@ See [Render deployment](../deploy/RENDER.md) for setup and migration steps.
 | `context_list` | Browse all, current, previous, or archived context snapshots |
 | `context_history` | Read recorded branch births, attachments, selections, and continuations |
 | `context_fetch` | Retrieve the entire archived event stream in bounded fragments |
+| `context_find` | Find displayed text in one pinned conversation, preserving exact source ranges |
 | `memory_load` | Project merged memory or retrieve an exact archived object in bounded fragments |
 | `context_search` | Search messages and readable events, continuing through older records |
 | `context_link_status` | Read recorded publication, integration and immutable memory-pin progress |
@@ -110,6 +152,43 @@ from another repository, tool, or filter is rejected. Authorization is checked
 again on every request. List pages contain at most 100 rows. Search limits its
 scan per call and can return an empty result page with a nonempty cursor: that
 means older data remains to be searched.
+
+### Finding displayed conversation text
+
+`context_find` takes `repository`, `query` (1–256 Unicode code points), optional
+`ref` and optional `cursor`. The ref is a named branch/tag, `HEAD`, or full
+snapshot hash; short-hash discovery is deliberately not used because it would
+enumerate history. Omit ref to select the repository default branch. The first
+read pins the immutable snapshot; moving that branch does not change subsequent
+pages. Keep repository, ref and query unchanged when following a cursor.
+
+The application uses `display-prepared-v1` matching, shared with Web's explicit
+prepared profile. Responses have `snapshot_id`, `page_hash`, `byte_offset`,
+`json_fragment`, `page_complete` and `next_cursor`. Concatenate fragments by byte
+offset, then parse the completed native find page. Offsets in its matches are
+whole-event displayed UTF-8 byte coordinates; `source_range` is the exact original
+JSON cover, not proof that historical prose describes current code. An empty
+match page can still have a next cursor. Transport JSON is capped at 12KiB per
+response, including metadata and escaped fragments.
+
+When a permitted read is not ready, MCP releases the read and forwards a bounded
+request to `POST /internal/mcp/conversation-find-preparation` at the configured
+API origin. Both services use the same explicit `CXT_MCP_PUBLIC_URL` resource
+audience. The API independently verifies the live MCP token and repository read
+authority and derives work from current document metadata; the request cannot
+declare an arbitrary event target. The API acknowledges only accepted work,
+while its workers create derived pages. MCP receives no display-job store and
+starts no worker. This endpoint is enabled only with an explicit MCP resource
+origin and is not a general bearer-token passthrough to ordinary REST routes.
+
+Structured not-ready errors carry `retry_cursor`; use it with the same arguments.
+An unreachable preparation API retains that cursor but reports preparation
+unavailable, not accepted work. Revocation, stale generation, integrity and
+unsupported-format failures are terminal. No raw-source or whole-document
+fallback is used. Large Markdown and generic/diff tool formatters are still
+separate R1 work; unsupported formatting returns an explicit error rather than
+silently searching different text. This new tool does not promote Web defaults
+or establish production performance/rollout acceptance.
 
 `context_fetch` starts at the oldest archived event and includes all event
 kinds. Each fragment has `event_index`, `byte_offset`, `event_complete`, and

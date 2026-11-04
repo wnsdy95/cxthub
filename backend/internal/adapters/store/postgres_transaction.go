@@ -26,11 +26,14 @@ type pgDatabase interface {
 type repositoryTxKey struct{}
 type repositoryTx struct {
 	pgx.Tx
-	owner      *PostgresStore
-	repo       domain.ContentHash
-	repository string
-	readOnly   bool
-	identity   bool
+	owner       *PostgresStore
+	repo        domain.ContentHash
+	repository  string
+	profileUser string
+	readOnly    bool
+	identity    bool
+	docRange    *postgresDocRangeGenerationRead
+	readLive    func() error
 }
 
 // Inner storage operations use savepoints; releasing one never commits the
@@ -70,11 +73,17 @@ func (foreignTransactionDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, err
 
 var _ outbound.RepositoryTransactions = (*PostgresStore)(nil)
 var _ outbound.RepositoryTransactionState = (*PostgresStore)(nil)
+var _ outbound.RepositoryTransactionPresence = (*PostgresStore)(nil)
 var _ outbound.PRJobFence = (*PostgresStore)(nil)
 
 func (s *PostgresStore) InReadOnlyTransaction(ctx context.Context) bool {
 	tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
 	return ok && tx.owner == s && tx.readOnly
+}
+
+func (s *PostgresStore) InTransaction(ctx context.Context) bool {
+	_, present := ctx.Value(repositoryTxKey{}).(*repositoryTx)
+	return present
 }
 
 func rollbackPG(tx pgx.Tx) {
@@ -105,9 +114,14 @@ func (s *PostgresStore) WithinRepository(ctx context.Context, repo domain.Conten
 		return err
 	}
 	// Pin repository identity and policy for the complete operation.
-	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM repos WHERE id=$1 FOR SHARE`, string(repo)).Scan(&id); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	var id, repository string
+	if err = tx.QueryRow(ctx, `SELECT id,COALESCE(repository_id,'') FROM repos WHERE id=$1 FOR SHARE`, string(repo)).Scan(&id, &repository); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return mapNoRows(err)
+	}
+	if repository != "" {
+		if err = tx.QueryRow(ctx, `SELECT id FROM repositories WHERE id=$1 FOR SHARE`, repository).Scan(&id); err != nil {
+			return mapNoRows(err)
+		}
 	}
 	bound := context.WithValue(ctx, repositoryTxKey{}, &repositoryTx{Tx: tx, owner: s, repo: repo})
 	if err = fn(bound); err != nil {
@@ -129,7 +143,16 @@ func (s *PostgresStore) WithinReadSnapshot(ctx context.Context, fn func(context.
 		return err
 	}
 	defer rollbackPG(tx)
-	if err = fn(context.WithValue(ctx, repositoryTxKey{}, &repositoryTx{Tx: tx, owner: s, readOnly: true})); err != nil {
+	bound := &repositoryTx{Tx: tx, owner: s, readOnly: true}
+	bound.readLive = func() error {
+		connection := tx.Conn()
+		if connection == nil || connection.IsClosed() || connection.PgConn().TxStatus() != 'T' {
+			return domain.ErrConflict
+		}
+		return nil
+	}
+	defer func() { bound.docRange, bound.readLive = nil, nil }()
+	if err = fn(context.WithValue(ctx, repositoryTxKey{}, bound)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

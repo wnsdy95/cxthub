@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "purpose": "Source-only provenance for finite R1 native-float64 wave7",
+  "recorded_date": "2026-10-25",
+  "license_notice": "backend/internal/domain/legacy_native_float64/NOTICE.md",
+  "hash_algorithm": "SHA-256",
+  "hash_scope": "Complete installed file bytes, not selected methods or destination files",
+  "baseline": {
+    "writable_checkout": "/Users/work/.codex/worktrees/incremental-1025-b08/cxthub-public",
+    "index_tree": "c01a31e7da09da02d401a43b3cf81fef6daef3a8",
+    "head": "55de2dea54370473e1bb2b98103a2cefa25a365c",
+    "head_is_intentionally_older": true,
+    "initial_tracked_worktree_drift": false,
+    "initial_untracked_files": [],
+    "parent_checkout_read_only": "/Users/work/.codex/worktrees/cold-read-admission-8842/cxthub-public"
+  },
+  "installed_authority": {
+    "root": "/Users/work/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64",
+    "version": "go1.26.10",
+    "version_file_contents": "go1.26.10\ntime 2026-10-19T22:20:36Z\n",
+    "os": "darwin",
+    "architecture": "arm64",
+    "int_bits": 64,
+    "uint_bits": 64,
+    "evidence_kind": "Installed VERSION and local source inspection; no Go executable or runtime probe"
+  },
+  "code_profile": {
+    "name": "Go 1.26.10 current 64-bit native binary64, legacy encoding/json",
+    "json_package": "encoding/json",
+    "json_source_build_constraint": "!goexperiment.jsonv2",
+    "native_destination": "any containing float64",
+    "use_number": false,
+    "conversion_package": "src/internal/strconv",
+    "source_optimize_default": true,
+    "dispatch": [
+      "atof64exact if primary scan is not truncated",
+      "eiselLemire64, with mantissa+1 confirmation when primary scan is truncated",
+      "decimal.set state and decimal.floatBits fallback"
+    ],
+    "binary64_mantissa_bits": 52,
+    "binary64_exponent_bits": 11,
+    "binary64_bias": -1023,
+    "primary_mantissa_digits": 19,
+    "decimal_fallback_digits": 800,
+    "decimal_max_shift": 60,
+    "exponent_accumulator_update_condition": "accumulator < 10000 before multiply/add; may reach 99999; continue consuming remaining digits",
+    "point_positions": "Primary uses total significant digits; fallback uses retained digits at dot/no-dot assignment; preserve independently",
+    "required_semantics": [
+      "Exact JSON-number grammar, full source-span consumption, and accepting terminal state",
+      "Native binary64 result bits, signed zero, nearest/ties-to-even, subnormals and signed underflow",
+      "Installed exact/fast/fallback dispatch and source scan quirks, not a normalized display approximation",
+      "Semantic overflow rejection; enclosing caller reconstructs the original error cooperatively"
+    ],
+    "excluded_production_substitutes": [
+      "UseNumber or display-number reduction",
+      "Whole-token ParseFloat or Decoder conversion",
+      "Private standard-library imports, unsafe aliases, or linkname access"
+    ],
+    "profile_is_runtime_gating": false,
+    "profile_is_cross_version_or_platform_certification": false
+  },
+  "sources": [
+    {
+      "path": "LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "bytes": 1453,
+      "role": "Full original copyright, BSD conditions, and disclaimer reproduced verbatim in NOTICE.md",
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "path": "VERSION",
+      "sha256": "3f3fbe1bb9146eb51957d11386aabb1016b0cb389b8cb551e831abefc77ee54f",
+      "role": "Installed version/build-time authority"
+    },
+    {
+      "path": "src/internal/strconv/decimal.go",
+      "sha256": "23bd45989d0b5a7b441c45873bf43f210fdf8381132fc74424d381216ac3a8b4",
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "role": "G01 fixed decimal storage, shifts, cheat table, trim, and rounding",
+      "additional_attribution": "Credit for this trick goes to Ken."
+    },
+    {
+      "path": "src/internal/strconv/atof.go",
+      "sha256": "2c2205ccab8626b623a188144a7dcaf202ece77002a27a2cd6b0aaf5a61669a5",
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "role": "Parent scan summaries/dispatch, G01 floatBits/powtab, G02 exact conversion/exact powers"
+    },
+    {
+      "path": "src/internal/strconv/atofeisel.go",
+      "sha256": "af5b2e23d8ab9624febb8751364b3c48388e02712817db527dd4abfb89ed7bce",
+      "copyright": "Copyright 2020 The Go Authors. All rights reserved.",
+      "role": "G02 Eisel-Lemire binary64 conversion"
+    },
+    {
+      "path": "src/internal/strconv/math.go",
+      "sha256": "88db7fb281cdfab21f657eab8b37af131f23d822977c7e71bc753ffc5aec0145",
+      "copyright": "Copyright 2025 The Go Authors. All rights reserved.",
+      "role": "G02 uint128 representation, pow10 lookup, and mulLog2_10 exponent calculation"
+    },
+    {
+      "path": "src/internal/strconv/pow10tab.go",
+      "sha256": "1c4356efc589a293b12b6af86f0fca7a88d139d01876ba98306cc1aae2e19ab4",
+      "copyright": "Copyright 2025 The Go Authors. All rights reserved.",
+      "role": "G02 all 696 ordered 128-bit power pairs, exponents -348 through 347",
+      "generated_source_notice": "Code generated by: go run pow10gen.go. DO NOT EDIT.",
+      "generator_executed": false
+    },
+    {
+      "path": "src/internal/strconv/ftoa.go",
+      "sha256": "2c12d1c3a17b9a978266a7c761862a4be8dd1f2fae14ad5bbdf6ff2dd8f3493d",
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "role": "Binary64 floatInfo constants only; no formatting implementation adaptation"
+    },
+    {
+      "path": "src/strconv/number.go",
+      "sha256": "dda43e8c91d95f9dea0c46b2fec6637e5520cae099e40c5965dca0e41bbaab9e",
+      "copyright": "Copyright 2025 The Go Authors. All rights reserved.",
+      "role": "Contract-only reference: public ParseFloat wrapper and error construction"
+    },
+    {
+      "path": "src/encoding/json/decode.go",
+      "sha256": "a91535f18f9a2c8380448b1c84c4c2017dbe3d530a10faf8babf03494042da48",
+      "copyright": "Copyright 2010 The Go Authors. All rights reserved.",
+      "role": "Contract-only reference: native any number conversion, overflow rejection, saved errors"
+    },
+    {
+      "path": "src/encoding/json/scanner.go",
+      "sha256": "2b16dd215274dfa8e0806b53cca144684d5b9c8a02319cf5ce10120c50e6eef2",
+      "copyright": "Copyright 2010 The Go Authors. All rights reserved.",
+      "role": "Parent JSON-number grammar/accepting scan-state reference"
+    },
+    {
+      "path": "src/encoding/json/stream.go",
+      "sha256": "bb26b2442db6a686fc7f823ea9cc89babe26ac988ec7d8caf4a157aeb60d92f2",
+      "copyright": "Copyright 2010 The Go Authors. All rights reserved.",
+      "role": "API-boundary reference only: whole-value Decoder/Token buffering is not the cooperative numeric implementation"
+    }
+  ],
+  "source_notice_suffix": "Use of this source code is governed by a BSD-style\nlicense that can be found in the LICENSE file.",
+  "adaptations": [
+    {
+      "owner": "G01",
+      "destination": "backend/internal/domain/doc_legacy_native_float64_decimal.go",
+      "source_methods": {
+        "src/internal/strconv/decimal.go": [
+          "decimal", "trim", "rightShift", "leftCheat", "leftcheats",
+          "prefixIsLessThan", "leftShift", "Shift", "shouldRoundUp",
+          "RoundedInteger", "uintSize", "maxShift"
+        ],
+        "src/internal/strconv/atof.go": ["powtab", "decimal.floatBits"],
+        "src/internal/strconv/ftoa.go": ["floatInfo", "float64info", "binary64 constants"]
+      },
+      "destination_mapping": {
+        "trim": "legacyNativeFloat64Decimal.trim",
+        "rightShift": "legacyNativeFloat64Decimal.shiftRight",
+        "leftcheats": "legacyNativeFloat64DecimalLeftCheats",
+        "prefixIsLessThan": "legacyNativeFloat64DecimalPrefixLessThan",
+        "leftShift": "legacyNativeFloat64Decimal.shiftLeft",
+        "Shift": "legacyNativeFloat64DecimalShift phase in advance, split at the original 60-bit shift boundary",
+        "shouldRoundUp_and_RoundedInteger": "legacyNativeFloat64Decimal.roundedInteger",
+        "powtab": "legacyNativeFloat64DecimalPowers",
+        "decimal.floatBits": "legacyNativeFloat64Decimal.advance and finish"
+      },
+      "adaptation_form": "Fixed arrays/scalars and resumable phases; preserve source operation order, truncation, rounding and sign; reject overflow rather than publish infinity"
+    },
+    {
+      "owner": "G02",
+      "destination": "backend/internal/domain/doc_legacy_native_float64_fast.go",
+      "source_methods": {
+        "src/internal/strconv/atof.go": ["atof64exact", "atof64 optimized decimal dispatch"],
+        "src/internal/strconv/atofeisel.go": ["eiselLemire64"],
+        "src/internal/strconv/ftoa.go": ["binary64 constants"]
+      },
+      "destination_mapping": {
+        "atof64exact": "legacyNativeFloat64Exact",
+        "atof64_optimized_decimal_dispatch": "legacyNativeFloat64Fast, including mantissa+1 confirmation",
+        "eiselLemire64": "legacyNativeFloat64EiselLemire"
+      },
+      "adaptation_form": "Return binary64 bits and fast-path availability; preserve exact arithmetic ordering and Eisel-Lemire fallback conditions"
+    },
+    {
+      "owner": "G02",
+      "destination": "backend/internal/domain/doc_legacy_native_float64_powers.go",
+      "source_methods": {
+        "src/internal/strconv/math.go": ["uint128", "pow10", "mulLog2_10"],
+        "src/internal/strconv/pow10tab.go": ["pow10Min", "pow10Max", "pow10Tab"],
+        "src/internal/strconv/atof.go": ["float64pow10"]
+      },
+      "destination_mapping": {
+        "uint128": "legacyNativeFloat64Power128",
+        "pow10_and_mulLog2_10": "legacyNativeFloat64Power",
+        "pow10Tab": "legacyNativeFloat64Powers",
+        "float64pow10": "legacyNativeFloat64ExactPowers"
+      },
+      "power_pair_count": 696,
+      "power_pair_order": "High uint64 then low uint64, in increasing decimal-exponent order",
+      "power_exponent_min": -348,
+      "power_exponent_max": 347,
+      "exact_power_count": 23,
+      "exact_power_exponent_min": 0,
+      "exact_power_exponent_max": 22,
+      "adaptation_form": "Fixed installed tables and original integer lookup formula; no per-token regeneration"
+    },
+    {
+      "owner": "parent",
+      "destination": "backend/internal/domain/doc_legacy_native_float64.go",
+      "source_methods": {
+        "src/internal/strconv/atof.go": ["readFloat decimal scan", "decimal.set", "atof64 decimal dispatch"],
+        "src/encoding/json/scanner.go": [
+          "stateNeg", "state1", "state0", "stateDot", "stateDot0",
+          "stateE", "stateESign", "stateE0"
+        ]
+      },
+      "destination_mapping": {
+        "readFloat_and_decimal.set": "legacyNativeFloat64 digit, decimalMark, exponentDigit, and finish with independent primary/fallback scan state",
+        "JSON_number_states": "legacyNativeFloat64.add accepting grammar phases",
+        "atof64_decimal_dispatch": "legacyNativeFloat64.step using G02 fast conversion then G01 decimal fallback"
+      },
+      "adaptation_form": "Bounded cooperative source scan and converter driver; parent owns integration, original-error reconstruction, retained accounting and source/context fences"
+    }
+  ],
+  "upstream_lineage_recorded_in_atofeisel": {
+    "evidence": "References transcribed from the installed file; external sources not independently inspected or adapted",
+    "algorithm_discussion": "https://nigeltao.github.io/blog/2020/eisel-lemire.html",
+    "original_cpp_reference": "https://github.com/lemire/fast_double_parser/blob/644bef4306059d3be01a04e77d3cc84b379c596f/include/fast_double_parser.h#L840",
+    "wuffs_reference": "https://github.com/google/wuffs/blob/ba3818cb6b473a2ed0b38ecfc07dbbd3a97e8ae7/internal/cgen/base/floatconv-submodule-code.c#L990",
+    "additional_testing_reference": "https://github.com/nigeltao/parse-number-fxx-test-data/blob/5280dcfccf6d0b02a65ae282dad0b6d9de50e039/script/test-go-strconv.go"
+  },
+  "maintenance": {
+    "go_version_or_source_change": "Reinspect methods, tables and notices; update whole-file hashes and mappings; parent reruns serial native-bit/source-path/rejection/resource/fence validation",
+    "jsonv2_or_json_implementation_change": "Review grammar, native any conversion and error behavior before extending the profile",
+    "word_width_or_architecture_change": "Explicitly review counts, uint operations, shift split order (64-bit maxShift 60 versus 32-bit 28), rounding, accounting and parent validation; no assumed cross-platform parity",
+    "distribution": "Retain source notices/license and reproduce the full license in binary documentation/materials if distribution is authorized; no publication or legal clearance is established here",
+    "runtime_or_ci_platform_added": false
+  },
+  "validation_status": {
+    "go_build_test_benchmark_commands_executed": false,
+    "parent_owns_all_executable_validation_serially": true,
+    "full_parity_established": false,
+    "entire_R1_complete": false,
+    "publication_requested_or_performed": false,
+    "legal_clearance_claimed": false,
+    "destination_implementation_hashes": "Not recorded: parallel implementation/integration is not frozen in this provenance-only checkout"
+  },
+  "unchanged_gates": [
+    "64 KiB maximum numeric parsing work per call",
+    "Existing shared 512 KiB work quantum and at most two authenticated part loads",
+    "Existing source/context/error/EOF/lease gates",
+    "16 MiB heap and 64 MiB spool limits",
+    "128,000-event, setup-inclusive 30-second gate"
+  ]
+}

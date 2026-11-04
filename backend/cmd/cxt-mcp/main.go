@@ -10,7 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/memorypreparation"
 	"github.com/wnsdy95/cxthub/backend/internal/mcpserver"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"github.com/wnsdy95/cxthub/backend/internal/serverruntime"
 )
 
@@ -59,15 +61,53 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("CXT_MCP_PUBLIC_URL: %w", err)
 	}
-	runtime, err := serverruntime.Open(ctx, addr, "", true)
+	preparationOrigin, err := readPreparationAPIOrigin(os.Getenv("CXT_READ_PREPARATION_API_ORIGIN"), os.Getenv("CXT_MEMORY_PREPARATION_API_ORIGIN"))
+	if err != nil {
+		return err
+	}
+	requester, conversation, err := readPreparationRequesters(os.Getenv("CXT_MEMORY_READ_REPOS"), preparationOrigin)
+	if err != nil {
+		return err
+	}
+	runtime, err := serverruntime.OpenMCP(ctx, addr, "", true)
 	if err != nil {
 		return err
 	}
 	defer runtime.Close()
-	handler, err := mcpserver.Handler(runtime, resourceOrigin)
+	ctx = runtime.ProcessContext(ctx)
+	handler, err := mcpserver.HandlerWithReadPreparation(runtime, resourceOrigin, requester, conversation)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "cxt-mcp: listening on %s (store=postgres, auth=%s)\n", addr, runtime.AuthMode)
 	return serverruntime.Serve(ctx, addr, handler)
+}
+
+func memoryPreparationRequester(readRepos, origin string) (outbound.MemoryPreparationRequester, error) {
+	memory, _, err := readPreparationRequesters(readRepos, origin)
+	return memory, err
+}
+
+func readPreparationAPIOrigin(current, legacy string) (string, error) {
+	if current != "" && legacy != "" && current != legacy {
+		return "", fmt.Errorf("CXT_READ_PREPARATION_API_ORIGIN conflicts with the legacy memory preparation origin")
+	}
+	if current != "" {
+		return current, nil
+	}
+	return legacy, nil
+}
+
+func readPreparationRequesters(readRepos, origin string) (outbound.MemoryPreparationRequester, outbound.ConversationFindPreparationRequester, error) {
+	if origin == "" {
+		if readRepos != "" {
+			return nil, nil, fmt.Errorf("CXT_READ_PREPARATION_API_ORIGIN is required when MCP prepared memory reads are enabled")
+		}
+		return nil, nil, nil
+	}
+	client, err := memorypreparation.NewClient(origin)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid CXT_READ_PREPARATION_API_ORIGIN")
+	}
+	return client, client, nil
 }
