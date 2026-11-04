@@ -45,6 +45,12 @@ separate DML credentials. An unprepared or mismatched schema refuses startup.
 This is a release requirement, not an automatically provisioned Render service
 or pre-deploy hook. No new resources or credential grants are activated here.
 
+Use the complete **160-migration** bundle and digest in the
+[current release catalog](../docs/DATABASE_MIGRATIONS.md#current-release-catalog).
+Bounded API, MCP, and worker roles use process admission **protocol 7**. The
+historical schema-152 and protocol-v2/v3 qualifications are not current release
+identities or evidence of production compatibility.
+
 ## Provision
 
 ### Initial budget deployment
@@ -129,8 +135,11 @@ References: [Render free limits](https://render.com/docs/free),
    replacement or database identity rewrites.
 3. The Blueprint injects the same internal PostgreSQL connection string into
    both services. External DB access is disabled (`ipAllowList: []`). Docker
-   images enforce PostgreSQL and bundle the migration directory. Concurrent
-   starts serialize migrations using the existing PostgreSQL advisory lock.
+   images enforce PostgreSQL and bundle the exact release migration directory.
+   Startup performs read-only schema verification under the existing PostgreSQL
+   advisory lock; it never applies migrations. Complete the explicit operator
+   application and verification above before starting services with runtime DML
+   credentials, not the operator credential.
 4. Add GitHub App secrets and optional Resend settings **only to API**, following
    [GitHub connections](../docs/GITHUB_CONNECTIONS.md) and `.env.example`. Empty
    integration settings leave those optional features disabled. Server workers
