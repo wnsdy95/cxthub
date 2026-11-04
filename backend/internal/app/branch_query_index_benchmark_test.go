@@ -26,7 +26,7 @@ func BenchmarkBranchCodeProjection(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for iteration := 0; iteration < b.N; iteration++ {
-				evidence := &codeEvidence{repo: repo, closures: map[string]*evidenceClosure{}}
+				evidence := &codeEvidence{repo: repo}
 				index, err := newBranchHistoryIndex(ctx, repo, history)
 				if err != nil {
 					b.Fatal(err)

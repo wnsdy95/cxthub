@@ -9,6 +9,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,9 +23,9 @@ func TestRevisionHubSharesReadAndReleasesObservers(t *testing.T) {
 	var calls atomic.Int32
 	h := repositoryChangeHub{}
 	repo := domain.HashContent([]byte(t.Name()))
-	read := func(context.Context, domain.ContentHash) (domain.RepositoryRevision, error) {
+	read := func(context.Context, domain.ContentHash) (domain.RepositoryChangeState, error) {
 		calls.Add(1)
-		return domain.RepositoryRevision{Graph: 3, Pending: 4}, nil
+		return domain.RepositoryChangeState{RepositoryRevision: domain.RepositoryRevision{Graph: 3, Pending: 4}}, nil
 	}
 	a, releaseA := h.subscribe(repo, read)
 	b, releaseB := h.subscribe(repo, read)
@@ -54,7 +55,25 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	ids := app.NewIdentityService(auth.NewDevVerifier(), st)
-	ts := httptest.NewServer(NewServer(svc, ids).Handler())
+	delivery := NewServer(svc, ids)
+	contextQueries, err := svc.ContextQueriesForProfile(inbound.ContextQueryCompatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.SetContextQuery(contextQueries, inbound.ContextQueryCompatibility); err != nil {
+		t.Fatal(err)
+	}
+	queries, err := svc.GraphQueriesForProfile(inbound.RepositoryGraphCompatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.SetRepositoryGraphQueries(queries, inbound.RepositoryGraphCompatibility); err != nil {
+		t.Fatal(err)
+	}
+	if err := delivery.SetRepositoryStateQueries(svc, inbound.RepositoryStateCompatibility); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(delivery.Handler())
 	defer ts.Close()
 	var me struct{ Username string }
 	if doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me) != 200 {

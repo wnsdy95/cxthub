@@ -2,112 +2,14 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"strings"
 )
 
-func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in domain.ContextSelection) (domain.ContextQueryView, error) {
-	if err := domain.ValidateContextSegmentSelection(in); err != nil {
-		return domain.ContextQueryView{}, err
-	}
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return domain.ContextQueryView{}, err
-	}
-	if in.CodeCommit != "" && domain.ValidateGitOID(in.CodeCommit) != nil {
-		return domain.ContextQueryView{}, domain.ErrValidation
-	}
-	ctx, release, err := AcquireResources(ctx, ResourceInteractive)
+func (service *Service) QueryContext(ctx context.Context, repo domain.ContentHash, selection domain.ContextSelection) (domain.ContextQueryView, error) {
+	queries, err := service.ContextQueries()
 	if err != nil {
 		return domain.ContextQueryView{}, err
 	}
-	defer release()
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.ContextQueryView, error) {
-		r, err := s.meta.GetRepo(ctx, repo)
-		if err != nil {
-			return domain.ContextQueryView{}, err
-		}
-
-		revision, err := s.RepositoryRevision(ctx, repo)
-		if err != nil {
-			return domain.ContextQueryView{}, err
-		}
-		key := segmentCacheKey(repo, r, revision, in)
-		if in.SegmentLimit > 0 && (revision.Graph != 0 || revision.Evidence != 0) {
-			if basis, ok := s.segmentCache.get(key); ok {
-				return s.contextSegmentPage(ctx, repo, in, basis)
-			}
-		}
-		view, err := s.loadRepositoryView(ctx, repo)
-		if err != nil {
-			return domain.ContextQueryView{}, err
-		}
-		branch := r.DefaultBranch
-		if branch == "" {
-			branch = "main"
-		}
-		out, err := domain.SelectContext(view, in, branch)
-		if err != nil {
-			return out, err
-		}
-		if in.Scope != "current" {
-			return s.finishContextQuery(ctx, repo, in, out, view, key)
-		}
-		name := in.Branch
-		if name == "" {
-			name = in.Position
-			if strings.EqualFold(name, "HEAD") {
-				name = branch
-			}
-		}
-		for _, ref := range view.Refs {
-			if ref.Kind != domain.RefBranch || ref.Name != name {
-				continue
-			}
-			if ref.BranchID == "" {
-				bindings, e := domain.ProjectContextBranches(view.History)
-				if e != nil {
-					return out, e
-				}
-				ref.BranchID = bindings.Identity(string(repo), name)
-			}
-			ref.Target = out.Position
-			code := in.CodeCommit
-			inputs, e := newBranchQueryInputs(ctx, repo, view.Snapshots, view.History)
-			if e != nil {
-				return out, e
-			}
-			evidence, e := s.newCodeEvidence(ctx, repo)
-			if e != nil {
-				return out, e
-			}
-			if code == "" {
-				code, e = resolvedBranchCodeFromIndex(ctx, ref, inputs.history, evidence)
-				if e != nil {
-					return out, e
-				}
-			}
-			included, e := s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
-			if e != nil {
-				return out, e
-			}
-			out.Snapshots = []domain.Snapshot{}
-			for _, id := range included.SnapshotIDs {
-				out.Snapshots = append(out.Snapshots, inputs.snapshots[id])
-			}
-			out.Inclusion = &included
-			out.Branch = name
-			basis, e := json.Marshal(struct {
-				Version   int
-				Inclusion domain.BranchContext
-				Snapshots []domain.Snapshot
-			}{1, included, out.Snapshots})
-			if e != nil {
-				return out, e
-			}
-			out.StateHash = domain.HashContent(basis)
-			break
-		}
-		return s.finishContextQuery(ctx, repo, in, out, view, key)
-	})
+	return queries.QueryContext(ctx, repo, selection)
 }

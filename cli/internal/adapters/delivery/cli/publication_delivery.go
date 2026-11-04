@@ -6,18 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
-
-func resolvePublicationRepo(ctx context.Context, c *Container, cwd string) (domain.Repo, error) {
-	if c.ResolveRepo != nil {
-		return c.ResolveRepo(ctx, cwd)
-	}
-	return remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
-}
 
 // Immutable local history is the durable outbox. Successful exact remote
 // acceptance is its acknowledgement; no second queue or current-tip push is
@@ -26,7 +17,7 @@ func runBranchHistorySync(ctx context.Context, c *Container, cwd string) error {
 	if c.History == nil || c.Sync == nil {
 		return fmt.Errorf("branch history publication service unavailable")
 	}
-	repo, err := resolvePublicationRepo(ctx, c, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

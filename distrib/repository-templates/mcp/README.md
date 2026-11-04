@@ -39,8 +39,10 @@ not a deployment authorization.
 Render uses this repository's `main`, root `Dockerfile`, and root context for
 `cxthub-mcp`. Automatic deployment stays off. MCP requires PostgreSQL, including
 locally; do not substitute a filesystem store. It shares the existing database,
-Firebase project, and public origin with the API. OAuth records and startup
-migrations require database writes even though MCP tools are read-only.
+Firebase project, and public origin with the API. OAuth records still require
+database writes even though MCP tools are read-only. Startup only verifies the
+current migration bundle; it never applies migrations. Run the backend mirror's
+operator migration image before starting either service.
 
 Verify all four generated repositories against the same source commit and wait
 for their CI before manually deploying the exact exported MCP commit. Preserve

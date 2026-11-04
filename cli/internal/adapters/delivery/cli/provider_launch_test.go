@@ -249,7 +249,7 @@ func strictLaunchContextFixture(request ProviderLaunchRequest, host domain.Agent
 }
 
 func launchTestRuntime() providerLaunchRuntime {
-	return providerLaunchRuntime{stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard, interactive: true, pollInterval: 5 * time.Millisecond}
+	return providerLaunchRuntime{stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard, interactive: true, pollInterval: 5 * time.Millisecond, sessionInventory: captureSelectionForTest()}
 }
 
 func TestProviderLaunchRecordsPreparedAndLaunchedWithoutClaimingAcceptance(t *testing.T) {

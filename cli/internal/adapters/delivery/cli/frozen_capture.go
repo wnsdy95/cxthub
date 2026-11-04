@@ -75,10 +75,10 @@ func freezeCommitInputs(ctx context.Context, c *Container, cwd, root, message st
 	var failures []error
 	for i, o := range p.Outcomes {
 		claimed := o.Provider == domain.ProviderCodex && (providerfs.ValidSessionID(os.Getenv("CODEX_THREAD_ID")) || providerfs.ValidSessionID(os.Getenv("CODEX_SESSION_ID")))
-		if owner, managed := supervisedProvider(ctx, cwd); managed && owner == o.Provider {
+		if owner, managed := c.supervisedProvider(ctx, cwd); managed && owner == o.Provider {
 			claimed = true
 		}
-		selected, err := commandCapture(ctx, cwd, o.Provider)
+		selected, err := c.commandCapture(ctx, cwd, o.Provider)
 		if err != nil {
 			state := "failed"
 			if errors.Is(err, domain.ErrNoActiveSession) && !claimed {
@@ -186,7 +186,7 @@ func runCommitCaptureWorker(ctx context.Context, c *Container, cwd string) error
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	repo, err := resolvePublicationRepo(ctx, c, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

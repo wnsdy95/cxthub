@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -71,17 +72,29 @@ func TestP6PGMerkleWarmFrozenAndSourcePages(t *testing.T) {
 	}
 	// Explicit synthetic capable peer+binary validates adapter semantics only.
 	capable := outbound.WithDocumentIdentityCompatibility(ctx, []domain.DocumentIdentity{domain.DocumentIdentityRootV1}, []domain.DocumentIdentity{domain.DocumentIdentityRootV1})
-	got, err := s.CatalogMerkle(capable, repo, domain.CatalogMerkleRequest{Version: 1})
-	if err != nil || got.RootHash != warm.RootHash {
+	got, err := s.CatalogMerkle(capable, repo, domain.CatalogMerkleRequest{Version: 1, RootHash: warm.RootHash, Checkpoint: &warm.Checkpoint})
+	if err != nil || !reflect.DeepEqual(got, warm) {
 		t.Fatal("capable frozen read", err)
 	}
 	n2, r2 := catalogMerkleCountsPG(t, ctx, s, repo)
 	if n != n2 || r != r2 {
 		t.Fatal("warm/denied reads changed cache")
 	}
+	current := catalogMerklePagePG(t, capable, s, repo, domain.CatalogMerkleRequest{Version: 1})
+	if current.RootHash != warm.RootHash {
+		t.Fatal("identity requirement changed the logical Merkle content")
+	}
+	n, r = catalogMerkleCountsPG(t, ctx, s, repo)
+	if hit := catalogMerklePagePG(t, capable, s, repo, domain.CatalogMerkleRequest{Version: 1}); !reflect.DeepEqual(hit, current) {
+		t.Fatal("capable warm read changed the current page")
+	}
 	peerOnly := outbound.WithDocumentIdentityCompatibility(ctx, []domain.DocumentIdentity{domain.DocumentIdentityRootV1}, nil)
 	if _, err := s.CatalogMerkle(peerOnly, repo, domain.CatalogMerkleRequest{Version: 1}); !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
 		t.Fatal("peer forged binary", err)
+	}
+	n2, r2 = catalogMerkleCountsPG(t, ctx, s, repo)
+	if n != n2 || r != r2 {
+		t.Fatal("current warm or denied peer read changed cache")
 	}
 }
 func TestP6PGReadPinsRequirementAcrossConcurrentOptIn(t *testing.T) {

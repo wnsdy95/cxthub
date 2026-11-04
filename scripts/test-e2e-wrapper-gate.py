@@ -12,6 +12,8 @@ GATE = SOURCE.split("# BEGIN wrapper prerequisite gate", 1)[1].split("\n", 1)[1]
 CLEANUP = SOURCE.split("# BEGIN fixture job cleanup", 1)[1].split("\n", 1)[1].split("# END fixture job cleanup.", 1)[0]
 HOLDER = SOURCE.split("# BEGIN wrapper holder readiness.\n", 1)[1].split("# END wrapper holder readiness.", 1)[0]
 CAPTURE_GATE = GATE.split("# Capture exclusion:", 1)[1].split("\n", 1)[1].split("# Enforcement:", 1)[0]
+PUBLICATION_SOURCE = (ROOT / "scripts/e2e-publication.inc.sh").read_text()
+EVIDENCE_GATE = PUBLICATION_SOURCE.split('PUB_MERGE=$(git -C "$TMP/publication-host" rev-parse HEAD)\n', 1)[1].split('PUB_REQUEST=', 1)[0]
 
 
 class WrapperGateTest(unittest.TestCase):
@@ -216,6 +218,146 @@ finish_fixture_job() { FAIL=1; CXT_E2E_KEEP_TMP=1; return 1; }
             result = subprocess.run(["bash", "-c", script], env=dict(os.environ, TMP=tmp, CXT_E2E_DIAGNOSTICS_DIR=""), capture_output=True, text=True, timeout=2)
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertTrue(Path(tmp).is_dir())
+
+
+class PublicationEvidenceTest(unittest.TestCase):
+    def test_live_wrong_resolver_cannot_overlap_helper_and_workers_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bin").mkdir()
+            provider = root / "bin/provider"
+            provider.write_text('''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import signal
+import sys
+
+root = Path(os.environ["TMP"])
+def stop(signum, frame):
+    (root / ("joined-" + str(os.getpid()))).touch()
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
+(root / ("ready-" + str(os.getpid()))).touch()
+while True:
+    signal.pause()
+''')
+            provider.chmod(0o700)
+            helper = root / "bin/publication-git-evidence"
+            helper.write_text('''#!/usr/bin/env bash
+if kill -0 "$INITIAL_SERVER_PID" 2>/dev/null; then
+  echo "wrong resolver can still claim fixture scans"; exit 71
+fi
+[ -f "$TMP/joined-$INITIAL_SERVER_PID" ] || exit 72
+echo exclusive-evidence >> "$TMP/actions"
+''')
+            helper.chmod(0o700)
+            script = '''set -u
+FAIL=0; SRV_PID=""; PUB_RID=fixture-repo; PUB_MERGE=fixture-merge
+B=http://127.0.0.1:19999/api/v1
+''' + CLEANUP + '''
+trap '[ -z "$SRV_PID" ] || finish_fixture_job "$SRV_PID"' EXIT
+fixture_server=("$TMP/bin/provider")
+"${fixture_server[@]}" > "$TMP/srv.log" 2>&1 &
+SRV_PID=$!
+export INITIAL_SERVER_PID=$SRV_PID
+for attempt in $(seq 1 100); do
+  [ -f "$TMP/ready-$SRV_PID" ] && break
+  sleep 0.01
+done
+[ -f "$TMP/ready-$SRV_PID" ] || exit 73
+curl() { [ -f "$TMP/ready-$SRV_PID" ]; }
+publication() {
+''' + EVIDENCE_GATE + '''
+[ "$SRV_PID" != "$INITIAL_SERVER_PID" ] && kill -0 "$SRV_PID" || exit 74
+echo live-promotion-workers >> "$TMP/actions"
+}
+publication
+exit "$FAIL"
+'''
+            result = subprocess.run(["bash", "-c", script], cwd=tmp,
+                                    env=dict(os.environ, TMP=tmp, CXT_E2E_DSN=""),
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "actions").read_text().splitlines(),
+                             ["exclusive-evidence", "live-promotion-workers"])
+
+    def run_gate(self, scenario, dsn=""):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bin").mkdir()
+            helper = root / "bin/publication-git-evidence"
+            helper.write_text('''#!/usr/bin/env bash
+echo evidence >> "$TMP/actions"
+[ -f "$TMP/joined" ] || { echo "live provider overlaps evidence"; exit 71; }
+[ "$CXT_E2E_GIT_FIXTURE_ROOT" = "$TMP" ] &&
+  [ "$CXT_E2E_GIT_FIXTURE_REPO" = fixture-repo ] &&
+  [ "$CXT_E2E_GIT_FIXTURE_MERGE" = fixture-merge ] || exit 72
+[ "$SCENARIO" != evidence-fails ]
+''')
+            helper.chmod(0o700)
+            script = '''set -u
+FAIL=0; SRV_PID=77; PUB_RID=fixture-repo; PUB_MERGE=fixture-merge
+B=http://127.0.0.1:19999/api/v1
+fixture_job_active() { [ "$SCENARIO" != exited ]; }
+finish_fixture_job() {
+  echo stop-and-join >> "$TMP/actions"
+  [ "$SCENARIO" != shutdown-fails ] || return 1
+  touch "$TMP/joined"
+}
+start_server() { echo restart >> "$TMP/actions"; }
+fixture_server=(start_server)
+kill() { [ "$SCENARIO" != restart-exits ]; }
+curl() {
+  echo ready-check >> "$TMP/actions"
+  [ "$SCENARIO" != restart-unavailable ]
+}
+sleep() { :; }
+publication() {
+''' + EVIDENCE_GATE + '''
+wait
+echo promotion >> "$TMP/actions"
+}
+publication
+wait
+printf 'RESULT:%s\n' "$FAIL"
+'''
+            result = subprocess.run(["bash", "-c", script], cwd=tmp,
+                                    env=dict(os.environ, TMP=tmp, ROOT=str(ROOT), SCENARIO=scenario, CXT_E2E_DSN=dsn),
+                                    capture_output=True, text=True, timeout=5)
+            actions = (root / "actions").read_text().splitlines() if (root / "actions").exists() else []
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result, actions
+
+    def test_provider_is_joined_before_evidence_and_restarted_before_promotion(self):
+        for dsn in ("", "host=/fixture-owned-socket dbname=fixture"):
+            with self.subTest(dsn=dsn):
+                result, actions = self.run_gate("ready", dsn)
+                self.assertIn("RESULT:0", result.stdout)
+                self.assertEqual(actions[:2], ["stop-and-join", "evidence"])
+                self.assertIn("restart", actions)
+                self.assertIn("ready-check", actions)
+                self.assertEqual(actions[-1], "promotion")
+
+    def test_missing_or_unjoined_server_prevents_evidence(self):
+        for scenario in ("exited", "shutdown-fails"):
+            with self.subTest(scenario=scenario):
+                result, actions = self.run_gate(scenario)
+                self.assertIn("RESULT:1", result.stdout)
+                self.assertNotIn("evidence", actions)
+                self.assertNotIn("restart", actions)
+                self.assertNotIn("promotion", actions)
+
+    def test_evidence_failure_is_not_retried_or_promoted(self):
+        result, actions = self.run_gate("evidence-fails")
+        self.assertIn("RESULT:1", result.stdout)
+        self.assertEqual(actions, ["stop-and-join", "evidence"])
+
+    def test_restart_failure_prevents_promotion(self):
+        for scenario in ("restart-exits", "restart-unavailable"):
+            with self.subTest(scenario=scenario):
+                result, actions = self.run_gate(scenario)
+                self.assertIn("RESULT:1", result.stdout)
+                self.assertNotIn("promotion", actions)
 
 
 if __name__ == "__main__":

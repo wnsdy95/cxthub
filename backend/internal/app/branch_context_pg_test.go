@@ -179,7 +179,7 @@ func TestPGMemoryProjectionBranchIntegrationReplicaSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := len(writer.deliveryCache.entries)
+	entries := writer.deliveryCache.Len()
 	rollback := errors.New("synthetic rollback")
 	err = repositoryWriteError(ctx, writer, repo, func(bound context.Context) error {
 		snap, e := st.GetSnapshot(bound, repo, ids[1])
@@ -197,7 +197,7 @@ func TestPGMemoryProjectionBranchIntegrationReplicaSnapshot(t *testing.T) {
 		if uncommitted.DeliveryStateHash == committed.DeliveryStateHash {
 			t.Fatal("write read ignored uncommitted memory")
 		}
-		if len(writer.deliveryCache.entries) != entries {
+		if writer.deliveryCache.Len() != entries {
 			t.Fatal("write read poisoned delivery cache")
 		}
 		return rollback

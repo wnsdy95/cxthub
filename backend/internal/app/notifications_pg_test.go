@@ -27,6 +27,7 @@ func (s failedNotificationPG) EnqueueNotification(ctx context.Context, d outboun
 	return errors.New("injected failure after outbox insert")
 }
 func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
+	t.Setenv("CXT_TEST_DSN", a11IsolatedPGDSN(t, context.Background()))
 	_, st, _ := collaborationPG(t)
 	ctx := systemTestContext()
 	user := domain.User{ID: domain.NewID("user_"), Username: fmt.Sprintf("notify%d", time.Now().UnixNano()), Email: "owner@example.test", Name: "Owner"}

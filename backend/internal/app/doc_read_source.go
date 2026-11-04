@@ -2,9 +2,9 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -147,40 +147,15 @@ func (s *Service) agentHistoryReadSource(ctx context.Context, repo domain.Conten
 // snapshot selects the reference; a root is materialized from its current owned
 // proof without relabeling its canonical CIR byte hash. No read index is needed.
 func (s *Service) materializedDocumentRead(ctx context.Context, repo, hash domain.ContentHash) (domain.SessionDoc, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	snapshot, err := s.meta.GetSnapshot(ctx, repo, hash)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return domain.SessionDoc{}, err
-	}
-	if err == nil {
-		if err := matchReadSnapshot(domain.DocumentRef{Hash: hash, Identity: snapshot.DocIdentity}, snapshot); err != nil {
-			return domain.SessionDoc{}, err
-		}
-		if snapshot.DocIdentity == domain.DocumentIdentityRootV1 {
-			proof, err := s.verifiedRootDoc(ctx, repo, snapshot)
-			if err != nil {
-				return domain.SessionDoc{}, err
-			}
-			doc := domain.SessionDoc{Hash: hash, Identity: proof.DocumentRef().Identity}
-			if err := json.Unmarshal(proof.Bytes(), &doc.CIR); err != nil {
-				return domain.SessionDoc{}, domain.ErrIntegrity
-			}
-			if err := ctx.Err(); err != nil {
-				return domain.SessionDoc{}, err
-			}
-			return doc, nil
-		}
-	}
-	doc, err := s.blobs.GetDoc(ctx, repo, hash)
+	indexed, _ := s.blobs.(outbound.DocReadStore)
+	verified, _ := s.blobs.(outbound.VerifiedDocReader)
+	reader, err := documentquery.NewRawReader(documentquery.RawConfig{
+		Profile: documentquery.LegacyCompatibility, Snapshots: s.meta, Legacy: s.blobs, Index: indexed, Verified: verified,
+	})
 	if err != nil {
 		return domain.SessionDoc{}, err
 	}
-	if doc.DocumentRef() != (domain.DocumentRef{Hash: hash}) {
-		return domain.SessionDoc{}, domain.ErrIntegrity
-	}
-	return doc, ctx.Err()
+	return reader.MaterializedDocumentRead(ctx, repo, hash)
 }
 
 func (s *Service) documentReadSource(ctx context.Context, repo, hash domain.ContentHash) (docReadSource, error) {

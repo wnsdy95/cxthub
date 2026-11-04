@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,12 +8,17 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 func (s *Server) getDocEvents(w http.ResponseWriter, r *http.Request) {
-	query, err := docReadQuery(r, "view", "offset", "limit", "base")
+	query, err := docReadQuery(r, "projection", "view", "offset", "limit", "base")
 	if err != nil {
 		s.respond(w, nil, err)
+		return
+	}
+	if query.Has("projection") {
+		s.getDocVisiblePage(w, r, query)
 		return
 	}
 	offset, limit := -1, 50
@@ -40,14 +44,19 @@ func (s *Server) getDocEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if view != "" {
-		viewer, ok := s.b.(interface {
-			ReadDocViewEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int, int, string) (domain.DocViewPage, error)
-		})
-		if !ok {
+		viewer := s.documentViews
+		if viewer == nil {
 			s.writeError(w, 503, "unavailable", "range event paging unavailable")
 			return
 		}
-		out, err := viewer.ReadDocViewEvents(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), base, offset, limit, view)
+		request, release, ok := s.documentResponseRequest(w, r)
+		if !ok {
+			return
+		}
+		defer release()
+		repo := s.repoID(r)
+		ctx := inbound.WithDocumentReadAuthorizer(request.Context(), s.documentReadAuthorizer(r, repo))
+		out, err := viewer.ReadDocViewEvents(ctx, repo, domain.ContentHash(r.PathValue("hash")), base, offset, limit, view)
 		s.respond(w, out, err)
 		return
 	}
@@ -56,14 +65,14 @@ func (s *Server) getDocEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	reader, ok := s.b.(interface {
-		ReadDocEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int, int) (domain.DocEventPage, error)
-	})
-	if !ok {
+	reader := s.documentEvents
+	if reader == nil {
 		s.writeError(w, 503, "unavailable", "event paging unavailable")
 		return
 	}
-	out, err := reader.ReadDocEvents(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), base, offset, limit)
+	repo := s.repoID(r)
+	ctx := inbound.WithDocumentReadAuthorizer(r.Context(), s.documentReadAuthorizer(r, repo))
+	out, err := reader.ReadDocEvents(ctx, repo, domain.ContentHash(r.PathValue("hash")), base, offset, limit)
 	s.respond(w, out, err)
 }
 
@@ -73,10 +82,8 @@ func (s *Server) getDocEventFragment(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, nil, err)
 		return
 	}
-	reader, ok := s.b.(interface {
-		ReadDocViewFragment(context.Context, domain.ContentHash, domain.ContentHash, int, int, int) (domain.DocViewFragment, error)
-	})
-	if !ok {
+	reader := s.documentViews
+	if reader == nil {
 		s.writeError(w, 503, "unavailable", "event fragment paging unavailable")
 		return
 	}
@@ -91,8 +98,22 @@ func (s *Server) getDocEventFragment(w http.ResponseWriter, r *http.Request) {
 			values[key] = value
 		}
 	}
-	out, err := reader.ReadDocViewFragment(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), values["index"], values["offset"], values["budget"])
+	request, release, ok := s.documentResponseRequest(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	repo := s.repoID(r)
+	ctx := inbound.WithDocumentReadAuthorizer(request.Context(), s.documentReadAuthorizer(r, repo))
+	out, err := reader.ReadDocViewFragment(ctx, repo, domain.ContentHash(r.PathValue("hash")), values["index"], values["offset"], values["budget"])
 	s.respond(w, out, err)
+}
+
+func (server *Server) documentReadAuthorizer(request *http.Request, repo domain.ContentHash) inbound.DocumentReadAuthorization {
+	if server.documentQueryProfile == inbound.DocumentQueryVerifiedRoots {
+		return server.memoryReadAuthorizer(request, repo)
+	}
+	return server.docVisibleReadAuthorizer(request, repo)
 }
 
 func docReadQuery(r *http.Request, keys ...string) (url.Values, error) {

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,30 @@ import (
 func HashContent(data []byte) ContentHash {
 	h := sha256.Sum256(data)
 	return ContentHash("sha256:" + hex.EncodeToString(h[:]))
+}
+
+func HashContentContext(ctx context.Context, data []byte) (ContentHash, error) {
+	if len(data) > 0 && len(data) <= canonicalCheckBytes {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		hash := HashContent(data)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return hash, nil
+	}
+	hasher := sha256.New()
+	for offset := 0; offset < len(data); offset += canonicalCheckBytes {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		hasher.Write(data[offset:min(offset+canonicalCheckBytes, len(data))])
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return ContentHash("sha256:" + hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
 // CanonicalBytes returns the deterministic canonical bytes of a CIRDocument (events seq sorted + key sorted + compact).
@@ -41,7 +66,7 @@ func canonicalBytes(doc CIRDocument, eventJSON func(CIREvent) ([]byte, error)) (
 	for i, event := range canonicalEvents(doc.Events) {
 		var raw []byte
 		if eventJSON == nil {
-			raw, err = canonicalJSON(event)
+			raw, err = canonicalInputEventJSON(event)
 		} else {
 			raw, err = eventJSON(event)
 		}
@@ -96,7 +121,47 @@ func ValidateSessionDocHash(doc SessionDoc) error {
 // ValidatedSessionDocBytes lets storage reuse exactly the bytes it validates,
 // avoiding a second canonicalization of a cumulative session.
 func ValidatedSessionDocBytes(doc SessionDoc) ([]byte, error) {
-	return validatedSessionDocBytes(doc, nil)
+	raw, err := validatedSessionDocBytes(doc, func(event CIREvent) ([]byte, error) {
+		needsWireCheck := publicationEventNeedsWireCheck(event)
+		raw, err := canonicalInputEventJSON(event)
+		if err != nil {
+			return nil, err
+		}
+		if needsWireCheck {
+			if _, err := verifyCanonicalEvent(context.Background(), doc.CIR.Envelope.CIRVersion, raw); err != nil {
+				return nil, err
+			}
+		}
+		return raw, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid(raw) {
+		return nil, ErrIntegrity
+	}
+	return raw, nil
+}
+
+func publicationEventNeedsWireCheck(event CIREvent) bool {
+	switch event.Kind {
+	case EventToolCall:
+		if len(event.Input) != 0 {
+			return true
+		}
+	case EventToolResult:
+		switch event.Output.(type) {
+		case nil, string, bool, float64:
+		default:
+			return true
+		}
+	}
+	for _, replacement := range event.Replacement {
+		if publicationEventNeedsWireCheck(replacement) {
+			return true
+		}
+	}
+	return false
 }
 
 func validatedSessionDocBytes(doc SessionDoc, eventJSON func(CIREvent) ([]byte, error)) ([]byte, error) {
