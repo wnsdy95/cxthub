@@ -2,38 +2,22 @@ package app
 
 import (
 	"context"
-	"errors"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/contextprojection"
+	"github.com/wnsdy95/cxthub/backend/internal/app/evidencequery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-const maxCodeEvidenceReads = 8192
+const maxCodeEvidenceReads = contextprojection.MaxCodeEvidenceReads
 
-type evidenceValue[T any] struct {
-	value T
-	err   error
-}
-type evidenceClosure struct {
-	seen       map[string]bool
-	expanded   map[string]bool
-	todo       []string
-	incomplete bool
-}
-
-// One coherent read owns this cache. Missing immutable evidence is cached too;
-// a later request sees its own committed repository generation. No provider I/O.
 type codeEvidence struct {
 	repo                   domain.ContentHash
 	origin                 string
 	trees                  outbound.GitTreeStore
 	deltas                 outbound.GitDeltaReader
-	commits                map[string]evidenceValue[domain.GitCommitTree]
-	nodes                  map[string]evidenceValue[domain.GitTreeNode]
-	changes                map[[2]string]evidenceValue[domain.GitCommitDelta]
-	closures               map[string]*evidenceClosure
-	reads                  int
-	limited                bool
+	git                    *evidencequery.GitEvidence
+	requireComplete        bool
 	contributions          []verifiedPRContribution
 	contributionsLoaded    bool
 	gitContributions       []verifiedGitContribution
@@ -41,153 +25,138 @@ type codeEvidence struct {
 	contributionHistory    []domain.HistoryEvent
 }
 
-func (e *codeEvidence) bindContributionHistory(repo domain.ContentHash, history []domain.HistoryEvent) error {
-	if e == nil {
+func (evidence *codeEvidence) bindContributionHistory(repo domain.ContentHash, history []domain.HistoryEvent) error {
+	if evidence == nil {
 		return nil
 	}
-	if e.repo != repo {
+	if evidence.repo != repo {
 		return domain.ErrIntegrity
 	}
-	same := len(e.contributionHistory) == len(history)
+	same := len(evidence.contributionHistory) == len(history)
 	if same && len(history) != 0 {
-		same = &e.contributionHistory[0] == &history[0]
+		same = &evidence.contributionHistory[0] == &history[0]
 	}
 	if !same {
-		e.contributions, e.gitContributions = nil, nil
-		e.contributionsLoaded, e.gitContributionsLoaded = false, false
+		evidence.contributions, evidence.gitContributions = nil, nil
+		evidence.contributionsLoaded, evidence.gitContributionsLoaded = false, false
 	}
-	e.contributionHistory = history
+	evidence.contributionHistory = history
 	return nil
 }
 
-func (s *Service) newCodeEvidence(ctx context.Context, repo domain.ContentHash) (*codeEvidence, error) {
-	r, err := s.meta.GetRepo(ctx, repo)
+func (service *Service) newCodeEvidence(ctx context.Context, repo domain.ContentHash) (*codeEvidence, error) {
+	return newCodeEvidenceFromReader(ctx, service.graphEvidenceReader(), repo, service.requireCompleteMemory)
+}
+
+func newCodeEvidenceFromReader(ctx context.Context, reader outbound.RepositoryReader, repo domain.ContentHash, requireComplete bool) (*codeEvidence, error) {
+	metadata, err := reader.GetRepo(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	trees, _ := s.meta.(outbound.GitTreeStore)
-	deltas, _ := s.meta.(outbound.GitDeltaReader)
-	return &codeEvidence{repo: repo, origin: r.GitRemoteURL, trees: trees, deltas: deltas,
-		commits: map[string]evidenceValue[domain.GitCommitTree]{}, nodes: map[string]evidenceValue[domain.GitTreeNode]{}, changes: map[[2]string]evidenceValue[domain.GitCommitDelta]{}, closures: map[string]*evidenceClosure{}}, nil
+	if metadata.ID != repo {
+		return nil, domain.ErrIntegrity
+	}
+	trees, _ := reader.(outbound.GitTreeStore)
+	deltas, _ := reader.(outbound.GitDeltaReader)
+	return &codeEvidence{repo: repo, origin: metadata.GitRemoteURL, trees: trees, deltas: deltas,
+		requireComplete: requireComplete}, nil
 }
-func (e *codeEvidence) allow(ctx context.Context, repo domain.ContentHash, origin string) error {
+
+func (evidence *codeEvidence) gitEvidence() (*evidencequery.GitEvidence, error) {
+	if evidence.git == nil {
+		owner, err := evidencequery.NewGitEvidence(evidencequery.GitEvidenceConfig{
+			RepoID: evidence.repo, Origin: evidence.origin, Trees: evidence.trees, Deltas: evidence.deltas,
+			RequireComplete: evidence.requireComplete,
+		})
+		if err != nil {
+			return nil, err
+		}
+		evidence.git = owner
+	}
+	return evidence.git, nil
+}
+
+func (evidence *codeEvidence) allow(ctx context.Context, repo domain.ContentHash, origin string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if repo != e.repo || origin != e.origin {
-		return domain.ErrIntegrity
+	owner, err := evidence.gitEvidence()
+	if err != nil {
+		return err
 	}
-	if e.reads >= maxCodeEvidenceReads {
-		e.limited = true
-		return domain.ErrNotFound
-	}
-	e.reads++
-	return nil
-}
-func (e *codeEvidence) GetGitCommitTree(ctx context.Context, repo domain.ContentHash, origin, id string) (domain.GitCommitTree, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.GitCommitTree{}, err
-	}
-	if repo != e.repo || origin != e.origin {
-		return domain.GitCommitTree{}, domain.ErrIntegrity
-	}
-	if v, ok := e.commits[id]; ok {
-		return v.value, v.err
-	}
-	if err := e.allow(ctx, repo, origin); err != nil {
-		return domain.GitCommitTree{}, err
-	}
-	if e.trees == nil {
-		return domain.GitCommitTree{}, domain.ErrNotFound
-	}
-	v, err := e.trees.GetGitCommitTree(ctx, repo, origin, id)
-	e.commits[id] = evidenceValue[domain.GitCommitTree]{v, err}
-	return v, err
-}
-func (e *codeEvidence) GetGitTreeNode(ctx context.Context, repo domain.ContentHash, origin, id string) (domain.GitTreeNode, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.GitTreeNode{}, err
-	}
-	if repo != e.repo || origin != e.origin {
-		return domain.GitTreeNode{}, domain.ErrIntegrity
-	}
-	if v, ok := e.nodes[id]; ok {
-		return v.value, v.err
-	}
-	if err := e.allow(ctx, repo, origin); err != nil {
-		return domain.GitTreeNode{}, err
-	}
-	if e.trees == nil {
-		return domain.GitTreeNode{}, domain.ErrNotFound
-	}
-	v, err := e.trees.GetGitTreeNode(ctx, repo, origin, id)
-	e.nodes[id] = evidenceValue[domain.GitTreeNode]{v, err}
-	return v, err
-}
-func (e *codeEvidence) GetGitDelta(ctx context.Context, repo domain.ContentHash, origin, id, parent string) (domain.GitCommitDelta, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.GitCommitDelta{}, err
-	}
-	if repo != e.repo || origin != e.origin {
-		return domain.GitCommitDelta{}, domain.ErrIntegrity
-	}
-	key := [2]string{id, parent}
-	if v, ok := e.changes[key]; ok {
-		return v.value, v.err
-	}
-	if err := e.allow(ctx, repo, origin); err != nil {
-		return domain.GitCommitDelta{}, err
-	}
-	if e.deltas == nil {
-		return domain.GitCommitDelta{}, domain.ErrNotFound
-	}
-	v, err := e.deltas.GetGitDelta(ctx, repo, origin, id, parent)
-	e.changes[key] = evidenceValue[domain.GitCommitDelta]{v, err}
-	return v, err
+	return owner.ConsumeRead(ctx, repo, origin)
 }
 
-// A proven ancestor returns immediately; later queries resume the same walk.
-// This avoids scanning a long history merely to answer a direct-parent query.
-func (e *codeEvidence) relation(ctx context.Context, source, selected string) (string, error) {
+func (evidence *codeEvidence) GetGitCommitTree(ctx context.Context, repo domain.ContentHash, origin, identifier string) (domain.GitCommitTree, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.GitCommitTree{}, err
+	}
+	owner, err := evidence.gitEvidence()
+	if err != nil {
+		return domain.GitCommitTree{}, err
+	}
+	return owner.GetGitCommitTree(ctx, repo, origin, identifier)
+}
+
+func (evidence *codeEvidence) GetGitTreeNode(ctx context.Context, repo domain.ContentHash, origin, identifier string) (domain.GitTreeNode, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.GitTreeNode{}, err
+	}
+	owner, err := evidence.gitEvidence()
+	if err != nil {
+		return domain.GitTreeNode{}, err
+	}
+	return owner.GetGitTreeNode(ctx, repo, origin, identifier)
+}
+
+func (evidence *codeEvidence) GetGitDelta(ctx context.Context, repo domain.ContentHash, origin, identifier, parent string) (domain.GitCommitDelta, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.GitCommitDelta{}, err
+	}
+	owner, err := evidence.gitEvidence()
+	if err != nil {
+		return domain.GitCommitDelta{}, err
+	}
+	return owner.GetGitDelta(ctx, repo, origin, identifier, parent)
+}
+
+func (evidence *codeEvidence) relation(ctx context.Context, source, selected string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	closure := e.closures[selected]
-	if closure == nil {
-		closure = &evidenceClosure{seen: map[string]bool{selected: true}, expanded: map[string]bool{}, todo: []string{selected}}
-		e.closures[selected] = closure
+	owner, err := evidence.gitEvidence()
+	if err != nil {
+		return "", err
 	}
-	if closure.seen[source] {
-		return "ancestor", nil
+	return owner.Relation(ctx, source, selected)
+}
+
+func (evidence *codeEvidence) exhaustTraversal() error {
+	owner, err := evidence.gitEvidence()
+	if err != nil {
+		return err
 	}
-	for len(closure.todo) > 0 && len(closure.expanded) < 4096 {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		id := closure.todo[len(closure.todo)-1]
-		closure.todo = closure.todo[:len(closure.todo)-1]
-		if closure.expanded[id] {
-			continue
-		}
-		closure.expanded[id] = true
-		c, err := e.GetGitCommitTree(ctx, e.repo, e.origin, id)
-		if errors.Is(err, domain.ErrNotFound) {
-			closure.incomplete = true
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		for _, p := range c.Parents {
-			closure.seen[p] = true
-			closure.todo = append(closure.todo, p)
-		}
-		if closure.seen[source] {
-			return "ancestor", nil
-		}
+	return owner.ExhaustTraversal()
+}
+
+func (evidence *codeEvidence) ReadCount() int {
+	if evidence.git == nil {
+		return 0
 	}
-	if closure.incomplete || len(closure.todo) > 0 {
-		return "unknown", nil
+	return evidence.git.ReadCount()
+}
+
+func (evidence *codeEvidence) Limited() bool {
+	return evidence.git != nil && evidence.git.Limited()
+}
+
+func (evidence *codeEvidence) TraversalLimited() bool {
+	return evidence.git != nil && evidence.git.TraversalLimited()
+}
+
+func (evidence *codeEvidence) CachedCommit(identifier string) (domain.GitCommitTree, error, bool) {
+	if evidence.git == nil {
+		return domain.GitCommitTree{}, nil, false
 	}
-	return "not_ancestor", nil
+	return evidence.git.CachedCommit(identifier)
 }

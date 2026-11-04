@@ -17,7 +17,7 @@ func prepareManualPublication(ctx context.Context, c *Container, cwd, name strin
 	if err := domain.ValidateBranchName(name); err != nil {
 		return scope, err
 	}
-	repo, err := resolvePublicationRepo(ctx, c, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return scope, err
 	}

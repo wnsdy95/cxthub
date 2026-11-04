@@ -19,9 +19,5 @@ func conversationManifestEnvelope(raw []byte) (string, error) {
 }
 
 func conversationManifestEvent(ctx context.Context, version string, raw []byte) (int, error) {
-	// A fresh verifier delegates to the existing strict typed event check. Its
-	// pending event proof is discarded, never admitted or reused across calls.
-	var verifier CanonicalDocVerifier
-	var pending []canonicalEventProof
-	return verifier.event(ctx, version, raw, &pending)
+	return verifyCanonicalEvent(ctx, version, raw)
 }

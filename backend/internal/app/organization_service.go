@@ -163,14 +163,7 @@ func (s *IdentityService) PublicOrganization(ctx context.Context, slug string) (
 }
 
 func (s *IdentityService) OrganizationRoleOf(ctx context.Context, organizationID, userID string) (domain.OrganizationRole, bool) {
-	if s.organization == nil || userID == "" {
-		return "", false
-	}
-	member, err := s.organization.GetOrganizationMembership(ctx, organizationID, userID)
-	if err != nil || !domain.ValidOrganizationRole(member.Role) {
-		return "", false
-	}
-	return member.Role, true
+	return organizationRoleFromReader(ctx, s.organization, organizationID, userID)
 }
 
 func (s *IdentityService) ListOrganizationMembers(ctx context.Context, actorID, organizationID string) ([]domain.OrganizationMembership, error) {
@@ -435,41 +428,54 @@ func (s *IdentityService) HasBreakGlassAccess(ctx context.Context, repositoryID,
 	return identityResult(ctx, s, func(ctx context.Context) (bool, error) { return s.hasBreakGlassAccess(ctx, repositoryID, userID) })
 }
 func (s *IdentityService) hasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error) {
+	grant, err := s.useBreakGlassAccess(ctx, repositoryID, userID)
+	return grant.ID != "", err
+}
+
+func (s *IdentityService) breakGlassOrganization(ctx context.Context, repositoryID, userID string) (string, error) {
 	if s.organization == nil || repositoryID == "" || userID == "" {
-		return false, nil
+		return "", nil
 	}
 	repository, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil || repository.OwnerNamespaceID == "" {
-		return false, nil
+		return "", err
 	}
 	ns, err := s.organization.GetNamespace(ctx, repository.OwnerNamespaceID)
 	if err != nil || ns.Kind != domain.NamespaceOrganization {
-		return false, nil
+		return "", err
 	}
 	role, ok := s.OrganizationRoleOf(ctx, ns.OrganizationID, userID)
 	if !ok || role != domain.OrganizationOwner {
-		return false, nil
+		return "", nil
 	}
 	policy, err := s.effectiveOrganizationPolicy(ctx, ns.OrganizationID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if !policy.BreakGlassEnabled {
-		return false, nil
+		return "", nil
+	}
+	return ns.OrganizationID, nil
+}
+
+func (s *IdentityService) useBreakGlassAccess(ctx context.Context, repositoryID, userID string) (domain.BreakGlassGrant, error) {
+	organizationID, err := s.breakGlassOrganization(ctx, repositoryID, userID)
+	if err != nil || organizationID == "" {
+		return domain.BreakGlassGrant{}, err
 	}
 	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
-		return false, err
+		return domain.BreakGlassGrant{}, err
 	}
 	now := time.Now().UTC()
-	used := organizationAudit(ctx, ns.OrganizationID, userID, "organization.break_glass.used", "repository", repositoryID, "", now)
-	_, err = s.organization.UseActiveBreakGlassGrant(ctx, ns.OrganizationID, repositoryID, userID, now, used)
+	used := organizationAudit(ctx, organizationID, userID, "organization.break_glass.used", "repository", repositoryID, "", now)
+	grant, err := s.organization.UseActiveBreakGlassGrant(ctx, organizationID, repositoryID, userID, now, used)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			return false, nil
+			return domain.BreakGlassGrant{}, nil
 		}
-		return false, err
+		return domain.BreakGlassGrant{}, err
 	}
-	return true, nil
+	return grant, nil
 }
 
 func (s *IdentityService) ListOrganizationAudit(ctx context.Context, actorID, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error) {

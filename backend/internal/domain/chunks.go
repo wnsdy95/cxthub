@@ -88,13 +88,17 @@ func buildDocChunkPlan(format string, env json.RawMessage, raw [][]byte) DocChun
 	return p
 }
 
-// ParseDocChunkManifest parses data if it's a chunk manifest (otherwise ok=false — legacy fallback).
-func ParseDocChunkManifest(data []byte) (DocChunkManifest, bool) {
-	limit := len(data)
+func docChunkManifestCandidate(raw []byte) bool {
+	limit := len(raw)
 	if limit > 64 {
 		limit = 64
 	}
-	if !bytes.Contains(data[:limit], []byte("cxt-doc-chunks-v")) {
+	return bytes.Contains(raw[:limit], []byte("cxt-doc-chunks-v"))
+}
+
+// ParseDocChunkManifest parses data if it's a chunk manifest (otherwise ok=false — legacy fallback).
+func ParseDocChunkManifest(data []byte) (DocChunkManifest, bool) {
+	if !docChunkManifestCandidate(data) {
 		return DocChunkManifest{}, false
 	}
 	var man DocChunkManifest

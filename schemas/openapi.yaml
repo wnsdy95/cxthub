@@ -434,6 +434,50 @@ components:
         evidence: { type: string, pattern: '^[0-9]+$', description: Git evidence query generation; does not invalidate graph metadata }
         graph: { type: string, pattern: '^[0-9]+$' }
         pending: { type: string, pattern: '^[0-9]+$' }
+    RepositoryChangeState:
+      allOf:
+        - $ref: '#/components/schemas/RepositoryRevision'
+        - type: object
+          properties:
+            pending_projection: { $ref: '#/components/schemas/PendingProjectionStatus' }
+            graph_projection: { $ref: '#/components/schemas/GraphProjectionStatus' }
+    GraphProjectionStatus:
+      type: object
+      required: [state, source_epoch, rules, complete, current]
+      description: Metadata-only graph readiness; not payload validation. Optional and independently enabled from the worker. A complete lagged same-incarnation generation remains readable while catching up. Generation identifies the applied bundle and stays stable when only the source head moves. Missing output, an incarnation reset or incompatible rules makes complete false. Omission or disabled preserves legacy reads. Current is true only at the exact source head.
+      properties:
+        state: { type: string, enum: [disabled, needs_attention, catching_up, ready] }
+        source_epoch: { $ref: '#/components/schemas/GraphSourceEpoch' }
+        applied_epoch: { $ref: '#/components/schemas/GraphSourceEpoch' }
+        rules: { type: integer, const: 2 }
+        generation: { $ref: '#/components/schemas/ContentHash' }
+        complete: { type: boolean }
+        current: { type: boolean }
+    GraphSourceEpoch:
+      type: string
+      maxLength: 56
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$'
+      description: Repository source incarnation UUID and nonnegative signed-64-bit sequence, at most 9223372036854775807. Preserves integer precision in browser clients.
+    GraphReadGeneration:
+      type: object
+      required: [generation, source_epoch, applied_epoch, rules, complete, current]
+      description: Complete immutable applied graph bundle. Metadata and graph carry identical generation fields and come from the same applied epoch. Source and applied epochs must share an incarnation; applied cannot exceed source. Current means exact source equality, not merely complete. A later source notice does not invalidate a complete earlier same-incarnation response. Missing or corrupt durable payloads never fall back to a direct rebuild. Authorization is always checked against current server rights.
+      properties:
+        generation: { $ref: '#/components/schemas/ContentHash' }
+        source_epoch: { $ref: '#/components/schemas/GraphSourceEpoch' }
+        applied_epoch: { $ref: '#/components/schemas/GraphSourceEpoch' }
+        rules: { type: integer, const: 2 }
+        complete: { type: boolean, const: true }
+        current: { type: boolean }
+    PendingProjectionStatus:
+      type: object
+      required: [state, source_epoch, rules]
+      description: Metadata-only status for explicitly enabled On Hold readers. No payload is read. Generation is present only when the complete applied generation matches the current source. Omitted from notices when the process has not enabled this repository.
+      properties:
+        state: { type: string, enum: [disabled, catching_up, ready, needs_attention] }
+        source_epoch: { type: string, maxLength: 56, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$', description: Repository source incarnation and signed-64-bit sequence, encoded without JavaScript precision loss. }
+        rules: { type: integer, const: 1 }
+        generation: { $ref: '#/components/schemas/ContentHash' }
     ContextMergeEvidence:
       type: object
       required: [event_id, completed, placement_intact, source_available, lineage]
@@ -519,6 +563,7 @@ components:
       type: object
       required: ["branch_snapshots", "continuations", "operations", "encoding", "dictionary", "version", "revision", "primary_branch", "snapshot_ids", "graph_ids", "committed_ids", "historical_ids", "shared_ids", "pushed_ids", "unpushed_ids", "uncommitted_ids", "tagged_ids", "archived_only_ids", "ahead_ids", "ahead_tips", "markers", "branch_heads", "ref_scopes", "snapshot_scopes", "scope_labels", "hold", "orphan_sessions", "hold_counts", "positions", "previous"]
       properties:
+        read_generation: { $ref: '#/components/schemas/GraphReadGeneration' }
         encoding: { type: string, enum: [indexed-v1, indexed-v2] }
         dictionary: { type: array, items: { type: string } }
         branch_snapshots: { type: object, additionalProperties: { type: array, items: { type: integer, minimum: 0 } } }
@@ -706,11 +751,12 @@ components:
         lifecycle_birth: {"type": "string"}
     PendingView:
       type: object
-      description: Raw capture patches at a matching graph revision. Snapshot branches is omitted and must not replace membership from RepositoryView. Other capture metadata may update; unknown new ancestors require a complete view refresh.
+      description: Raw capture patches at a matching graph revision. Snapshot branches is omitted and must not replace membership from RepositoryView. Durable responses carry matching top-level and graph read_generation; never patch a durable graph with legacy or differently generated pending metadata. Other capture metadata may update; unknown new ancestors require a complete view refresh.
       required: [revision, pending, snapshots, graph, archived_sessions]
       properties:
         archived_sessions: { type: array, items: { $ref: '#/components/schemas/SessionArchiveView' } }
         graph: { $ref: '#/components/schemas/GraphState' }
+        read_generation: { $ref: '#/components/schemas/GraphReadGeneration' }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
@@ -720,6 +766,17 @@ components:
       description: Lightweight On Hold classification from a coherent metadata revision. Uses the same publication/reachability rules as the full graph but contains no branch-integration graph, document bodies or code-evidence projection. Must never replace or patch RepositoryView.graph.
       required: [projection, revision, default_branch, refs, pending, snapshots, archived_sessions, hold, orphan_sessions, hold_counts]
       properties:
+        read_generation:
+          type: object
+          additionalProperties: false
+          required: [generation, source_epoch, applied_epoch, rules, complete]
+          description: Present for a complete durable On Hold projection. Source and applied epochs must match for this current-only endpoint; each epoch is UUID:decimal-sequence, never a JavaScript integer.
+          properties:
+            generation: { $ref: '#/components/schemas/ContentHash' }
+            source_epoch: { type: string }
+            applied_epoch: { type: string }
+            rules: { type: integer, enum: [1] }
+            complete: { type: boolean, enum: [true] }
         projection: { type: string, enum: [on-hold-v1] }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         default_branch: { type: string }
@@ -923,6 +980,78 @@ components:
         items: { type: array, items: { $ref: '#/components/schemas/EffectiveMemoryItem' } }
         total: { type: integer }
         next_cursor: { type: string }
+    MemoryReadSourceGeneration:
+      type: object
+      required: [version, graph, epoch, sequence]
+      additionalProperties: false
+      description: Independent graph and memory source incarnations and sequences. Sequences are decimal strings, not JSON numbers or a combined scalar clock.
+      properties:
+        version: { type: integer, const: 1 }
+        graph:
+          type: object
+          required: [version, scope, repo_id, epoch, sequence]
+          additionalProperties: false
+          properties:
+            version: { type: integer, const: 1 }
+            scope: { type: string, const: repository-graph-v1 }
+            repo_id: { $ref: '#/components/schemas/ContentHash' }
+            epoch: { type: string, format: uuid }
+            sequence: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
+        epoch: { type: string, format: uuid }
+        sequence: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
+    MemoryReadStatus:
+      type: object
+      required: [schema_version, algorithm_version, generation, minimum_epoch, source_epoch, applied_epoch, complete, freshness]
+      additionalProperties: false
+      description: A complete prepared generation meets the pinned minimum for both graph and memory within the same incarnations. Current means applied equals observed source; catching_up means a complete generation satisfies the minimum but trails the observed source. No partial generation is served.
+      properties:
+        schema_version: { type: integer, const: 1 }
+        algorithm_version: { type: integer, const: 1 }
+        generation: { $ref: '#/components/schemas/ContentHash' }
+        minimum_epoch: { $ref: '#/components/schemas/MemoryReadSourceGeneration' }
+        source_epoch: { $ref: '#/components/schemas/MemoryReadSourceGeneration' }
+        applied_epoch: { $ref: '#/components/schemas/MemoryReadSourceGeneration' }
+        complete: { type: boolean, const: true }
+        freshness: { type: string, enum: [current, catching_up] }
+    MemoryReadPage:
+      type: object
+      required: [status, page]
+      additionalProperties: false
+      properties:
+        cursor:
+          type: string
+          maxLength: 4096
+          description: Opaque prepared cursor that replays this page with its pinned minimum and generation. Resubmit unchanged with the same selection, content and limit; it is not the next-page cursor.
+        status: { $ref: '#/components/schemas/MemoryReadStatus' }
+        page:
+          allOf:
+            - $ref: '#/components/schemas/EffectiveMemoryPage'
+            - type: object
+              properties:
+                next_cursor:
+                  type: string
+                  maxLength: 4096
+                  description: Opaque full prepared continuation cursor carrying the pinned minimum and generation. Resubmit unchanged to this read endpoint with the same selection, content and limit. Empty on the final page; never pass to the legacy effective-memory endpoint.
+    PreparedMemoryErrorResponse:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          additionalProperties: false
+          properties:
+            code: { type: string, description: Classify by code, not by message or HTTP status alone. }
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: false
+              properties:
+                retry_cursor:
+                  type: string
+                  maxLength: 4096
+                  description: Only returned for memory_read_not_ready with a typed pending read. Preserves the initial request minimum across retries and may not bind a generation yet. Resubmit unchanged in the cursor query parameter with the original selection, content and limit. Never returned for authorization or integrity failures.
     CodeSelection:
       type: object
       required: [code_commit, source_commit, paths]
@@ -1426,7 +1555,12 @@ components:
       allOf:
         - $ref: "#/components/schemas/DocEventPage"
         - type: object
+          required: [doc_identity]
           properties:
+            doc_identity:
+              allOf:
+                - $ref: '#/components/schemas/DocumentIdentity'
+              description: "Actual source identity, independent of this compatibility transport. Explicit empty string means legacy canonical CIR. A root may also use this old view; it must not be sent to legacy find. Older responses without this field remain readable but cannot affirm legacy find support."
             events:
               type: array
               items:
@@ -1437,6 +1571,379 @@ components:
                   event_bytes: { type: integer, minimum: 1 }
                   deferred: { type: boolean, description: "Only presentation metadata is present; load the body explicitly on expansion." }
                   kind: { type: string }
+
+    DocFindPreparedProgress:
+      type: object
+      additionalProperties: false
+      required: [page, generation]
+      description: "Version 3 displayed-event progress only. page is the next prepared page within the current event; generation binds its prepared descriptor, not the archive's visible generation. A nonzero page requires a descriptor hash. page=0 with generation='' is the small-event path, whose byte position is at most 512KiB. Terminal event_index=to resets page=0, generation='' and byte_offset=0."
+      allOf:
+        - if: { properties: { page: { minimum: 1 } } }
+          then: { properties: { generation: { $ref: '#/components/schemas/ContentHash' } } }
+      properties:
+        page: { type: integer, minimum: 0, maximum: 4194303 }
+        generation:
+          oneOf:
+            - { $ref: '#/components/schemas/ContentHash' }
+            - { type: string, const: '' }
+    DocFindMatch:
+      type: object
+      additionalProperties: false
+      required: [event_index, field, byte_offset, byte_length, raw, preview, preview_byte_offset, reveal_cursor]
+      description: "A source position plus a bounded preview containing the match and at most 32 Unicode runes on either side; not a full body. Decoded fields use deterministic DocFindTexts field ordinals; raw=true uses canonical event JSON byte coordinates for oversized-event fragments. Byte coordinates are UTF-8, not JavaScript UTF-16 offsets. RootV1 reveal_cursor is a same-generation all-view units replay at the matched archive ordinal, limit=1. Legacy reveal_cursor is empty: read the original immutable hash through view=raw, offset=event_index, limit=1, with fresh authorization. Clients must not invent visible selectors or duplicate field-order rules."
+      properties:
+        prepared_page: { type: integer, minimum: 0, maximum: 4194303, description: 'Required only for prepared display matches, including page zero; forbidden in source v1 and preview display v2.' }
+        event_index: { type: integer, minimum: 0 }
+        field: { type: integer, minimum: 0, maximum: 131072 }
+        byte_offset: { type: integer, minimum: 0 }
+        byte_length: { type: integer, minimum: 1 }
+        raw: { type: boolean }
+        preview: { type: string, minLength: 1, maxLength: 320 }
+        preview_byte_offset: { type: integer, minimum: 0 }
+        source_range:
+          type: object
+          additionalProperties: false
+          required: [from, to]
+          description: "Optional in source v1; required in both display profiles, even without Accept. Half-open UTF-8 canonical event JSON byte cover for this match, including JSON escapes. from < to <= event bytes. A display cover can span syntax, quotes or multiple reordered fields. Raw source matches use exactly byte_offset..byte_offset+byte_length. The server maps decoded/display content; clients must not reconstruct field order or offsets. Use find-fragments to reveal the original evidence."
+          properties:
+            from: { type: integer, minimum: 0, maximum: 536870912 }
+            to: { type: integer, minimum: 1, maximum: 536870912 }
+        reveal_cursor:
+          oneOf:
+            - { $ref: '#/components/schemas/DocVisibleSelectorToken' }
+            - { type: string, const: '' }
+    DocFindFragmentPage:
+      type: object
+      additionalProperties: false
+      required: [projection, hash, generation, event_index, byte_offset, total_bytes, json_fragment, next, previous]
+      description: "One verified canonical event JSON fragment, never a whole document. RootV1 generation is bound to the source and base; explicit legacy mode retains the original hash and an empty generation. next is the first byte after the fragment or -1 at EOF; previous is a valid UTF-8 boundary before byte_offset, or -1 only at offset zero."
+      properties:
+        projection: { type: string, enum: ['find-fragment-v1', 'find-legacy-fragment-v1'] }
+        hash: { $ref: '#/components/schemas/ContentHash' }
+        generation: { type: string }
+        event_index: { type: integer, minimum: 0 }
+        byte_offset: { type: integer, minimum: 0 }
+        total_bytes: { type: integer, minimum: 1 }
+        json_fragment: { type: string, minLength: 1, maxLength: 65536 }
+        next: { type: integer, minimum: -1 }
+        previous: { type: integer, minimum: -1 }
+    DocFindSelector:
+      type: object
+      additionalProperties: false
+      required: [version, selection, query_hash, from, to, index, field, byte]
+      allOf:
+        - if: { properties: { version: { const: 2 } } }
+          then: { required: [representation], properties: { representation: { const: 'display-v1' }, field: { const: 0 }, byte: { maximum: 524288 } } }
+        - if: { properties: { version: { const: 3 } } }
+          then:
+            required: [representation, prepared]
+            properties:
+              representation: { const: 'display-prepared-v1' }
+              field: { const: 0 }
+            allOf:
+              - if: { properties: { prepared: { properties: { generation: { const: '' } } } } }
+                then: { properties: { byte: { maximum: 524288 } } }
+          else: { not: { required: [prepared] } }
+        - if: { properties: { version: { const: 1 } } }
+          then: { not: { required: [representation] } }
+      description: "Canonical resumable scan state. The nested units selection binds current source/base versions and visible rules. from >= selection.start; from <= index <= to <= selection.total. A terminal index=to requires field=byte=0 and, in version 3, prepared.page=0 and prepared.generation=''. Unsigned selectors are not authorization or content proofs."
+      properties:
+        version: { type: integer, enum: [1, 2, 3] }
+        representation: { type: string, enum: ['display-v1', 'display-prepared-v1'], description: 'Version 2 requires display-v1; version 3 requires display-prepared-v1; absent for version 1. Continuations explicitly send the same representation.' }
+        prepared: { $ref: '#/components/schemas/DocFindPreparedProgress' }
+        selection:
+          allOf:
+            - { $ref: '#/components/schemas/DocVisibleSelector' }
+            - { type: object, properties: { purpose: { const: 'units' } } }
+        query_hash: { $ref: '#/components/schemas/ContentHash' }
+        from: { type: integer, minimum: 0 }
+        to: { type: integer, minimum: 0 }
+        index: { type: integer, minimum: 0 }
+        field: { type: integer, minimum: 0, maximum: 131072 }
+        byte: { type: integer, minimum: 0, maximum: 536870912 }
+    DocLegacyFindSelector:
+      type: object
+      additionalProperties: false
+      required: [version, repo, hash, base, total, inherited, from, to, event_index, field, byte_offset, query_hash]
+      allOf:
+        - if: { properties: { version: { const: 2 } } }
+          then: { required: [representation], properties: { representation: { const: 'display-v1' }, field: { const: 0 }, byte_offset: { maximum: 524288 } } }
+        - if: { properties: { version: { const: 3 } } }
+          then:
+            required: [representation, prepared]
+            properties:
+              representation: { const: 'display-prepared-v1' }
+              field: { const: 0 }
+            allOf:
+              - if: { properties: { prepared: { properties: { generation: { const: '' } } } } }
+                then: { properties: { byte_offset: { maximum: 524288 } } }
+          else: { not: { required: [prepared] } }
+        - if: { properties: { version: { const: 1 } } }
+          then: { not: { required: [representation] } }
+      description: "Explicit immutable legacy identity, not a visible generation or authorization proof. Canonical unpadded base64url, at most 2048 decoded bytes. The server checks actual ownership, archive size and base prefix on every call. A terminal event_index=to requires field=byte_offset=0 and, in version 3, prepared.page=0 and prepared.generation=''."
+      properties:
+        version: { type: integer, enum: [1, 2, 3] }
+        representation: { type: string, enum: ['display-v1', 'display-prepared-v1'], description: 'Version 2 requires display-v1; version 3 requires display-prepared-v1; absent for version 1.' }
+        prepared: { $ref: '#/components/schemas/DocFindPreparedProgress' }
+        repo: { $ref: '#/components/schemas/ContentHash' }
+        hash: { $ref: '#/components/schemas/ContentHash' }
+        base: { type: string }
+        total: { type: integer, minimum: 0 }
+        inherited: { type: integer, minimum: 0 }
+        from: { type: integer, minimum: 0 }
+        to: { type: integer, minimum: 0 }
+        event_index: { type: integer, minimum: 0 }
+        field: { type: integer, minimum: 0, maximum: 131072 }
+        byte_offset: { type: integer, minimum: 0, maximum: 536870912 }
+        query_hash: { $ref: '#/components/schemas/ContentHash' }
+    DocFindPage:
+      type: object
+      additionalProperties: false
+      required: [projection, hash, generation, from, to, event_index, field, byte_offset, matches, next_cursor]
+      description: "A scan over one selected document range, with at most 20 matches. A page can have no matches and a non-null next_cursor: search is not complete until that cursor is null. Source v1 and preview display v2 scan at most 128 completed events and 256KiB canonical event bytes per call; selected verified storage chunks may be larger. Prepared display v3 instead searches bounded prepared-page windows, with whole-event UTF-8 display positions up to 512MiB and a separate descriptor generation in prepared. Legacy source preparation can inspect complete metadata/events or a monolithic archive; its total cost is not this matcher bound. No whole-document prepass, constant total search-time or complete rendered-Markdown equivalence claim follows."
+      allOf:
+        - if: { properties: { projection: { enum: ['find-v1', 'find-display-v1', 'find-display-prepared-v1'] } } }
+          then:
+            properties:
+              generation: { $ref: '#/components/schemas/ContentHash' }
+              matches: { items: { properties: { reveal_cursor: { $ref: '#/components/schemas/DocVisibleSelectorToken' } } } }
+          else:
+            properties:
+              generation: { const: '' }
+              matches: { items: { properties: { reveal_cursor: { const: '' } } } }
+              next_cursor: { maxLength: 2731 }
+        - if: { properties: { projection: { enum: ['find-display-v1', 'find-legacy-display-v1'] } } }
+          then:
+            properties:
+              field: { const: 0 }
+              byte_offset: { maximum: 524288 }
+              matches:
+                items:
+                  required: [source_range]
+                  properties:
+                    field: { const: 0 }
+                    raw: { const: false }
+                    byte_offset: { maximum: 524288 }
+        - if: { properties: { projection: { enum: ['find-display-prepared-v1', 'find-legacy-display-prepared-v1'] } } }
+          then:
+            required: [prepared]
+            properties:
+              field: { const: 0 }
+              matches:
+                items:
+                  required: [source_range, prepared_page]
+                  properties:
+                    field: { const: 0 }
+                    raw: { const: false }
+                    byte_offset: { maximum: 536870912 }
+                    byte_length: { maximum: 536870912 }
+                    preview_byte_offset: { maximum: 536870912 }
+            allOf:
+              - if: { properties: { prepared: { properties: { generation: { const: '' } } } } }
+                then: { properties: { byte_offset: { maximum: 524288 } } }
+              - if: { properties: { next_cursor: { type: 'null' } } }
+                then:
+                  properties:
+                    byte_offset: { const: 0 }
+                    prepared: { properties: { page: { const: 0 }, generation: { const: '' } } }
+          else:
+            not: { required: [prepared] }
+            properties:
+              matches: { items: { not: { required: [prepared_page] } } }
+      properties:
+        projection: { type: string, enum: ['find-v1', 'find-legacy-v1', 'find-display-v1', 'find-legacy-display-v1', 'find-display-prepared-v1', 'find-legacy-display-prepared-v1'] }
+        prepared: { $ref: '#/components/schemas/DocFindPreparedProgress' }
+        hash: { $ref: '#/components/schemas/ContentHash' }
+        generation:
+          oneOf:
+            - { $ref: '#/components/schemas/ContentHash' }
+            - { type: string, const: '' }
+        from: { type: integer, minimum: 0 }
+        to: { type: integer, minimum: 0 }
+        event_index: { type: integer, minimum: 0 }
+        field: { type: integer, minimum: 0, maximum: 131072 }
+        byte_offset: { type: integer, minimum: 0, maximum: 536870912 }
+        matches: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/DocFindMatch' } }
+        next_cursor:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 5462
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: "Canonical unpadded base64url DocFindSelector (4096 decoded bytes) or DocLegacyFindSelector (2048). Root continuations send q and cursor; legacy also requires legacy=1. Display continuations additionally require the same explicit representation=display-v1 or representation=display-prepared-v1; modes cannot be mixed."
+
+    DocVisibleEvent:
+      type: object
+      description: |
+        Flattened CIR event or deferred presentation metadata, with absolute archive
+        ordinal and canonical byte length. seed_summary and empty_reasoning are
+        always present, including false. Deferred events omit body fields; use
+        event-fragments to load the original canonical event without truncation.
+        Other fields follow the CIR event schema in schemas/cir.schema.json.
+      required: [kind, seq, event_index, event_bytes, seed_summary, empty_reasoning]
+      additionalProperties: true
+      properties:
+        kind: { type: string }
+        seq: { type: integer }
+        event_index: { type: integer, minimum: 0 }
+        event_bytes: { type: integer, minimum: 1 }
+        deferred: { type: boolean, description: "True when only presentation metadata is returned; otherwise absent." }
+        seed_summary: { type: boolean }
+        empty_reasoning: { type: boolean }
+
+    DocVisibleSelectorToken:
+      type: string
+      minLength: 1
+      maxLength: 2731
+      pattern: '^[A-Za-z0-9_-]+$'
+      description: |
+        Canonical unpadded base64url encoding of the canonical JSON DocVisibleSelector
+        (at most 2048 decoded bytes). Selectors are unsigned and are not capabilities,
+        credentials, or integrity proofs. Never treat possession as authorization.
+        The server validates canonical encoding, all fields, purpose, route repository
+        and document, then checks current access and live generation/source bindings.
+        Unknown or duplicate JSON fields and noncanonical encodings are rejected.
+        Pass units selectors only as cursor and fold selectors only as expand.
+
+    DocVisibleSelector:
+      type: object
+      additionalProperties: false
+      required: [version, purpose, repo, hash, base, generation, view, start, total, inherited, unit, next, limit]
+      description: |
+        Decoded selector payload, not a request body. All fields are required even
+        when zero or empty. For nonterminal selections, start, unit and next are
+        less than total and next is at least start. The exact terminal units tuple
+        purpose=units, start=next=total and unit=0 is also valid, including total=0.
+        No terminal or zero-event fold selector is valid. inherited is at most total;
+        empty base requires inherited=0. These cross-field relations are checked by
+        the canonical selector decoder and application.
+        The application independently checks current unit/fold boundaries, selected
+        view, inherited prefix and generation; a syntactically valid selector does
+        not authorize an arbitrary range. Clients should return selectors unchanged.
+      properties:
+        version: { type: integer, const: 1 }
+        purpose: { type: string, enum: [units, fold] }
+        repo: { $ref: "#/components/schemas/ContentHash" }
+        hash: { $ref: "#/components/schemas/ContentHash" }
+        base:
+          oneOf:
+            - { $ref: "#/components/schemas/ContentHash" }
+            - { type: string, const: "" }
+        generation: { $ref: "#/components/schemas/ContentHash" }
+        view: { type: string, enum: [all, chat, prompts] }
+        start: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0, maximum: 536870912 }
+        inherited: { type: integer, minimum: 0 }
+        unit: { type: integer, minimum: 0, description: "Absolute unit ordinal, less than total for nonterminal selections; exactly zero for terminal units replay." }
+        next: { type: integer, minimum: 0, description: "Next absolute archive event ordinal; equals total only for the exact terminal units tuple." }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+      allOf:
+        - if:
+            properties:
+              total: { const: 0 }
+          then:
+            properties:
+              purpose: { const: units }
+              start: { const: 0 }
+              unit: { const: 0 }
+              next: { const: 0 }
+              inherited: { const: 0 }
+
+    DocVisibleFold:
+      type: object
+      additionalProperties: false
+      required: [from, to, rows, cursor]
+      properties:
+        from: { type: integer, minimum: 0, description: "Inclusive absolute archive event ordinal." }
+        to: { type: integer, minimum: 1, description: "Exclusive absolute archive event ordinal, greater than from." }
+        rows: { type: integer, minimum: 0, description: "Rendered row count inside this fold; not necessarily to minus from." }
+        cursor:
+          $ref: "#/components/schemas/DocVisibleSelectorToken"
+          description: "Fold-purpose selector to send as expand, never as cursor."
+
+    DocVisiblePageUnit:
+      type: object
+      additionalProperties: false
+      required: [from, to, turn_index, event, fold]
+      description: |
+        One contiguous half-open archive interval. The optional visible event and
+        optional folded interval partition this unit. Either may be null, including
+        an all-view unit with no rendered event. No hidden body is loaded just to
+        enumerate the fold. turn_index remains an absolute event ordinal.
+      properties:
+        from: { type: integer, minimum: 0 }
+        to: { type: integer, minimum: 1 }
+        turn_index: { type: integer, minimum: -1, description: "User-turn start ordinal, or -1 before any user turn." }
+        event:
+          oneOf:
+            - { $ref: "#/components/schemas/DocVisibleEvent" }
+            - { type: "null" }
+        fold:
+          oneOf:
+            - { $ref: "#/components/schemas/DocVisibleFold" }
+            - { type: "null" }
+
+    DocVisibleFoldRange:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from: { type: integer, minimum: 0, description: "Inclusive ordinal of the whole expanded fold." }
+        to: { type: integer, minimum: 1, description: "Exclusive ordinal of the whole expanded fold." }
+
+    DocVisiblePage:
+      type: object
+      additionalProperties: false
+      required: [projection, kind, hash, base, generation, rules, view, envelope, total, inherited, start, from, to, units, fold, events, next_cursor, replay_cursor]
+      description: |
+        Explicit visible-v1 unit or fold page, never a legacy DocViewPage. All
+        offsets/ranges refer to original archive events, not rendered row indexes.
+        Empty collections are arrays and absent fold/next_cursor values are null.
+        Page bounds [from,to) advance through the original archive; start is the
+        original selection start, retained across continuations. A unit page carries
+        units, an empty events array and null fold. A fold page carries events, an
+        empty units array and the complete fold range. Limits and payload budgets
+        may shorten pages; next_cursor is null only when that selection is exhausted.
+      properties:
+        projection: { type: string, const: visible-v1 }
+        kind: { type: string, enum: [units, fold] }
+        hash: { $ref: "#/components/schemas/ContentHash" }
+        base:
+          oneOf:
+            - { $ref: "#/components/schemas/ContentHash" }
+            - { type: string, const: "" }
+        generation: { $ref: "#/components/schemas/ContentHash", description: "Binding of the visible generation and current source/base versions; not a document content hash proof." }
+        rules: { type: integer, const: 1 }
+        view: { type: string, enum: [all, chat, prompts] }
+        envelope: { type: object, description: "Original CIR envelope." }
+        total: { type: integer, minimum: 0, description: "Total archive events, not units or rendered rows." }
+        inherited: { type: integer, minimum: 0, description: "Exact shared event prefix with base." }
+        start: { type: integer, minimum: 0, description: "Resolved initial offset; -1 requests resolve to inherited." }
+        from: { type: integer, minimum: 0 }
+        to: { type: integer, minimum: 0 }
+        units: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/DocVisiblePageUnit" } }
+        fold:
+          oneOf:
+            - { $ref: "#/components/schemas/DocVisibleFoldRange" }
+            - { type: "null" }
+        events: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/DocVisibleEvent" } }
+        next_cursor:
+          oneOf:
+            - { $ref: "#/components/schemas/DocVisibleSelectorToken" }
+            - { type: "null" }
+          description: "For kind=units send as cursor; for kind=fold send as expand. Null means exhausted; no legacy next=-1 field."
+        replay_cursor:
+          allOf:
+            - { $ref: "#/components/schemas/DocVisibleSelectorToken" }
+          description: "Replays this exact page in the same generation, including initial, empty and fully inherited unit pages. For kind=units send as cursor; for kind=fold send as expand. Authorization and current source checks run again; this is not the next-page cursor."
+      oneOf:
+        - properties:
+            kind: { const: units }
+            fold: { type: "null" }
+            events: { maxItems: 0 }
+        - properties:
+            kind: { const: fold }
+            fold: { $ref: "#/components/schemas/DocVisibleFoldRange" }
+            units: { maxItems: 0 }
 
     DocViewFragment:
       type: object
@@ -2084,6 +2591,8 @@ components:
                 - ref_conflict
                 - git_origin_mismatch
                 - conflict
+                - doc_visible_projection_unsupported
+                - doc_visible_generation_stale
                 - validation
                 - csrf_rejected
                 - integrity_violation
@@ -3153,7 +3662,7 @@ paths:
       operationId: enableContextProtocol
       parameters:
         - $ref: '#/components/parameters/repoID'
-      - $ref: "#/components/parameters/DocIdentities"
+        - $ref: "#/components/parameters/DocIdentities"
       requestBody:
         required: true
         content:
@@ -3397,14 +3906,14 @@ paths:
     get:
       operationId: getRepositoryRevision
       summary: Read durable graph and pending change counters
-      description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
+      description: Requires viewer access. Revision counters survive server restarts. Enabled On Hold readers report pending_projection; independently enabled graph readers report graph_projection, using only metadata in the same read snapshot. Source-only mutations and worker completion can change these fields without changing the counters. Graph generation tracks the applied complete bundle, not each source-head change. Absence preserves the legacy response. This endpoint never loads projection rows, graphs or conversation bodies.
       tags: [snapshots]
       responses:
         "200":
           description: Committed repository state
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/RepositoryRevision' }
+              schema: { $ref: '#/components/schemas/RepositoryChangeState' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
@@ -3424,7 +3933,7 @@ paths:
     get:
       operationId: getPendingView
       summary: Read pending pointers and their target snapshot metadata
-      description: Requires viewer access. By default returns the full PendingView contract. projection=on-hold-v1 computes only pending/held-session classification from coherent repository metadata, without building branch integrations or loading conversation bodies. Its explicitly partial DTO has no graph field and uses a separate client cache. Publication rules are shared with the full graph, not reimplemented in the browser.
+      description: Requires viewer access. By default returns the full PendingView contract. projection=on-hold-v1 returns pending/held-session classification without building branch integrations or loading conversation bodies. Explicitly enabled repositories use a durable read generation; missing or lagging generations return pending_projection_pending rather than stale results or synchronous rebuilding. Other repositories retain the coherent metadata projection. Its explicitly partial DTO has no graph field and uses a separate client cache. Publication rules are shared with the full graph, not reimplemented in the browser.
       tags: [snapshots]
       responses:
         "200":
@@ -3439,7 +3948,7 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
         "422": { description: Invalid projection or query. }
-        "503": { description: Shared resource queue saturated; retry after the indicated interval. }
+        "503": { description: "pending_projection_pending means the enabled durable On Hold projection is catching up (Retry-After: 1). The full PendingView can return graph_projection_pending when no complete graph generation exists (Retry-After: 1). pending_projection_failed and graph_projection_failed require attention and carry no automatic retry advice. resource_overloaded means the shared resource queue is saturated. None of these responses is a complete generation." }
 
   /repos/{repoID}/changes:
     parameters:
@@ -3453,7 +3962,7 @@ paths:
           description: "EventSource equivalent of the compatibility header; it never carries authentication. Repeated/unknown values or simultaneous header declaration are rejected. Only this stream endpoint accepts the query declaration."
           schema: { type: string, enum: [cxt-manifest-sha256-v1] }
       summary: Observe durable repository revisions over server-sent events
-      description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
+      description: Requires viewer access. Revision events carry RepositoryChangeState, including independent optional pending_projection and graph_projection metadata. One shared metadata read per watched repository and identity class detects counter, source-generation and readiness changes. Reconnect sends the latest state and rechecks authorization; the event ID is an opaque content hash, not an ordered cursor. Clients fetch complete graph bundles on newly published complete generations, not every pending-only or source-head change. Same-incarnation complete older bundles may remain visible with an explicit lag notice. No transaction is held for the stream lifetime.
       tags: [snapshots]
       responses:
         "200":
@@ -3517,6 +4026,56 @@ paths:
           description: Error code memory_cursor_stale identifies a continuation cursor whose bound state no longer matches the query. Restarting without the cursor requires reauthorizing and revalidating the original selection and observed content; the code does not prove revision-only drift. Other conflicts remain terminal and must not be classified by message text.
         '422': { description: Invalid explicit selection, cursor or result bounds. memory_projection_limit identifies a bounded memory object, retained contribution, traversal or output limit; original memory is retained and no truncated result is returned. }
         '503': { description: Query unavailable }
+
+  /repos/{repoID}/effective-memory/read:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: queryPreparedMemory
+      summary: Read an explicitly prepared memory generation
+      description: Viewer access with shared memory-read admission and fresh authorization. Opt-in read-only contract; no preparation, repair, provider I/O, writes or legacy fallback. The initial request observes and pins a source minimum. A complete prepared generation must satisfy that minimum; it may trail a newer observed source with freshness catching_up. Retry a pending read using error.details.retry_cursor to preserve its minimum even while the source advances. Replay cursor and page.next_cursor preserve the same minimum and prepared generation and remain opaque. Malformed query encoding, including unrelated parameters, duplicate declared query parameters, and a present but empty cursor are rejected before read admission. Omit cursor for an initial request. Existing effective-memory and positions endpoints are unchanged.
+      parameters:
+        - { name: branch, in: query, schema: { type: string }, description: Include verified PR contributions at the selected code. Mutually exclusive with memory_hash. }
+        - { name: content, in: query, schema: { type: string, enum: [all, claims, prompt], default: all }, description: Same content selection as effective-memory; bound by prepared cursors. }
+        - { name: snapshot_id, in: query, required: true, schema: { $ref: '#/components/schemas/ContentHash' } }
+        - { name: code_commit, in: query, required: true, schema: { type: string }, description: Explicit full Git commit SHA. }
+        - { name: memory_hash, in: query, schema: { $ref: '#/components/schemas/ContentHash' } }
+        - { name: cursor, in: query, schema: { type: string, minLength: 1, maxLength: 4096 }, description: Opaque retry, replay or continuation cursor from this endpoint. Must be nonempty when present; omit for an initial request. }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: Complete prepared generation and one bounded page of assessed memory
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryReadPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: catalog_reset_required indicates a source incarnation reset; memory_cursor_stale indicates a prepared cursor no longer matches its bound state. Restart only after reauthorizing and revalidating the original selection. No retry cursor or memory payload is returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreparedMemoryErrorResponse' }
+        '410':
+          description: memory_capture_expired indicates the prepared capture is outside retention. No memory payload is returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreparedMemoryErrorResponse' }
+        '422':
+          description: Invalid explicit selection, content, cursor or result bounds; integrity_violation and memory_projection_limit are terminal and expose no partial payload or retry cursor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreparedMemoryErrorResponse' }
+        '503':
+          description: memory_read_not_ready is retryable after 2 seconds; retain error.details.retry_cursor when supplied and resubmit it to preserve the initial source minimum. memory_read_needs_attention is non-retryable and has no Retry-After or retry cursor. prepared_memory_unavailable means disabled or unsupported prepared reads, with no fallback. Shared admission may return resource_overloaded with Retry-After 1. No memory payload is returned.
+          headers:
+            Retry-After:
+              description: Present for memory_read_not_ready (2 seconds) or resource_overloaded (1 second), not needs-attention or unavailable errors.
+              schema: { type: integer, enum: [1, 2] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreparedMemoryErrorResponse' }
 
   /repos/{repoID}/code-applicability:
     parameters:
@@ -3754,7 +4313,7 @@ paths:
     get:
       operationId: getGraphState
       summary: Read server-classified graph state at an optional browsing position
-      description: Viewer access required. The position is a recorded worktree position event ID, never a ref mutation. Response facts must be used with a matching repository revision.
+      description: Viewer access required and rechecked after resource admission for durable reads. The position is a recorded worktree position event ID, never a ref mutation. Response facts must be used with matching repository revision and read_generation when present. Durable reads may return complete lagged same-incarnation generations, never a partial or cross-incarnation bundle.
       tags: [snapshots]
       parameters:
         - { name: position, in: query, schema: { type: string } }
@@ -3764,6 +4323,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/GraphState' }
+        '503': { description: 'graph_projection_pending means no complete durable generation is available (Retry-After: 1). graph_projection_failed is terminal and carries no automatic retry advice. Neither permits a direct fallback.' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3779,7 +4339,7 @@ paths:
     get:
       operationId: getRepositoryView
       summary: Read a complete committed graph generation
-      description: Requires viewer access. PostgreSQL reads all fields in one repeatable-read transaction. A failed component fails the entire request.
+      description: Requires current viewer access, rechecked after resource admission for durable reads. PostgreSQL reads all fields coherently; an independently enabled durable reader serves metadata and graph from one complete applied generation, which may lag the current head within the same source incarnation. read_generation is identical on the bundle and graph. A failed component fails the entire request. Never splice newer pending metadata into an older graph or rebuild directly when durable output is missing or corrupt. Legacy readers remain unchanged when not explicitly enabled.
       tags: [snapshots]
       responses:
         "200":
@@ -3791,6 +4351,7 @@ paths:
                 required: [revision, refs, snapshots, reflog, history, pending, unsync, semantics, graph, default_branch, archived_sessions]
                 properties:
                   archived_sessions: { type: array, items: { $ref: '#/components/schemas/SessionArchiveView' } }
+                  read_generation: { $ref: '#/components/schemas/GraphReadGeneration' }
                   graph: { $ref: '#/components/schemas/GraphState' }
                   default_branch: { type: string }
                   semantics: { $ref: '#/components/schemas/ContextSemantics' }
@@ -3810,6 +4371,7 @@ paths:
                   history: { type: array, items: { $ref: '#/components/schemas/HistoryEvent' } }
                   pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
                   unsync: { type: array, items: { $ref: '#/components/schemas/Unsync' } }
+        "503": { description: "graph_projection_pending means no complete durable generation is available (Retry-After: 1). graph_projection_failed requires attention without automatic retry. resource_overloaded means resource admission is saturated." }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
@@ -3965,6 +4527,10 @@ paths:
                         seq:
                           type: integer
                           description: "CIR seq in event match"
+                        event_index:
+                          type: integer
+                          minimum: 0
+                          description: "Absolute zero-based archive event ordinal in the selected snapshot, including ordinal zero. Present only for event hits; seq is not a position."
                         snippet:
                           type: string
                         created_at:
@@ -3996,38 +4562,295 @@ paths:
       - $ref: "#/components/parameters/docHash"
     get:
       operationId: getDocEvents
-      summary: Read conversation events or a bounded presentation page
+      summary: Read conversation events, legacy presentation pages or visible-v1 units/folds
       description: |
-        Without view, retain the strict audit contract: root documents verify all current
+        With projection omitted, preserve the existing legacy parameter contract:
+        unknown parameters are ignored, empty recognized values use legacy defaults,
+        and duplicate view/offset/limit/base values or malformed query encoding fail
+        with 422. Without view, retain the strict audit contract: root documents verify all current
         dependencies on every request. With view, use a separately published verified
         range index: validate repository ownership, the root descriptor, index pages,
         and selected chunk hashes without auditing unrelated chunks. Publication fully
         validates the document before committing the projection. A missing projection
-        on an older root is built through a bounded-admission full verification; damaged
+        on an older PostgreSQL root is queued durably for bounded background full
+        verification, returning doc_range_index_pending (503, Retry-After: 3).
+        Completed jobs never substitute for current page verification. Explicit
+        read-only callers do not enqueue jobs. FS compatibility retains synchronous
+        bounded-admission full verification; damaged
         projections fail closed rather than silently being trusted or replaced.
         View pages retain absolute event ordinals and return metadata placeholders for
-        hidden bodies. Root prefix comparison uses verified index blocks, not bodies.
+        hidden bodies. PostgreSQL root pairs reuse a completed exact-prefix boundary
+        bound to both live source versions and generations. Missing boundaries use
+        the same durable preparation queue and pending response; partial comparison
+        progress is never returned as inherited. Comparison reads verified index
+        blocks and exact event hashes, not bodies, with bounded resumable work.
+        Both documents must remain owned by the requesting repository on every read.
+        Generation invalidation during preparation is retried at most once within
+        the request; current source/pair recovery is prepared before returning pending.
+        Timed-out foreground queue registration returns resource_overloaded without
+        claiming that work was durably accepted. Integrity/access errors stay terminal.
         Legacy documents retain their existing verified read-index compatibility path.
+
+        Opt into visible unit paging with projection=visible-v1. The only valid shapes are:
+        - Initial: projection=visible-v1 and required view=all|chat|prompts, with optional
+          offset (default -1), limit (default 20, range 1..100) and base (valid content hash).
+        - Unit continuation: exactly projection=visible-v1 and cursor=<units selector>.
+        - Fold expansion/continuation: exactly projection=visible-v1 and expand=<fold selector>.
+        Neither token form accepts view, base, offset or limit, even if unchanged or empty;
+        cursor and expand are mutually exclusive. Visible requests reject unknown,
+        duplicate, empty or malformed query parameters with 422 before the page service
+        is called. Offsets are -1 or nonnegative decimal integers (at most 536870912);
+        limits are positive decimal integers. Signs other than the literal offset=-1,
+        fractions, exponent notation, whitespace, overflow and invalid hashes are rejected.
+        Any provided projection other than visible-v1, including an empty projection, is 422.
+        Without projection, cursor/expand remain ignored legacy parameters, not an opt-in.
+
+        Selectors are unsigned canonical base64url JSON, not capabilities or credentials.
+        The HTTP adapter validates their structure, purpose and route repo/hash before
+        calling the service; the service independently validates selection and current
+        source/generation bindings. Every initial, cursor and fold request reuses the
+        current viewer authorization guard, including credential and membership checks.
+        After every application resource admission, before opening a read transaction
+        or enqueueing preparation, the same viewer policy is checked again using fresh
+        request credentials, current repository visibility and roles. Cached user/actor
+        context cannot preserve revoked access. Any required break-glass audit runs
+        before the read transaction and fails closed if unavailable.
+        A selector cannot grant access to another repository/document or bypass revocation.
+        Every successful visible page includes replay_cursor for its own incoming
+        position, including terminal empty and fully inherited selections. Reuse it
+        as cursor for units or expand for folds; the response still undergoes all
+        current ownership, authorization, generation and selected-byte checks.
+        Unsupported document/storage projections return 409 doc_visible_projection_unsupported;
+        a changed generation returns 409 doc_visible_generation_stale (restart selection).
+        Neither condition silently falls back to legacy reads or becomes generic 503.
+        Missing but supported indexes may still return explicit preparation-pending 503.
+        One request deadline bounds the operation; application admission owns its permits.
       tags: [docs]
       parameters:
-        - { in: query, name: offset, schema: { type: integer, minimum: -1, default: -1 }, description: "-1 starts after the inherited prefix." }
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 }, description: "Without view, defaults to 50 raw events. With view, defaults to 20 visible messages (20 rows in all/raw)." }
-        - { in: query, name: view, schema: { type: string, enum: [all, chat, prompts, raw] }, description: "Opt into verified range reads. chat counts messages; prompts counts non-compacted user messages. all defers tool/reasoning bodies; raw loads one selected event unless oversized." }
-        - { in: query, name: base, schema: { $ref: "#/components/schemas/ContentHash" }, description: "Optional parent document owned by the same repository." }
+        - { in: query, name: projection, schema: { type: string, enum: [visible-v1] }, description: "Explicit opt-in. Omit for legacy behavior; every other provided value is 422." }
+        - { in: query, name: offset, schema: { type: integer, minimum: -1, default: -1 }, description: "-1 starts after the inherited prefix. Visible-v1 initial requests only; maximum 536870912. Forbidden with cursor/expand." }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 }, description: "Legacy without view defaults to 50 events; with view defaults to 20 messages (20 rows in all/raw). Visible-v1 initial requests default to 20 units. Forbidden with cursor/expand; fold pages use a bounded event/byte budget." }
+        - { in: query, name: view, schema: { type: string, enum: [all, chat, prompts, raw] }, description: "Legacy verified range mode when projection is absent. Required for visible-v1 initial requests, where only all/chat/prompts are valid: all uses per-event units, chat folds around messages, prompts groups by user turn. raw is legacy-only. Forbidden with cursor/expand." }
+        - { in: query, name: base, schema: { $ref: "#/components/schemas/ContentHash" }, description: "Optional parent document owned by the same repository. A visible-v1 Root source may select either a Root or a legacy parent backed by a current verified range generation and durable exact-prefix evidence. Missing parent metadata is prepared asynchronously, not rescanned in the page request. Legacy parent IDs are preserved; this does not allow a legacy primary source to pretend to be Root. A provided value must be a nonempty valid hash; forbidden with cursor/expand." }
+        - { in: query, name: cursor, schema: { $ref: "#/components/schemas/DocVisibleSelectorToken" }, description: "Unit continuation: requires projection=visible-v1 and purpose=units; no other query parameters are permitted." }
+        - { in: query, name: expand, schema: { $ref: "#/components/schemas/DocVisibleSelectorToken" }, description: "Fold expansion/continuation: requires projection=visible-v1 and purpose=fold. Use a unit.fold.cursor or fold-page next_cursor; no other query parameters are permitted." }
       responses:
         "200":
-          description: "Without view: at most limit events and 512 KiB, with an oversized first event intact. With view: at most limit visible items, 512 traversed events and a 128 KiB soft payload budget; oversized bodies are deferred to event-fragments. next always advances through original ordinals. Archive content is never truncated."
+          description: "Legacy without view: at most limit events and 512 KiB, with an oversized first event intact. Legacy with view: at most limit visible items, 512 traversed events and a 128 KiB soft payload budget. visible-v1: explicit units/fold DTO, at most limit units or 128 expanded fold events and 128 KiB per page; oversized bodies are deferred to event-fragments. Selectors preserve original ordinals. Archive content is never truncated."
           content:
             application/json:
               schema:
                 anyOf:
                   - $ref: "#/components/schemas/DocEventPage"
                   - $ref: "#/components/schemas/DocViewPage"
+                  - $ref: "#/components/schemas/DocVisiblePage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "422": { description: "Invalid event range or hash." }
-        "503": { description: "Projection unavailable or shared resource queue saturated. Retry later; no document was modified." }
+        "409":
+          description: "doc_visible_projection_unsupported: document representation or storage cannot serve visible-v1; no silent fallback. doc_visible_generation_stale: selector generation/source binding changed; restart with an initial selection. Neither is a generic unavailable 503."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              examples:
+                unsupported:
+                  value: { error: { code: doc_visible_projection_unsupported, message: "visible document projection unsupported", details: {} } }
+                stale:
+                  value: { error: { code: doc_visible_generation_stale, message: "visible document generation changed", details: {} } }
+        "422":
+          description: "Invalid event range/hash or visible-v1 query shape: unsupported/empty projection, missing/invalid view, unknown/duplicate/empty/malformed parameters, mixed token and initial parameters, noncanonical/invalid selector, wrong purpose or mismatched route repo/hash."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503": { description: "doc_range_index_pending: durable index preparation queued/running/retrying (Retry-After: 3). doc_range_index_unavailable: preparation is not available for this read. resource_overloaded: shared capacity or per-repository job limit reached. No source document was modified." }
+
+  /repos/{repoID}/docs/{hash}/find-fragments:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - $ref: '#/components/parameters/docHash'
+    get:
+      operationId: getDocFindFragment
+      summary: Reveal a verified fragment at a matched source position
+      description: |
+        RootV1 requests require exactly selection, offset, budget. selection is the
+        matched reveal_cursor (all-view units selector, limit=1), not a client-created
+        event number. Every fragment rechecks current authorization, source/base
+        generation and ownership, selected metadata and bytes. A changed generation
+        fails closed; there is no legacy or old raw-fragment fallback.
+        Explicit legacy requests require exactly legacy=1, index, total, offset,
+        budget; only actual original legacy archives qualify, never RootV1 data
+        relabelled as legacy. Actual event count must match total. Legacy metadata
+        preparation may still scale with the archive; it is not a bounded-cost claim.
+        offset must be an event-relative UTF-8 rune boundary before EOF. budget is
+        4..65536 bytes. Reads return at most budget JSON bytes and a bounded UTF-8
+        probe for previous navigation. Unknown, duplicate, empty, mixed and
+        noncanonical parameters fail validation. This is explicit canonical JSON
+        source viewing, not a rendered-Markdown equivalence claim or a full audit.
+      parameters:
+        - { name: selection, in: query, schema: { $ref: '#/components/schemas/DocVisibleSelectorToken' } }
+        - { name: legacy, in: query, schema: { type: string, const: '1' } }
+        - { name: index, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: total, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: offset, in: query, required: true, schema: { type: integer, minimum: 0 } }
+        - { name: budget, in: query, required: true, schema: { type: integer, minimum: 4, maximum: 65536 } }
+      responses:
+        '200':
+          description: Verified selected JSON fragment and UTF-8 navigation positions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocFindFragmentPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Source/base generation changed or unsupported identity contract
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Invalid fragment selector, byte offset, budget or legacy declaration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Generation preparation pending or shared read capacity unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /repos/{repoID}/docs/{hash}/find:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - $ref: '#/components/parameters/docHash'
+    get:
+      operationId: getDocFindPage
+      summary: Find source positions within an explicit document range
+      description: |
+        RootV1 initial query requires exactly q, selection, from and to. selection is a
+        visible-v1 units replay selector; from/to are a client-declared half-open
+        archive range within its start/total bounds, not proof of earlier page
+        transfers. Continuations require exactly q and
+        cursor. Duplicate, unknown, mixed, empty or noncanonical parameters fail
+        validation. q is a literal 1..256 Unicode-rune query using Unicode simple
+        case folding, without trimming or regular-expression interpretation.
+        Small events search decoded source text fields, including tool inputs and
+        outputs, but not provider-locked state. Hidden empty reasoning and active
+        compaction state are skipped using verified presentation metadata without
+        reading their bodies. Oversized visible reasoning uses immutable,
+        event-hash/length-bound public-field spans prepared by a durable worker. A
+        small summary is decoded without reading the full event; an oversized
+        summary searches only its public canonical JSON string contents and marks
+        matches raw=true with event-relative byte offsets. Locked fields are never
+        searched. Oversized messages, including CIR v2 agent messages with locked
+        provider state, similarly use only their public blocks span: small blocks
+        are decoded, large blocks use raw event-relative JSON coordinates.
+        Missing spans enqueue preparation after releasing the read
+        transaction and rechecking authorization, returning doc_find_fields_pending
+        (503, Retry-After: 1). A read-only request or unconfigured store instead
+        returns doc_find_fields_unavailable (503, no Retry-After). Corrupt evidence
+        fails closed, without partial results or a locked-state fallback.
+        Other oversized events without provider-locked state search their raw canonical JSON fragments and mark
+        matches raw=true. This is not a browser
+        rendered-Markdown/whitespace equivalence or frontend find/reveal completion
+        claim. Scope and representation are explicit; repository-search semantics
+        remain unchanged. Every call rechecks authorization, source/base generation,
+        ownership, selected index pages and chunk bytes. Changed generations fail
+        closed; errors never trigger legacy fallback.
+        Legacy mode is explicit: initial queries require q, legacy=1, from, to,
+        total, inherited and optionally base. Continuations require exactly q,
+        legacy=1 and cursor. The original archive hash is preserved and the
+        response uses find-legacy-v1 with empty generation and reveal_cursor.
+        The server verifies actual total/base prefix, repository ownership and
+        selected bytes; supplied counts are not trusted. A RootV1 identity cannot
+        downgrade to legacy. Legacy compatibility preparation can load complete
+        metadata or an old monolithic archive under shared bulk admission; this
+        cost is not covered by the matcher's per-call byte bound. Missing legacy
+        indexes are derived transiently without repacking or mutating the source.
+        For source v1, source_range is opt-in: send Accept exactly
+        "application/json, application/vnd.cxthub.find-source-ranges-v1+json".
+        Without that capability, matches retain the old exact field set. Responses
+        vary by Accept. Older servers can return the original JSON representation
+        without source_range; clients must not invent missing source coordinates.
+        Explicit representation=display-v1 selects the version 2 display profile
+        on both initial requests and every continuation. Responses use
+        find-display-v1 or find-legacy-display-v1, always with source_range,
+        field=0 and raw=false. Match offsets address the event's whole formatted
+        content, not source-field ordinals. Markdown uses the version 1 mini-renderer
+        profile; tool data uses expanded formatting, excluding translated controls,
+        duplicate previews and clipping notices. Provider-locked bytes stay excluded.
+        A result's source_range covers all participating canonical JSON bytes;
+        reordered fields can make that cover wider than the visible match.
+        This preview implementation limits a projection input to 128KiB and
+        charges projected text plus provenance against a 512KiB construction
+        budget per page. Every constructor receives the remaining budget;
+        insufficient room defers that event to a new page. Canonical source scanning
+        retains its separate 256KiB bound. A larger unprepared projection returns
+        doc_find_display_unavailable on a fresh page, never partial error results or raw fallback. It is
+        not automatically retried or durably prepared by this preview path.
+        Explicit representation=display-prepared-v1 selects version 3 on both
+        initial requests and every continuation, for RootV1 and legacy identities.
+        Responses use find-display-prepared-v1 or find-legacy-display-prepared-v1.
+        Only these profiles require prepared:{page,generation} on pages/selectors
+        and prepared_page on each match, including zero. Descriptor generation is
+        separate from the response's visible archive generation; legacy keeps the
+        latter empty. field=0, raw=false and source_range are always required,
+        independent of Accept. Match and continuation byte positions address the
+        whole event's displayed UTF-8 content, up to 512MiB, not a page-local
+        offset. The profile searches bounded prepared-page windows: at most 8 per
+        call, with each current page plus bounded previous-page overlap. The old
+        256KiB canonical-source scan budget does not measure prepared text work;
+        small events still use the bounded preview path. Prepared oversized
+        tool-result strings are supported; other oversized formats can return
+        doc_find_display_unavailable rather than silently switching profiles.
+        A nonzero prepared.page requires a valid descriptor hash. A zero page
+        with empty descriptor generation is allowed for small-event positions
+        up to 512KiB. Terminal event_index=to resets prepared to page=0 and
+        generation='', with byte_offset=0. Missing prepared data can return
+        doc_display_pending (503, Retry-After: 1); unavailable display support
+        retains doc_find_display_unavailable (503, no Retry-After). No implicit
+        profile downgrade, whole-document prepass or complete rendered-Markdown
+        equivalence is promised. Source v1 and preview display v2 retain their
+        original wire fields, without prepared or prepared_page. Unknown profiles,
+        including display-v2, and cross-profile cursors remain invalid.
+      parameters:
+        - { name: Accept, in: header, description: 'Optional source coordinate capability: application/json, application/vnd.cxthub.find-source-ranges-v1+json', schema: { type: string } }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 256 } }
+        - { name: representation, in: query, description: 'Optional explicit display profile; required again on every display continuation. Omit for unchanged source v1.', schema: { type: string, enum: ['display-v1', 'display-prepared-v1'] } }
+        - { name: selection, in: query, schema: { $ref: '#/components/schemas/DocVisibleSelectorToken' } }
+        - { name: from, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: to, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: legacy, in: query, schema: { type: string, const: '1' } }
+        - { name: base, in: query, schema: { $ref: '#/components/schemas/ContentHash' } }
+        - { name: total, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: inherited, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: cursor, in: query, schema: { type: string, minLength: 1, maxLength: 5462, pattern: '^[A-Za-z0-9_-]+$' } }
+      responses:
+        '200':
+          description: Verified range scan and resumable positions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocFindPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Visible generation changed or unsupported source contract
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Invalid search query, range or selector
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: "doc_display_pending: displayed-event preparation waiting/running/retrying (Retry-After: 1). doc_find_fields_pending: durable public-field span preparation waiting/running/retrying (Retry-After: 1). doc_find_fields_unavailable: preparation disabled for this read/store (no Retry-After). doc_find_display_unavailable: display support unavailable or projection exceeds the preview preparation bound (no Retry-After or implicit fallback). Existing generation preparation and shared capacity errors retain their own retry policy."
+          headers:
+            Retry-After: { description: '1 for doc_display_pending or doc_find_fields_pending; absent for doc_find_display_unavailable and doc_find_fields_unavailable.', schema: { type: integer, minimum: 1 } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /repos/{repoID}/docs/{hash}/event-fragments:
     parameters:
@@ -4053,7 +4876,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { description: "Invalid event index, byte offset, budget or hash." }
-        "503": { description: "Projection unavailable or shared resource queue saturated." }
+        "503": { description: "doc_range_index_pending: durable index preparation queued/running/retrying (Retry-After: 3); doc_range_index_unavailable or resource_overloaded otherwise. A failed integrity check is not a pending state." }
 
   /repos/{repoID}/docs/{hash}/turns:
     parameters:
@@ -7855,36 +8678,6 @@ paths:
         "422":
           description: Invalid request
 
-tags:
-  - name: repos
-    description: Repo registration and retrieval.
-  - name: manifest
-    description: "Manifest for push/pull negotiation (have/want 1st step)."
-  - name: branches
-    description: Convenience branch retrieval.
-  - name: snapshots
-    description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
-  - name: docs
-    description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
-  - name: refs
-    description: "HEAD/branch/session pointers and immutable tags. Ref movement uses CAS; cxt/branch-state/v1 tags carry branch lifecycle events."
-  - name: memories
-    description: "snapshot attachment MemoryDigest."
-  - name: push
-    description: "Push negotiation in three stages (negotiate → objects → bounded ref batch, with single-ref fallback for older servers)."
-  - name: pull
-    description: "Pull negotiation (manifest GET → pull/objects → local ref merge)."
-  - name: actions
-    description: "common use-case actions for web UI / CLI (diff / fork / load)."
-  - name: assets
-    description: "repo team assets — About / team settings bundle / E2E secret envelope / commit attachment settings object."
-  - name: identity
-    description: "authentication (session exchange) · account (username/nickname) · CLI token."
-  - name: repositories
-    description: "repository settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
-  - name: organizations
-    description: "Global Organization namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."
-
   /organizations/{organizationID}/invitations:
     parameters:
       - name: organizationID
@@ -8137,3 +8930,33 @@ tags:
               schema:
                 type: array
                 items: {$ref: '#/components/schemas/AccountAuditEvent'}
+
+tags:
+  - name: repos
+    description: Repo registration and retrieval.
+  - name: manifest
+    description: "Manifest for push/pull negotiation (have/want 1st step)."
+  - name: branches
+    description: Convenience branch retrieval.
+  - name: snapshots
+    description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
+  - name: docs
+    description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
+  - name: refs
+    description: "HEAD/branch/session pointers and immutable tags. Ref movement uses CAS; cxt/branch-state/v1 tags carry branch lifecycle events."
+  - name: memories
+    description: "snapshot attachment MemoryDigest."
+  - name: push
+    description: "Push negotiation in three stages (negotiate → objects → bounded ref batch, with single-ref fallback for older servers)."
+  - name: pull
+    description: "Pull negotiation (manifest GET → pull/objects → local ref merge)."
+  - name: actions
+    description: "common use-case actions for web UI / CLI (diff / fork / load)."
+  - name: assets
+    description: "repo team assets — About / team settings bundle / E2E secret envelope / commit attachment settings object."
+  - name: identity
+    description: "authentication (session exchange) · account (username/nickname) · CLI token."
+  - name: repositories
+    description: "repository settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
+  - name: organizations
+    description: "Global Organization namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."

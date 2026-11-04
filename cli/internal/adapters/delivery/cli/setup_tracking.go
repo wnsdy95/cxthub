@@ -94,7 +94,7 @@ func setupFirstTracking(ctx context.Context, c *Container, cwd string) (string, 
 	if !ok {
 		return "", fmt.Errorf("first-connection tracking service unavailable")
 	}
-	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +123,7 @@ func setupFirstTracking(ctx context.Context, c *Container, cwd string) (string, 
 	if err != nil {
 		return "", err
 	}
-	repo, err = remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	repo, err = resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return "", err
 	}

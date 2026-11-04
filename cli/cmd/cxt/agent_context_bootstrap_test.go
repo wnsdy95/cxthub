@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub-cli/internal/app"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
@@ -113,7 +114,7 @@ func newEmptyBootstrapFixture(t *testing.T, unborn bool) *emptyBootstrapFixture 
 	if _, err := app.NewInitRepoService(f.runtime.git, f.runtime.store).Init(context.Background(), inbound.InitInput{Cwd: f.root}); err != nil {
 		t.Fatal(err)
 	}
-	f.hooks = providerLaunchHooks(f.cfg)
+	f.hooks = providerLaunchHooks(f.cfg, capture.NewCommandSessionResolver(capture.NewClaudeCapture(), capture.NewCodexCapture()))
 	return f
 }
 

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -59,117 +58,29 @@ func (g *GitChanges) Retry(ctx context.Context, repo domain.ContentHash, id stri
 	}
 	return repositoryWriteError(evidenceWriteContext(ctx), g.core, repo, func(ctx context.Context) error { return g.store.RetryGitChange(ctx, repo, id, time.Now().UTC()) })
 }
-func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
-	work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 90*time.Second)
-	defer cancel()
-	repo, err := g.core.workerRepository(work, j.RepoID)
-	if err == nil && repo.GitRemoteURL != j.GitOrigin {
-		err = domain.ErrConflict
+func (changes *GitChanges) run(ctx context.Context, job domain.GitChangeJob) error {
+	worker, err := changes.worker()
+	if err != nil {
+		return err
 	}
-	var fence GitReadFence
-	if err == nil {
-		fence, err = authorizeGitRead(work, g.sourceAccess, j.RepoID)
-	}
-	var proof domain.GitReversalEvidence
-	if err == nil {
-		reader := g.reader
-		if st, ok := g.core.meta.(outbound.GitScanStore); ok {
-			reader = cachedGitEvidence{st, j.RepoID, reader}
-		}
-		proof, err = verifyGitReversal(work, reader, j.GitOrigin, j.Request.Target, j.Request.TargetParent, j.Request.Commit, j.Request.Parent)
-	}
-	now := time.Now().UTC()
-	next := j
-	next.UpdatedAt = now
-	next.LeaseUntil = time.Time{}
-	if err == nil {
-		next.State = "completed"
-		next.Result = &proof
-		next.Reason = proof.Reason
-		err = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
-			current, e := g.core.meta.GetRepo(tx, j.RepoID)
-			if e != nil {
-				return e
-			}
-			if current.GitRemoteURL != j.GitOrigin {
-				return domain.ErrConflict
-			}
-			// CAS and result publication are one store transition. A lost commit ack is
-			// safe: retries see the terminal row and cannot overwrite its evidence.
-			if e := fence(tx); e != nil {
-				return e
-			}
-			return g.store.FinishGitChange(tx, next)
-		})
-		if err == nil {
-			return nil
-		}
-	}
-	next.Result = nil
-	next.State = "retrying"
-	next.Reason = "temporary_provider_or_storage_failure"
-	switch {
-	case errors.Is(err, domain.ErrIntegrity):
-		next.State = "attention"
-		next.Reason = "integrity_check_failed"
-	case errors.Is(err, domain.ErrValidation):
-		next.State = "attention"
-		next.Reason = "invalid_or_ambiguous_git_evidence"
-	case errors.Is(err, domain.ErrConflict):
-		next.State = "attention"
-		next.Reason = "origin_or_lease_changed"
-	case errors.Is(err, domain.ErrNotFound):
-		next.State = "attention"
-		next.Reason = "repository_missing"
-	}
-	if next.State == "retrying" && next.Attempts >= 20 {
-		next.State = "attention"
-		next.Reason = "retry_limit_reached"
-	}
-	next.NextAttempt = now.Add(time.Second << min(next.Attempts, 8))
-	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer done()
-	// If another worker completed, or our own COMMIT succeeded with a lost ack,
-	// this fence rejects the stale failure state without changing the result.
-	e := repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return g.store.FinishGitChange(tx, next) })
-	return errors.Join(err, e)
+	return worker.RunLease(ctx, job)
 }
-func (g *GitChanges) Process(ctx context.Context, limit int) error {
-	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
-	for i := 0; i < limit; i++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		err := admittedJob(ctx, func(bound context.Context) (domain.GitChangeJob, error) {
-			return g.store.ClaimGitChange(bound, "", "", time.Now().UTC(), 2*time.Minute)
-		}, func(bound context.Context, job domain.GitChangeJob) error {
-			if err := g.run(bound, job); err != nil {
-				log.Printf("Git change verification %s attempt %d deferred", job.ID, job.Attempts)
-			}
-			return nil
-		})
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+
+func (changes *GitChanges) Process(ctx context.Context, limit int) error {
+	worker, err := changes.worker()
+	if err != nil {
+		return err
 	}
-	return nil
+	return worker.Process(ctx, limit)
 }
-func (g *GitChanges) Run(ctx context.Context) {
-	timer := time.NewTicker(time.Second)
-	defer timer.Stop()
-	for {
-		if err := g.Process(ctx, 4); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Git change worker: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
+
+func (changes *GitChanges) Run(ctx context.Context) {
+	worker, err := changes.worker()
+	if err != nil {
+		log.Printf("Git change worker: %v", err)
+		return
 	}
+	worker.Run(ctx)
 }
 
 // SetSourceAuthorizer configures source policy before workers start.

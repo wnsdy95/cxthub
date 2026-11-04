@@ -81,7 +81,7 @@ func (g *GitHubConnections) Receive(ctx context.Context, id, kind string, body [
 		return nil
 	})
 }
-func (g *GitHubConnections) Run(ctx context.Context) {
+func (g *GitHubWorker) Run(ctx context.Context) {
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
 	for {
@@ -97,8 +97,8 @@ func (g *GitHubConnections) Run(ctx context.Context) {
 		}
 	}
 }
-func (g *GitHubConnections) Tick(ctx context.Context) error {
-	ctx = g.core.workerDocumentIdentityContext(ctx)
+func (g *GitHubWorker) Tick(ctx context.Context) error {
+	ctx = g.workerDocumentIdentityContext(ctx)
 	var failures []error
 	all, err := g.store.ListGitHubConnections(ctx)
 	if err != nil {
@@ -126,9 +126,9 @@ func (g *GitHubConnections) Tick(ctx context.Context) error {
 	}
 	return errors.Join(append(failures, g.reconcilePRHistories(ctx, 4))...)
 }
-func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
+func (g *GitHubWorker) reconcile(ctx context.Context, ns string) error {
 	var c domain.GitHubConnection
-	err := g.id.withIdentity(ctx, func(tx context.Context) error {
+	err := g.withIdentity(ctx, func(tx context.Context) error {
 		var e error
 		c, e = g.store.GetGitHubConnection(tx, ns)
 		if e != nil {
@@ -187,7 +187,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 		for _, i := range identities {
 			byID[i.ExternalID] = i.UserID
 		}
-		owner, e := g.id.organization.GetNamespace(ctx, ns)
+		owner, e := g.organizations.GetNamespace(ctx, ns)
 		if e != nil {
 			workErr = e
 		} else {
@@ -216,7 +216,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 						unresolved++
 						continue
 					}
-					if _, ok := g.id.OrganizationRoleOf(ctx, owner.OrganizationID, uid); !ok {
+					if _, ok := g.organizationRoleOf(ctx, owner.OrganizationID, uid); !ok {
 						unresolved++
 						continue
 					}
@@ -229,7 +229,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 			}
 		}
 	}
-	err = g.id.withIdentity(ctx, func(tx context.Context) error {
+	err = g.withIdentity(ctx, func(tx context.Context) error {
 		current, e := g.store.GetGitHubConnection(tx, ns)
 		if e != nil {
 			return e
@@ -263,13 +263,13 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 			grants = nil
 		}
 		// Membership may have been revoked while GitHub was responding.
-		owner, e := g.id.organization.GetNamespace(tx, ns)
+		owner, e := g.organizations.GetNamespace(tx, ns)
 		if e != nil {
 			return e
 		}
 		valid := []domain.GitHubTeamMember{}
 		for _, grant := range grants {
-			team, e := g.id.teams.GetTeam(tx, grant.TeamID)
+			team, e := g.teams.GetTeam(tx, grant.TeamID)
 			if e != nil {
 				if errors.Is(e, domain.ErrNotFound) {
 					continue
@@ -279,7 +279,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 			if team.OrganizationID != owner.OrganizationID {
 				continue
 			}
-			if _, ok := g.id.OrganizationRoleOf(tx, owner.OrganizationID, grant.UserID); ok {
+			if _, ok := g.organizationRoleOf(tx, owner.OrganizationID, grant.UserID); ok {
 				valid = append(valid, grant)
 			}
 		}
@@ -314,7 +314,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 		if page < 1 {
 			page = 1
 		}
-		if err := g.id.withIdentity(ctx, func(tx context.Context) error {
+		if err := g.withIdentity(ctx, func(tx context.Context) error {
 			current, err := g.store.GetGitHubConnection(tx, ns)
 			if err != nil {
 				return err
@@ -342,7 +342,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 		if more {
 			next = page + 1
 		}
-		e = g.id.withIdentity(ctx, func(tx context.Context) error {
+		e = g.withIdentity(ctx, func(tx context.Context) error {
 			v, e := g.store.GetGitHubConnection(tx, ns)
 			if e != nil {
 				return e
@@ -365,7 +365,7 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 	}
 	return nil
 }
-func (g *GitHubConnections) binding(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding) (domain.Repo, error) {
+func (g *GitHubWorker) binding(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding) (domain.Repo, error) {
 	current, err := g.store.GetGitHubConnection(ctx, c.NamespaceID)
 	if err != nil {
 		return domain.Repo{}, err
@@ -391,14 +391,14 @@ func (g *GitHubConnections) binding(ctx context.Context, c domain.GitHubConnecti
 	if name == "" {
 		return domain.Repo{}, domain.ErrForbidden
 	}
-	local, err := g.id.repositories.GetRepository(ctx, b.RepositoryID)
+	local, err := g.repositories.GetRepository(ctx, b.RepositoryID)
 	if err != nil {
 		return domain.Repo{}, err
 	}
 	if local.OwnerNamespaceID != c.NamespaceID || local.Archived {
 		return domain.Repo{}, domain.ErrForbidden
 	}
-	repo, err := g.core.meta.GetRepo(ctx, b.ContextRepoID)
+	repo, err := g.metadata.GetRepo(ctx, b.ContextRepoID)
 	if err != nil {
 		return repo, err
 	}
@@ -407,19 +407,19 @@ func (g *GitHubConnections) binding(ctx context.Context, c domain.GitHubConnecti
 	}
 	return repo, nil
 }
-func (g *GitHubConnections) enqueuePR(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding, pr domain.PullRequestMerge) error {
+func (g *GitHubWorker) enqueuePR(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding, pr domain.PullRequestMerge) error {
 	ctx = context.WithValue(ctx, revisionScopeKey{}, "none")
-	return repositoryWriteError(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx)), g.core, b.ContextRepoID, func(tx context.Context) error {
+	return repositoryWriteErrorWithWork(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx)), g.work, b.ContextRepoID, func(tx context.Context) error {
 		if _, e := g.binding(tx, c, b); e != nil {
 			return e
 		}
-		_, err := g.core.submitPRPromotion(tx, b.ContextRepoID, pr)
+		_, err := g.publications.submitPRPromotion(tx, b.ContextRepoID, pr)
 		return err
 	})
 }
-func (g *GitHubConnections) deliver(ctx context.Context, id string) error {
+func (g *GitHubWorker) deliver(ctx context.Context, id string) error {
 	var job domain.GitHubDelivery
-	err := g.id.withIdentity(ctx, func(tx context.Context) error {
+	err := g.withIdentity(ctx, func(tx context.Context) error {
 		var e error
 		job, e = g.store.GetGitHubDelivery(tx, id)
 		if e != nil {
@@ -443,7 +443,7 @@ func (g *GitHubConnections) deliver(ctx context.Context, id string) error {
 		return err
 	}
 	workErr := g.applyDelivery(ctx, job)
-	return g.id.withIdentity(ctx, func(tx context.Context) error {
+	return g.withIdentity(ctx, func(tx context.Context) error {
 		current, e := g.store.GetGitHubDelivery(tx, id)
 		if e != nil {
 			return e
@@ -463,7 +463,7 @@ func (g *GitHubConnections) deliver(ctx context.Context, id string) error {
 		return g.store.PutGitHubDelivery(tx, current)
 	})
 }
-func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDelivery) error {
+func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDelivery) error {
 	if j.Kind != "pull_request" && j.Kind != "push" {
 		return nil
 	}
@@ -547,12 +547,12 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 				continue
 			}
 			if j.Kind == "pull_request" {
-				err = repositoryWriteError(evidenceWriteContext(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.core, b.ContextRepoID, func(tx context.Context) error {
+				err = repositoryWriteErrorWithWork(evidenceWriteContext(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.work, b.ContextRepoID, func(tx context.Context) error {
 					repo, e := g.binding(tx, c, b)
 					if e != nil {
 						return e
 					}
-					st, ok := g.core.meta.(outbound.GitScanStore)
+					st, ok := g.metadata.(outbound.GitScanStore)
 					if !ok {
 						return fmt.Errorf("Git scan queue unavailable")
 					}
@@ -569,7 +569,7 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 					}
 					if p.Action == "closed" {
 						pr := domain.PullRequestMerge{Number: p.Number, BaseBranch: p.PR.Base.Ref, HeadBranch: p.PR.Head.Ref, HeadSHA: p.PR.Head.SHA, MergeSHA: p.PR.Merge}
-						_, e = g.core.submitPRPromotion(tx, b.ContextRepoID, pr)
+						_, e = g.publications.submitPRPromotion(tx, b.ContextRepoID, pr)
 						return e
 					}
 					return nil
@@ -588,12 +588,12 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 					}
 					return s
 				}
-				err = repositoryWriteError(evidenceWriteContext(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.core, b.ContextRepoID, func(tx context.Context) error {
+				err = repositoryWriteErrorWithWork(evidenceWriteContext(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.work, b.ContextRepoID, func(tx context.Context) error {
 					repo, e := g.binding(tx, c, b)
 					if e != nil {
 						return e
 					}
-					st, ok := g.core.meta.(outbound.GitScanStore)
+					st, ok := g.metadata.(outbound.GitScanStore)
 					if !ok {
 						return fmt.Errorf("Git scan queue unavailable")
 					}

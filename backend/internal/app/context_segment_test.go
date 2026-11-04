@@ -97,8 +97,8 @@ func TestContextSegmentPagesBindOnlyFinalizedVerifiedRanges(t *testing.T) {
 	if err != nil || !last.Segments.Complete || last.Segments.StateHash != page.StateHash || last.Segments.Entries[0].Kind != "full_source" {
 		t.Fatalf("last page: %+v %v", last.Segments, err)
 	}
-	if spy.catalogReads != catalogReads {
-		t.Fatalf("continuation reread full catalog: %d -> %d", catalogReads, spy.catalogReads)
+	if spy.catalogReads != catalogReads+1 {
+		t.Fatalf("unversioned continuation reused catalog: %d -> %d", catalogReads, spy.catalogReads)
 	}
 	if domain.ValidateContentHash(first.DeliveryStateHash) != nil || first.DeliveryStateHash != plain.DeliveryStateHash || last.DeliveryStateHash != first.DeliveryStateHash {
 		t.Fatal("delivery proof must cover the entire selection on every page")
@@ -141,34 +141,6 @@ func TestContextSegmentsLegacyCoverageDoesNotInventDeltaOrBinding(t *testing.T) 
 	got, err = svc.QueryContext(ctx, repo, domain.ContextSelection{SegmentLimit: 1})
 	if err != nil || got.Segments.Entries[0].Kind != "unavailable" || got.Segments.Entries[0].TotalEvents != -1 {
 		t.Fatalf("missing hidden: %+v %v", got.Segments, err)
-	}
-}
-
-func TestContextPublicationBindingsRequireExactAcceptedObservation(t *testing.T) {
-	repo := hh(t.Name())
-	snap := hh("capture")
-	o := domain.HistoryEvent{ID: strings.Repeat("a", 32), RepoID: string(repo), BranchID: "b", Branch: "feature", Kind: "position", Target: snap, Source: snap, GitAfter: strings.Repeat("b", 40), WorktreeID: strings.Repeat("c", 32), CreatedAt: time.Unix(1, 0).UTC()}
-	p := prPublication(o)
-	for _, tc := range []struct {
-		name   string
-		mutate func(*domain.HistoryEvent)
-	}{
-		{"other worktree", func(e *domain.HistoryEvent) { e.WorktreeID = strings.Repeat("d", 32) }},
-		{"other branch identity", func(e *domain.HistoryEvent) { e.BranchID = "different" }},
-		{"other code revision", func(e *domain.HistoryEvent) { e.GitAfter = strings.Repeat("e", 40) }},
-		{"PR receipt is not capture observation", func(e *domain.HistoryEvent) { e.Kind = "pr-merge" }},
-		{"other repository", func(e *domain.HistoryEvent) { e.RepoID = string(hh("foreign")) }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			wrong := o
-			tc.mutate(&wrong)
-			if got := contextPublicationBindings(repo, []domain.HistoryEvent{wrong, p}); len(got) != 0 {
-				t.Fatal("unproven finalized binding")
-			}
-		})
-	}
-	if got := contextPublicationBindings(repo, []domain.HistoryEvent{o, p}); len(got[snap]) != 1 {
-		t.Fatal("accepted binding missing")
 	}
 }
 

@@ -197,7 +197,7 @@ func (s *PostgresStore) CheckImportTargetEmpty(ctx context.Context) error {
 	}
 	for _, name := range names {
 		var occupied bool
-		if err = s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM "+pgx.Identifier{name}.Sanitize()+")").Scan(&occupied); err != nil {
+		if err = s.pool.QueryRow(ctx, frozenImportTargetOccupiedSQL(name)).Scan(&occupied); err != nil {
 			return err
 		}
 		if occupied {
@@ -206,6 +206,15 @@ func (s *PostgresStore) CheckImportTargetEmpty(ctx context.Context) error {
 	}
 	return nil
 }
+
+func frozenImportTargetOccupiedSQL(table string) string {
+	condition := ""
+	if table == "doc_display_maintenance_cursor_v1" {
+		condition = " WHERE singleton IS DISTINCT FROM true OR after_source IS DISTINCT FROM ''"
+	}
+	return "SELECT EXISTS(SELECT 1 FROM " + pgx.Identifier{table}.Sanitize() + condition + ")"
+}
+
 func (f *frozenFS) read(path string) ([]byte, error) {
 	expected, ok := f.files[path]
 	if !ok {
@@ -286,7 +295,7 @@ func (s *PostgresStore) ImportFrozenFS(ctx context.Context, root string, apply b
 			return f.report, err
 		}
 		var occupied bool
-		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM "+q+")").Scan(&occupied); err != nil {
+		if err = tx.QueryRow(ctx, frozenImportTargetOccupiedSQL(table)).Scan(&occupied); err != nil {
 			return f.report, err
 		}
 		if occupied {

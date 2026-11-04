@@ -23,6 +23,7 @@ type toolArgs struct {
 	Paths        []string `json:"paths"`
 	ChangeID     string   `json:"change_id"`
 	Mode         string   `json:"mode"`
+	ReadVersion  *int     `json:"read_version,omitempty"`
 	Repository   string   `json:"repository"`
 	Branch       string   `json:"branch"`
 	Limit        int      `json:"limit"`
@@ -43,22 +44,55 @@ const (
 func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw json.RawMessage) (string, error) {
 	// This adapter reads through the current server binary; a remote MCP
 	// caller cannot select compatibility or gain repository authority.
-	identities := []domain.DocumentIdentity{domain.DocumentIdentityLegacy}
-	if capabilities, ok := s.context.(inbound.DocumentIdentityCapabilities); ok {
-		identities = capabilities.DocumentIdentitiesSupported()
+	identities := s.documentIdentities
+	if len(identities) == 0 {
+		identities = []domain.DocumentIdentity{domain.DocumentIdentityLegacy}
+		if capabilities, ok := s.context.(inbound.DocumentIdentityCapabilities); ok {
+			identities = capabilities.DocumentIdentitiesSupported()
+		}
 	}
 	ctx = inbound.WithDocumentIdentities(ctx, identities)
 	var args toolArgs
+	var fields map[string]json.RawMessage
+	explicitReadVersion := false
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
+		if err := json.Unmarshal(raw, &fields); err != nil {
 			return "", fmt.Errorf("invalid arguments")
 		}
+		for name := range fields {
+			if strings.EqualFold(name, "read_version") {
+				explicitReadVersion = true
+			}
+		}
+		if err := json.Unmarshal(raw, &args); err != nil {
+			if explicitReadVersion {
+				return "", preparedMemoryFailure(domain.ErrValidation)
+			}
+			return "", fmt.Errorf("invalid arguments")
+		}
+	}
+	if name == "context_find" {
+		for field := range fields {
+			if field != "repository" && field != "ref" && field != "query" && field != "cursor" {
+				return "", conversationFindToolFailure(domain.ErrValidation)
+			}
+		}
+	}
+	if explicitReadVersion {
+		if args.ReadVersion == nil || name != "memory_load" || *args.ReadVersion != 1 || args.Mode != "effective" || strings.TrimSpace(args.Repository) == "" {
+			return "", preparedMemoryFailure(domain.ErrValidation)
+		}
+		result, err := s.memoryLoad(ctx, user, args)
+		return result, preparedMemoryFailure(err)
 	}
 	if name == "repository_list" {
 		return s.repositoryPage(ctx, user, args)
 	}
 	if strings.TrimSpace(args.Repository) == "" {
 		return "", fmt.Errorf("repository is required; call repository_list first")
+	}
+	if name == "memory_load" {
+		return s.memoryLoad(ctx, user, args)
 	}
 	repo, err := s.resolveRepository(ctx, user, args.Repository)
 	if err != nil {
@@ -75,8 +109,8 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		return s.contextPage(ctx, repo, args)
 	case "context_fetch":
 		return s.eventPage(ctx, repo, args)
-	case "memory_load":
-		return s.memoryPage(ctx, repo, args)
+	case "context_find":
+		return s.conversationFindPage(ctx, repo, args)
 	case "code_applicability":
 		return s.codeApplicabilityPage(ctx, repo, args)
 	case "git_observations":
@@ -256,6 +290,10 @@ func (s *Server) toolContextList(ctx context.Context, repo domain.Repo, branch s
 }
 
 func (s *Server) resolveRef(ctx context.Context, repo domain.Repo, ref string) (domain.Snapshot, error) {
+	return s.resolveRefWithShortHash(ctx, repo, ref, true)
+}
+
+func (s *Server) resolveRefWithShortHash(ctx context.Context, repo domain.Repo, ref string, allowShort bool) (domain.Snapshot, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || strings.EqualFold(ref, "HEAD") {
 		ref = defaultBranch(repo)
@@ -272,7 +310,7 @@ func (s *Server) resolveRef(ctx context.Context, repo domain.Repo, ref string) (
 			return s.context.GetSnapshot(ctx, repo.ID, candidate.Target)
 		}
 	}
-	if len(ref) >= 6 {
+	if allowShort && len(ref) >= 6 {
 		snapshots, listErr := s.context.List(ctx, inbound.ListSnapshotsInput{RepoID: repo.ID})
 		if listErr == nil {
 			var matched *domain.Snapshot
@@ -294,6 +332,9 @@ func (s *Server) resolveRef(ctx context.Context, repo domain.Repo, ref string) (
 }
 
 func (s *Server) nearestDigest(ctx context.Context, repoID domain.ContentHash, start domain.Snapshot) (domain.MemoryDigest, bool, error) {
+	if s.memorySnapshots == nil {
+		return domain.MemoryDigest{}, false, errMemorySnapshotsUnavailable
+	}
 	seen := map[domain.ContentHash]bool{}
 	queue := []domain.ContentHash{start.ID}
 	for len(queue) > 0 {
@@ -314,7 +355,7 @@ func (s *Server) nearestDigest(ctx context.Context, repoID domain.ContentHash, s
 			return domain.MemoryDigest{}, false, err
 		}
 		if snapshot.MemoryHash != "" {
-			digest, err := s.context.GetMemoryObject(ctx, repoID, snapshot.MemoryHash)
+			digest, err := s.memorySnapshots.GetMemoryObject(ctx, repoID, snapshot.MemoryHash)
 			if err != nil {
 				return domain.MemoryDigest{}, false, err
 			}
@@ -378,11 +419,14 @@ func eventText(event domain.CIREvent) string {
 }
 
 func (s *Server) toolMemoryLoad(ctx context.Context, repo domain.Repo, ref string) (string, error) {
+	if s.memorySnapshots == nil {
+		return "", errMemorySnapshotsUnavailable
+	}
 	snapshot, err := s.resolveRef(ctx, repo, ref)
 	if err != nil {
 		return "", err
 	}
-	projection, err := s.context.GetMemoryProjection(ctx, repo.ID, snapshot.ID)
+	projection, err := s.memorySnapshots.GetMemoryProjection(ctx, repo.ID, snapshot.ID)
 	if err != nil {
 		return "", err
 	}

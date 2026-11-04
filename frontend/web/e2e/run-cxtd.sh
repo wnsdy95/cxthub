@@ -24,10 +24,14 @@ trap 'exit 130' INT TERM
 cd "$repo_root/backend"
 go build -tags postgres -o "$build_root/cxtd" ./cmd/cxtd
 go build -tags postgres -o "$build_root/cxt-mcp" ./cmd/cxt-mcp
+go build -tags postgres -o "$build_root/cxt-admin" ./cmd/cxt-admin
 export CXT_POSTGRES_DSN="$CXT_E2E_DSN" CXT_REQUIRE_POSTGRES=1
 export RESEND_API_KEY= CXT_ENV_FILE=/dev/null CXT_AUTH=dev
+export CXT_CONVERSATION_ROOT_PUBLICATION=true
+export CXT_LEGACY_BYTE_RANGE_PUBLICATION=true
 export CXT_PUBLIC_URL=http://127.0.0.1:4174
 export CXT_MIGRATIONS_DIR="$repo_root/schemas/db/migrations"
+"$build_root/cxt-admin" migrate --apply
 # MCP starts first; API readiness means the browser can use both services.
 "$build_root/cxt-mcp" serve --addr 127.0.0.1:18908 &
 mcp_pid=$!

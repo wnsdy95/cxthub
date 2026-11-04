@@ -13,9 +13,8 @@ import (
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type branchOperationStatus struct {
@@ -79,7 +78,7 @@ type diagnosticsReport struct {
 // RunDiagnostics is dispatched before the ordinary composition root and its
 // automatic replay. It remains available with a missing or corrupt .cxt and
 // never authenticates, writes, contacts the server, or controls a provider.
-func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer, captureChecks ...func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) error {
+func RunDiagnostics(ctx context.Context, reader outbound.LocalReplicaInspector, cwd string, args []string, w io.Writer, captureChecks ...func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) error {
 	if args[0] == "branch" {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -106,7 +105,7 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer,
 		}
 		return nil
 	}
-	report := collectDiagnostics(ctx, cwd, captureChecks)
+	report := collectDiagnostics(ctx, reader, cwd, captureChecks)
 	if flagPresent(args, "--json") {
 		if err := json.NewEncoder(w).Encode(report); err != nil {
 			return err
@@ -143,7 +142,7 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer,
 	return nil
 }
 
-func collectDiagnostics(ctx context.Context, cwd string, captureChecks []func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) diagnosticsReport {
+func collectDiagnostics(ctx context.Context, reader outbound.LocalReplicaInspector, cwd string, captureChecks []func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) diagnosticsReport {
 	r := diagnosticsReport{
 		Unchecked: []string{"Git journal", "Git registration", "replica inspection", "historical uploads", "capture recovery"},
 		Backfills: []domain.SnapshotBackfill{}, Captures: []domain.CaptureRecoveryStatus{},
@@ -199,26 +198,32 @@ func collectDiagnostics(ctx context.Context, cwd string, captureChecks []func(co
 	}
 	phaseDone()
 	if state.Exists {
-		store := storage.NewFileStore(state.Root)
-		inspection := store.InspectReplica(ctx)
+		if reader == nil {
+			r.Issues = append(r.Issues, "replica inspection unavailable")
+			return r
+		}
+		inspection := reader.InspectReplica(ctx, state.Root)
 		r.Snapshots, r.HistoryEvents, r.DocumentsChecked = inspection.Snapshots, inspection.HistoryEvents, inspection.DocumentsChecked
 		r.ReplicaInspectionCompleted = inspection.Completed
 		r.Issues = append(r.Issues, inspection.Issues...)
 		if stop() {
 			return r
 		}
+		if !inspection.Completed {
+			r.Issues = append(r.Issues, "replica inspection incomplete")
+			return r
+		}
 	}
 	phaseDone()
 	if state.Exists {
-		store := storage.NewFileStore(state.Root)
-		repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		repo, err := reader.ResolveRepo(ctx, state.Root, cwd)
 		if stop() {
 			return r
 		}
 		if err != nil {
 			r.Issues = append(r.Issues, "Historical uploads: cannot establish repository identity: "+err.Error())
 		} else {
-			jobs, err := store.ListBackfills(ctx, string(repo.ID))
+			jobs, err := reader.ListBackfills(ctx, state.Root, string(repo.ID))
 			if stop() {
 				return r
 			}

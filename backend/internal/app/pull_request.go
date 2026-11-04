@@ -62,10 +62,10 @@ func (s *Service) SubmitMergedPR(ctx context.Context, gitURL string, pr domain.P
 // The receipt is published before append, so a crash or another delivery always
 // resumes the same snapshot. Appending is idempotent and preserves the base DAG.
 func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error) {
-	return s.promoteBoundPR(ctx, repoID, pr, "")
+	return s.prCoordinations().PromoteRepositoryPR(ctx, repoID, pr)
 }
 
-func (s *Service) promoteBoundPRInTransaction(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, expectedBaseID string) (inbound.UpdateRefOutput, error) {
+func (s *PRPromotionWorker) promoteBoundPRInTransaction(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, expectedBaseID string) (inbound.UpdateRefOutput, error) {
 	var zero inbound.UpdateRefOutput
 	verified := make(historyVerification)
 	if err := pr.Validate(); err != nil {
@@ -247,26 +247,14 @@ func (s *Service) promoteBoundPRInTransaction(ctx context.Context, repoID domain
 }
 
 func hasPRCompletion(rows []domain.HistoryEvent, receipt domain.HistoryEvent) (bool, error) {
-	key := sha256.Sum256([]byte(receipt.ID + ":completed"))
-	id := fmt.Sprintf("%x", key[:16])
-	for _, e := range rows {
-		if e.ID != id {
-			continue
-		}
-		if e.Kind != "pr-merge" || !e.PRCompleted || e.PR == nil || *e.PR != *receipt.PR || e.Source != receipt.Source || e.SourceBranchID != receipt.SourceBranchID || e.BranchID != receipt.BranchID {
-			return false, domain.ErrRefConflict
-		}
-		return true, nil
-	}
-	return false, nil
+	return domain.HasPRCompletion(rows, receipt)
 }
 
 // Binding and completion are separate immutable events. If recording completion
 // fails after append, the next delivery verifies reachability and retries it.
 // This also proves joins that leave the base ref unchanged.
-func (s *Service) completePRPromotion(ctx context.Context, receipt domain.HistoryEvent, before domain.ContentHash, out inbound.UpdateRefOutput, verified historyVerification) (inbound.UpdateRefOutput, error) {
-	key := sha256.Sum256([]byte(receipt.ID + ":completed"))
-	id := fmt.Sprintf("%x", key[:16])
+func (s *PRPromotionWorker) completePRPromotion(ctx context.Context, receipt domain.HistoryEvent, before domain.ContentHash, out inbound.UpdateRefOutput, verified historyVerification) (inbound.UpdateRefOutput, error) {
+	id := domain.PRCompletionID(receipt.ID)
 	accepted := func() (bool, error) {
 		rows, err := s.ListHistory(ctx, domain.ContentHash(receipt.RepoID))
 		if err != nil {
@@ -296,7 +284,7 @@ func (s *Service) completePRPromotion(ctx context.Context, receipt domain.Histor
 	return out, nil
 }
 
-func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, events []domain.HistoryEvent) (domain.ContentHash, string, error) {
+func (s *PRPromotionWorker) resolvePRSource(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, events []domain.HistoryEvent) (domain.ContentHash, string, error) {
 	candidates := map[domain.ContentHash]string{}
 	for _, e := range events {
 		if e.Kind != "publish" || e.GitAfter != pr.HeadSHA || e.Target == "" || !domain.MatchesPRSourcePublication(e, pr.HeadBranch, events) {

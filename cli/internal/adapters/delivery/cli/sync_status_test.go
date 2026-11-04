@@ -43,7 +43,7 @@ func TestSyncStatusReadsQueuesWithoutAuditingObjectsOrMutating(t *testing.T) {
 	}
 	before := treeBytes(t, cwd)
 	var out bytes.Buffer
-	if err = RunSyncStatus(ctx, cwd, true, &out); err != nil {
+	if err = RunSyncStatus(ctx, inspectionReaderForTest{}, cwd, true, &out); err != nil {
 		t.Fatal(err)
 	}
 	var report syncStatus
@@ -60,7 +60,7 @@ func TestSyncStatusReadsQueuesWithoutAuditingObjectsOrMutating(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err = RunSyncStatus(ctx, cwd, true, &out); err == nil {
+	if err = RunSyncStatus(ctx, inspectionReaderForTest{}, cwd, true, &out); err == nil {
 		t.Fatal("missing replica reported empty/healthy")
 	}
 	if _, err = os.Stat(filepath.Join(cwd, ".cxt")); !os.IsNotExist(err) {
@@ -84,7 +84,7 @@ func TestSyncStatusReportsCorruptQueueWithoutRepair(t *testing.T) {
 	}
 	before := treeBytes(t, cwd)
 	var out bytes.Buffer
-	if err = RunSyncStatus(ctx, cwd, true, &out); err == nil {
+	if err = RunSyncStatus(ctx, inspectionReaderForTest{}, cwd, true, &out); err == nil {
 		t.Fatal("corrupt queue reported as empty")
 	}
 	var report syncStatus
@@ -118,7 +118,7 @@ func TestSyncStatusReportsMergeDeliveriesWithoutMutating(t *testing.T) {
 	handleIncomingContexts(context.Background(), container, root)
 	before := treeBytes(t, root)
 	var output bytes.Buffer
-	if err := RunSyncStatus(context.Background(), root, true, &output); err != nil {
+	if err := RunSyncStatus(context.Background(), inspectionReaderForTest{}, root, true, &output); err != nil {
 		t.Fatal(err)
 	}
 	var report syncStatus

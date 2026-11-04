@@ -113,7 +113,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	var err error
 	// Init writes the working HEAD; rerunning setup must not reset a selection.
 	if state := gitctx.InspectContextRoot(ctx, cwd); state.Initialized {
-		repo, rerr := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		repo, rerr := resolveLocalRepo(ctx, c, cwd)
 		err = rerr
 		out = inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(state.Root, ".cxt")}
 	} else {
@@ -139,7 +139,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 			return err
 		}
 		if authcfg.Token(server.Host) == "" && os.Getenv("CXT_TOKEN") == "" {
-			if err = deviceLogin(ctx, base, server.Host); err != nil {
+			if err = c.deviceLogin(ctx, base, server.Host); err != nil {
 				return fmt.Errorf("login before repository connection: %w", err)
 			}
 		}
@@ -179,7 +179,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 				ok("login (existing token: %s)", host)
 			} else if base, host2, berr := remoteAPIBase(cwd); berr == nil {
 				fmt.Println("  … login (device flow) — approve in browser")
-				if lerr := deviceLogin(ctx, base, host2); lerr != nil {
+				if lerr := c.deviceLogin(ctx, base, host2); lerr != nil {
 					bad("Login failed: %v (try cxt login later)", lerr)
 				} else {
 					ok("Login completed")

@@ -82,7 +82,7 @@ func (publication *pgLegacyStreamingPublication) matches(job domain.DocFinalizat
 		return err
 	}
 	if !publication.doc.Valid() || publication.doc.Reference().DocumentRef() != job.DocumentRef() ||
-		job.RepoID != publication.job.RepoID || job.ID != publication.job.ID || job.Version != publication.job.Version ||
+		job.RepoID != publication.job.RepoID || job.RepositoryEpoch != publication.job.RepositoryEpoch || job.ID != publication.job.ID || job.Version != publication.job.Version ||
 		!sameDocManifest(job.Manifest, publication.job.Manifest) {
 		return domain.ErrConflict
 	}
@@ -91,12 +91,8 @@ func (publication *pgLegacyStreamingPublication) matches(job domain.DocFinalizat
 }
 
 func (publication *pgLegacyStreamingPublication) current(ctx context.Context, tx pgx.Tx, job domain.DocFinalizationJob) (domain.DocFinalizationJob, error) {
-	var raw []byte
-	var current domain.DocFinalizationJob
-	if err := tx.QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, job.RepoID, job.ID).Scan(&raw); err != nil {
-		return current, mapNoRows(err)
-	}
-	if err := json.Unmarshal(raw, &current); err != nil {
+	current, err := readLockedDocJobPG(ctx, tx, job.RepoID, job.ID)
+	if err != nil {
 		return current, err
 	}
 	if err := publication.matches(current); err != nil {

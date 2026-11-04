@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -16,11 +17,13 @@ var _ outbound.DocJobStore = (*PostgresStore)(nil)
 
 func (s *PostgresStore) GetDocJob(ctx context.Context, repo domain.ContentHash, id string) (j domain.DocFinalizationJob, err error) {
 	var raw []byte
-	err = s.db(ctx).QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2`, repo, id).Scan(&raw)
+	var epoch string
+	err = s.db(ctx).QueryRow(ctx, `SELECT job.payload,catalog.epoch::text FROM doc_finalization_jobs job
+ JOIN repository_catalog_state catalog ON catalog.repo_id=job.repo_id WHERE job.repo_id=$1 AND job.id=$2`, repo, id).Scan(&raw, &epoch)
 	if err != nil {
 		return j, mapNoRows(err)
 	}
-	err = json.Unmarshal(raw, &j)
+	j, err = decodeDocJobLifetimePG(raw, epoch)
 	if err == nil {
 		err = j.Validate()
 	}
@@ -92,29 +95,39 @@ func (s *PostgresStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizat
 		if count >= domain.MaxPendingDocJobs {
 			return domain.ErrConflict
 		}
+		j.RepositoryEpoch, err = retainDocJobRepositoryPG(ctx, s.db(ctx), j.RepoID)
+		if err != nil {
+			return err
+		}
 		out = j
 		return s.writeDocJob(ctx, j)
 	})
 	return
 }
 
-const claimDocJobSQL = `SELECT j.payload FROM doc_finalization_jobs j
+const claimDocJobCandidateSQL = `SELECT j.payload FROM doc_finalization_jobs j
  WHERE ($2='' OR j.repo_id=$2) AND j.state IN ('waiting','retrying','running') AND j.next_attempt<=$1 AND (j.state<>'running' OR j.lease_until<=$1)
  AND NOT EXISTS(SELECT 1 FROM doc_finalization_jobs p WHERE p.repo_id=j.repo_id AND p.id<>j.id AND p.state='running')
  AND (j.state='running' OR NOT EXISTS(SELECT 1 FROM doc_finalization_jobs p WHERE p.repo_id=j.repo_id AND p.state IN ('waiting','retrying') AND p.next_attempt<=$1 AND (p.created_at,p.id)<(j.created_at,j.id)))
- ORDER BY j.next_attempt,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`
+ ORDER BY j.next_attempt,j.created_at,j.id LIMIT 1`
+
+const claimDocJobSQL = claimDocJobCandidateSQL + ` FOR UPDATE OF j SKIP LOCKED`
 
 func (s *PostgresStore) ClaimDocJob(ctx context.Context, repo domain.ContentHash, now time.Time, lease time.Duration) (j domain.DocFinalizationJob, err error) {
-	tx, err := s.db(ctx).Begin(ctx)
+	tx, err := s.db(ctx).BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return j, err
 	}
 	defer rollbackPG(tx)
 	var b []byte
-	if err = tx.QueryRow(ctx, claimDocJobSQL, now, repo).Scan(&b); err != nil {
+	if err = tx.QueryRow(ctx, claimDocJobCandidateSQL, now, repo).Scan(&b); err != nil {
 		return j, mapNoRows(err)
 	}
 	if err = json.Unmarshal(b, &j); err != nil {
+		return j, err
+	}
+	epoch, err := retainDocJobRepositoryPG(ctx, tx, j.RepoID)
+	if err != nil {
 		return j, err
 	}
 	// Row locks alone allow two different jobs for one repo to be selected under
@@ -125,6 +138,12 @@ func (s *PostgresStore) ClaimDocJob(ctx context.Context, repo domain.ContentHash
 	}
 	if !locked {
 		return j, domain.ErrNotFound
+	}
+	if err = tx.QueryRow(ctx, claimDocJobSQL, now, j.RepoID).Scan(&b); err != nil {
+		return j, mapNoRows(err)
+	}
+	if j, err = decodeDocJobLifetimePG(b, epoch); err != nil {
+		return j, err
 	}
 	var other bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM doc_finalization_jobs WHERE repo_id=$1 AND id<>$2 AND state='running')`, j.RepoID, j.ID).Scan(&other); err != nil {
@@ -153,12 +172,8 @@ func (s *PostgresStore) RenewDocJob(ctx context.Context, j domain.DocFinalizatio
 		return err
 	}
 	defer rollbackPG(tx)
-	var b []byte
-	if err := tx.QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&b); err != nil {
-		return mapNoRows(err)
-	}
-	var old domain.DocFinalizationJob
-	if err := json.Unmarshal(b, &old); err != nil {
+	old, err := readLockedDocJobPG(ctx, tx, j.RepoID, j.ID)
+	if err != nil {
 		return err
 	}
 	if !old.Fences(j, now) {
@@ -166,7 +181,7 @@ func (s *PostgresStore) RenewDocJob(ctx context.Context, j domain.DocFinalizatio
 	}
 	old.LeaseUntil = now.Add(lease)
 	old.UpdatedAt = now
-	b, err = json.Marshal(old)
+	b, err := json.Marshal(old)
 	if err != nil {
 		return err
 	}
@@ -182,18 +197,26 @@ func (s *PostgresStore) FinishDocJob(ctx context.Context, j domain.DocFinalizati
 	if err := j.Validate(); err != nil {
 		return err
 	}
+	tx, err := s.db(ctx).BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackPG(tx)
+	current, err := readLockedDocJobPG(ctx, tx, j.RepoID, j.ID)
+	if err != nil {
+		return err
+	}
+	if !current.Fences(j, now) {
+		return domain.ErrConflict
+	}
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	tag, err := s.db(ctx).Exec(ctx, `UPDATE doc_finalization_jobs SET payload=$4,state=$5,next_attempt=$6,lease_until=$7 WHERE repo_id=$1 AND id=$2 AND version=$3 AND state='running' AND lease_until>$8`, j.RepoID, j.ID, j.Version, b, j.State, j.NextAttempt, j.LeaseUntil, now)
-	if err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE doc_finalization_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE repo_id=$1 AND id=$2`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil); err != nil {
 		return err
 	}
-	if tag.RowsAffected() != 1 {
-		return domain.ErrConflict
-	}
-	return nil
+	return storageWriteError(tx.Commit(ctx))
 }
 func (s *PostgresStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJob, doc domain.VerifiedSessionDoc, _ time.Time) error {
 	publication, err := s.PrepareDocJob(ctx, doc)
@@ -230,12 +253,8 @@ func (p pgDocPublication) Complete(ctx context.Context, j domain.DocFinalization
 		return err
 	}
 	return s.WithinRepository(ctx, j.RepoID, func(ctx context.Context) error {
-		var raw []byte
-		if err := s.db(ctx).QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&raw); err != nil {
-			return mapNoRows(err)
-		}
-		var old domain.DocFinalizationJob
-		if err := json.Unmarshal(raw, &old); err != nil {
+		old, err := readLockedDocJobPG(ctx, s.db(ctx), j.RepoID, j.ID)
+		if err != nil {
 			return err
 		}
 		now := time.Now().UTC()
