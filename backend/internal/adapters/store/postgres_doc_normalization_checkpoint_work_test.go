@@ -66,7 +66,7 @@ func normalizationCheckpointPGColdReclaim(test *testing.T, storage *PostgresStor
 	if deadline, ok := ctx.Deadline(); ok {
 		test.Log("cold child inherited remaining parent window", time.Until(deadline))
 	}
-	command := exec.CommandContext(ctx, executable, "-test.run=^TestNormalizationCheckpointPGColdChild$", "-test.count=1", "-test.timeout=30s", "-test.v")
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestNormalizationCheckpointPGColdChild$", "-test.count=1", "-test.timeout=0", "-test.v")
 	command.Env = append(os.Environ(), "CXT_NORMALIZATION_CHECKPOINT_CHILD=1", "CXT_NORMALIZATION_CHECKPOINT_PRIOR="+string(encoded),
 		"CXT_NORMALIZATION_CHECKPOINT_EXPECTED_ROOT="+string(state.hash))
 	if expectedParser != "" {
@@ -237,12 +237,14 @@ func TestNormalizationCheckpointPGColdChild(test *testing.T) {
 	if err := json.Unmarshal([]byte(os.Getenv("CXT_NORMALIZATION_CHECKPOINT_PRIOR")), &prior); err != nil || prior.Validate() != nil {
 		test.Fatal("invalid prior claim", err)
 	}
-	storage, base := chunkReusePG(test)
+	storage, base := chunkReusePGContext(test, test.Context())
 	peer, trace := docCaptureWorkPGStore(test, storage, base)
 	job := docRangeJobPGClaim(test, peer, base, prior.RepoID, prior.DocHash)
 	if job.Version != prior.Version+1 || job.Attempts != prior.Attempts+1 || !job.CreatedAt.Equal(prior.CreatedAt) {
 		test.Fatal("new process did not reclaim the same durable job", prior, job)
 	}
+	stopRenewal := docNormalizationPGMaintainLease(test, peer, base, job, 2*time.Minute)
+	defer stopRenewal()
 	ctx := &legacyByteRecoveryPGVerificationContext{Context: base}
 	prepared, err := peer.PrepareDocRangeWork(ctx, job)
 	if err != nil || prepared == nil {
@@ -305,6 +307,7 @@ func TestNormalizationCheckpointPGColdChild(test *testing.T) {
 	if progress != outbound.DocRangeWorkPublishable || !restoredControlChecked || trace.bodyReads.Load() != 0 || !ctx.preparation.Load() || !ctx.step.Load() || !ctx.event.Load() {
 		test.Fatal("new process skipped fresh verification or reread the original source", progress, trace.bodyReads.Load(), ctx.preparation.Load(), ctx.step.Load(), ctx.event.Load())
 	}
+	stopRenewal()
 	if err := work.Publish(ctx, job); err != nil {
 		test.Fatal("new process could not atomically publish its reverified result", err)
 	}

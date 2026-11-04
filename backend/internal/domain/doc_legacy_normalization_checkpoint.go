@@ -235,12 +235,17 @@ func (work *LegacyNormalizationPreparation) BeginCheckpoint(ctx context.Context)
 			return nil, ErrIntegrity
 		}
 		pending = len(work.pending) - work.next
-		for _, event := range work.pending[work.next:] {
+		for index, event := range work.pending[work.next:] {
 			if event.Encoding == nil || !event.Encoding.initialized || event.Encoding.complete || event.Encoding.err != nil {
 				return nil, ErrIntegrity
 			}
-			if event.Encoding.preparation != nil && !legacyCanonicalInitialState(event.Encoding) {
-				return nil, ErrDocRangeIndexPending
+			if event.Encoding.preparation != nil {
+				if index == 0 && work.written != 0 {
+					return nil, ErrIntegrity
+				}
+				if !legacyCanonicalInitialState(event.Encoding) && (index != 0 || !legacyCanonicalSourceCheckpointState(event.Encoding)) {
+					return nil, ErrDocRangeIndexPending
+				}
 			}
 		}
 	}

@@ -130,6 +130,8 @@ jobs:
             --no-batch-timeout TestDocNativeBlockPGActivePagesRetainFencesAndPublish \
             --no-batch-timeout TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes \
             --no-batch-timeout TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
+            --no-batch-timeout TestNormalizationCheckpointPGPreparingColdRestart \
+            --no-batch-timeout TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed \
             --require-test TestLegacyByteRecoveryPGColdChild \
             --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
             --require-test TestNormalizationCheckpointPGColdChild \

@@ -61,15 +61,20 @@ func TestLegacyNormalizationParserProgressUsesDistinctStageContract(test *testin
 	}
 }
 
-func TestLegacyNormalizationStageCheckpointKeepsUnfinishedPreparationPending(test *testing.T) {
+func TestLegacyNormalizationStageCheckpointCapturesUnwrittenPreparation(test *testing.T) {
 	work, _ := legacyCanonicalInitialCheckpointStage(test, `{"kind":"tool_call","seq":1,"input":{"items":[`+strings.Repeat("null,", 5000)+`null]}}`)
 	if complete, err := work.Step(context.Background()); err != nil || complete || work.phase != legacyNormalizationStage ||
 		work.pending[work.next].Encoding.preparation == nil || legacyCanonicalInitialState(work.pending[work.next].Encoding) {
 		test.Fatal("fixture did not reach actual unfinished output preparation", complete, err)
 	}
-	if capture, err := work.BeginCheckpoint(context.Background()); capture != nil || !errors.Is(err, ErrDocRangeIndexPending) || work.mutation.activity.Load() != 0 {
-		test.Fatal("unsupported preparation acquired a checkpoint or blocked the live worker", err)
+	capture, err := work.BeginCheckpoint(context.Background())
+	if err != nil {
+		test.Fatal("unwritten preparation could not save its native source", err)
 	}
+	if _, err := work.Step(context.Background()); !errors.Is(err, ErrLegacyNormalizationBusy) {
+		test.Fatal("source capture did not freeze preparation", err)
+	}
+	capture.Close()
 	if _, err := work.Step(context.Background()); err != nil {
 		test.Fatal("pending capture did not leave the real worker resumable", err)
 	}
