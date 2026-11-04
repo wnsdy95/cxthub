@@ -55,8 +55,7 @@ func TestDocToolValuesPGColdPreparationCounts(test *testing.T) {
 	for _, count := range []int{100, 1000} {
 		test.Run(fmt.Sprint(count), func(test *testing.T) {
 			fixture, job, prepared := docToolTreePGFixture(test, count)
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(fixture.ctx), 2*time.Minute)
-			defer cancel()
+			ctx := test.Context()
 			fixture.ctx = ctx
 			prepared = completeDocToolTreePG(test, fixture, job, prepared)
 			prepared = docToolKeyMapStoreComplete(test, fixture, job, prepared)
@@ -72,11 +71,18 @@ func TestDocToolValuesPGColdPreparationCounts(test *testing.T) {
 			started := time.Now()
 			steps, requested := 0, 0
 			for prepared.Phase != "tool_values_done" {
+				previous, err := prepared.Encode()
+				if err != nil {
+					test.Fatal(err)
+				}
 				step := docToolValuesPGStep(test, fixture, job, prepared, &requested)
-				var err error
 				prepared, err = fixture.storage.SaveDocEventDisplay(ctx, job, step)
 				if err != nil {
 					test.Fatal(err)
+				}
+				current, err := prepared.Encode()
+				if err != nil || bytes.Equal(previous, current) {
+					test.Fatal("value preparation did not advance", steps, err)
 				}
 				steps++
 				if steps%100 == 0 {

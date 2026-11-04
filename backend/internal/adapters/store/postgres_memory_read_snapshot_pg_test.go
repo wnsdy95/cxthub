@@ -56,9 +56,11 @@ func TestPGMemoryReadAtomicVisibilityCancellationAndPruneLock(test *testing.T) {
 	if _, err := storage.ReadMemoryReadHeader(ctx, repo, bundle.ID); !errors.Is(err, domain.ErrNotFound) {
 		test.Fatal("incomplete result readable", err)
 	}
+	pruneTransaction := catalogTxPG(test, ctx, storage)
 	pruning, stop := context.WithTimeout(ctx, 100*time.Millisecond)
-	_, err := storage.pool.Exec(pruning, `DELETE FROM memory_capture_headers WHERE repo_id=$1 AND capture_id=$2`, string(repo), string(capture.ID))
+	_, err := pruneTransaction.Exec(pruning, `DELETE FROM memory_capture_headers WHERE repo_id=$1 AND capture_id=$2`, string(repo), string(capture.ID))
 	stop()
+	rollbackPG(pruneTransaction)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		test.Fatal("capture was not locked against pruning", err)
 	}

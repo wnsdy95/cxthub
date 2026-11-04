@@ -129,6 +129,7 @@ jobs:
             --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeArgumentFence \
             --no-batch-timeout TestDocNativeBlockPGActivePagesRetainFencesAndPublish \
             --no-batch-timeout TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes \
+            --no-batch-timeout TestDocToolValuesPGColdPreparationCounts \
             --no-batch-timeout TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
             --no-batch-timeout TestNormalizationCheckpointPGPreparingColdRestart \
             --no-batch-timeout TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed \
