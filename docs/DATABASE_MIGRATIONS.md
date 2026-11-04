@@ -53,7 +53,32 @@ update the digest merely to accept an unexplained bundle or history mismatch.
 The private historical migration helper is only for isolated migration fixtures
 and offline tooling; production roots do not receive its apply capability.
 
-## Settings schema release 152
+## Current release catalog
+
+This source release requires the complete 160-file SQL bundle, from
+`0001_init.sql` through `0160_legacy_checkpoint_insert_accounting.sql`. Its catalog
+digest is
+`ec6887aaa6fc2b75c5540d0dbceab39ff1e4b237bbded38acc3707e4bc5fecd4`, matching
+`releasedMigrationCatalogSHA256` in
+`backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
+with the corresponding API, MCP, worker and operator artifacts. The current
+bounded process admission protocol is **7**, as described below.
+
+The historical schema-152 and protocol-v2/v3 qualifications below do not identify
+the current release or qualify its production rollout. The full offline sequence
+still applies: operator application and verification must precede verify-only
+runtime startup. A current binary rejects an incomplete or different catalog,
+even if that catalog was valid for an earlier release.
+
+There is no automatic destructive schema downgrade. Do not remove Codex
+settings, edit migration receipts, rewrite historical SQL, or point an old
+binary at a substitute bundle to force startup. Recovery requires an artifact
+compatible with the actual database catalog (160 after this release's upgrade),
+or a separately verified pre-upgrade backup recovery that explicitly accounts
+for writes after the backup. Local fixture tests are not evidence that a
+production backup or recovery has been tested.
+
+## Historical settings schema release 152
 
 Migration `0152_settings_codex.sql` expands the existing validated
 `repo_settings_kind_check` from `claude/agents` to `claude/agents/codex`, matching
@@ -63,26 +88,21 @@ ownership receipts must remain unchanged. The migration's constraint DDL and
 its own history receipt commit together; cancellation or receipt failure must
 leave the previous constraint intact.
 
-The complete 152-file catalog digest is
+The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
-Ship that exact bundle with the corresponding API, MCP, worker and operator
-artifacts. Current verify-only startup also checks the public table and its
-validated, local, exact kind constraint. A receipt without the expected DDL,
-a missing or unvalidated constraint, or an expanded unknown kind is not a
-compatible schema. Verification does not repair these conditions.
+That bundle belongs only to the corresponding historical artifacts, not the
+current 160-file release. Current verify-only startup still checks the public
+table and its validated, local, exact kind constraint. A receipt without the
+expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
+is not a compatible schema. Verification does not repair these conditions.
 
-This upgrade requires the full offline sequence below. A current 152 binary
-must not serve a 151 database, and a historical 151 binary must not serve a 152
-database. This is a schema transition, not the same-catalog protocol handoff
-qualified earlier. Reusing protocol 3 does not make the catalogs compatible:
-the existing control identity already binds the compiled catalog.
-
-There is no automatic destructive schema downgrade. Do not remove Codex
-settings, edit migration receipts, rewrite historical SQL, or point an old
-binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with schema 152, or a separately verified pre-upgrade backup recovery
-that explicitly accounts for writes after the backup. Local fixture tests are
-not evidence that a production backup or recovery has been tested.
+The historical 151-to-152 upgrade required the full offline sequence below.
+A historical 152 binary must not serve a 151 database, and a historical 151
+binary must not serve a 152 database. That was a schema transition, not the
+historical same-catalog protocol handoff. Reusing protocol 3 did not make those
+catalogs compatible: the control identity already bound the compiled catalog.
+This historical qualification does not establish compatibility with the current
+catalog or protocol 7.
 
 ## Bounded process control compatibility
 
@@ -90,7 +110,9 @@ Canonical budget equality alone is not release compatibility.
 `Budget.Fingerprint()` and `ProcessAdmissionConfig.BudgetFingerprint` remain the
 unchanged raw budget fingerprint. `store.ProcessAdmissionFingerprint` derives the
 runtime control identity as the 43-character, unpadded base64url SHA-256 of
-`fmt.Sprintf("cxthub/process-admission/v%d\x00%s\x00%s", 3, releasedMigrationCatalogSHA256, budgetFingerprint)`.
+`fmt.Sprintf("cxthub/process-admission/v%d\x00%s\x00%s", 7, releasedMigrationCatalogSHA256, budgetFingerprint)`.
+The protocol value is the compiled `processAdmissionProtocolVersion` in
+`backend/internal/adapters/store/process_admission_protocol.go`.
 The separators are actual NUL bytes; the budget input is its canonical,
 unpadded base64url string encoding of a 32-byte hash, not the decoded bytes.
 Invalid or noncanonical budget hashes are rejected. The catalog input is the
@@ -98,7 +120,7 @@ existing compiled released SQL catalog digest described above, not an operator
 override. `OpenProcessAdmission` uses this bound identity for its control session
 and controller fingerprint; it does not replace the raw budget fingerprint.
 
-Every bounded API, MCP, and worker must match that protocol-v3/catalog/budget
+Every bounded API, MCP, and worker must match that protocol-v7/catalog/budget
 identity for the cohort to become ready. No environment override, new ledger,
 or additional admission gate is introduced. Existing role singleton locks,
 namespaces, prefixes, pools, and gates remain unchanged: one process per role,
@@ -106,13 +128,14 @@ four active operations (API two, MCP one, worker one), two shared bulk slots wit
 the existing worker reserve, and the original connection/reserve and spool caps.
 Budgets, leases, and safety checks are not relaxed.
 
-Protocol3 includes current repository-policy pinning for context writes and
-first registration while direct repository metadata commands use target-local
-authority locks. Protocol2 writers do not provide all these policy pins. They
-must not be mixed with protocol3 writers even when the SQL catalog and budget
-are identical. Exact local v2/v3 executable handoff qualification is recorded
-in the incremental publication plan's R4-A-1 evidence; it is not authorization
-to roll out an arbitrary old image or to skip the full drain below.
+Historically, protocol 3 introduced repository-policy pinning for context writes
+and first registration while direct repository metadata commands use target-local
+authority locks. Protocol 2 writers do not provide all these policy pins and
+must not be mixed with protocol 3 writers even when the SQL catalog and budget
+are identical. The exact local v2/v3 executable handoff qualification recorded
+in the incremental publication plan's R4-A-1 evidence is historical only. It
+does not qualify a protocol-7 handoff, authorize an arbitrary old image, or
+permit skipping the full drain below.
 
 Before switching protocols or releases, even without SQL changes, explicitly
 drain and stop **all** API, MCP, and worker roles, including old replicas and
