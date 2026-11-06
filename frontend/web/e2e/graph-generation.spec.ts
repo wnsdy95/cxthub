@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import type { QueryClient } from '@tanstack/react-query';
 import type { GraphReadGeneration, RepositoryRevision, RepositoryView } from '../src/types';
 import { fullFixture, pendingFixture, pendingStateFixture, wireFixture } from '../tests/pendingViewFixture';
+import { repositoryBootstrapFixture } from '../tests/repositoryBootstrapFixture';
 
 const incarnation = '12345678-abcd-4321-9876-123456789abc';
 const counters = { graph: '1', pending: '1', evidence: '1' };
@@ -72,6 +73,7 @@ await import('/e2e/graph-generation-harness.ts');
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/bootstrap')) return route.fulfill({json: repositoryBootstrapFixture(state.full, url.searchParams.get('branch') ?? undefined)});
     if (url.pathname.endsWith('/revision')) {
       await delayed;
       return route.fulfill(state.denied ? { status: 403, json: { error: { code: 'forbidden', message: 'Access denied' } } } : { json: state.revision });

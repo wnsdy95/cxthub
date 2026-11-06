@@ -143,6 +143,8 @@ export const api = {
  retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
   repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes?doc_identities=cxt-manifest-sha256-v1`,
   repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
+  repositoryBootstrap: (repo: string, branch?: string, signal?: AbortSignal) =>
+    call<import('./types').RepositoryBootstrap>('GET', `/repos/${encodeURIComponent(repo)}/bootstrap${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`, undefined, undefined, signal),
   pendingState: async (repo: string, signal?: AbortSignal) => validatePendingState(
     await call<import('./types').PendingStateView>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?projection=on-hold-v1`, undefined, undefined, signal)),
   pendingView: async (repo: string, signal?: AbortSignal) => {

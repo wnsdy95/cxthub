@@ -760,10 +760,23 @@ components:
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+    RepositoryBootstrap:
+      type: object
+      additionalProperties: false
+      required: [revision, default_branch, branch, archived]
+      description: Current branch selection from one authorized metadata snapshot, using only point reads. Requires a pinned read and context protocol 1; unsupported stores return 501 for explicit legacy fallback. Does not include or replace the graph, merged timeline, or historical selection. An archived head has no snapshot or parent; a missing branch has no ref. Never splice these fields into a graph from another revision.
+      properties:
+        revision: { $ref: '#/components/schemas/RepositoryRevision' }
+        default_branch: { type: string }
+        branch: { type: string }
+        ref: { $ref: '#/components/schemas/Ref' }
+        snapshot: { $ref: '#/components/schemas/Snapshot' }
+        parent: { $ref: '#/components/schemas/Snapshot' }
+        archived: { type: boolean }
     PendingStateView:
       type: object
       additionalProperties: false
-      description: Lightweight On Hold classification from a coherent metadata revision. Uses the same publication/reachability rules as the full graph but contains no branch-integration graph, document bodies or code-evidence projection. Must never replace or patch RepositoryView.graph.
+      description: Lightweight On Hold classification from a coherent metadata revision. Uses the same publication/reachability rules as the full graph but contains no branch-integration graph, document bodies or code-evidence projection. HTTP refs contain branch filters only; internal lifecycle and retention refs remain classification inputs and are not deleted. Must never replace or patch RepositoryView.graph.
       required: [projection, revision, default_branch, refs, pending, snapshots, archived_sessions, hold, orphan_sessions, hold_counts]
       properties:
         read_generation:
@@ -4327,6 +4340,32 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/bootstrap:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: branch
+        in: query
+        description: Current branch to select. Defaults to the repository default branch, or main if unset. Repeated parameters are rejected.
+        schema: { type: string }
+    get:
+      operationId: getRepositoryBootstrap
+      summary: Select the first conversation without loading the complete graph
+      description: Requires viewer access and rechecks authorization inside the pinned metadata read after resource admission. Reads a single branch ref, its head, optional first parent and archive marker. A missing branch is an empty selection, not evidence that the repository has no history. No raw conversation bytes or integrated branch timeline are returned.
+      tags: [snapshots]
+      responses:
+        '200':
+          description: Coherent current selection with repository revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryBootstrap' }
+        '422': { description: Invalid branch or duplicate query parameter }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501': { description: This server does not support the bounded bootstrap query }
+        '503': { description: Resource capacity unavailable; bounded retry is permitted }
 
   /repos/{repoID}/view:
     parameters:

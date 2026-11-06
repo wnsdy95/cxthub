@@ -274,7 +274,7 @@ export function Dashboard() {
                     </h4>
                   </div>
                   {activeRepo ? (
-                    <ContextView repo={activeRepo} repositoryMetadata={selected} role={role} />
+                    <ContextView key={activeRepo.id} repo={activeRepo} repositoryMetadata={selected} role={role} />
                   ) : (
                     <div className="empty-box">
                       {t('dashboard.contextEmptyLead')}

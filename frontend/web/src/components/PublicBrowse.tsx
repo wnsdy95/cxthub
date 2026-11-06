@@ -130,7 +130,7 @@ export function PublicBrowse({
             {tab === 'settings' ? (
               <AccessDenied message={t('dashboard.repositoryAccessDenied')} />
             ) : activeRepo ? (
-              <ContextView repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />
+              <ContextView key={activeRepo.id} repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />
             ) : (
               <div className="empty-box">{t('common.noPushedContext')}</div>
             )}

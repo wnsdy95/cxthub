@@ -92,7 +92,7 @@ export function validateGraphRead<View extends RepositoryView | PendingView>(vie
 
 export function graphReadState(view: RepositoryView | undefined, status?: GraphProjectionStatus, error?: unknown, noticeError?: unknown) {
   const failure = error && typeof error === 'object' ? error as { status?: number; code?: string } : undefined;
-  if (noticeError || (failure?.status && [401, 403].includes(failure.status))) return { state: 'denied', showGraph: false } as const;
+  if (noticeError || (failure?.status && [401, 403, 404].includes(failure.status))) return { state: 'denied', showGraph: false } as const;
   if (status?.state === 'disabled' || (!status && !view?.read_generation && !view?.graph.read_generation)) {
     return { state: 'legacy', showGraph: Boolean(view) } as const;
   }

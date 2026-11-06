@@ -98,9 +98,10 @@ func (service *Service) RepositoryStateQueriesForProfile(profile repositoryquery
 	pending, _ := service.meta.(repositoryquery.PendingReader)
 	pendingState, _ := service.meta.(repositoryquery.PendingStatusReader)
 	graphState, _ := service.meta.(repositoryquery.GraphStatusReader)
+	bootstrap, _ := service.meta.(repositoryquery.BootstrapReader)
 	config := repositoryquery.Config{Profile: profile, Scope: scope, Resources: scope, Metadata: service.meta,
 		Revisions: revisions, History: history, Archives: archives, Pending: pending, PendingState: pendingState, GraphState: graphState,
-		AtomicRead: transactions != nil}
+		AtomicRead: transactions != nil, Bootstrap: bootstrap}
 	for repo, enabled := range service.pendingProjectionRepos {
 		if enabled {
 			config.PendingRepos = append(config.PendingRepos, repo)

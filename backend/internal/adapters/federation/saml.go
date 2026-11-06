@@ -363,29 +363,34 @@ func (*SAML) Authorize(ctx context.Context, s outbound.SAMLSettings, id, state s
 type strongSAMLSignature struct{}
 
 func (strongSAMLSignature) VerifySignature(v *dsig.ValidationContext, e *etree.Element) error {
+	_, err := verifiedSAMLSignature(v, e)
+	return err
+}
+
+func verifiedSAMLSignature(v *dsig.ValidationContext, e *etree.Element) (*etree.Element, error) {
 	sig := samlOne(e, dsigNS, "Signature")
 	si := samlOne(sig, dsigNS, "SignedInfo")
 	method := samlOne(si, dsigNS, "SignatureMethod")
 	ref := samlOne(si, dsigNS, "Reference")
 	digest := samlOne(ref, dsigNS, "DigestMethod")
-	if method == nil || digest == nil || ref.SelectAttrValue("URI", "") != "#"+e.SelectAttrValue("ID", "") {
-		return errProvider
+	if method == nil || digest == nil || !samlUnqualifiedClaims(e) || ref.SelectAttrValue("URI", "") != "#"+e.SelectAttrValue("ID", "") {
+		return nil, errProvider
 	}
 	switch method.SelectAttrValue("Algorithm", "") {
 	case dsig.RSASHA256SignatureMethod, dsig.RSASHA384SignatureMethod, dsig.RSASHA512SignatureMethod, dsig.ECDSASHA256SignatureMethod, dsig.ECDSASHA384SignatureMethod, dsig.ECDSASHA512SignatureMethod:
 	default:
-		return errProvider
+		return nil, errProvider
 	}
 	switch digest.SelectAttrValue("Algorithm", "") {
 	case "http://www.w3.org/2001/04/xmlenc#sha256", "http://www.w3.org/2001/04/xmldsig-more#sha384", "http://www.w3.org/2001/04/xmlenc#sha512":
 	default:
-		return errProvider
+		return nil, errProvider
 	}
-	_, err := v.Validate(e)
+	verified, err := v.Validate(e)
 	if err != nil {
-		return errProvider
+		return nil, errProvider
 	}
-	return nil
+	return verified, nil
 }
 
 func (*SAML) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw []byte, started time.Time) (outbound.SAMLProof, error) {
@@ -398,7 +403,7 @@ func (*SAML) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw
 		return zero, err
 	}
 	root, err := samlXML(raw)
-	if err != nil || root.Tag != "Response" || root.NamespaceURI() != samlProtocol {
+	if err != nil || root.Tag != "Response" || root.NamespaceURI() != samlProtocol || !samlUnqualifiedClaims(root) {
 		return zero, errProvider
 	}
 	allowed := samlAllowed(samlProtocol, "Status")
@@ -420,28 +425,46 @@ func (*SAML) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw
 	if !samlOnly(ael, allowed) || !samlOnly(sub, samlAllowed(samlNS, "NameID", "SubjectConfirmation")) || !samlOnly(cond, samlAllowed(samlNS, "AudienceRestriction", "OneTimeUse")) {
 		return zero, errProvider
 	}
+	status := samlOne(root, samlProtocol, "Status")
+	statusCode := samlOne(status, samlProtocol, "StatusCode")
+	authentication := samlOne(ael, samlNS, "AuthnStatement")
+	authContext := samlOne(authentication, samlNS, "AuthnContext")
+	classRefs := samlChildren(authContext, samlNS, "AuthnContextClassRef")
+	if !samlScalar(statusCode) || statusCode.SelectAttrValue("Value", "") != saml.StatusSuccess || !samlOnly(status, samlAllowed(samlProtocol, "StatusCode", "StatusMessage", "StatusDetail")) {
+		return zero, errProvider
+	}
+	if !samlScalar(samlOne(root, samlNS, "Issuer")) || !samlScalar(samlOne(ael, samlNS, "Issuer")) || !samlScalar(samlOne(sub, samlNS, "NameID")) || !samlOnly(confirmation, samlAllowed(samlNS, "SubjectConfirmationData")) || !samlScalar(samlOne(confirmation, samlNS, "SubjectConfirmationData")) {
+		return zero, errProvider
+	}
+	if !samlOnly(authentication, samlAllowed(samlNS, "SubjectLocality", "AuthnContext")) || !samlOnly(authContext, samlAllowed(samlNS, "AuthnContextClassRef", "AuthnContextDecl", "AuthnContextDeclRef", "AuthenticatingAuthority")) || len(classRefs) > 1 || (len(classRefs) == 1 && !samlScalar(classRefs[0])) {
+		return zero, errProvider
+	}
 	ars := samlChildren(cond, samlNS, "AudienceRestriction")
 	if len(ars) == 0 {
 		return zero, errProvider
 	}
 	for _, ar := range ars {
 		au := samlOne(ar, samlNS, "Audience")
-		if au == nil || au.Text() != s.EntityID || !samlOnly(ar, samlAllowed(samlNS, "Audience")) {
+		if !samlScalar(au) || au.Text() != s.EntityID || !samlOnly(ar, samlAllowed(samlNS, "Audience")) {
 			return zero, errProvider
 		}
 	}
-	// Validate assertion signature even if a signed response would permit the
-	// library to skip it. This profile always requires both signatures to verify
-	// when both are present, and never accepts an unsigned assertion.
-	a, err := sp.ParseXMLResponse(raw, []string{id}, sp.AcsURL)
+	if samlOne(root, dsigNS, "Signature") != nil {
+		root, err = verifiedSAMLElement(sp, root)
+		if err != nil {
+			return zero, errProvider
+		}
+	}
+	ael, err = verifiedSAMLElement(sp, ael)
 	if err != nil {
 		return zero, errProvider
 	}
-	// Verify the assertion independently with the pinned metadata roots.
-	if err = verifySAMLAssertionSignature(sp, ael); err != nil {
+	var a samlAssertionClaims
+	var response samlResponseClaims
+	if samlDecodeClaims(ael, &a) != nil || samlDecodeClaims(root, &response) != nil {
 		return zero, errProvider
 	}
-	if a.ID == "" || a.Version != "2.0" || a.Subject == nil || a.Subject.NameID == nil || a.Conditions == nil || len(a.Subject.SubjectConfirmations) != 1 || len(a.AuthnStatements) != 1 {
+	if a.ID == "" || a.Version != "2.0" || a.Issuer == nil || a.Issuer.Value != sp.IDPMetadata.EntityID || a.Subject == nil || a.Subject.NameID == nil || a.Conditions == nil || len(a.Subject.SubjectConfirmations) != 1 || len(a.AuthnStatements) != 1 {
 		return zero, errProvider
 	}
 	n := a.Subject.NameID
@@ -452,11 +475,7 @@ func (*SAML) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw
 	if n.Format != string(saml.PersistentNameIDFormat) || n.Value == "" || len(n.Value) > 1024 || (n.NameQualifier != "" && n.NameQualifier != sp.IDPMetadata.EntityID) || (n.SPNameQualifier != "" && n.SPNameQualifier != s.EntityID) || n.SPProvidedID != "" || c.Method != "urn:oasis:names:tc:SAML:2.0:cm:bearer" || d == nil || d.InResponseTo != id || d.Recipient != s.ACS || !d.NotBefore.IsZero() || c.NameID != nil {
 		return zero, errProvider
 	}
-	var response saml.Response
-	if xml.Unmarshal(raw, &response) != nil {
-		return zero, errProvider
-	}
-	if response.Issuer == nil || response.Issuer.Value != sp.IDPMetadata.EntityID || response.IssueInstant.After(now.Add(time.Minute)) || a.IssueInstant.After(now.Add(time.Minute)) || a.IssueInstant.Before(started.Add(-time.Minute)) || auth.AuthnInstant.Before(started.Add(-time.Minute)) || auth.AuthnInstant.After(now.Add(time.Minute)) || started.IsZero() || started.After(now) || now.Sub(started) > 10*time.Minute {
+	if response.Issuer == nil || response.Issuer.Value != sp.IDPMetadata.EntityID || !validSAMLIssueInstant(response.IssueInstant, now) || !validSAMLIssueInstant(a.IssueInstant, now) || a.IssueInstant.Before(started.Add(-time.Minute)) || auth.AuthnInstant.Before(started.Add(-time.Minute)) || auth.AuthnInstant.After(now.Add(time.Minute)) || started.IsZero() || started.After(now) || now.Sub(started) > 10*time.Minute {
 		return zero, errProvider
 	}
 	expires := a.Conditions.NotOnOrAfter
@@ -484,20 +503,21 @@ func (*SAML) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw
 	}
 	return outbound.SAMLProof{AssertionID: a.ID, FederationProof: outbound.FederationProof{Issuer: a.Issuer.Value, Subject: n.Value, AuthenticatedAt: auth.AuthnInstant, ExpiresAt: expires, SessionExpiresAt: auth.SessionNotOnOrAfter, ACR: acr}}, nil
 }
-func verifySAMLAssertionSignature(sp *saml.ServiceProvider, el *etree.Element) error {
-	// Preserve inherited namespace context exactly as the protocol library does.
-	// Validating a detached subtree without those bindings can change C14N bytes.
+func verifiedSAMLElement(sp *saml.ServiceProvider, el *etree.Element) (*etree.Element, error) {
+	if el == nil {
+		return nil, errProvider
+	}
 	ns, err := etreeutils.NSBuildParentContext(el)
 	if err != nil {
-		return errProvider
+		return nil, errProvider
 	}
 	ns, err = ns.SubContext(el)
 	if err != nil {
-		return errProvider
+		return nil, errProvider
 	}
 	el, err = etreeutils.NSDetatch(ns, el)
 	if err != nil {
-		return errProvider
+		return nil, errProvider
 	}
 	var certs []*x509.Certificate
 	for _, k := range sp.IDPMetadata.IDPSSODescriptors[0].KeyDescriptors {
@@ -508,12 +528,12 @@ func verifySAMLAssertionSignature(sp *saml.ServiceProvider, el *etree.Element) e
 			b, _ := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(c.Data), ""))
 			cert, err := x509.ParseCertificate(b)
 			if err != nil {
-				return errProvider
+				return nil, errProvider
 			}
 			certs = append(certs, cert)
 		}
 	}
 	v := dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{Roots: certs})
 	v.IdAttribute = "ID"
-	return (strongSAMLSignature{}).VerifySignature(v, el)
+	return verifiedSAMLSignature(v, el)
 }

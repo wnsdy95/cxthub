@@ -31,7 +31,7 @@ func repositoryQueryViolations(source string, module string) ([]string, error) {
 		"ArchiveReader": true, "PendingReader": true, "PendingStatusReader": true, "GraphStatusReader": true, "Profile": true, "bool": true,
 		"GraphScope": true, "GraphResources": true, "PublishedGraphReader": true, "ServingGraphRepair": true, "ProjectionGraphRepair": true,
 		"ProjectionCacheScope": true, "GraphGenerationReader": true, "ProjectionMetadataReader": true, "ContributionEvidence": true, "GraphReadScope": true,
-		"ContextReadScope": true, "ContextIndexReader": true}
+		"ContextReadScope": true, "ContextIndexReader": true, "BootstrapReader": true}
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch inspected := node.(type) {
 		case *ast.TypeAssertExpr:
@@ -97,7 +97,7 @@ func TestRepositoryStateQueryProductionBoundary(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	owned := map[string]string{"RepositoryRevision": "readRepository", "RepositoryChangeState": "readRepository", "GetPendingState": "readRepository",
+	owned := map[string]string{"RepositoryRevision": "readRepository", "RepositoryChangeState": "readRepository", "GetPendingState": "readRepository", "GetRepositoryBootstrap": "readRepository",
 		"GetRepositoryView": "readPublishedGraphResult", "GetPendingView": "readPublishedGraphResult", "QueryGraphState": "readPublishedGraphResult"}
 	present := map[string]bool{}
 	for _, entry := range entries {

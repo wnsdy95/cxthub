@@ -206,3 +206,28 @@ receives explicit archived snapshot IDs, then filters visibility only after the
 complete branch graph projection. Archiving never changes publication tiers,
 branch refs, PR completion, memory applicability or MCP/CLI context selection.
 See [session archives](LIVE_CAPTURE.md#session-archives).
+
+### First conversation without the full graph
+
+`GET /repos/{repoID}/bootstrap` selects the current branch ref, its snapshot and
+optional first parent. A session archive is checked by its stable key, including
+the legacy snapshot-key fallback. PostgreSQL reads these fields and the repository
+revision in one pinned snapshot, rechecking viewer authorization after admission.
+The endpoint neither scans snapshot history nor calculates PR inclusion.
+
+This bounded path requires context protocol 1 and snapshot-capable storage.
+Unsupported stores return an explicit `repository_bootstrap_unavailable` 501;
+only that unsupported contract permits the legacy graph-based selection path.
+Permission, integrity and overload failures do not silently select another head.
+
+The browser starts the first conversation page before the heavy graph and On Hold
+reads. A graph failure does not prevent a separately authorized conversation from
+being read. Bootstrap metadata never patches a differently revised graph; user
+selection and archived-session visibility remain separate concerns. The existing
+change stream still carries revisions rather than conversation bodies.
+
+The `on-hold-v1` HTTP response includes branch refs for filters, not internal
+retention tags. Classification and stored projection parts retain the full inputs.
+This reduces response size without changing publication or archive semantics.
+The complete graph response is still a separate large read; bootstrap does not
+claim to make that response bounded or activate durable projections automatically.

@@ -18,6 +18,7 @@ import (
 )
 
 type sessionArchiveTestStore interface {
+	GetSessionArchive(context.Context, domain.ContentHash, domain.ContentHash) (domain.SessionArchive, error)
 	outbound.SessionArchiveStore
 	outbound.MetadataStore
 	outbound.BlobStore
@@ -104,6 +105,16 @@ func checkSessionArchivePersistence(t *testing.T, ctx context.Context, st sessio
 		}
 	}
 	want := []domain.SessionArchive{first, provider, anonymous, otherAnonymous}
+	for _, record := range append([]domain.SessionArchive{other}, want...) {
+		got, err := st.GetSessionArchive(ctx, record.RepoID, record.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireSessionArchive(t, got, record)
+	}
+	if _, err := st.GetSessionArchive(ctx, repo, domain.HashContent([]byte("missing archive"))); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("missing archive lookup", err)
+	}
 	sort.Slice(want, func(left, right int) bool { return want[left].Key < want[right].Key })
 	for attempt := 0; attempt < 2; attempt++ {
 		records, err := st.ListSessionArchives(ctx, repo)

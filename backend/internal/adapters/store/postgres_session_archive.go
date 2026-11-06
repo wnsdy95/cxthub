@@ -4,13 +4,36 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 var _ outbound.SessionArchiveStore = (*PostgresStore)(nil)
+
+func (s *PostgresStore) GetSessionArchive(ctx context.Context, repo, key domain.ContentHash) (domain.SessionArchive, error) {
+	if err := validateHashes(repo, key); err != nil {
+		return domain.SessionArchive{}, err
+	}
+	var record domain.SessionArchive
+	err := s.db(ctx).QueryRow(ctx, `SELECT repo_id,key,snapshot_id,provider,session_id,archived_at,archived_by
+ FROM session_archives WHERE repo_id=$1 AND key=$2`, repo, key).Scan(
+		&record.RepoID, &record.Key, &record.SnapshotID, &record.Provider, &record.SessionID, &record.ArchivedAt, &record.ArchivedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SessionArchive{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.SessionArchive{}, err
+	}
+	if validateSessionArchive(record) != nil || record.RepoID != repo || record.Key != key {
+		return domain.SessionArchive{}, domain.ErrIntegrity
+	}
+	return record, nil
+}
 
 func (s *PostgresStore) ListSessionArchives(ctx context.Context, repo domain.ContentHash) ([]domain.SessionArchive, error) {
 	if err := validateHash(repo); err != nil {
