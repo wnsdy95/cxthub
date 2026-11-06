@@ -760,6 +760,12 @@ components:
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+    GraphReadiness:
+      type: object
+      required: [selected, projection]
+      properties:
+        selected: { type: boolean }
+        projection: { $ref: '#/components/schemas/GraphProjectionStatus' }
     RepositoryBootstrap:
       type: object
       additionalProperties: false
@@ -4340,6 +4346,27 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/graph-readiness:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: getGraphReadiness
+      summary: Check qualified graph readiness before switching the read path
+      description: Read-only metadata query, independent of read-path activation. Rechecks viewer authorization in a pinned read. Does not load graph bodies, build projections, or change routing. Complete means a retained generation passed comparison, not that all source changes have been applied; current describes that separately.
+      tags: [snapshots]
+      responses:
+        '200':
+          description: Selected read path and independently qualified generation status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GraphReadiness' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501': { description: Pinned graph metadata queries are unavailable }
+        '503': { description: Resource capacity unavailable }
 
   /repos/{repoID}/bootstrap:
     parameters:

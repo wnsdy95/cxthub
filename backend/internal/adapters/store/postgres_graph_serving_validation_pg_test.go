@@ -81,18 +81,18 @@ func TestPGGraphServingReadRejectsLogicalSizeAndExtraRowsBeforePayload(t *testin
 			switch mode {
 			case "header", "body":
 				kind := "header"
+				key := "view"
 				if mode == "body" {
-					kind = initial.Parts[0].Kind
 					for _, part := range initial.Parts {
 						if part.Kind != "header" {
-							kind = part.Kind
+							kind, key = part.Kind, part.Key
 							break
 						}
 					}
 				}
-				catalogExecPG(t, ctx, storage.pool, `UPDATE graph_serving_parts SET image=jsonb_build_object('large',repeat('x',$3)) WHERE repo_id=$1 AND kind=$2`, string(repo), kind, domain.MaxPendingProjectionOutputBytes)
+				catalogExecPG(t, ctx, storage.pool, `UPDATE graph_serving_parts SET image=jsonb_build_object('large',repeat('x',$4)) WHERE repo_id=$1 AND kind=$2 AND entity_key=$3`, string(repo), kind, key, domain.MaxGraphViewProjectionOutputBytes)
 			case "rows", "extra":
-				count := domain.MaxPendingProjectionOutputRows + 1
+				count := domain.MaxGraphViewProjectionOutputParts + 1
 				if mode == "extra" {
 					count, want = 1, domain.ErrIntegrity
 				}

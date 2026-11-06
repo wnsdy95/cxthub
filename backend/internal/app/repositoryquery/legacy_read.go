@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -50,6 +51,9 @@ func (queries *LegacyGraphQueries) QueryGraphState(ctx context.Context, repo dom
 }
 
 func readLegacyGraphResult[Result any](ctx context.Context, queries *LegacyGraphQueries, repo domain.ContentHash, read func(context.Context) (Result, error)) (Result, error) {
+	graphdiagnostics.SelectRoute(ctx, graphdiagnostics.Legacy)
+	ctx, span := graphdiagnostics.Start(ctx, graphdiagnostics.LegacyRead)
+	defer span.End()
 	var result Result
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return result, err
@@ -92,6 +96,8 @@ func (queries *LegacyGraphQueries) LoadRepositoryView(ctx context.Context, repo 
 }
 
 func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers RepositoryViewReaders) (domain.RepositoryView, error) {
+	ctx, span := graphdiagnostics.Start(ctx, graphdiagnostics.LoadView)
+	defer span.End()
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.RepositoryView{}, err
 	}
@@ -107,7 +113,9 @@ func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers Re
 		}
 	}
 	var view domain.RepositoryView
-	metadata, err := readers.Metadata.GetRepo(ctx, repo)
+	metadata, err := graphdiagnostics.Read(ctx, graphdiagnostics.Metadata, func(bound context.Context) (domain.Repo, error) {
+		return readers.Metadata.GetRepo(bound, repo)
+	})
 	if err == nil {
 		if metadata.ID != repo {
 			return domain.RepositoryView{}, domain.ErrIntegrity
@@ -116,30 +124,44 @@ func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers Re
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return domain.RepositoryView{}, err
 	}
-	if view.Refs, err = readers.Metadata.ListRefs(ctx, repo); err != nil {
+	if view.Refs, err = graphdiagnostics.Read(ctx, graphdiagnostics.Refs, func(bound context.Context) ([]domain.Ref, error) {
+		return readers.Metadata.ListRefs(bound, repo)
+	}); err != nil {
 		return domain.RepositoryView{}, err
 	}
-	if view.Snapshots, err = readers.Metadata.ListSnapshots(ctx, repo, ""); err != nil {
+	if view.Snapshots, err = graphdiagnostics.Read(ctx, graphdiagnostics.Snapshots, func(bound context.Context) ([]domain.Snapshot, error) {
+		return readers.Metadata.ListSnapshots(bound, repo, "")
+	}); err != nil {
 		return domain.RepositoryView{}, err
 	}
-	if view.Reflog, err = readers.Metadata.ReadReflog(ctx, repo); err != nil {
+	if view.Reflog, err = graphdiagnostics.Read(ctx, graphdiagnostics.Reflog, func(bound context.Context) ([]domain.RefLogEntry, error) {
+		return readers.Metadata.ReadReflog(bound, repo)
+	}); err != nil {
 		return domain.RepositoryView{}, err
 	}
 	if readers.History == nil {
 		return domain.RepositoryView{}, errors.New("context history storage unavailable")
 	}
-	if view.History, err = readers.History.ListHistoryEvents(ctx, repo); err != nil {
+	if view.History, err = graphdiagnostics.Read(ctx, graphdiagnostics.History, func(bound context.Context) ([]domain.HistoryEvent, error) {
+		return readers.History.ListHistoryEvents(bound, repo)
+	}); err != nil {
 		return domain.RepositoryView{}, err
 	}
-	if view.Pending, err = readers.Metadata.ListPendings(ctx, repo); err != nil {
+	if view.Pending, err = graphdiagnostics.Read(ctx, graphdiagnostics.Pending, func(bound context.Context) ([]domain.Pending, error) {
+		return readers.Metadata.ListPendings(bound, repo)
+	}); err != nil {
 		return domain.RepositoryView{}, err
 	}
-	if view.Unsync, err = readers.Metadata.ListUnsyncs(ctx, repo); err != nil {
+	if view.Unsync, err = graphdiagnostics.Read(ctx, graphdiagnostics.Unsync, func(bound context.Context) ([]domain.Unsync, error) {
+		return readers.Metadata.ListUnsyncs(bound, repo)
+	}); err != nil {
 		return domain.RepositoryView{}, err
 	}
 	var archives []domain.SessionArchive
 	if readers.Archives != nil {
-		if archives, err = readers.Archives.ListSessionArchives(ctx, repo); err != nil {
+		if archives, err = graphdiagnostics.Read(ctx, graphdiagnostics.Archives, func(bound context.Context) ([]domain.SessionArchive, error) {
+			return readers.Archives.ListSessionArchives(bound, repo)
+		}); err != nil {
 			return domain.RepositoryView{}, err
 		}
 	}
@@ -152,10 +174,14 @@ func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers Re
 		}
 	}
 	if readers.Revisions != nil {
-		if view.Revision, err = readers.Revisions.RepositoryRevision(ctx, repo); err != nil {
+		if view.Revision, err = graphdiagnostics.Read(ctx, graphdiagnostics.Revision, func(bound context.Context) (domain.RepositoryRevision, error) {
+			return readers.Revisions.RepositoryRevision(bound, repo)
+		}); err != nil {
 			return domain.RepositoryView{}, err
 		}
 	}
+	ctx, project := graphdiagnostics.Start(ctx, graphdiagnostics.ViewProjection)
+	defer project.End()
 	if err := domain.ValidateRepositoryViewScope(ctx, repo, view); err != nil {
 		return domain.RepositoryView{}, err
 	}

@@ -21,7 +21,7 @@ func TestGraphProjectionSchemaCacheKeepsObjectValidationLocal(t *testing.T) {
 	decode := func(raw []byte) ([]graphProjectionSchemaCacheRow, error) {
 		var rows []graphProjectionSchemaCacheRow
 		field := graphProjectionTypedField("rows", &rows)
-		budget := graphProjectionBudget{ctx: ctx}
+		budget := newGraphProjectionBudget(ctx, GraphProjectionRules)
 		err := field.decode(ctx, raw, &budget)
 		return rows, err
 	}
@@ -44,19 +44,20 @@ func TestGraphProjectionSchemaCacheKeepsObjectValidationLocal(t *testing.T) {
 			t.Fatalf("cached schema relaxed validation for %s: %v", raw, err)
 		}
 		var got []graphProjectionSchemaCacheRow
-		budget := graphProjectionBudget{ctx: ctx}
+		budget := newGraphProjectionBudget(ctx, GraphProjectionRules)
 		if err := graphProjectionTypedField("rows", &got).decode(ctx, valid, &budget); err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatal("failed or previous decode changed cached schema", got, err)
 		}
 	}
-	budget := graphProjectionBudget{ctx: ctx, rows: MaxPendingProjectionOutputRows - 1}
+	budget := newGraphProjectionBudget(ctx, GraphProjectionRules)
+	budget.rows = MaxPendingProjectionOutputRows - 1
 	var got []graphProjectionSchemaCacheRow
 	if err := graphProjectionTypedField("rows", &got).decode(ctx, valid, &budget); !errors.Is(err, ErrRepositoryViewSourceLimit) || got != nil {
 		t.Fatal("warm schema bypassed per-read nested row budget", got, err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	budget = graphProjectionBudget{ctx: canceled}
+	budget = newGraphProjectionBudget(canceled, GraphProjectionRules)
 	if err := graphProjectionTypedField("rows", &got).decode(canceled, valid, &budget); !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal("warm schema bypassed cancellation", got, err)
 	}
@@ -123,7 +124,7 @@ func TestGraphProjectionSchemaCacheConcurrentFirstUse(t *testing.T) {
 			for iteration := range 10 {
 				var rows []concurrentRow
 				field := graphProjectionTypedField("rows", &rows)
-				budget := graphProjectionBudget{ctx: context.Background()}
+				budget := newGraphProjectionBudget(context.Background(), GraphProjectionRules)
 				if iteration%2 == 0 {
 					if err := field.decode(budget.ctx, []byte(`{"value":[{"id":"first","sequence":"1"},{"id":"second","sequence":"2","optional":true}]}`), &budget); err != nil || len(rows) != 2 || !rows[1].Optional {
 						t.Error("concurrent cache validation", err)

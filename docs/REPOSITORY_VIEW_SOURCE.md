@@ -319,9 +319,12 @@ but rejects missing fields, duplicate/unknown fields, extra parts and corruption
 Ordering, nil versus empty values, and internal merge identities are preserved.
 Only the default server graph is published here; a selected historical position
 is reconstructed from the same completed metadata bundle, not current source
-rows. The 4 MiB/20,000-item safety limits count
-nested memberships too, not 20,000 graph nodes. Oversize graphs fail explicitly,
-without truncation; wider scale limits need measurement before serving cutover.
+rows. The rules-2 graph/view output has independent 32 MiB/1,000,000-structural-entry
+limits; the rules-1 graph and pending output retain 4 MiB/20,000 entries.
+Structural entries include nested memberships, not only graph nodes. Persisted
+part discovery remains capped at 20,000 parts. Oversize output fails explicitly,
+without truncation. These are logical bounds, not an RSS guarantee; production-sized
+measurement and exact-generation qualification are required before serving cutover.
 
 Unchanged completed deltas advance only the ready checkpoint. A rules mismatch
 wakes an idle consumer even without a source write and starts a fresh dataset.
@@ -345,6 +348,14 @@ in `cxtd`. The reader requires the complete rules-2 bundle, not graph-only rules
 parts. Graph and companion metadata are published atomically under the same
 ready checkpoint. Capturing the next dataset never overwrites the metadata read
 from the previous ready generation. Reader configuration cannot enable a worker.
+
+Before switching reads, `GET /api/v1/repos/{repoID}/graph-readiness` returns
+`selected` (this process's read routing) separately from `projection` (qualified
+serving readiness). It uses current repository authorization, resource admission
+and pinned metadata reads, without reading graph bodies or starting a build.
+Missing/mismatched qualification cannot advertise a complete generation. This
+endpoint also works while the reader allowlist is empty. See
+[graph read rollout](GRAPH_READ_ROLLOUT.md) for staged activation and rollback.
 
 Full repository, graph and live responses include `read_generation`: generation
 ID, applied/source epochs, expected rules, `complete` and `current`. A complete

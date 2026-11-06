@@ -17,21 +17,21 @@ func TestGraphViewProjectionEncodeBudgets(t *testing.T) {
 		change func(*RepositoryView)
 	}{
 		{"aggregate rows", func(view *RepositoryView) {
-			view.Graph.SnapshotIDs = make([]ContentHash, MaxPendingProjectionOutputRows/2)
-			view.Snapshots = []Snapshot{{RepoID: repo, Branches: make([]string, MaxPendingProjectionOutputRows/2)}}
+			view.Graph.SnapshotIDs = make([]ContentHash, MaxGraphViewProjectionStructuralEntries/2)
+			view.Snapshots = []Snapshot{{RepoID: repo, Branches: make([]string, MaxGraphViewProjectionStructuralEntries/2)}}
 		}},
 		{"nested command rows", func(view *RepositoryView) {
-			view.History = []HistoryEvent{{RepoID: string(repo), Creation: &GitCreation{Command: make([]string, MaxPendingProjectionOutputRows)}}}
+			view.History = []HistoryEvent{{RepoID: string(repo), Creation: &GitCreation{Command: make([]string, MaxGraphViewProjectionStructuralEntries)}}}
 		}},
 		{"nested archive rows", func(view *RepositoryView) {
-			view.ArchivedSessions = []SessionArchiveView{{SessionArchive: SessionArchive{RepoID: repo}, SnapshotIDs: make([]ContentHash, MaxPendingProjectionOutputRows)}}
+			view.ArchivedSessions = []SessionArchiveView{{SessionArchive: SessionArchive{RepoID: repo}, SnapshotIDs: make([]ContentHash, MaxGraphViewProjectionStructuralEntries)}}
 		}},
 		{"aggregate bytes", func(view *RepositoryView) {
-			view.Graph.PrimaryBranch = strings.Repeat("x", MaxPendingProjectionOutputBytes/2)
-			view.DefaultBranch = strings.Repeat("y", MaxPendingProjectionOutputBytes/2)
+			view.Graph.PrimaryBranch = strings.Repeat("x", MaxGraphViewProjectionOutputBytes/2)
+			view.DefaultBranch = strings.Repeat("y", MaxGraphViewProjectionOutputBytes/2)
 		}},
 		{"escaped metadata", func(view *RepositoryView) {
-			view.Snapshots = []Snapshot{{RepoID: repo, Message: strings.Repeat("<", MaxPendingProjectionOutputBytes/6)}}
+			view.Snapshots = []Snapshot{{RepoID: repo, Message: strings.Repeat("<", MaxGraphViewProjectionOutputBytes/6)}}
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -43,8 +43,8 @@ func TestGraphViewProjectionEncodeBudgets(t *testing.T) {
 		})
 	}
 	view := RepositoryView{
-		Graph:     &GraphState{Version: 1, SnapshotIDs: make([]ContentHash, MaxPendingProjectionOutputRows/2-1)},
-		Snapshots: []Snapshot{{RepoID: repo, Branches: make([]string, MaxPendingProjectionOutputRows/2)}},
+		Graph:     &GraphState{Version: 1, SnapshotIDs: make([]ContentHash, MaxGraphViewProjectionStructuralEntries/2-1)},
+		Snapshots: []Snapshot{{RepoID: repo, Branches: make([]string, MaxGraphViewProjectionStructuralEntries/2)}},
 	}
 	parts, err := EncodeGraphViewProjection(context.Background(), repo, view)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestGraphViewProjectionEncodeBudgets(t *testing.T) {
 	if got, err := DecodeGraphViewProjection(context.Background(), repo, parts); err != nil || !reflect.DeepEqual(got, view) {
 		t.Fatal("exact row cap lost bundle data", err)
 	}
-	view = RepositoryView{Graph: &GraphState{Version: 1}, DefaultBranch: strings.Repeat("x", MaxPendingProjectionOutputBytes-32<<10)}
+	view = RepositoryView{Graph: &GraphState{Version: 1}, DefaultBranch: strings.Repeat("x", MaxGraphViewProjectionOutputBytes-32<<10)}
 	parts, err = EncodeGraphViewProjection(context.Background(), repo, view)
 	if err != nil {
 		t.Fatal("near byte cap rejected", err)
@@ -74,25 +74,25 @@ func TestGraphViewProjectionDecodeBudgetsBeforeParse(t *testing.T) {
 		change func([]GraphProjectionPart) []GraphProjectionPart
 	}{
 		{"part count", func([]GraphProjectionPart) []GraphProjectionPart {
-			return make([]GraphProjectionPart, MaxPendingProjectionOutputRows+1)
+			return make([]GraphProjectionPart, MaxGraphViewProjectionOutputParts+1)
 		}},
 		{"body bytes", func(parts []GraphProjectionPart) []GraphProjectionPart {
-			parts[0].Value = []byte(strings.Repeat("!", MaxPendingProjectionOutputBytes))
+			parts[0].Value = []byte(strings.Repeat("!", MaxGraphViewProjectionOutputBytes))
 			return parts
 		}},
 		{"aggregate before identity and parse", func(parts []GraphProjectionPart) []GraphProjectionPart {
 			parts[0] = GraphProjectionPart{Kind: "invalid", Key: "", Value: []byte("not-json")}
-			parts[1].Value = []byte(strings.Repeat("!", MaxPendingProjectionOutputBytes/2))
-			parts[2].Value = []byte(strings.Repeat("!", MaxPendingProjectionOutputBytes/2))
+			parts[1].Value = []byte(strings.Repeat("!", MaxGraphViewProjectionOutputBytes/2))
+			parts[2].Value = []byte(strings.Repeat("!", MaxGraphViewProjectionOutputBytes/2))
 			return parts
 		}},
 		{"aggregate nested rows", func(parts []GraphProjectionPart) []GraphProjectionPart {
-			graphProjectionTestRebind(t, parts, "graph.snapshot_ids", graphProjectionTestJSON(t, graphProjectionValue[[]ContentHash]{Value: make([]ContentHash, MaxPendingProjectionOutputRows/2)}))
-			graphProjectionTestRebind(t, parts, "snapshots", graphProjectionTestJSON(t, graphProjectionValue[[]graphViewProjectionSnapshot]{Value: []graphViewProjectionSnapshot{{graphViewProjectionSnapshotValue: graphViewProjectionSnapshotValue{RepoID: repo}, Branches: make([]string, MaxPendingProjectionOutputRows/2)}}}))
+			graphProjectionTestRebind(t, parts, "graph.snapshot_ids", graphProjectionTestJSON(t, graphProjectionValue[[]ContentHash]{Value: make([]ContentHash, MaxGraphViewProjectionStructuralEntries/2)}))
+			graphProjectionTestRebind(t, parts, "snapshots", graphProjectionTestJSON(t, graphProjectionValue[[]graphViewProjectionSnapshot]{Value: []graphViewProjectionSnapshot{{graphViewProjectionSnapshotValue: graphViewProjectionSnapshotValue{RepoID: repo}, Branches: make([]string, MaxGraphViewProjectionStructuralEntries/2)}}}))
 			return parts
 		}},
 		{"nested command rows", func(parts []GraphProjectionPart) []GraphProjectionPart {
-			graphProjectionTestRebind(t, parts, "history", graphProjectionTestJSON(t, graphProjectionValue[[]graphViewProjectionHistory]{Value: []graphViewProjectionHistory{{HistoryEvent: HistoryEvent{RepoID: string(repo)}, Creation: &graphViewProjectionCreation{Command: make([]string, MaxPendingProjectionOutputRows)}}}}))
+			graphProjectionTestRebind(t, parts, "history", graphProjectionTestJSON(t, graphProjectionValue[[]graphViewProjectionHistory]{Value: []graphViewProjectionHistory{{HistoryEvent: HistoryEvent{RepoID: string(repo)}, Creation: &graphViewProjectionCreation{Command: make([]string, MaxGraphViewProjectionStructuralEntries)}}}}))
 			return parts
 		}},
 	} {
@@ -136,11 +136,11 @@ func TestGraphViewProjectionHeaderDiscovery(t *testing.T) {
 		})
 	}
 	oversized := header
-	oversized.Value = []byte(strings.Repeat("!", MaxPendingProjectionOutputBytes))
+	oversized.Value = []byte(strings.Repeat("!", MaxGraphViewProjectionOutputBytes))
 	if kinds, keys, err := GraphViewProjectionPartKeys(oversized); !errors.Is(err, ErrRepositoryViewSourceLimit) || kinds != nil || keys != nil {
 		t.Fatal("oversized header parsed before cap", err)
 	}
-	index := graphProjectionHeader{Version: 1, Rules: GraphViewProjectionRules, Projection: "graph-view-v2", RepoID: repo, Parts: make([]graphProjectionPartIdentity, MaxPendingProjectionOutputRows+1)}
+	index := graphProjectionHeader{Version: 1, Rules: GraphViewProjectionRules, Projection: "graph-view-v2", RepoID: repo, Parts: make([]graphProjectionPartIdentity, MaxGraphViewProjectionOutputParts+1)}
 	for position := range index.Parts {
 		index.Parts[position] = graphProjectionPartIdentity{Kind: "field", Key: "revision", Digest: HashContent(nil)}
 	}

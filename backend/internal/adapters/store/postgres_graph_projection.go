@@ -29,6 +29,8 @@ func (s *PostgresStore) graphProjection() projectionStore {
 		partKeys:          domain.GraphViewProjectionPartKeys,
 		repairQuarantined: graphProjectionRepairQuarantined,
 		claimHeldSQL:      graphProjectionClaimHeldSQL,
+		maxOutputBytes:    domain.MaxGraphViewProjectionOutputBytes,
+		maxOutputRows:     domain.MaxGraphViewProjectionOutputParts,
 	}}
 }
 

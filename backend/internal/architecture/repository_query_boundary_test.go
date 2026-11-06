@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ func repositoryQueryViolations(source string, module string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if strings.Contains(path, ".") && path != module+"/internal/domain" && path != module+"/internal/ports/inbound" && path != module+"/internal/app/contextprojection" && path != module+"/internal/app/evidencequery" {
+		if strings.Contains(path, ".") && path != module+"/internal/domain" && path != module+"/internal/ports/inbound" && path != module+"/internal/app/contextprojection" && path != module+"/internal/app/evidencequery" && path != module+"/internal/app/graphdiagnostics" {
 			violations = append(violations, "repository query imports forbidden dependency "+path)
 		}
 	}
@@ -155,6 +156,12 @@ func TestRepositoryStateQueryProductionBoundary(test *testing.T) {
 func TestRepositoryStateQueryBoundaryRejectsBadFixtures(test *testing.T) {
 	for _, fixture := range []struct{ code, want string }{
 		{`import "github.com/wnsdy95/cxthub/backend/internal/app"`, "forbidden dependency"},
+		{`import "github.com/wnsdy95/cxthub/backend/internal/adapters/store"`, "forbidden dependency"},
+		{`import "github.com/wnsdy95/cxthub/backend/internal/ports/outbound"`, "forbidden dependency"},
+		{`import "github.com/wnsdy95/cxthub/backend/internal/app/projectionworker"`, "forbidden dependency"},
+		{`import "github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics/adapter"`, "forbidden dependency"},
+		{`import "github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics_extra"`, "forbidden dependency"},
+		{`import "github.com/jackc/pgx/v5"`, "forbidden dependency"},
 		{`func read(value any) { _ = value.(interface{ Write() }) }`, "capability discovery"},
 		{`type Other struct { parent *Service }`, "Service backreference"},
 		{`type Other struct { admission chan struct{} }`, "admission channel"},
@@ -167,6 +174,65 @@ func TestRepositoryStateQueryBoundaryRejectsBadFixtures(test *testing.T) {
 		violations, err := repositoryQueryViolations("package repositoryquery\n"+fixture.code, "github.com/wnsdy95/cxthub/backend")
 		if err != nil || !strings.Contains(fmt.Sprint(violations), fixture.want) {
 			test.Fatal("forbidden query boundary escaped the guard", fixture.want, violations, err)
+		}
+	}
+}
+
+func TestRepositoryStateQueryBoundaryAllowsOnlyExactDiagnosticsPackage(test *testing.T) {
+	const module = "github.com/wnsdy95/cxthub/backend"
+	source := "package repositoryquery\nimport diagnostics " + strconv.Quote(module+"/internal/app/graphdiagnostics") + "\n"
+	violations, err := repositoryQueryViolations(source, module)
+	if err != nil || len(violations) != 0 {
+		test.Fatal("approved instrumentation import rejected", violations, err)
+	}
+	for _, forbidden := range []string{
+		`func read(value any) { _ = value.(interface{ Write() }) }`,
+		`type Queries struct { observer *diagnostics.Recorder }`,
+		`type Other struct { admission chan struct{} }`,
+	} {
+		violations, err := repositoryQueryViolations(source+forbidden, module)
+		if err != nil || len(violations) == 0 {
+			test.Fatal("instrumentation exemption bypassed ownership checks", forbidden, violations, err)
+		}
+	}
+}
+
+func TestGraphDiagnosticsProductionImportsOnlyStandardLibrary(test *testing.T) {
+	module, err := readGoModule(filepath.Join("..", ".."))
+	if err != nil {
+		test.Fatal(err)
+	}
+	command := exec.Command("go", "list", "std")
+	command.Dir = module.directory
+	output, err := command.CombinedOutput()
+	if err != nil {
+		test.Fatalf("list standard library: %v\n%s", err, output)
+	}
+	standard := make(map[string]bool)
+	for _, path := range strings.Fields(string(output)) {
+		standard[path] = true
+	}
+	directory := filepath.Join(module.directory, "internal", "app", "graphdiagnostics")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		test.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(directory, entry.Name()), nil, parser.ImportsOnly)
+		if err != nil {
+			test.Fatal(err)
+		}
+		for _, imported := range file.Imports {
+			path, err := strconv.Unquote(imported.Path.Value)
+			if err != nil {
+				test.Fatal(err)
+			}
+			if !standard[path] {
+				test.Errorf("%s: instrumentation must remain standard-library-only: %s", entry.Name(), path)
+			}
 		}
 	}
 }

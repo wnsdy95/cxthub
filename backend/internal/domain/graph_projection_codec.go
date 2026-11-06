@@ -118,7 +118,7 @@ func EncodeGraphProjection(ctx context.Context, repo ContentHash, graph GraphSta
 	if ValidateContentHash(repo) != nil || graph.Version != 1 || graph.PositionEvent != "" || graph.ReadGeneration != nil {
 		return nil, ErrIntegrity
 	}
-	budget := graphProjectionBudget{ctx: ctx}
+	budget := newGraphProjectionBudget(ctx, GraphProjectionRules)
 	if err := budget.measure(reflect.ValueOf(graph)); err != nil {
 		return nil, err
 	}
@@ -155,14 +155,14 @@ func graphProjectionEncodeFields(ctx context.Context, repo ContentHash, rules in
 	parts := make([]GraphProjectionPart, 0, len(fields)+1)
 	size := 0
 	for _, field := range fields {
-		part, err := graphProjectionEncodePart(ctx, "field", field.key, field.value, &size)
+		part, err := graphProjectionEncodePart(ctx, rules, "field", field.key, field.value, &size)
 		if err != nil {
 			return nil, err
 		}
 		parts = append(parts, part)
 		header.Parts = append(header.Parts, graphProjectionPartIdentity{Kind: part.Kind, Key: part.Key, Digest: HashContent(part.Value)})
 	}
-	part, err := graphProjectionEncodePart(ctx, "header", "view", header, &size)
+	part, err := graphProjectionEncodePart(ctx, rules, "header", "view", header, &size)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +172,9 @@ func graphProjectionEncodeFields(ctx context.Context, repo ContentHash, rules in
 	return append(parts, part), nil
 }
 
-func graphProjectionEncodePart(ctx context.Context, kind, key string, value any, size *int) (GraphProjectionPart, error) {
-	budget := graphProjectionBudget{ctx: ctx, size: *size + len(kind) + len(key) + 128}
+func graphProjectionEncodePart(ctx context.Context, rules int, kind, key string, value any, size *int) (GraphProjectionPart, error) {
+	budget := newGraphProjectionBudget(ctx, rules)
+	budget.size = *size + len(kind) + len(key) + 128
 	if err := budget.measure(reflect.ValueOf(value)); err != nil {
 		return GraphProjectionPart{}, err
 	}
@@ -182,7 +183,7 @@ func graphProjectionEncodePart(ctx context.Context, kind, key string, value any,
 		return GraphProjectionPart{}, fmt.Errorf("%w: graph projection JSON: %v", ErrIntegrity, err)
 	}
 	*size += len(kind) + len(key) + len(raw) + 128
-	if *size > MaxPendingProjectionOutputBytes {
+	if *size > budget.maxBytes {
 		return GraphProjectionPart{}, ErrRepositoryViewSourceLimit
 	}
 	return GraphProjectionPart{Kind: kind, Key: key, Value: raw}, ctx.Err()
@@ -197,13 +198,14 @@ func graphProjectionDecodeFieldHeader(ctx context.Context, part GraphProjectionP
 	if err := ctx.Err(); err != nil {
 		return header, err
 	}
-	if len(part.Value) > MaxPendingProjectionOutputBytes-len("headerview")-128 {
+	budget := newGraphProjectionBudget(ctx, rules)
+	if len(part.Value) > budget.maxBytes-len("headerview")-128 {
 		return header, ErrRepositoryViewSourceLimit
 	}
 	if part.Kind != "header" || part.Key != "view" {
 		return header, ErrIntegrity
 	}
-	budget := graphProjectionBudget{ctx: ctx}
+	budget.maxRows = budget.maxParts
 	if err := graphProjectionJSONSchema(ctx, part.Value, reflect.TypeFor[graphProjectionHeader](), &budget); err != nil {
 		return header, err
 	}
@@ -263,7 +265,8 @@ func graphProjectionDecodeFields(ctx context.Context, repo ContentHash, parts []
 	if ValidateContentHash(repo) != nil {
 		return ErrIntegrity
 	}
-	if len(parts) > MaxPendingProjectionOutputRows {
+	budget := newGraphProjectionBudget(ctx, rules)
+	if len(parts) > budget.maxParts {
 		return ErrRepositoryViewSourceLimit
 	}
 	size := 0
@@ -272,7 +275,7 @@ func graphProjectionDecodeFields(ctx context.Context, repo ContentHash, parts []
 			return err
 		}
 		for _, length := range []int{len(part.Kind), len(part.Key), len(part.Value), 128} {
-			if length > MaxPendingProjectionOutputBytes-size {
+			if length > budget.maxBytes-size {
 				return ErrRepositoryViewSourceLimit
 			}
 			size += length
@@ -300,7 +303,6 @@ func graphProjectionDecodeFields(ctx context.Context, repo ContentHash, parts []
 	for _, field := range fields {
 		byKey[field.key] = field
 	}
-	budget := graphProjectionBudget{ctx: ctx}
 	for _, identity := range header.Parts {
 		part, exists := rows[[2]string{identity.Kind, identity.Key}]
 		if !exists {
@@ -311,7 +313,7 @@ func graphProjectionDecodeFields(ctx context.Context, repo ContentHash, parts []
 			return fmt.Errorf("%w: graph projection field %s", err, identity.Key)
 		}
 		canonicalSize := 0
-		canonical, err := graphProjectionEncodePart(ctx, part.Kind, part.Key, field.value, &canonicalSize)
+		canonical, err := graphProjectionEncodePart(ctx, rules, part.Kind, part.Key, field.value, &canonicalSize)
 		if err != nil {
 			return err
 		}

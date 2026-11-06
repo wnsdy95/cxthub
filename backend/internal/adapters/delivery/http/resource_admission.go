@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app"
+	"github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -80,6 +81,8 @@ func (s *Server) resourceRequestDeadline(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) graphRead(w http.ResponseWriter, r *http.Request, read func(*http.Request) (any, error)) {
+	w, r, finish := observeGraphRead(w, r)
+	defer finish()
 	if s.repositoryGraphs == nil {
 		s.writeError(w, http.StatusNotImplemented, "graph_query_unavailable", "repository graph query unavailable")
 		return
@@ -108,7 +111,12 @@ func (s *Server) graphRead(w http.ResponseWriter, r *http.Request, read func(*ht
 			authorize = s.memoryReadAuthorizer(request, s.repoID(request))
 		}
 		request = request.WithContext(inbound.WithDocumentReadAuthorizer(request.Context(), authorize))
+		queryContext, query := graphdiagnostics.Start(request.Context(), graphdiagnostics.Query)
+		if query != nil {
+			request = request.WithContext(queryContext)
+		}
 		value, err := read(request)
+		query.End()
 		if err != nil {
 			return err
 		}

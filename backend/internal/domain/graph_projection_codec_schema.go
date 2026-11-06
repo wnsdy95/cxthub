@@ -13,9 +13,25 @@ import (
 )
 
 type graphProjectionBudget struct {
-	ctx  context.Context
-	size int
-	rows int
+	ctx      context.Context
+	size     int
+	rows     int
+	maxBytes int
+	maxRows  int
+	maxParts int
+}
+
+func newGraphProjectionBudget(ctx context.Context, rules int) graphProjectionBudget {
+	budget := graphProjectionBudget{
+		ctx: ctx, maxBytes: MaxPendingProjectionOutputBytes,
+		maxRows: MaxPendingProjectionOutputRows, maxParts: MaxPendingProjectionOutputRows,
+	}
+	if rules == GraphViewProjectionRules {
+		budget.maxBytes = MaxGraphViewProjectionOutputBytes
+		budget.maxRows = MaxGraphViewProjectionStructuralEntries
+		budget.maxParts = MaxGraphViewProjectionOutputParts
+	}
+	return budget
 }
 
 type graphProjectionJSONField struct {
@@ -60,7 +76,7 @@ func (budget *graphProjectionBudget) addBytes(count int) error {
 	if err := budget.ctx.Err(); err != nil {
 		return err
 	}
-	if count > MaxPendingProjectionOutputBytes-budget.size {
+	if count > budget.maxBytes-budget.size {
 		return ErrRepositoryViewSourceLimit
 	}
 	budget.size += count
@@ -71,7 +87,7 @@ func (budget *graphProjectionBudget) addRows(count int) error {
 	if err := budget.ctx.Err(); err != nil {
 		return err
 	}
-	if count > MaxPendingProjectionOutputRows-budget.rows {
+	if count > budget.maxRows-budget.rows {
 		return ErrRepositoryViewSourceLimit
 	}
 	budget.rows += count
