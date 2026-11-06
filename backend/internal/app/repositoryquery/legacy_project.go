@@ -8,6 +8,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/app/contextprojection"
 	"github.com/wnsdy95/cxthub/backend/internal/app/evidencequery"
+	"github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -20,6 +21,8 @@ func ProjectionGenerationUnavailable(err error) bool {
 }
 
 func ReadProjectionGraphSourceGeneration(ctx context.Context, repo domain.ContentHash, scope ProjectionCacheScope, generations GraphGenerationReader, captured bool) (domain.RepositoryViewSourceCheckpoint, bool, error) {
+	ctx, span := graphdiagnostics.Start(ctx, graphdiagnostics.SourceGeneration)
+	defer span.End()
 	if err := ctx.Err(); err != nil {
 		return domain.RepositoryViewSourceCheckpoint{}, false, err
 	}
@@ -104,7 +107,11 @@ func ProjectGraphPosition(view domain.RepositoryView, position string) (domain.G
 }
 
 func (projection *LegacyProjection) Project(ctx context.Context, view domain.RepositoryView, position string) (domain.GraphState, error) {
+	ctx, span := graphdiagnostics.Start(ctx, graphdiagnostics.Projection)
+	defer span.End()
+	_, base := graphdiagnostics.Start(ctx, graphdiagnostics.GraphBase)
 	graph, err := projectGraphBase(view, position)
+	base.End()
 	if err != nil {
 		return graph, err
 	}
@@ -121,7 +128,9 @@ func (projection *LegacyProjection) Project(ctx context.Context, view domain.Rep
 	if repo == "" {
 		return graph, nil
 	}
-	metadata, err := projection.metadata.GetRepo(ctx, repo)
+	metadata, err := graphdiagnostics.Read(ctx, graphdiagnostics.Metadata, func(bound context.Context) (domain.Repo, error) {
+		return projection.metadata.GetRepo(bound, repo)
+	})
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return graph, err
 	}
@@ -141,14 +150,18 @@ func (projection *LegacyProjection) Project(ctx context.Context, view domain.Rep
 	if err := ctx.Err(); err != nil {
 		return graph, err
 	}
-	prs, err := projection.contributions.VerifiedPR(ctx, repo, view.History)
+	prs, err := graphdiagnostics.Read(ctx, graphdiagnostics.PREvidence, func(bound context.Context) ([]evidencequery.VerifiedPRContribution, error) {
+		return projection.contributions.VerifiedPR(bound, repo, view.History)
+	})
 	if err != nil {
 		return graph, err
 	}
 	if err := ctx.Err(); err != nil {
 		return graph, err
 	}
-	git, err := projection.contributions.VerifiedGit(ctx, repo, view.History)
+	git, err := graphdiagnostics.Read(ctx, graphdiagnostics.GitEvidence, func(bound context.Context) ([]evidencequery.VerifiedGitContribution, error) {
+		return projection.contributions.VerifiedGit(bound, repo, view.History)
+	})
 	if err != nil {
 		return graph, err
 	}
@@ -164,6 +177,7 @@ func (projection *LegacyProjection) Project(ctx context.Context, view domain.Rep
 	key.Generation = generation
 	if cacheable {
 		if cached, found := projection.branches.Get(key); found {
+			graphdiagnostics.RecordCache(ctx, graphdiagnostics.BranchCache, graphdiagnostics.Hit)
 			graph.BranchContexts = cached
 			for branch, inclusion := range cached {
 				graph.BranchSnapshots[branch] = append([]domain.ContentHash{}, inclusion.SnapshotIDs...)
@@ -172,7 +186,12 @@ func (projection *LegacyProjection) Project(ctx context.Context, view domain.Rep
 			domain.ApplyGraphIntegrations(&graph, view.Snapshots)
 			return graph, nil
 		}
+		graphdiagnostics.RecordCache(ctx, graphdiagnostics.BranchCache, graphdiagnostics.Miss)
+	} else {
+		graphdiagnostics.RecordCache(ctx, graphdiagnostics.BranchCache, graphdiagnostics.Ineligible)
 	}
+	ctx, branches := graphdiagnostics.Start(ctx, graphdiagnostics.BranchProjection)
+	defer branches.End()
 	inputs, err := contextprojection.NewInputs(ctx, repo, view.Snapshots, view.History)
 	if err != nil {
 		return graph, err
@@ -211,10 +230,13 @@ func (projection *LegacyProjection) Project(ctx context.Context, view domain.Rep
 }
 
 func (projection *LegacyProjection) Cached(ctx context.Context, repo domain.ContentHash, view domain.RepositoryView, position string) (domain.GraphState, error) {
+	ctx, span := graphdiagnostics.Start(ctx, graphdiagnostics.CachedProjection)
+	defer span.End()
 	if err := ctx.Err(); err != nil {
 		return domain.GraphState{}, err
 	}
 	if !projection.scope.IsPinnedRead(ctx) || view.Revision == (domain.RepositoryRevision{}) {
+		graphdiagnostics.RecordCache(ctx, graphdiagnostics.GraphCache, graphdiagnostics.Ineligible)
 		return projection.Admitted(ctx, view, position)
 	}
 	generation, complete, err := projection.SourceGeneration(ctx, repo)
@@ -222,32 +244,49 @@ func (projection *LegacyProjection) Cached(ctx context.Context, repo domain.Cont
 		return domain.GraphState{}, err
 	}
 	if !complete {
+		graphdiagnostics.RecordCache(ctx, graphdiagnostics.GraphCache, graphdiagnostics.Ineligible)
 		return projection.Admitted(ctx, view, position)
 	}
-	metadata, err := projection.metadata.GetRepo(ctx, repo)
+	metadata, err := graphdiagnostics.Read(ctx, graphdiagnostics.Metadata, func(bound context.Context) (domain.Repo, error) {
+		return projection.metadata.GetRepo(bound, repo)
+	})
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return domain.GraphState{}, err
 	}
 	fingerprint := sha256.New()
-	if err := json.NewEncoder(fingerprint).Encode(view); err != nil {
+	_, hashing := graphdiagnostics.Start(ctx, graphdiagnostics.Fingerprint)
+	err = json.NewEncoder(fingerprint).Encode(view)
+	hashing.End()
+	if err != nil {
 		return domain.GraphState{}, err
 	}
 	key := GraphProjectionKey{Repo: repo, Revision: view.Revision, Source: generation, Position: position, Origin: metadata.GitRemoteURL}
 	copy(key.Inputs[:], fingerprint.Sum(nil))
 	if encoded, found := projection.graphs.Get(key); found {
-		return DecodeGraphProjection(ctx, encoded)
+		graphdiagnostics.RecordCache(ctx, graphdiagnostics.GraphCache, graphdiagnostics.Hit)
+		return graphdiagnostics.Read(ctx, graphdiagnostics.CacheDecode, func(bound context.Context) (domain.GraphState, error) {
+			return DecodeGraphProjection(bound, encoded)
+		})
 	}
+	graphdiagnostics.RecordCache(ctx, graphdiagnostics.GraphCache, graphdiagnostics.Miss)
+	_, admission := graphdiagnostics.Start(ctx, graphdiagnostics.BuildAdmission)
 	bound, release, err := projection.resources.AcquireBuild(ctx)
+	admission.End()
 	if err != nil {
 		return domain.GraphState{}, err
 	}
 	defer release()
+	_, lookup := graphdiagnostics.Start(ctx, graphdiagnostics.CacheLookup)
 	encoded, finish, err := projection.graphs.Lookup(key)
+	lookup.End()
 	if err != nil {
 		return domain.GraphState{}, err
 	}
 	if finish == nil {
-		return DecodeGraphProjection(bound, encoded)
+		graphdiagnostics.RecordCache(ctx, graphdiagnostics.GraphCache, graphdiagnostics.Hit)
+		return graphdiagnostics.Read(bound, graphdiagnostics.CacheDecode, func(decode context.Context) (domain.GraphState, error) {
+			return DecodeGraphProjection(decode, encoded)
+		})
 	}
 	defer finish()
 	graph, err := projection.Admitted(bound, view, position)
@@ -257,7 +296,9 @@ func (projection *LegacyProjection) Cached(ctx context.Context, repo domain.Cont
 	if err != nil {
 		return domain.GraphState{}, err
 	}
-	encoded, err = EncodeGraphProjection(bound, graph)
+	encoded, err = graphdiagnostics.Read(bound, graphdiagnostics.CacheEncode, func(encode context.Context) ([]byte, error) {
+		return EncodeGraphProjection(encode, graph)
+	})
 	if errors.Is(err, ErrGraphProjectionCacheLimit) {
 		return graph, bound.Err()
 	}
@@ -272,7 +313,9 @@ func (projection *LegacyProjection) Cached(ctx context.Context, repo domain.Cont
 }
 
 func (projection *LegacyProjection) Admitted(ctx context.Context, view domain.RepositoryView, position string) (domain.GraphState, error) {
+	_, admission := graphdiagnostics.Start(ctx, graphdiagnostics.BuildAdmission)
 	bound, release, err := projection.resources.AcquireBuild(ctx)
+	admission.End()
 	if err != nil {
 		return domain.GraphState{}, err
 	}

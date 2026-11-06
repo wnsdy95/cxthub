@@ -2,7 +2,6 @@ package repositoryquery
 
 import (
 	"context"
-	"errors"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -47,29 +46,9 @@ func (queries *Queries) RepositoryChangeState(ctx context.Context, repo domain.C
 			if queries.graphState == nil {
 				return domain.RepositoryChangeState{}, domain.ErrCatalogUnsupported
 			}
-			projection, err := queries.graphState.ReadQualifiedGraphProjectionStatus(bound, repo)
+			status, err := queries.graphReadiness(bound, repo)
 			if err != nil {
 				return domain.RepositoryChangeState{}, err
-			}
-			if projection.Source.RepoID != repo {
-				return domain.RepositoryChangeState{}, domain.ErrIntegrity
-			}
-			status, err := projection.Status()
-			if err != nil {
-				return domain.RepositoryChangeState{}, err
-			}
-			if projection.Enabled && !projection.NeedsAttention && projection.Complete {
-				if err := domain.ValidateGraphReadQualification(bound, projection); err != nil {
-					switch {
-					case errors.Is(err, domain.ErrGraphProjectionNotReady):
-						status.State = "catching_up"
-					case errors.Is(err, domain.ErrGraphProjectionFailed):
-						status.State = "needs_attention"
-					default:
-						return domain.RepositoryChangeState{}, err
-					}
-					status.Complete, status.Current, status.Generation = false, false, ""
-				}
 			}
 			state.GraphProjection = &status
 		}

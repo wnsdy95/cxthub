@@ -223,7 +223,7 @@ func TestPGGraphProjectionBundleCorruptionIsValidatedForCurrentAndPriorReads(t *
 				case "missing":
 					catalogExecPG(t, ctx, storage.pool, `DELETE FROM graph_projection_parts WHERE repo_id=$1`, string(repo))
 				case "oversized":
-					catalogExecPG(t, ctx, storage.pool, `UPDATE graph_projection_parts SET image=jsonb_build_object('oversized',repeat('x',$2::int)) WHERE repo_id=$1 AND kind='header'`, string(repo), domain.MaxPendingProjectionOutputBytes)
+					catalogExecPG(t, ctx, storage.pool, `UPDATE graph_projection_parts SET image=jsonb_build_object('oversized',repeat('x',$2::int)) WHERE repo_id=$1 AND kind='header'`, string(repo), domain.MaxGraphViewProjectionOutputBytes)
 					want = domain.ErrRepositoryViewSourceLimit
 				}
 				status := graphProjectionStatusObservedPG(t, ctx, storage, repo)

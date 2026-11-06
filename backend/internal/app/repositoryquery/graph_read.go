@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -31,6 +32,9 @@ func (queries *PublishedGraphQueries) QueryGraphState(ctx context.Context, repo 
 }
 
 func readPublishedGraphResult[Result any](ctx context.Context, queries *PublishedGraphQueries, repo domain.ContentHash, read func(context.Context) (Result, error)) (Result, error) {
+	graphdiagnostics.SelectRoute(ctx, graphdiagnostics.Published)
+	ctx, span := graphdiagnostics.Start(ctx, graphdiagnostics.PublishedRead)
+	defer span.End()
 	var result Result
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return result, err
@@ -39,7 +43,16 @@ func readPublishedGraphResult[Result any](ctx context.Context, queries *Publishe
 		return result, domain.ErrCatalogUnsupported
 	}
 	err := queries.scope.ReadGraph(ctx, repo, func(bound context.Context) error {
-		var err error
+		_, admission := graphdiagnostics.Start(bound, graphdiagnostics.BuildAdmission)
+		bound, release, err := queries.resources.AcquireBuild(bound)
+		admission.End()
+		if err != nil {
+			return err
+		}
+		defer release()
+		if err := bound.Err(); err != nil {
+			return err
+		}
 		result, err = read(bound)
 		return err
 	})
@@ -51,7 +64,9 @@ func readPublishedGraphResult[Result any](ctx context.Context, queries *Publishe
 }
 
 func (queries *PublishedGraphQueries) readPublishedGraphView(ctx context.Context, repo domain.ContentHash) (domain.RepositoryView, error) {
-	projection, err := queries.reader.ReadQualifiedGraphProjection(ctx, repo)
+	projection, err := graphdiagnostics.Read(ctx, graphdiagnostics.PublishedLoad, func(bound context.Context) (domain.GraphProjectionRead, error) {
+		return queries.reader.ReadQualifiedGraphProjection(bound, repo)
+	})
 	if err != nil {
 		return domain.RepositoryView{}, err
 	}
@@ -68,7 +83,9 @@ func (queries *PublishedGraphQueries) readPublishedGraphView(ctx context.Context
 	if !projection.Enabled || !projection.Complete {
 		return domain.RepositoryView{}, domain.ErrGraphProjectionNotReady
 	}
-	view, err := domain.DecodeGraphViewProjection(ctx, repo, projection.Parts)
+	view, err := graphdiagnostics.Read(ctx, graphdiagnostics.PublishedDecode, func(bound context.Context) (domain.RepositoryView, error) {
+		return domain.DecodeGraphViewProjection(bound, repo, projection.Parts)
+	})
 	if err != nil {
 		failure := &domain.GraphProjectionCorruption{RepoID: repo, Dataset: projection.Dataset,
 			Applied: projection.Applied, Rules: projection.Rules, Serving: true, ServingFence: projection.ServingFence, Cause: err}
@@ -77,7 +94,10 @@ func (queries *PublishedGraphQueries) readPublishedGraphView(ctx context.Context
 		}
 		return domain.RepositoryView{}, err
 	}
-	if err := domain.ValidateGraphReadQualification(ctx, projection); err != nil {
+	_, qualification := graphdiagnostics.Start(ctx, graphdiagnostics.PublishedQualification)
+	err = domain.ValidateGraphReadQualification(ctx, projection)
+	qualification.End()
+	if err != nil {
 		return domain.RepositoryView{}, err
 	}
 	generation := domain.GraphReadGeneration{
@@ -98,15 +118,12 @@ func (queries *PublishedGraphQueries) readPublishedGraph(ctx context.Context, re
 	if position == "" {
 		return *view.Graph, nil
 	}
-	bound, release, err := queries.resources.AcquireBuild(ctx)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return domain.GraphState{}, err
 	}
-	defer release()
-	if err := bound.Err(); err != nil {
-		return domain.GraphState{}, err
-	}
+	_, positionSpan := graphdiagnostics.Start(ctx, graphdiagnostics.PositionProjection)
 	graph, err := ProjectGraphPosition(view, position)
+	positionSpan.End()
 	if err != nil {
 		if !view.ReadGeneration.Current && errors.Is(err, domain.ErrNotFound) {
 			err = domain.ErrGraphProjectionNotReady
@@ -114,7 +131,7 @@ func (queries *PublishedGraphQueries) readPublishedGraph(ctx context.Context, re
 		return domain.GraphState{}, err
 	}
 	graph.ReadGeneration = view.ReadGeneration
-	return graph, bound.Err()
+	return graph, ctx.Err()
 }
 
 func (queries *PublishedGraphQueries) repairGraphRead(ctx context.Context, repo domain.ContentHash, readErr error) error {
@@ -123,6 +140,8 @@ func (queries *PublishedGraphQueries) repairGraphRead(ctx context.Context, repo 
 		failure.RepoID != repo || failure.Validate() != nil || !queries.scope.GraphRepairAllowed(ctx) {
 		return readErr
 	}
+	ctx, repair := graphdiagnostics.Start(ctx, graphdiagnostics.Repair)
+	defer repair.End()
 	err := queries.scope.RepairGraph(ctx, repo, func(bound context.Context) error {
 		if failure.Serving {
 			return queries.servingRepairs.RequestGraphServingRepair(bound, *failure)

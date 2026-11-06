@@ -125,7 +125,7 @@ func TestGraphProjectionRepeatedMembershipRowBudget(t *testing.T) {
 	const membershipsPerNode, fixedRows = 8, 6
 	maxNodes := (MaxPendingProjectionOutputRows - fixedRows) / membershipsPerNode
 	want := makeGraph(maxNodes)
-	budget := graphProjectionBudget{ctx: context.Background()}
+	budget := newGraphProjectionBudget(context.Background(), GraphProjectionRules)
 	if err := budget.measure(reflect.ValueOf(want)); err != nil || budget.rows != membershipsPerNode*maxNodes+fixedRows {
 		t.Fatal("unexpected repeated membership accounting", budget.rows, err)
 	}

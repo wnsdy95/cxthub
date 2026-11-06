@@ -25,11 +25,27 @@ type projectionSpec struct {
 	partKeys                   func(domain.PendingProjectionPart) ([]string, []string, error)
 	repairQuarantined          func(context.Context, pgx.Tx, domain.ContentHash) (bool, error)
 	claimHeldSQL               string
+	maxOutputBytes             int
+	maxOutputRows              int
 }
 
 type projectionStore struct {
 	*PostgresStore
 	spec projectionSpec
+}
+
+func (s projectionStore) outputBytes() int {
+	if s.spec.maxOutputBytes > 0 {
+		return s.spec.maxOutputBytes
+	}
+	return domain.MaxPendingProjectionOutputBytes
+}
+
+func (s projectionStore) outputRows() int {
+	if s.spec.maxOutputRows > 0 {
+		return s.spec.maxOutputRows
+	}
+	return domain.MaxPendingProjectionOutputRows
 }
 
 type projectionReadOptions struct {
@@ -590,7 +606,7 @@ func (s projectionStore) loadInputs(ctx context.Context, lease domain.PendingPro
 }
 
 func (s projectionStore) validateParts(ctx context.Context, repo domain.ContentHash, parts []domain.PendingProjectionPart) error {
-	if len(parts) > domain.MaxPendingProjectionOutputRows {
+	if len(parts) > s.outputRows() {
 		return domain.ErrRepositoryViewSourceLimit
 	}
 	size := 0
@@ -600,7 +616,7 @@ func (s projectionStore) validateParts(ctx context.Context, repo domain.ContentH
 			return err
 		}
 		size += len(part.Value) + len(part.Kind) + len(part.Key) + 128
-		if size > domain.MaxPendingProjectionOutputBytes {
+		if size > s.outputBytes() {
 			return domain.ErrRepositoryViewSourceLimit
 		}
 		identity := [2]string{part.Kind, part.Key}
@@ -648,7 +664,7 @@ func (s projectionStore) publish(ctx context.Context, lease domain.PendingProjec
 		FROM jsonb_to_recordset($1::jsonb) AS part(kind text,key text,value jsonb)`, raw).Scan(&storedBytes); err != nil {
 		return err
 	}
-	if storedBytes > domain.MaxPendingProjectionOutputBytes {
+	if storedBytes > int64(s.outputBytes()) {
 		return domain.ErrRepositoryViewSourceLimit
 	}
 	if _, err := transaction.Exec(ctx, `WITH latest AS MATERIALIZED (`+s.latestParts()+`),
@@ -754,7 +770,7 @@ func (s projectionStore) readReadyPartsFrom(ctx context.Context, database projec
 		return nil, domain.ErrIntegrity
 	}
 	headerBytes += int64(len("headerview") + 128)
-	if headerBytes > domain.MaxPendingProjectionOutputBytes {
+	if headerBytes > int64(s.outputBytes()) {
 		return nil, domain.ErrRepositoryViewSourceLimit
 	}
 	header := domain.PendingProjectionPart{Kind: "header", Key: "view"}
@@ -765,6 +781,9 @@ func (s projectionStore) readReadyPartsFrom(ctx context.Context, database projec
 	kinds, keys, err := s.spec.partKeys(header)
 	if err != nil {
 		return nil, err
+	}
+	if len(keys) > s.outputRows()-1 {
+		return nil, domain.ErrRepositoryViewSourceLimit
 	}
 	parts := make([]domain.PendingProjectionPart, 0, 1+len(keys))
 	parts = append(parts, header)
@@ -783,7 +802,7 @@ func (s projectionStore) readReadyPartsFrom(ctx context.Context, database projec
 	if count != int64(len(keys)) || invalid != 0 {
 		return nil, domain.ErrIntegrity
 	}
-	if bodyBytes+headerBytes > domain.MaxPendingProjectionOutputBytes {
+	if bodyBytes+headerBytes > int64(s.outputBytes()) {
 		return nil, domain.ErrRepositoryViewSourceLimit
 	}
 	rows, err := database.Query(ctx, `SELECT wanted.kind,wanted.entity_key,latest.image

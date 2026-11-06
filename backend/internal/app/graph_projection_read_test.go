@@ -122,7 +122,7 @@ func newGraphProjectionRead(t *testing.T) (*Service, *graphProjectionReadStore, 
 	return service, storage, repo, want
 }
 
-func TestGraphProjectionReadsUseOneCompleteBundleWithoutBulk(t *testing.T) {
+func TestGraphProjectionReadsUseOneCompleteBundleAfterBulkAdmission(t *testing.T) {
 	service, storage, repo, want := newGraphProjectionRead(t)
 	ctx, gate := admissionTestContext(100 * time.Millisecond)
 	ctx = inbound.WithSystemActor(ctx)
@@ -131,6 +131,14 @@ func TestGraphProjectionReadsUseOneCompleteBundleWithoutBulk(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
+	notice, err := service.RepositoryChangeState(ctx, repo)
+	if err != nil || notice.GraphProjection == nil || !notice.GraphProjection.Complete || storage.reads != 0 {
+		t.Fatal("status must remain readable without loading the bundle", err)
+	}
+	if full, err := service.GetRepositoryView(ctx, repo); !errors.Is(err, domain.ErrResourceOverloaded) || !reflect.DeepEqual(full, domain.RepositoryView{}) || storage.reads != 0 {
+		t.Fatal("saturated bulk capacity must not admit full-bundle allocations", err, storage.reads)
+	}
+	release()
 	for range 2 {
 		full, err := service.GetRepositoryView(ctx, repo)
 		if err != nil {
@@ -165,7 +173,6 @@ func TestGraphProjectionReadsUseOneCompleteBundleWithoutBulk(t *testing.T) {
 	if storage.snapshotLists != 0 || storage.snapshotReads != 0 || storage.evidenceReads != 0 || service.graphCache.Stats().Entries != 0 {
 		t.Fatal("durable read scanned live source", storage.snapshotLists, storage.snapshotReads, storage.evidenceReads)
 	}
-	release()
 	assertResourcesReleased(t, gate)
 }
 

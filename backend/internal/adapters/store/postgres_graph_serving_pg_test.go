@@ -188,7 +188,7 @@ func TestPGGraphServingPromotionRejectsCandidateDriftAndRollsBack(t *testing.T) 
 			case "missing":
 				catalogExecPG(t, ctx, storage.pool, `DELETE FROM graph_projection_parts WHERE repo_id=$1 AND kind='header'`, string(repo))
 			case "oversize":
-				catalogExecPG(t, ctx, storage.pool, `UPDATE graph_projection_parts SET image=jsonb_build_object('large',repeat('x',$2)) WHERE repo_id=$1 AND kind='header'`, string(repo), domain.MaxPendingProjectionOutputBytes)
+				catalogExecPG(t, ctx, storage.pool, `UPDATE graph_projection_parts SET image=jsonb_build_object('large',repeat('x',$2)) WHERE repo_id=$1 AND kind='header'`, string(repo), domain.MaxGraphViewProjectionOutputBytes)
 				want = domain.ErrRepositoryViewSourceLimit
 			case "body":
 				catalogExecPG(t, ctx, storage.pool, `UPDATE graph_projection_parts SET image='{}' WHERE repo_id=$1 AND kind<>'header'`, string(repo))

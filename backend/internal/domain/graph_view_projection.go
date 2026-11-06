@@ -56,7 +56,7 @@ func EncodeGraphViewProjection(ctx context.Context, repo ContentHash, view Repos
 		view.Graph.Version != 1 || view.Graph.PositionEvent != "" || view.Graph.Revision != view.Revision {
 		return nil, ErrIntegrity
 	}
-	budget := graphProjectionBudget{ctx: ctx}
+	budget := newGraphProjectionBudget(ctx, GraphViewProjectionRules)
 	if err := budget.measure(reflect.ValueOf(view)); err != nil {
 		return nil, err
 	}

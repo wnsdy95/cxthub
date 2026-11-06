@@ -35,6 +35,7 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	config.ConnConfig.Tracer = graphQueryTracer{}
 	// Never acknowledge writes before durable WAL flush, even if a role/DSN
 	// supplies asynchronous commit. Preserve the stronger replay acknowledgement.
 	if config.ConnConfig.RuntimeParams["synchronous_commit"] != "remote_apply" {

@@ -86,7 +86,7 @@ func TestPGGraphServingPromotionPinsSizeAndPayloadAgainstConcurrentGrowth(t *tes
 		t.Fatal(ctx.Err())
 	}
 	catalogExecPG(t, ctx, storage.pool, `UPDATE graph_projection_parts SET image=jsonb_build_object('large',repeat('x',$2))
-		WHERE repo_id=$1 AND kind='header'`, string(key.RepoID), domain.MaxPendingProjectionOutputBytes+1)
+		WHERE repo_id=$1 AND kind='header'`, string(key.RepoID), domain.MaxGraphViewProjectionOutputBytes+1)
 	unblock()
 	if err := <-done; err != nil {
 		t.Fatal("size check and payload read used different snapshots", err)

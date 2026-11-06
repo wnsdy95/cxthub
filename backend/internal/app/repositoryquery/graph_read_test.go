@@ -93,7 +93,7 @@ func (probe *publishedGraphProbe) RepairGraph(ctx context.Context, repo domain.C
 
 func (probe *publishedGraphProbe) ReadQualifiedGraphProjection(ctx context.Context, repo domain.ContentHash) (domain.GraphProjectionRead, error) {
 	probe.test.Helper()
-	if !probe.reading || probe.repairing || ctx.Value(publishedGraphScopeKey{}) != "read" || repo != probe.repo {
+	if !probe.reading || !probe.building || probe.repairing || ctx.Value(publishedGraphScopeKey{}) != "read" || repo != probe.repo {
 		probe.test.Fatal("projection read bypassed the pinned authorized scope")
 	}
 	probe.reads++
@@ -284,8 +284,8 @@ func TestPublishedGraphReadersServeCoherentCurrentAndRetainedBundles(test *testi
 				if !reflect.DeepEqual(pending, wantPending) {
 					test.Fatal("pending view lost metadata, retained duplicate targets, or included memberships")
 				}
-				if probe.readScopes != 3 || probe.readReleases != 3 || probe.reads != 3 || probe.buildAttempts != 0 || probe.repairScopes != 0 {
-					test.Fatal("published endpoints bypassed scope or acquired build/repair work", probe)
+				if probe.readScopes != 3 || probe.readReleases != 3 || probe.reads != 3 || probe.buildAttempts != 3 || probe.buildReleases != 3 || probe.repairScopes != 0 {
+					test.Fatal("published endpoints bypassed decoding admission or acquired repair work", probe)
 				}
 			})
 		}
@@ -382,7 +382,7 @@ func TestPublishedGraphUnavailableOrUnqualifiedNeverReturnsData(test *testing.T)
 				queries, probe, _ := newPublishedGraphFixture(test, PinnedSnapshots)
 				scenario.change(probe)
 				result, err := publishedGraphEndpoint(queries, endpoint, probe.repo)
-				if !errors.Is(err, scenario.want) || !reflect.DeepEqual(result, publishedGraphEmpty(endpoint)) || probe.reads != 1 || probe.readReleases != 1 || probe.buildAttempts != 0 || probe.repairScopes != 0 {
+				if !errors.Is(err, scenario.want) || !reflect.DeepEqual(result, publishedGraphEmpty(endpoint)) || probe.reads != 1 || probe.readReleases != 1 || probe.buildAttempts != 1 || probe.buildReleases != 1 || probe.repairScopes != 0 {
 					test.Fatal("unavailable projection returned data or scheduled unrelated work", result, err)
 				}
 			})

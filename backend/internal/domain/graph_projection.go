@@ -6,6 +6,12 @@ const GraphProjectionRules = 1
 
 const GraphViewProjectionRules = 2
 
+const (
+	MaxGraphViewProjectionOutputBytes       = 32 << 20
+	MaxGraphViewProjectionOutputParts       = 20000
+	MaxGraphViewProjectionStructuralEntries = 1000000
+)
+
 var ErrGraphProjectionNotReady = errors.New("graph projection is not ready for the current source")
 
 var ErrGraphProjectionFailed = errors.New("graph projection requires attention")

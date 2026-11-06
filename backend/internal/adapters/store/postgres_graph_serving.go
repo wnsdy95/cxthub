@@ -77,7 +77,7 @@ func (s *PostgresStore) promoteGraphServing(ctx context.Context, transaction pgx
 		FROM jsonb_to_recordset($1::jsonb) AS part(kind text,key text,value jsonb)`, raw).Scan(&storedBytes); err != nil {
 		return err
 	}
-	if storedBytes > domain.MaxPendingProjectionOutputBytes {
+	if storedBytes > int64(projection.outputBytes()) {
 		return domain.ErrRepositoryViewSourceLimit
 	}
 	if _, err := transaction.Exec(ctx, `DELETE FROM graph_serving_parts WHERE repo_id=$1`, string(lease.RepoID)); err != nil {
@@ -220,17 +220,17 @@ func (s *PostgresStore) readQualifiedGraphProjection(ctx context.Context, repo d
 }
 
 func (s *PostgresStore) readGraphServingParts(ctx context.Context, database projectionPartsReader, head graphServingHead) ([]domain.GraphProjectionPart, error) {
+	projection := s.graphProjection()
 	var count, size int64
 	if err := database.QueryRow(ctx, `SELECT count(*),COALESCE(sum(size),0) FROM
 		(SELECT octet_length(image::text)+octet_length(kind)+octet_length(entity_key)+128 AS size
-		FROM graph_serving_parts WHERE repo_id=$1 LIMIT $2) bounded`, string(head.RepoID), domain.MaxPendingProjectionOutputRows+1).
+		FROM graph_serving_parts WHERE repo_id=$1 LIMIT $2) bounded`, string(head.RepoID), projection.outputRows()+1).
 		Scan(&count, &size); err != nil {
 		return nil, err
 	}
-	if count > domain.MaxPendingProjectionOutputRows || size > domain.MaxPendingProjectionOutputBytes {
+	if count > int64(projection.outputRows()) || size > int64(projection.outputBytes()) {
 		return nil, domain.ErrRepositoryViewSourceLimit
 	}
-	projection := s.graphProjection()
 	projection.spec.parts = "graph_serving_parts"
 	parts, err := projection.readReadyPartsFrom(ctx, database, head.RepoID, head.Dataset, head.Applied.Sequence)
 	if err != nil {

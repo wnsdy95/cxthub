@@ -42,9 +42,9 @@ func TestProjectionRejectsOversizeBeforeParsing(t *testing.T) {
 	if err := validatePendingProjectionPage(work, source, page); !errors.Is(err, domain.ErrRepositoryViewSourceLimit) {
 		t.Fatalf("oversize malformed source was parsed: %v", err)
 	}
-	oversized := []domain.PendingProjectionPart{{Kind: "field", Key: "oversized",
-		Value: json.RawMessage(strings.Repeat("[", domain.MaxPendingProjectionOutputBytes+1))}}
 	for _, projection := range []projectionStore{(*PostgresStore)(nil).pendingProjection(), (*PostgresStore)(nil).graphProjection()} {
+		oversized := []domain.PendingProjectionPart{{Kind: "field", Key: "oversized",
+			Value: json.RawMessage(strings.Repeat("[", projection.outputBytes()+1))}}
 		if err := projection.validateParts(context.Background(), work.RepoID, oversized); !errors.Is(err, domain.ErrRepositoryViewSourceLimit) {
 			t.Fatalf("%s parsed oversize output: %v", projection.spec.scope, err)
 		}
