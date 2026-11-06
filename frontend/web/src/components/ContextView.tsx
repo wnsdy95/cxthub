@@ -1,7 +1,7 @@
 // ContextView — GitHub repo view context browser.
 // Automatically displays the latest context of the default branch (main/master),
 // and provides a branch dropdown + commit log (click to show context at that point in time).
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Repo, Repository, Snapshot } from '../types';
 import { useMemory, useMe, useFork, useSnapDiff, useSearch, useRepoView, useReflog } from '../hooks';
 import { navigate, repoPath } from '../route';
@@ -25,6 +25,9 @@ import { ArchivedSessionNotice, SessionArchiveActions } from './SessionArchive';
 import { DocEvents, DocumentReader, DocumentEvents } from './DocEvents';
 import { useT, Rich } from '../i18n';
 import { searchEventPosition } from '../documentSearch';
+import { useRepositoryBootstrap } from '../useRepositoryBootstrap';
+import { sameRevision } from '../useRepositoryUpdates';
+import { revisionCovers } from '../repositoryUpdates';
 
 // Participant AI points (overlap) — a reduced version of the GitHub participant avatar stack. Overlays snapshots models[] (if any)
 // on provider color circles. Continuous commit color changes soon indicate the "range of work done by which AI" intervals.
@@ -75,34 +78,53 @@ function tok(n: number): string {
   return String(n);
 }
 
-// Default branch selection: repo.default_branch → main → master → first branch.
-function pickDefaultBranch(names: string[], preferred: string): string | null {
-  for (const c of [preferred, 'main', 'master']) {
-    if (c && names.includes(c)) return c;
-  }
-  return names[0] ?? null;
-}
-
 type ContextRepository = Pick<Repository, 'id' | 'owner_username' | 'slug' | 'visibility'> &
   Partial<Pick<Repository, 'settings_policy' | 'secrets_policy'>>;
+
+function pickLegacyBranch(names: string[], preferred: string): string {
+  return [preferred, 'main', 'master'].find(name => names.includes(name)) ?? names[0] ?? 'main';
+}
 
 export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: ContextRepository | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
+  const [branchSelection, setBranchSelection] = useState<{ repo: string; name: string; id?: string }>();
+  const requestedBranch = branchSelection?.repo === repo.id ? branchSelection.name : undefined;
+  const bootstrap = useRepositoryBootstrap(repo.id, requestedBranch);
+  const bootstrapError = bootstrap.unsupported ? null : bootstrap.error;
+  const [settledRepo, setSettledRepo] = useState<string>();
+  const onInitialReadSettled = useCallback(() => setSettledRepo(repo.id), [repo.id]);
+  const deferHeavy = !bootstrap.unsupported && (!bootstrap.data || Boolean(bootstrap.data.snapshot && !bootstrap.data.archived && settledRepo !== repo.id));
   const { refs, snapshots: allSnapshots, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, graphReadStatus, graphReadNotice, retryGraph, pendings } =
-    useRepoView(repo.id, repo.default_branch || 'main');
-  const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
+    useRepoView(repo.id, repo.default_branch || 'main', deferHeavy);
+  const initial = bootstrap.data;
+  const graphMatches = bootstrap.unsupported || sameRevision(graphState?.revision, initial?.revision ?? null);
+  const reconciled = useRef<string>();
+  const graphRevision = graphState?.revision;
+  const bootstrapRevision = initial?.revision;
+  const refetchBootstrap = bootstrap.refetch;
+  useEffect(() => {
+    const identity = JSON.stringify([repo.id, requestedBranch, graphRevision]);
+    if (!graphRevision || !bootstrapRevision || graphMatches || reconciled.current === identity ||
+        revisionCovers(bootstrapRevision, graphRevision)) return;
+    reconciled.current = identity;
+    void refetchBootstrap();
+  }, [repo.id, requestedBranch, graphRevision, bootstrapRevision, graphMatches, refetchBootstrap]);
 
-  const [branchSelection, setBranchSelection] = useState<{ repo: string; name: string | null; id?: string }>();
   const selectedBranch = branchSelection?.repo === repo.id ? refs.find(r => r.kind === 'branch'
     && (branchSelection.id ? r.branch_id === branchSelection.id : r.name === branchSelection.name)) : undefined;
-  const branch = selectedBranch?.name ?? pickDefaultBranch(branches, repo.default_branch);
-  function setBranch(name: string | null) {
+  const graphBranches = useMemo(() => refs.filter(ref => ref.kind === 'branch').map(ref => ref.name).sort(), [refs]);
+  const branch = selectedBranch?.name ?? requestedBranch ?? initial?.branch ??
+    (bootstrap.unsupported ? pickLegacyBranch(graphBranches, repo.default_branch) : repo.default_branch || 'main');
+  const branches = useMemo(() => [...new Set([
+    ...graphBranches,
+    ...(initial?.ref ? [initial.branch] : []),
+    ...(requestedBranch ? [requestedBranch] : []),
+  ])].sort(), [graphBranches, initial, requestedBranch]);
+  function setBranch(name: string) {
     setBranchSelection({ repo: repo.id, name, id: refs.find(r => r.kind === 'branch' && r.name === name)?.branch_id });
+    setSelection(undefined);
   }
-  useEffect(() => {
-    if (!graphLoading && !selectedBranch && branch) setBranch(branch);
-  }, [repo.id, selectedBranch, branch, graphLoading]);
 
   // The server owns inclusion and Git order, including completed PR contexts
   // retained outside the current conversation's mutable placement.
@@ -133,18 +155,37 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
     const bySession = new Map(pendings.map(p => [p.session_id,p]));
     return new Map(Object.entries(graphState?.continuations ?? {}).flatMap(([id,session]) => bySession.has(session) ? [[id,bySession.get(session)!] as const] : []));
   }, [pendings,graphState]);
-  const [snapId, setSnapId] = useState<string | null>(null);
-  const { viewerRef, openSnapshot, selectedEvent, selectedEventIndex, selectedTargetKey } = useContextSelection(repo.id, snapId, setSnapId);
-  // Auto-selection is conservative: keep current selection if it exists in the full list (user click respected),
-  // otherwise set to branch head. (Orphan commits selected in the graph are also kept).
+  const [selection, setSelection] = useState<{repo: string; branch: string; id: string; explicit: boolean; snapshot?: Snapshot; parent?: Snapshot}>();
+  const renamedBranch = selectedBranch?.name;
   useEffect(() => {
-    const head = branch ? graphState?.branch_contexts?.[branch]?.snapshot_id : undefined;
-    setSnapId(current => {
-      if (current && (allSnapshots.some(snapshot => snapshot.id === current)
-        || archiveBySnapshot.has(current) && archiveSnapshots.some(snapshot => snapshot.id === current))) return current;
-      return head && !archiveBySnapshot.has(head) ? head : snapshots[0]?.id ?? null;
+    if (!renamedBranch || renamedBranch === requestedBranch) return;
+    setBranchSelection(current => current?.repo === repo.id && current.name === requestedBranch ? {...current, name: renamedBranch} : current);
+    setSelection(current => current?.repo === repo.id && current.branch === requestedBranch ? {...current, branch: renamedBranch} : current);
+  }, [repo.id, requestedBranch, renamedBranch]);
+  const pinned = selection?.repo === repo.id && selection.branch === branch ? selection : undefined;
+  const explicitSelection = pinned?.explicit ? pinned.id : undefined;
+  const legacyHead = bootstrap.unsupported ? graphState?.branch_contexts?.[branch]?.snapshot_id : undefined;
+  const initialSnapshot = bootstrap.unsupported
+    ? allSnapshots.find(snapshot => snapshot.id === legacyHead && !archiveBySnapshot.has(snapshot.id)) ?? snapshots[0]
+    : initial?.branch === branch && !initial.archived ? initial.snapshot : undefined;
+  const initialParent = initial?.parent ?? (bootstrap.unsupported ? archiveSnapshots.find(snapshot => snapshot.id === initialSnapshot?.parents?.[0]) : undefined);
+  useEffect(() => {
+    if (!initialSnapshot) return;
+    setSelection(current => {
+      if (current?.repo !== repo.id || current.branch !== branch) {
+        return {repo: repo.id, branch, id: initialSnapshot.id, snapshot: initialSnapshot, parent: initialParent, explicit: false};
+      }
+      if (current.id !== initialSnapshot.id || current.snapshot === initialSnapshot && current.parent === initialParent) return current;
+      return {...current, snapshot: initialSnapshot, parent: initialParent};
     });
-  }, [branch, snapshots, allSnapshots, graphState, archiveBySnapshot, archiveSnapshots]);
+  }, [repo.id, branch, initialSnapshot, initialParent]);
+  const snapId = pinned?.id ?? initialSnapshot?.id ?? null;
+  const setSnapId = (id: string) => {
+    const snapshot = archiveSnapshots.find(value => value.id === id) ?? (initialSnapshot?.id === id ? initialSnapshot : undefined);
+    const parent = archiveSnapshots.find(value => value.id === snapshot?.parents?.[0]) ?? (initialSnapshot?.id === id ? initial?.parent : undefined);
+    setSelection({repo: repo.id, branch, id, explicit: true, snapshot, parent});
+  };
+  const { viewerRef, openSnapshot, selectedEvent, selectedEventIndex, selectedTargetKey } = useContextSelection(repo.id, snapId, setSnapId);
 
   // View mode — Full / Prompt only (folded) / Prompt + Response (message only).
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
@@ -168,13 +209,19 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   const searchQ = useSearch(repo.id, dq);
   const searching = dq.length >= 2;
 
-  const selected = allSnapshots.find((s) => s.id === snapId) ?? archiveSnapshots.find(snapshot => snapshot.id === snapId && archiveBySnapshot.has(snapshot.id)) ?? null;
+  const denied = bootstrap.denied || graphReadStatus.state === 'denied';
+  const graphSelected = explicitSelection || graphMatches
+    ? allSnapshots.find(snapshot => snapshot.id === snapId && !archiveBySnapshot.has(snapshot.id)) ??
+      (explicitSelection ? archiveSnapshots.find(snapshot => snapshot.id === snapId && archiveBySnapshot.has(snapshot.id)) : undefined)
+    : undefined;
+  const archivedSelection = !explicitSelection && (initial?.archived && initial.ref?.target === snapId || archiveBySnapshot.has(snapId ?? ''));
+  const selected = denied || archivedSelection ? null : graphSelected ?? pinned?.snapshot ?? (initialSnapshot?.id === snapId ? initialSnapshot : null);
   const diffQ = useSnapDiff(
     repo.id,
     compareBase && selected && compareBase.id !== selected.id ? compareBase.doc_hash : null,
     compareBase && selected && compareBase.id !== selected.id ? selected.doc_hash : null,
   );
-  const parent = useMemo(() => archiveSnapshots.find(s => s.id === selected?.parents?.[0]) ?? null, [archiveSnapshots, selected]);
+  const parent = graphSelected ? archiveSnapshots.find(snapshot => snapshot.id === selected?.parents?.[0]) : pinned?.parent ?? initial?.parent;
   const [inheritedOpen, setInheritedOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); }, [selected?.id]);
@@ -202,7 +249,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   }, [branches.length > 0]);
 
   const graphEmptyIsCurrent = graphReadStatus.showGraph && (graphReadStatus.state === 'legacy' || graphReadStatus.state === 'ready');
-  if (branches.length === 0 && !selected && !archivedSessions.length && graphReadStatus.showGraph && !graphLoading && !graphError && !graphRefreshError) {
+  if ((initial || bootstrap.unsupported) && !bootstrapError && !initial?.archived && branches.length === 0 && !graphSnapshots.length && !selected && !archivedSessions.length && graphReadStatus.showGraph && !graphLoading && !graphError && !graphRefreshError) {
     return <>
       <ReadGenerationBanner {...graphReadNotice} />
       {graphEmptyIsCurrent && <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>}
@@ -231,7 +278,13 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
         />
       </div>
 
-      {searching && (
+      {bootstrapError && <div className="empty-box" role="alert">
+        <p>{bootstrapError.message}</p>
+        <button onClick={() => bootstrap.denied ? retryGraph() : void bootstrap.refetch()}>{t('context.retryRead')}</button>
+      </div>}
+      {!initial && !bootstrapError && !bootstrap.unsupported && <p role="status">{t('context.loadingEvents')}</p>}
+      {initial?.archived && !selected && !denied && <p role="status">{t('sessionArchive.archived')}</p>}
+      {searching && !denied && (
         <div className="search-results">
           {searchQ.isLoading && <div className="skel" style={{ height: 40 }} />}
           {searchQ.isError && <p className="empty-box">{t('context.searchFailed', { msg: (searchQ.error as Error).message })}</p>}
@@ -349,10 +402,10 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
             {compactions.has(s.id) && <div className="compaction-divider">{t('context.compactionDivider')}</div>}
           </li>
         ))}
-        {snapshots.length === 0 && graphEmptyIsCurrent && <li className="repository-empty">{t('context.noCommitsBranch')}</li>}
+        {snapshots.length === 0 && graphEmptyIsCurrent && !bootstrapError && !initial?.archived && <li className="repository-empty">{t('context.noCommitsBranch')}</li>}
       </ul>
 
-      {selected && <DocumentReader repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} start={selectedEventIndex ?? (inheritedOpen ? 0 : -1)} mode={viewMode} targetIndex={selectedEventIndex} targetKey={selectedTargetKey}>
+      {selected && <DocumentReader repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} start={selectedEventIndex ?? (inheritedOpen ? 0 : -1)} mode={viewMode} targetIndex={selectedEventIndex} targetKey={selectedTargetKey} onInitialReadSettled={onInitialReadSettled}>
       {reader => {
         const page = reader.query.data?.pages[0];
         const envelope = page?.header;
@@ -427,7 +480,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
                 <option value="prompts">{t('common.promptOnly')}</option>
                 <option value="chat">{t('context.viewModeChat')}</option>
               </select>
-              <SessionArchiveActions key={selected.id} repoId={repo.id} snapshotId={selected.id} docHash={selected.doc_hash} archive={archiveBySnapshot.get(selected.id)} role={role} />
+              <SessionArchiveActions key={selected.id} repoId={repo.id} snapshotId={selected.id} docHash={selected.doc_hash} archive={archiveBySnapshot.get(selected.id)} role={role} onSelectSnapshot={() => setSnapId(selected.id)} />
               {memory && (
                 <button
                   className="dl-btn"

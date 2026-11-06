@@ -80,6 +80,19 @@ func (s *FSStore) ListSessionArchives(ctx context.Context, repo domain.ContentHa
 	return s.listSessionArchives(ctx, repo)
 }
 
+func (s *FSStore) GetSessionArchive(ctx context.Context, repo, key domain.ContentHash) (domain.SessionArchive, error) {
+	if err := validateHashes(repo, key); err != nil {
+		return domain.SessionArchive{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.SessionArchive{}, err
+	}
+	lock := s.sessionArchiveLock(repo)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.readSessionArchive(repo, key)
+}
+
 func (s *FSStore) listSessionArchives(ctx context.Context, repo domain.ContentHash) ([]domain.SessionArchive, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -72,6 +72,7 @@ type Config struct {
 	PendingRepos []domain.ContentHash
 	GraphRepos   []domain.ContentHash
 	AtomicRead   bool
+	Bootstrap    BootstrapReader
 }
 
 type Queries struct {
@@ -87,6 +88,7 @@ type Queries struct {
 	pendingRepos map[domain.ContentHash]bool
 	graphRepos   map[domain.ContentHash]bool
 	atomicRead   bool
+	bootstrap    BootstrapReader
 }
 
 var _ inbound.RepositoryStateQueries = (*Queries)(nil)
@@ -100,7 +102,7 @@ func New(config Config) (*Queries, error) {
 			return nil, fmt.Errorf("%w: missing repository query dependency", domain.ErrValidation)
 		}
 	}
-	for _, optional := range []any{config.Revisions, config.History, config.Archives, config.Pending, config.PendingState, config.GraphState} {
+	for _, optional := range []any{config.Revisions, config.History, config.Archives, config.Pending, config.PendingState, config.GraphState, config.Bootstrap} {
 		if optional != nil && absent(optional) {
 			return nil, fmt.Errorf("%w: typed-nil repository query dependency", domain.ErrValidation)
 		}
@@ -114,7 +116,7 @@ func New(config Config) (*Queries, error) {
 	queries := &Queries{scope: config.Scope, resources: config.Resources, metadata: config.Metadata, revisions: config.Revisions,
 		history: config.History, archives: config.Archives, pending: config.Pending, pendingState: config.PendingState, graphState: config.GraphState,
 		pendingRepos: make(map[domain.ContentHash]bool, len(config.PendingRepos)), graphRepos: make(map[domain.ContentHash]bool, len(config.GraphRepos)),
-		atomicRead: config.AtomicRead || config.Profile == PinnedSnapshots}
+		atomicRead: config.AtomicRead || config.Profile == PinnedSnapshots, bootstrap: config.Bootstrap}
 	for _, configured := range []struct {
 		input []domain.ContentHash
 		repos map[domain.ContentHash]bool

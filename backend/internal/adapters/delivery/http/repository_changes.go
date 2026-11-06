@@ -141,7 +141,7 @@ func (s *Server) pendingView(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusServiceUnavailable, "pending_projection_pending", "On Hold projection is catching up")
 			return
 		}
-		s.respond(w, view, err)
+		s.respond(w, newPendingStateResponse(view), err)
 		return
 	}
 	s.graphRead(w, r, func(request *http.Request) (any, error) {

@@ -1,8 +1,8 @@
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useRef } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import { capacityReadRetry, capacityRetryDelay, pendingStateReadRetry, retryCapacityRead, retryPendingStateRead } from './readRetry';
-import type { PendingProjectionStatus, PendingStateView, RepositoryRevision, RepositoryView } from './types';
+import type { PendingProjectionStatus, PendingStateView, RepositoryBootstrap, RepositoryRevision, RepositoryView } from './types';
 import { mergePendingView, parseRevision, pendingViewNeedsFull, revisionCovers, samePendingProjection, subscribeRepository } from './repositoryUpdates';
 import { pendingProjectionMatches } from './pendingState';
 import { graphGenerationMatches, graphRefreshTarget, validateGraphRead } from './graphReadState';
@@ -17,7 +17,7 @@ export const graphReadRetry = {
   retryDelay: (attempt: number, error: Error) => Math.min(capacityRetryDelay(attempt, error), 10_000),
 };
 
-function sameRevision(current: RepositoryRevision | undefined, wanted: RepositoryRevision | null) {
+export function sameRevision(current: RepositoryRevision | undefined, wanted: RepositoryRevision | null) {
   return Boolean(current && wanted && revisionCovers(current, wanted) && revisionCovers(wanted, current));
 }
 
@@ -44,21 +44,33 @@ export async function readRepositoryGraph(repo: string, qc: QueryClient, signal?
   const noticeKey = ['repository-notice', repo];
   const access = qc.getQueryState(noticeKey);
   if (access?.error) throw access.error;
-  const view = await api.repositoryView(repo, signal);
+  const view = await api.repositoryView(repo, signal).catch(error => {
+    denyRepositoryAccess(repo, qc, error);
+    throw error;
+  });
   const latest = qc.getQueryState(noticeKey);
   if (latest?.error) throw latest.error;
   if ((access?.errorUpdateCount ?? 0) !== (latest?.errorUpdateCount ?? 0)) throw new Error('Repository access changed during the graph read');
   return validateGraphRead(view, qc.getQueryData<RepositoryRevision>(noticeKey)?.graph_projection);
 }
 
-export function useRepositoryUpdates(repo: string | null) {
+export function denyRepositoryAccess(repo: string, qc: QueryClient, error: unknown) {
+  if (!(error instanceof ApiError) || ![401, 403, 404].includes(error.status)) return;
+  const queryKey = ['repository-notice', repo];
+  qc.getQueryCache().build<RepositoryRevision, Error>(qc, {queryKey}).setState({status: 'error', error,
+    errorUpdateCount: (qc.getQueryState(queryKey)?.errorUpdateCount ?? 0) + 1});
+}
+
+export function useRepositoryUpdates(repo: string | null, deferHeavy = false) {
   const qc = useQueryClient();
   const [refreshVersion, refresh] = useReducer(version => version + 1, 0);
-  useEffect(() => repo ? startRepositoryUpdates(repo, qc) : undefined, [repo, qc, refreshVersion]);
+  const deferred = useRef(deferHeavy);
+  deferred.current = deferHeavy;
+  useEffect(() => repo ? startRepositoryUpdates(repo, qc, () => deferred.current) : undefined, [repo, qc, refreshVersion]);
   return refresh;
 }
 
-export function startRepositoryUpdates(repo: string, qc: QueryClient) {
+export function startRepositoryUpdates(repo: string, qc: QueryClient, deferHeavy: () => boolean = () => false) {
   const key = ['repo-view', repo];
   const pendingKey = ['pending-state', repo, 'on-hold-v1'];
   const noticeKey = ['repository-notice', repo];
@@ -84,9 +96,8 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient) {
   const active = (version = accessVersion()) => !disposed && !document.hidden && !denied() && version === accessVersion();
   const requireFull = () => { sourceVersion++; fullAttempts = 0; graphAttempt = undefined; };
   const deny = (error: unknown) => {
-    if (!(error instanceof ApiError) || ![401, 403].includes(error.status)) return;
-    qc.getQueryCache().build<RepositoryRevision, Error>(qc, {queryKey: noticeKey}).setState({status: 'error', error,
-      errorUpdateCount: accessVersion() + 1});
+    if (!(error instanceof ApiError) || ![401, 403, 404].includes(error.status)) return;
+    denyRepositoryAccess(repo, qc, error);
     void qc.cancelQueries({queryKey: key, exact: true});
     void qc.cancelQueries({queryKey: pendingKey, exact: true});
   };
@@ -99,7 +110,7 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient) {
   // React Query owns cancellation: another observer may still need this view.
   const full = () => qc.fetchQuery({queryKey: key, queryFn: ({signal}) => readRepositoryGraph(repo, qc, signal), staleTime: 0, ...graphReadRetry});
   const pending = async () => {
-    if (pendingBusy || !active() || !wanted) return;
+    if (pendingBusy || !active() || !wanted || deferHeavy()) return;
     const projection = wanted.pending_projection;
     if (projection?.state === 'catching_up' || projection?.state === 'needs_attention') return;
     const current = qc.getQueryState<PendingStateView, Error>(pendingKey);
@@ -155,6 +166,7 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient) {
         pendingRefresh++;
         pendingAttempt = undefined;
         requireFull();
+        void qc.invalidateQueries({queryKey: ['repo-bootstrap', repo]});
       }
       qc.setQueryData<RepositoryRevision>(noticeKey, revision);
       await changed(revision);
@@ -164,8 +176,8 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient) {
       deny(error);
       // A rolling deployment may still route to a pre-revision backend.
       // Do not turn authorization or transient errors into expensive fetches.
-      if (error instanceof ApiError && [404, 405, 501].includes(error.status)) {
-        if (active()) await full();
+      if (error instanceof ApiError && [405, 501].includes(error.status)) {
+        if (active() && !deferHeavy()) await full();
       } else throw error;
     }
   };
@@ -179,7 +191,7 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient) {
     delay = Math.min(delay * 2, 120_000);
   };
   const sync = async () => {
-    if (busy || !active() || !wanted) return;
+    if (busy || !active() || !wanted || deferHeavy()) return;
     const requested = wanted;
     const requestedAccess = accessVersion();
     const requestedSourceVersion = sourceVersion;
@@ -276,6 +288,8 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient) {
     }
     wanted = r;
     qc.setQueryData<RepositoryRevision>(noticeKey, r);
+    void qc.invalidateQueries({queryKey: ['repo-bootstrap', repo], predicate: query =>
+      Boolean(query.state.data && !sameRevision((query.state.data as RepositoryBootstrap).revision, r))}, {cancelRefetch: false});
     observeSource(r.graph_projection?.source_epoch ?? r.pending_projection?.source_epoch);
     if (r.pending_projection?.state === 'catching_up' || r.pending_projection?.state === 'needs_attention') {
       void qc.cancelQueries({queryKey: pendingKey, exact: true});

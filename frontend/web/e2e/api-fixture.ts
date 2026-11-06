@@ -1,4 +1,5 @@
 import { serverGraphWireFixture, serverMemoryPositionsFixture, serverPendingStateFixture } from '../tests/serverGraphFixture';
+import { repositoryBootstrapFixture } from '../tests/repositoryBootstrapFixture';
 import type { Page } from '@playwright/test';
 
 export interface ApiRequest {
@@ -33,10 +34,10 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
   const unexpected: string[] = [];
   const states = new Map<string, {graph: number; pending: number; g: string; p: string}>();
   const projected = (input: ApiRequest): ApiResponse | undefined => {
-    if (input.method !== 'GET' || !/\/(view|revision|changes|pending-view|graph-state)$/.test(input.pathname)) return undefined;
+    if (input.method !== 'GET' || !/\/(bootstrap|view|revision|changes|pending-view|graph-state)$/.test(input.pathname)) return undefined;
     // Contract regressions can supply actual, distinct serialized responses.
     // Do not silently replace them with an enriched full-view fixture.
-    if (/\/(pending-view|revision|changes)$/.test(input.pathname)) {
+    if (/\/(bootstrap|pending-view|revision|changes)$/.test(input.pathname)) {
       const direct = responder(input);
       if (direct) return direct;
     }
@@ -52,6 +53,8 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     const old = states.get(base);
     const next = {graph: (old?.graph ?? 0) + (g !== old?.g ? 1 : 0), pending: (old?.pending ?? 0) + (p !== old?.p ? 1 : 0), g, p}; states.set(base,next);
     const revision = {graph: options.graphRevision?.() ?? String(next.graph), pending: String(next.pending), ...(body.revision ?? {})};
+    if (input.pathname.endsWith('/bootstrap')) return {body: repositoryBootstrapFixture({refs: [], snapshots: [], default_branch: 'main',
+      ...body, revision}, input.searchParams.get('branch') ?? undefined, decodeURIComponent(base.split('/').at(-2)!))};
     if (input.pathname.endsWith('/revision')) return {body: revision};
     if (input.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
     try {

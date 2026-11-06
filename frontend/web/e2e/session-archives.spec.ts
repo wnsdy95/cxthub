@@ -222,7 +222,8 @@ for (const width of [1280, 390]) {
       await panel.locator(':scope > summary').click();
       const entries = panel.locator('.graph-session-archive');
       await expect(entries).toHaveCount(2);
-      const selectedBefore = await page.locator('.viewer-head > code').textContent();
+      const selectedBefore = tab ? await page.locator('.viewer-head > code').textContent() : null;
+      if (!tab) await expect(page.locator('.viewer')).toHaveCount(0);
       for (const entry of await entries.all()) {
         await expect(entry.locator('summary')).toBeVisible();
         await expect(entry.locator('.session-archive-details')).toBeHidden();
@@ -244,7 +245,8 @@ for (const width of [1280, 390]) {
       await expect(entries.nth(1).locator('.session-archive-details')).toBeVisible();
       await entries.nth(1).locator('summary').click();
       await expect(entries.nth(1).locator('.session-archive-details')).toBeHidden();
-      await expect(page.locator('.viewer-head > code')).toHaveText(selectedBefore!);
+      if (selectedBefore) await expect(page.locator('.viewer-head > code')).toHaveText(selectedBefore);
+      else await expect(page.locator('.viewer')).toHaveCount(0);
       expect(state.mutations).toEqual([]);
       await page.screenshot({path: testInfo.outputPath('collapsed-archive-titles.png'), fullPage: true});
       await firstTitle.click();
@@ -286,7 +288,7 @@ for (const role of ['viewer', 'puller', 'member'] as const) {
   test(`${role} can read archived content but cannot archive or restore`, async ({page}) => {
     const {state, errors, unexpected} = await fixture(page, role, [archiveFor(id(2), true)]);
     await page.goto('/alice/cxthub');
-    await expect(page.locator('.viewer-head > code')).toHaveText('1111111111');
+    await expect(page.locator('.viewer')).toHaveCount(0);
     await expect(page.getByRole('button', {name: 'Archive session', exact: true})).toHaveCount(0);
     const panel = page.locator('.graph-session-archives');
     await panel.locator(':scope > summary').click();

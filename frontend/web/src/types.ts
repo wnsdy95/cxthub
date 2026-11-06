@@ -584,6 +584,16 @@ export interface ContextSemantics {
   version: 1;
   merges: { event_id: string; birth_id?: string; completed: boolean; placement_intact: boolean; source_available: boolean; lineage: BranchLineage }[];
 }
+export interface RepositoryBootstrap {
+  revision: RepositoryRevision;
+  default_branch: string;
+  branch: string;
+  ref?: Ref;
+  snapshot?: Snapshot;
+  parent?: Snapshot;
+  archived: boolean;
+}
+
 export interface RepositoryView {
   read_generation?: GraphReadGeneration;
   graph: GraphState;

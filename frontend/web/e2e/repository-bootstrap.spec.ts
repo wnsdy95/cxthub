@@ -1,6 +1,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { build } from 'esbuild';
 import { serverGraphWireFixture, serverPendingStateFixture } from '../tests/serverGraphFixture';
+import { repositoryBootstrapFixture } from '../tests/repositoryBootstrapFixture';
 import type { RepositoryView } from '../src/types';
 import { en } from '../src/i18n/locales/en';
 import { ko } from '../src/i18n/locales/ko';
@@ -71,11 +72,14 @@ function gate() {
 }
 
 type ReadResponse = { body: unknown; status?: number; headers?: Record<string, string> };
-type ReadOverride = () => ReadResponse | 'abort' | undefined;
+type ReadOverride = (url: URL) => ReadResponse | 'abort' | undefined;
 type Options = {
   public?: boolean; denied?: boolean; revisionStatus?: number | (() => number); aRevision?: () => string;
   holdA?: { at: number; promise: Promise<void> };
+  holdBootstrap?: { branch?: string; promise: Promise<void> };
+  holdDoc?: Promise<void>;
   locale?: 'en' | 'ko';
+  aBootstrap?: ReadOverride;
   aView?: ReadOverride;
   aDoc?: ReadOverride;
   aPending?: ReadOverride;
@@ -142,10 +146,17 @@ async function fixture(page: Page, options: Options = {}) {
         const status = (typeof options.revisionStatus === 'function' ? options.revisionStatus() : options.revisionStatus) ?? 200;
         await send(status === 200 ? { ...revision, graph: id === 'a' ? options.aRevision?.() ?? '1' : '1' } : { error: { message: 'Denied' } }, status); return;
       }
+      if (endpoint === 'bootstrap') {
+        if (id === 'a' && options.holdBootstrap && (options.holdBootstrap.branch === undefined || options.holdBootstrap.branch === url.searchParams.get('branch'))) await options.holdBootstrap.promise;
+        const response = id === 'a' ? options.aBootstrap?.(url) : undefined;
+        if (response === 'abort') { await route.abort('failed'); return; }
+        if (response) { await send(response.body, response.status, response.headers); return; }
+        await send(repositoryBootstrapFixture(wires.get(id)!, url.searchParams.get('branch') ?? undefined)); return;
+      }
       if (endpoint === 'view') {
         expect(url.searchParams.get('graph_encoding')).toBe('indexed-v2');
         if (id === 'a' && ++aReads === options.holdA?.at) await options.holdA.promise;
-        const response = id === 'a' ? options.aView?.() : undefined;
+        const response = id === 'a' ? options.aView?.(url) : undefined;
         if (response === 'abort') { await route.abort('failed'); return; }
         if (response) { await send(response.body, response.status, response.headers); return; }
         await send(wires.get(id)); return;
@@ -157,14 +168,18 @@ async function fixture(page: Page, options: Options = {}) {
       }
       if (endpoint === 'pending-view') {
         expect(url.searchParams.get('projection')).toBe('on-hold-v1');
-        const response = id === 'a' ? options.aPending?.() : undefined;
+        const response = id === 'a' ? options.aPending?.(url) : undefined;
         if (response === 'abort') { await route.abort('failed'); return; }
         if (response) { await send(response.body, response.status, response.headers); return; }
         const {graph: _graph, ...view} = wires.get(id)!;
         await send(serverPendingStateFixture({...view, revision: {...revision, graph: id === 'a' ? options.aRevision?.() ?? '1' : '1'}})); return;
       }
+      if (endpoint.startsWith('memory-objects/')) {
+        await send({snapshot_id: `${id}-119`, summary: `MEMORY_${decodeURIComponent(endpoint.split('/')[1])}`, key_facts: [], open_tasks: []}); return;
+      }
       if (endpoint.startsWith('docs/') && endpoint.endsWith('/events')) {
-        const response = id === 'a' ? options.aDoc?.() : undefined;
+        if (id === 'a' && options.holdDoc) await options.holdDoc;
+        const response = id === 'a' ? options.aDoc?.(url) : undefined;
         if (response === 'abort') { await route.abort('failed'); return; }
         if (response) { await send(response.body, response.status, response.headers); return; }
         await send({ hash: decodeURIComponent(endpoint.split('/')[1]), envelope: { cir_version: '2', source_provider: 'codex', captured_at: '2026-09-18T00:00:00Z', git_branch: 'main' },
@@ -189,7 +204,7 @@ for (const publicView of [false, true]) test(`indexed-v2 ${publicView ? 'public'
   await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.bootstrapMetrics.firstDocumentVisibleMs)).toBeDefined();
   const metrics = await page.evaluate(() => window.bootstrapMetrics);
-  const chain = ['/api/v1/me', publicView ? '/api/v1/public/repositories/alice/a' : '/api/v1/repositories', '/api/v1/repos', '/api/v1/repos/a/view'];
+  const chain = ['/api/v1/me', publicView ? '/api/v1/public/repositories/alice/a' : '/api/v1/repositories', '/api/v1/repos', '/api/v1/repos/a/bootstrap', '/api/v1/repos/a/view'];
   for (let i = 0; i < chain.length; i++) {
     const current = metrics.reads.filter(r => r.path === chain[i]);
     expect(current).toHaveLength(1);
@@ -263,7 +278,7 @@ test('revision-triggered full refresh also follows last-observer cancellation', 
   } finally { delayed.release(); }
 });
 
-for (const status of [401, 403]) test(`revision ${status} does not trigger fallback full reads`, async ({ page }) => {
+for (const status of [401, 403, 404]) test(`revision ${status} does not trigger fallback full reads`, async ({ page }) => {
   const f = await fixture(page, { revisionStatus: status });
   await page.goto('http://bootstrap.test/observers');
   await expect(page.getByTestId('view')).toHaveText('a:error'); await settle(page);
@@ -323,12 +338,16 @@ for (const resource of capacityReads) {
     await page.clock.install();
     const fixtureState = await fixture(page, { [resource.option]: () => overloaded });
     await page.goto(`http://bootstrap.test${resource.route}`);
+    if (resource.name === 'document page') {
+      await expect.poll(async () => (await reads(page, resource.path))[0]?.headersMs).toBeDefined();
+      expect(fixtureState.requests.filter(path => /\/a\/(view|pending-view)$/.test(path))).toEqual([]);
+    }
     await finishCapacityRetries(page, fixtureState.requests, resource.path);
     await expect(page.getByRole('alert').filter({ hasText: overloaded.body.error.message })).toBeVisible();
     if (resource.name === 'graph') {
       await expect(graphFailure(page)).toBeVisible();
       await expect(page.locator('.graph-row')).toHaveCount(0);
-      expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+      await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toBeVisible();
     } else {
       await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
       if (resource.name === 'document page') await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toHaveCount(0);
@@ -391,14 +410,14 @@ for (const format of ['numeric', 'date'] as const) {
     const now = new Date('2026-10-15T12:00:00Z');
     await page.clock.install({ time: now });
     const hint = format === 'numeric' ? '11' : new Date(now.getTime() + 20_000).toUTCString();
-    const fixtureState = await fixture(page, { revisionStatus: 403, aView: () => ({ ...overloaded, headers: { 'Retry-After': hint } }) });
+    const fixtureState = await fixture(page, { aView: () => ({ ...overloaded, headers: { 'Retry-After': hint } }) });
     await page.goto('http://bootstrap.test/alice/a');
     await expect(graphFailure(page)).toBeVisible();
-    await page.clock.fastForward(25_000);
+    await page.clock.fastForward(10_000);
     await settle(page);
     expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
     await expect(page.locator('.graph-row')).toHaveCount(0);
-    expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+    await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toBeVisible();
     fixtureState.check();
   });
 }
@@ -414,14 +433,15 @@ for (const failure of ['401', '403', '404', '429', '500', 'other-code', 'missing
       : ['contract-invalid', 'contract-typeerror', 'graph-revision'].includes(failure) ? { body: invalid }
       : { status: /^\d+$/.test(failure) ? Number(failure) : 503,
         body: { error: { code: failure === 'other-code' ? 'service_unavailable' : failure === 'missing-code' ? undefined : 'resource_overloaded', message: 'Rejected read' } } };
-    const fixtureState = await fixture(page, { revisionStatus: 403, aView: () => response });
+    const fixtureState = await fixture(page, { aView: () => response });
     await page.goto('http://bootstrap.test/alice/a');
     await expect(graphFailure(page)).toBeVisible();
-    await page.clock.fastForward(20_000);
+    await page.clock.fastForward(10_000);
     await settle(page);
     expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
     await expect(page.locator('.graph-row')).toHaveCount(0);
-    expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+    if (['401', '403', '404'].includes(failure)) await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toHaveCount(0);
+    else await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toBeVisible();
     fixtureState.check();
   });
 }
@@ -509,7 +529,9 @@ test('graph refresh preserves the complete graph on a real fetch transport failu
 test('graph refresh warns even when the last complete generation was empty', async ({ page }) => {
   await page.clock.install();
   let graph = '1', failing = false;
-  const fixtureState = await fixture(page, { aRevision: () => graph, aView: () => failing ? overloaded : { body: wires.get('empty') } });
+  const fixtureState = await fixture(page, { aRevision: () => graph,
+    aBootstrap: () => ({body: repositoryBootstrapFixture(wires.get('empty')!)}),
+    aView: () => failing ? overloaded : { body: wires.get('empty') } });
   await page.goto('http://bootstrap.test/alice/a');
   await expect(page.locator('.empty-box')).toContainText('No context');
   graph = '2'; failing = true;
@@ -522,7 +544,7 @@ test('graph refresh warns even when the last complete generation was empty', asy
   fixtureState.check();
 });
 
-for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', 'graph-revision', 'pending-revision', 'evidence-revision']) {
+for (const failure of ['401', '403', '404', 'contract-invalid', 'contract-typeerror', 'graph-revision', 'pending-revision', 'evidence-revision']) {
   test(`graph refresh fails closed for ${failure} after a complete 200`, async ({ page }) => {
     const recovered = nextGraph();
     let graph = '1', failing = false, revisionStatus = 200;
@@ -530,7 +552,7 @@ for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', '
     if (failure === 'contract-invalid') invalid.graph.version = 2 as 1;
     if (failure === 'contract-typeerror') Object.assign(invalid.graph, { branch_contexts: { main: null } });
     if (failure.endsWith('-revision')) Object.assign(invalid.graph.revision, { [failure.split('-')[0]]: '99' });
-    const rejected = failure === '401' || failure === '403'
+    const rejected = ['401', '403', '404'].includes(failure)
       ? { status: Number(failure), body: { error: { code: 'resource_overloaded', message: 'Access denied' } } }
       : { body: invalid };
     const fixtureState = await fixture(page, { aRevision: () => graph, revisionStatus: () => revisionStatus,
@@ -542,7 +564,7 @@ for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', '
     await expect(graphFailure(page)).toBeVisible();
     await expect(page.locator('.graph-row')).toHaveCount(0);
     await expect(refreshWarning(page)).toHaveCount(0);
-    if (failure === '401' || failure === '403') {
+    if (['401', '403', '404'].includes(failure)) {
       revisionStatus = Number(failure);
       const beforeRetry = fixtureState.requests.length;
       await graphFailure(page).getByRole('button', { name: 'Retry', exact: true }).click();
@@ -558,7 +580,7 @@ for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', '
     const beforeRecovery = fixtureState.requests.length;
     await graphFailure(page).getByRole('button', { name: 'Retry', exact: true }).click();
     await expect(page.locator('[data-graph-id="a-120"]')).toBeVisible();
-    if (failure === '401' || failure === '403') {
+    if (['401', '403', '404'].includes(failure)) {
       const recovery = fixtureState.requests.slice(beforeRecovery).filter(path => path !== '/api/v1/repos/a/changes');
       expect(recovery[0]).toBe('/api/v1/repos/a/revision');
       expect(recovery.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
@@ -592,5 +614,277 @@ test('graph refresh retention does not bypass selected code-position revision ch
   await positions.selectOption('');
   await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
   await expect(refreshWarning(page)).toBeVisible();
+  fixtureState.check();
+});
+
+for (const publicView of [false, true]) test(`first conversation precedes the gated full graph (${publicView ? 'public' : 'authenticated'})`, async ({ page }, info) => {
+  const delayed = gate();
+  const bases: (string | null)[] = [];
+  const fixtureState = await fixture(page, { public: publicView, holdA: {at: 1, promise: delayed.promise}, aDoc: url => {
+    bases.push(url.searchParams.get('base'));
+    return {body: {hash: 'a-119', envelope: {cir_version: '2', source_provider: 'codex'}, total: 2, inherited: 1, offset: 1, next: -1,
+      events: [{kind: 'message', role: 'user', seq: 2, event_index: 1, blocks: [{type: 'text', text: 'BOOTSTRAP_BODY_a'}]}]}};
+  }});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+    await expect(page.locator('.inherited-toggle')).toContainText('a-118');
+    expect(bases).toEqual(['a-118']);
+    await expect(page.locator('.graph-row')).toHaveCount(0);
+    expect((await reads(page, '/api/v1/repos/a/view'))[0].bodyMs).toBeUndefined();
+    await expect.poll(() => page.evaluate(() => window.bootstrapMetrics.firstDocumentVisibleMs)).toBeDefined();
+    delayed.release();
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    await expect(page.locator('.viewer-head > code')).toHaveText('a-119');
+    const metrics = await page.evaluate(() => window.bootstrapMetrics);
+    expect(metrics.firstDocumentVisibleMs!).toBeLessThan(metrics.reads.find(read => read.path === '/api/v1/repos/a/view')!.bodyMs!);
+    fixtureState.check();
+    await report(page, info);
+  } finally { delayed.release(); }
+});
+
+test('bootstrap defers heavy reads and aborts cleanly when navigating to another repository', async ({ page }) => {
+  const delayed = gate();
+  const fixtureState = await fixture(page, {holdBootstrap: {promise: delayed.promise}});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/bootstrap')).length).toBe(1);
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/revision')).length).toBe(1);
+    expect(fixtureState.requests.filter(path => /\/a\/(view|pending-view|docs\/)/.test(path))).toEqual([]);
+    await page.evaluate(() => { history.pushState(null, '', '/alice/b'); dispatchEvent(new PopStateEvent('popstate')); });
+    await expect(page.getByText('BOOTSTRAP_BODY_b', {exact: true})).toBeVisible();
+    await expect.poll(async () => (await reads(page, '/api/v1/repos/a/bootstrap'))[0]?.abortedMs).toBeDefined();
+    delayed.release();
+    await settle(page);
+    expect((await reads(page, '/api/v1/repos/a/bootstrap'))[0].bodyMs).toBeUndefined();
+    await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toHaveCount(0);
+    expect(fixtureState.requests.filter(path => /\/a\/(view|pending-view|docs\/)/.test(path))).toEqual([]);
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+for (const explicit of [false, true]) test(`notice refresh preserves the ${explicit ? 'clicked' : 'initial automatic'} conversation across mismatched graph revisions`, async ({ page }) => {
+  const delayed = gate();
+  const recovered = nextGraph();
+  let advanced = false;
+  const fixtureState = await fixture(page, {aRevision: () => advanced ? '2' : '1', holdA: {at: 2, promise: delayed.promise},
+    aBootstrap: () => ({body: repositoryBootstrapFixture(advanced ? recovered : wires.get('a')!)}),
+    aView: () => ({body: advanced ? recovered : wires.get('a')})});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    if (explicit) await page.locator('.commits .commit-row').filter({hasText: 'a snapshot 118'}).click();
+    const chosen = explicit ? 'a-118' : 'a-119';
+    await expect(page.locator('.viewer-head > code')).toHaveText(chosen);
+    advanced = true;
+    await refreshRepository(page);
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/bootstrap')).length).toBe(2);
+    await expect.poll(async () => (await reads(page, '/api/v1/repos/a/bootstrap'))[1]?.bodyMs).toBeDefined();
+    await expect(page.locator('.viewer-head > code')).toHaveText(chosen);
+    await expect(page.locator('[data-graph-id="a-120"]')).toHaveCount(0);
+    delayed.release();
+    await expect(page.locator('[data-graph-id="a-120"]')).toBeVisible();
+    await expect(page.locator('.viewer-head > code')).toHaveText(chosen);
+    expect(fixtureState.requests.some(path => path.includes('/docs/a-120/'))).toBe(false);
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+test('a late older full graph cannot replace a newer bootstrap conversation', async ({ page }) => {
+  const delayed = gate(), recovered = nextGraph();
+  const fixtureState = await fixture(page, {holdA: {at: 1, promise: delayed.promise}, aRevision: () => '2',
+    aBootstrap: () => ({body: repositoryBootstrapFixture(recovered)})});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect(page.locator('.viewer-head > code')).toHaveText('a-120');
+    await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+    delayed.release();
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    await expect(page.locator('[data-graph-id="a-120"]')).toHaveCount(0);
+    await expect(page.locator('.viewer-head > code')).toHaveText('a-120');
+    expect(fixtureState.requests.some(path => path.includes('/docs/a-119/'))).toBe(false);
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+test('branch and repository navigation cannot consume a delayed bootstrap from a previous selection', async ({ page }) => {
+  const delayed = gate(), original = wires.get('a')!;
+  const topic = 'topic/other';
+  const branched = serverGraphWireFixture({...original, graph: undefined,
+    refs: [...original.refs, {repo_id: 'a', kind: 'branch', name: topic, target: 'a-118'}]}, '', 2);
+  const fixtureState = await fixture(page, {holdBootstrap: {branch: topic, promise: delayed.promise},
+    aBootstrap: url => ({body: repositoryBootstrapFixture(branched, url.searchParams.get('branch') ?? undefined)}),
+    aView: () => ({body: branched})});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    await page.getByRole('combobox', {name: 'Branch', exact: true}).selectOption(topic);
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/bootstrap')).length).toBe(2);
+    await expect(page.locator('.viewer')).toHaveCount(0);
+    await page.getByRole('combobox', {name: 'Branch', exact: true}).selectOption('main');
+    await expect(page.locator('.viewer-head > code')).toHaveText('a-119');
+    delayed.release();
+    await settle(page);
+    expect(fixtureState.requests.some(path => path.includes('/docs/a-118/'))).toBe(false);
+    await page.getByRole('combobox', {name: 'Branch', exact: true}).selectOption(topic);
+    await expect(page.locator('.viewer-head > code')).toHaveText('a-118');
+    await page.evaluate(() => { history.pushState(null, '', '/alice/b'); dispatchEvent(new PopStateEvent('popstate')); });
+    await expect(page.locator('.viewer-head > code')).toHaveText('b-119');
+    await expect(page.getByRole('combobox', {name: 'Branch', exact: true})).toHaveValue('main');
+    expect(fixtureState.requests.some(path => path.includes('/b/docs/a-'))).toBe(false);
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+for (const state of ['server-default', 'missing-ref', 'archived'] as const) test(`bootstrap ${state} selection never guesses another graph snapshot`, async ({ page }) => {
+  const delayed = gate(), original = wires.get('a')!;
+  const bootstrap = state === 'server-default'
+    ? repositoryBootstrapFixture({...original, default_branch: 'release', refs: [{repo_id: 'a', kind: 'branch', name: 'release', target: 'a-117'}]})
+    : state === 'missing-ref' ? repositoryBootstrapFixture({...original, default_branch: 'missing'})
+      : {...repositoryBootstrapFixture(original), snapshot: undefined, parent: undefined, archived: true};
+  const fixtureState = await fixture(page, {holdA: {at: 1, promise: delayed.promise}, aBootstrap: () => ({body: bootstrap})});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/view')).length).toBe(1);
+    if (state === 'server-default') {
+      await expect(page.locator('.viewer-head > code')).toHaveText('a-117');
+      await expect(page.getByRole('combobox', {name: 'Branch', exact: true})).toHaveValue('release');
+    } else {
+      await expect(page.locator('.viewer')).toHaveCount(0);
+      expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+      await expect(page.getByText('No context', {exact: false})).toHaveCount(0);
+      if (state === 'archived') await expect(page.getByText(en.sessionArchive.archived, {exact: true})).toBeVisible();
+    }
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+for (const endpoint of ['bootstrap', 'revision', 'view'] as const) for (const status of [401, 403, 404]) {
+  test(`${endpoint} ${status} revocation hides the bootstrap conversation and recovers after reauthorization`, async ({ page }) => {
+    const delayed = gate();
+    let revoked = false;
+    const denial = {status, body: {error: {message: 'Access revoked'}}};
+    const fixtureState = await fixture(page, {aRevision: () => revoked ? '2' : '1',
+      holdA: {at: endpoint === 'view' ? 2 : 1, promise: delayed.promise},
+      revisionStatus: () => endpoint === 'revision' && revoked ? status : 200,
+      aBootstrap: () => endpoint === 'bootstrap' && revoked ? denial : undefined,
+      aView: () => endpoint === 'view' && revoked ? denial : undefined});
+    try {
+      await page.goto('http://bootstrap.test/alice/a');
+      await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+      if (endpoint === 'view') await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+      revoked = true;
+      await refreshRepository(page);
+      if (endpoint === 'view') delayed.release();
+      await expect(page.locator('.viewer')).toHaveCount(0);
+      await expect(page.locator('.graph-row')).toHaveCount(0);
+      await expect(graphFailure(page)).toBeVisible();
+      delayed.release();
+      await settle(page);
+      await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toHaveCount(0);
+      revoked = false;
+      await graphFailure(page).getByRole('button', {name: 'Retry', exact: true}).click();
+      await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+      await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+      await expect(graphFailure(page)).toHaveCount(0);
+      fixtureState.check();
+    } finally { delayed.release(); }
+  });
+}
+
+for (const status of [404, 501, 503]) test(`bootstrap ${status} is an explicit error, not an empty repository or implicit legacy fallback`, async ({ page }) => {
+  const fixtureState = await fixture(page, {aBootstrap: () => ({status, body: {error: {message: 'Bootstrap unavailable'}}})});
+  await page.goto('http://bootstrap.test/alice/a');
+  await expect(page.locator('.ctx-main [role="alert"]')).toContainText('Bootstrap unavailable');
+  await expect(page.getByText('No context', {exact: false})).toHaveCount(0);
+  expect(fixtureState.requests.some(path => /\/(view|pending-view|docs\/)/.test(path))).toBe(false);
+  fixtureState.check();
+});
+
+for (const failed of [false, true]) test(`heavy reads wait for the first conversation page to ${failed ? 'fail' : 'succeed'}`, async ({ page }) => {
+  const delayed = gate();
+  const fixtureState = await fixture(page, {holdDoc: delayed.promise,
+    aDoc: () => failed ? {status: 500, body: {error: {message: 'Conversation unavailable'}}} : undefined});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect.poll(() => fixtureState.requests.filter(path => path.includes('/a/docs/')).length).toBe(1);
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/revision')).length).toBe(1);
+    expect(fixtureState.requests.filter(path => /\/a\/(view|pending-view)$/.test(path))).toEqual([]);
+    delayed.release();
+    if (failed) await expect(page.getByRole('alert')).toContainText('Conversation unavailable');
+    else await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    const metrics = await page.evaluate(() => window.bootstrapMetrics);
+    const document = metrics.reads.find(read => read.path.includes('/a/docs/'))!;
+    for (const endpoint of ['view', 'pending-view']) {
+      expect(metrics.reads.find(read => read.path === `/api/v1/repos/a/${endpoint}`)!.startMs).toBeGreaterThanOrEqual(document.bodyMs ?? document.headersMs!);
+    }
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+for (const code of ['catalog_unsupported', 'repository_bootstrap_unavailable']) test(`only explicit bootstrap 501 ${code} uses legacy graph selection`, async ({ page }) => {
+  const delayed = gate(), original = wires.get('a')!;
+  const branch = code === 'catalog_unsupported' ? 'master' : 'release';
+  const legacy = serverGraphWireFixture({...original, graph: undefined, refs: [{repo_id: 'a', kind: 'branch', name: branch, target: 'a-118'}]}, '', 2);
+  const fixtureState = await fixture(page, {holdA: {at: 1, promise: delayed.promise},
+    aBootstrap: () => ({status: 501, body: {error: {code, message: 'Bootstrap unavailable'}}}), aView: () => ({body: legacy})});
+  try {
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect.poll(() => fixtureState.requests.filter(path => path.endsWith('/a/view')).length).toBe(1);
+    expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByText('No context', {exact: false})).toHaveCount(0);
+    delayed.release();
+    await expect(page.locator('.viewer-head > code')).toHaveText('a-118');
+    await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+    await expect(page.getByRole('combobox', {name: 'Branch', exact: true})).toHaveValue(branch);
+    await expect(page.locator('[data-graph-id="a-118"]')).toBeVisible();
+    fixtureState.check();
+  } finally { delayed.release(); }
+});
+
+test('an archived bootstrap head stays hidden until explicitly opened from archived sessions', async ({ page }) => {
+  const original = wires.get('a')!;
+  const archived = serverGraphWireFixture({...original, graph: undefined, archived_sessions: [{
+    repo_id: 'a', key: 'archived-session', snapshot_id: 'a-119', provider: 'codex', session_id: 'archived-session',
+    archived_at: '2026-11-06T00:00:00Z', archived_by: 'reader', latest_snapshot_id: 'a-119', snapshot_ids: ['a-119'],
+    message: 'Archived head', branch: 'main', author: undefined, updated_at: '2026-11-06T00:00:00Z', origin: {main_branch: 'main'},
+  }]}, '', 2);
+  const fixtureState = await fixture(page, {aBootstrap: () => ({body: repositoryBootstrapFixture(archived)}), aView: () => ({body: archived})});
+  await page.goto('http://bootstrap.test/alice/a');
+  const archives = page.locator('.graph-session-archives');
+  await expect(archives.locator(':scope > summary')).toContainText('(1)');
+  await expect(page.locator('.viewer')).toHaveCount(0);
+  expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+  await archives.locator(':scope > summary').click();
+  await archives.locator('.graph-session-archive > summary').click();
+  await archives.getByRole('button', {name: 'Open archived session codex / archived-session'}).click();
+  await expect(page.locator('.viewer-head > code')).toHaveText('a-119');
+  await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+  await expect(page.locator('.session-archive-notice')).toBeVisible();
+  fixtureState.check();
+});
+
+test('same-head bootstrap metadata refresh updates memory while the full graph remains unavailable', async ({ page }) => {
+  let graph = '1';
+  const original = repositoryBootstrapFixture(wires.get('a')!);
+  const fixtureState = await fixture(page, {aRevision: () => graph,
+    aBootstrap: () => ({body: {...original, revision: {...revision, graph}, snapshot: {...original.snapshot!, memory_hash: `memory-${graph}`}}}),
+    aView: () => ({...overloaded, headers: {'Retry-After': '11'}})});
+  await page.goto('http://bootstrap.test/alice/a');
+  await expect(page.locator('.viewer-head > code')).toHaveText('a-119');
+  await expect(graphFailure(page)).toBeVisible();
+  await page.locator('.memory-box > summary').click();
+  await expect(page.locator('.memory-box')).toContainText('MEMORY_memory-1');
+  graph = '2';
+  await refreshRepository(page);
+  await expect(page.locator('.memory-box')).toContainText('MEMORY_memory-2');
+  await expect(page.locator('.viewer-head > code')).toHaveText('a-119');
+  await expect(page.getByText('BOOTSTRAP_BODY_a', {exact: true})).toBeVisible();
+  await expect(page.locator('.graph-row')).toHaveCount(0);
+  expect(fixtureState.requests.filter(path => path.includes('/memory-objects/'))).toEqual([
+    '/api/v1/repos/a/memory-objects/memory-1', '/api/v1/repos/a/memory-objects/memory-2',
+  ]);
   fixtureState.check();
 });

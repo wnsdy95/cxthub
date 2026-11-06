@@ -1,4 +1,5 @@
 import { serverGraphWireFixture } from '../tests/serverGraphFixture';
+import { repositoryBootstrapFixture } from '../tests/repositoryBootstrapFixture';
 import { ko } from '../src/i18n/locales/ko';
 import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
@@ -2633,6 +2634,7 @@ test('branch selection survives ref polling and follows identity through rename'
   refs = [refs[0], { ...refs[1], name: 'renamed' }];
   await page.clock.fastForward(16_000);
   await expect(select).toHaveValue('renamed');
+  await expect(page.locator('.viewer-head > code')).toHaveText(graftTarget.slice(7, 17));
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -2642,8 +2644,10 @@ test('graph distinguishes snapshot failure from empty history and recovers on re
   let fail = true;
   const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0)];
   const base = publicRepositoryApi(snapshots, [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
-  const unexpected = await installApiFixture(page, req => req.pathname.endsWith('/snapshots') && fail
-    ? { status: 503, body: { error: { message: 'snapshot outage' } } } : base(req));
+  const unexpected = await installApiFixture(page, req => req.pathname.endsWith('/bootstrap')
+    ? {body: repositoryBootstrapFixture({snapshots, refs: [{kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot}],
+      revision: {graph: '1', pending: '1'}, default_branch: 'main'})}
+    : req.pathname.endsWith('/snapshots') && fail ? { status: 503, body: { error: { message: 'snapshot outage' } } } : base(req));
   await page.goto('/alice/cxthub');
   await expect(page.locator('.graph-wrap').getByRole('alert')).toContainText('snapshot outage', { timeout: 15_000 });
   await expect(page.locator('.graph .repository-empty')).toHaveCount(0);
@@ -2985,6 +2989,7 @@ test('main includes PR conversations and evidence refreshes the graph without au
  const base=publicRepositoryApi(snapshots,refs,[],[],[],history);
  const {pageErrors,unexpected}=await openGraph(page,req=>{
   const v=view();
+  if(req.pathname.endsWith('/bootstrap')) return {body:repositoryBootstrapFixture({...v,default_branch:'main'},req.searchParams.get('branch') ?? undefined)};
   if(req.pathname.endsWith('/view')) {fullReads++;return {body:v};}
   if(req.pathname.endsWith('/revision')) return {body:v.revision};
   if(req.pathname.endsWith('/changes')) return {contentType:'text/event-stream',body:`event: revision\ndata: ${JSON.stringify(v.revision)}\n\n`};

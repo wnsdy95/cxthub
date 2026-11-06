@@ -20,19 +20,24 @@ type DocumentReaderState = {
 
 type DocumentReaderProps = Omit<DocEventsProps, 'children'> & {
   children: (reader: DocumentReaderState) => ReactNode;
+  onInitialReadSettled?: () => void;
 };
 
 export function DocEvents({ children, ...selection }: DocEventsProps) {
   return <DocumentReader {...selection}>{reader => <DocumentEvents reader={reader}>{children}</DocumentEvents>}</DocumentReader>;
 }
 
-export function DocumentReader({ repoId, hash, base, start = -1, mode, targetIndex, targetKey, children }: DocumentReaderProps) {
+export function DocumentReader({ repoId, hash, base, start = -1, mode, targetIndex, targetKey, children, onInitialReadSettled }: DocumentReaderProps) {
   const selection = { repoId, hash, base, start, mode };
   const selectionKey = JSON.stringify(documentVisibleKey(selection));
   const [readIdentity, setReadIdentity] = useState({ selectionKey, restart: '' });
   const restart = readIdentity.selectionKey === selectionKey ? readIdentity.restart : '';
   if (readIdentity.selectionKey !== selectionKey) setReadIdentity({ selectionKey, restart: '' });
   const query = useDocumentVisible(selection, restart);
+  const initialReadSettled = Boolean(query.data?.pages[0] || query.isError);
+  useEffect(() => {
+    if (initialReadSettled) onInitialReadSettled?.();
+  }, [initialReadSettled, onInitialReadSettled]);
   return children({ selection, restart, query, targetIndex, targetKey, onRestart: () => setReadIdentity({ selectionKey, restart: crypto.randomUUID() }) });
 }
 

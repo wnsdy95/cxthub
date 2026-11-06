@@ -458,10 +458,10 @@ export function useDismissPending() {
 }
 
 // One server generation shared by the context and On Hold views.
-export function useRepoView(repoId: string | null, _primaryBranch?: string) {
+export function useRepoView(repoId: string | null, _primaryBranch?: string, deferHeavy = false) {
   const t = useT();
   const qc = useQueryClient();
-  const refreshRepository = useRepositoryUpdates(repoId);
+  const refreshRepository = useRepositoryUpdates(repoId, deferHeavy);
   const noticeQuery = useQuery<RepositoryRevision>({queryKey:['repository-notice',repoId],queryFn:skipToken});
   const projection = noticeQuery.data?.pending_projection;
   const graphProjection = noticeQuery.data?.graph_projection;
@@ -470,9 +470,9 @@ export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   const pendingEnabled = !projection || projection.state === 'ready' || projection.state === 'disabled';
   const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>readRepositoryPending(repoId!,qc,signal),
     ...(projection?.state === 'ready' ? capacityReadRetry : pendingStateReadRetry),
-    enabled:Boolean(repoId && !noticeQuery.error && pendingEnabled),staleTime:projection?.state === 'ready' ? Infinity : 0,refetchOnWindowFocus:false});
+    enabled:Boolean(repoId && !deferHeavy && !noticeQuery.error && pendingEnabled),staleTime:projection?.state === 'ready' ? Infinity : 0,refetchOnWindowFocus:false});
   const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>readRepositoryGraph(repoId!,qc,signal),...graphReadRetry,
-    enabled:Boolean(repoId && !noticeQuery.error && graphEnabled),staleTime:Infinity,refetchOnMount:'always',refetchOnWindowFocus:false});
+    enabled:Boolean(repoId && !deferHeavy && !noticeQuery.error && graphEnabled),staleTime:Infinity,refetchOnMount:'always',refetchOnWindowFocus:false});
   const retryable = isRetryableGraphRefreshError(viewQuery.error);
   const fullReadState = useMemo(()=>graphReadState(viewQuery.data,graphProjection,viewQuery.error,noticeQuery.error),
     [viewQuery.data,graphProjection,viewQuery.error,noticeQuery.error]);

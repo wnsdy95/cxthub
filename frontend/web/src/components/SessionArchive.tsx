@@ -8,8 +8,8 @@ import { short, when } from '../snapshotFormat';
 import type { SessionArchiveView, Snapshot } from '../types';
 import { saveBlob } from '../zip';
 
-export function SessionArchiveActions({ repoId, snapshotId, docHash, archive, role }: {
-  repoId: string; snapshotId: string; docHash: string; archive?: SessionArchiveView; role: Role | null;
+export function SessionArchiveActions({ repoId, snapshotId, docHash, archive, role, onSelectSnapshot }: {
+  repoId: string; snapshotId: string; docHash: string; archive?: SessionArchiveView; role: Role | null; onSelectSnapshot?: () => void;
 }) {
   const t = useT();
   const mutation = useSessionArchive();
@@ -39,7 +39,7 @@ export function SessionArchiveActions({ repoId, snapshotId, docHash, archive, ro
   return <>
     <button type="button" className="dl-btn" title={t('context.rawTitle')} disabled={downloading} onClick={() => void download()}>↓ raw</button>
     {atLeast(role, 'maintainer') && <button ref={trigger} type="button" className="dl-btn" disabled={mutation.isPending}
-      onClick={() => { mutation.reset(); setConfirmation({repoId, snapshotId: archive?.snapshot_id ?? snapshotId, archived: !archive}); }}>{action}</button>}
+      onClick={() => { onSelectSnapshot?.(); mutation.reset(); setConfirmation({repoId, snapshotId: archive?.snapshot_id ?? snapshotId, archived: !archive}); }}>{action}</button>}
     {downloadError && <span role="alert" className="err">{downloadError}</span>}
     {confirmation && createPortal(<div className="modal-back">
       <div ref={dialog} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-label={confirmationAction} onKeyDown={event => {
