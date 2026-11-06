@@ -215,7 +215,14 @@ func (s projectionStore) configure(ctx context.Context, repo domain.ContentHash,
 			return transaction.Commit(ctx)
 		}
 	}
-	if enabled && (!work.enabled || work.Phase == "needs_attention") {
+	reset := enabled && (!work.enabled || work.Phase == "needs_attention")
+	if enabled && !reset && s.spec.scope == domain.RepositoryGraphSourceScope {
+		reset, err = graphProjectionNeedsInputReset(ctx, transaction, work)
+		if err != nil {
+			return err
+		}
+	}
+	if reset {
 		_, err = transaction.Exec(ctx, `UPDATE `+s.spec.work+` SET enabled=true,source_epoch=$2,dataset=gen_random_uuid(),
 			applied_seq=-1,input_seq=-1,cursor='',phase='capture',lease_until=NULL,fence=fence+1,attempts=0,
 			next_attempt=clock_timestamp(),reason='',pin_seq=$3,retention_until=clock_timestamp()+interval '24 hours' WHERE repo_id=$1`, string(repo), source.epoch, source.floor)
@@ -225,7 +232,7 @@ func (s projectionStore) configure(ctx context.Context, repo domain.ContentHash,
 	if err != nil {
 		return err
 	}
-	if enabled && (!work.enabled || work.Phase == "needs_attention") {
+	if reset {
 		if err := s.pruneDatasets(ctx, transaction, repo); err != nil {
 			return err
 		}
@@ -401,19 +408,22 @@ func (s projectionStore) renew(ctx context.Context, lease domain.PendingProjecti
 }
 
 func (s projectionStore) validatePage(work projectionWork, source projectionSource, page domain.RepositoryViewSourcePage) error {
+	if page.Profile != "" && (s.spec.scope != domain.RepositoryGraphSourceScope || page.Profile != domain.RepositoryGraphProjectionSourceProfile) {
+		return domain.ErrValidation
+	}
 	checkpoint := s.checkpoint(work.RepoID, work.Epoch, page.Through)
 	if page.Version != checkpoint.Version || page.Scope != checkpoint.Scope || page.RepoID != checkpoint.RepoID || page.Epoch != checkpoint.Epoch ||
 		checkpoint.Validate() != nil || page.Through > source.head || page.Through < max(source.floor, source.baseline) ||
 		page.Through <= work.AppliedSequence || len(page.Entries) > domain.MaxRepositoryViewSourceLimit {
 		return domain.ErrValidation
 	}
-	cursor := repositoryViewSourceCursor{Checkpoint: checkpoint, Floor: work.pin, Baseline: source.baseline, Mode: "baseline"}
+	cursor := repositoryViewSourceCursor{Checkpoint: checkpoint, Floor: work.pin, Baseline: source.baseline, Mode: "baseline", Profile: page.Profile}
 	if work.AppliedSequence >= 0 {
 		cursor.Mode, cursor.After, cursor.Sequence = "delta", work.AppliedSequence, work.AppliedSequence
 	}
 	if work.Cursor != "" {
 		prior, err := decodeRepositoryViewSourceCursor(work.Cursor)
-		if err != nil || prior.Checkpoint != checkpoint || prior.Floor != cursor.Floor || prior.Baseline != cursor.Baseline || prior.Mode != cursor.Mode || prior.After != cursor.After {
+		if err != nil || prior.Checkpoint != checkpoint || prior.Floor != cursor.Floor || prior.Baseline != cursor.Baseline || prior.Mode != cursor.Mode || prior.After != cursor.After || prior.Profile != cursor.Profile {
 			return domain.ErrValidation
 		}
 		cursor = prior
@@ -423,6 +433,9 @@ func (s projectionStore) validatePage(work projectionWork, source projectionSour
 	}
 	pageBytes := 0
 	for _, entry := range page.Entries {
+		if page.Profile == domain.RepositoryGraphProjectionSourceProfile && (entry.Kind == "git_tree" || entry.Kind == "git_delta") {
+			return domain.ErrValidation
+		}
 		pageBytes += len(entry.Value) + len(entry.Key) + 128
 		if len(entry.Value) > domain.MaxRepositoryViewSourceImageBytes || pageBytes > domain.MaxRepositoryViewSourcePageBytes {
 			return domain.ErrRepositoryViewSourceLimit

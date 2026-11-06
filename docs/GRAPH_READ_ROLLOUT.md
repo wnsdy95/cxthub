@@ -45,6 +45,37 @@ Removing worker startup allowlists drains only that process; durable enablement
 is shared. Do not claim workers are globally disabled unless their owners are
 drained or their durable configuration has been explicitly disabled.
 
+## Graph source profile and comparison contract
+
+Graph workers request the `graph-projection-v1` source profile. It retains the
+repository, snapshots, refs, history, archives, pending state, commit ancestry
+and contribution evidence, but excludes file-tree and file-delta payloads that
+graph projection never reads. Filtering happens before source-page allocation
+and budget accounting. The default source profile still includes those payloads
+for memory preparation and other consumers. Input size, page size, integrity,
+authorization and publication bounds are unchanged.
+
+Source cursors bind the profile as well as repository and generation. Before
+upgrading a running worker from the full profile, drain its owners. On startup,
+configuration fences and restarts an unfinished old-profile cursor or a dataset
+containing the excluded payloads; it preserves already published output until a
+replacement qualifies. Repeated configuration preserves new-profile progress.
+Do not run old and new graph workers concurrently during this transition.
+
+Legacy and projected views share explicit ref, history, pending and unsync ordering.
+Refs use kind/name byte ordering, history uses dependency-safe event ordering,
+pending uses session ID byte ordering, and unsync entries use descending update
+time with user/branch tie-breaks. Query timestamps are expressed in UTC without
+changing the instant or precision, independent of database/host timezone.
+Exact comparison still covers
+all view fields and graph facts; it does not ignore mismatching fields or edit
+stored source data to make a comparison pass.
+
+A restored-data replay with 9,777 snapshots, 204 PR joins and 173 branch births
+completed source capture, publication, qualification and selected serving with
+an identical full-view digest and unchanged source generation. This is local
+verification, not evidence that production routing has been enabled.
+
 ## Remaining boundary
 
 Qualified serving currently reads the entire field-part bundle. It removes

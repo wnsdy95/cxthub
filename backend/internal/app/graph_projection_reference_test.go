@@ -100,7 +100,7 @@ func (storage *graphProjectionReferenceTestStore) RepositoryGraphSourceChanges(c
 func TestGraphProjectionCapturesReferenceInsideOwnedFirstPageRead(test *testing.T) {
 	service, base, repo := newGraphQualificationTest(test)
 	storage := &graphProjectionReferenceTestStore{graphQualificationTestStore: base,
-		page: graphCapturePage(base.source, "baseline", nil, "")}
+		page: graphProjectionCapturePage(base.source, "baseline", nil, "")}
 	service.meta = storage
 	job := domain.GraphProjectionLease{RepoID: repo, Dataset: base.lease.Dataset, Epoch: base.source.Epoch,
 		Phase: "capture", Fence: 1, AppliedSequence: -1, InputSequence: -1, LeaseUntil: time.Now().Add(time.Minute)}
@@ -122,7 +122,7 @@ func TestGraphProjectionReferenceRejectsIncoherentOrOversizedCapture(test *testi
 		test.Run(failure, func(test *testing.T) {
 			service, base, repo := newGraphQualificationTest(test)
 			storage := &graphProjectionReferenceTestStore{graphQualificationTestStore: base,
-				page: graphCapturePage(base.source, "baseline", nil, "")}
+				page: graphProjectionCapturePage(base.source, "baseline", nil, "")}
 			service.meta = storage
 			job := domain.GraphProjectionLease{RepoID: repo, Dataset: base.lease.Dataset, Epoch: base.source.Epoch,
 				Phase: "capture", Fence: 1, AppliedSequence: -1, InputSequence: -1, LeaseUntil: time.Now().Add(time.Minute)}
@@ -159,7 +159,7 @@ func TestGraphProjectionReferenceExcludesInheritedEvidenceAndCaches(test *testin
 func TestGraphProjectionReferenceCancellationReleasesOwnedRead(test *testing.T) {
 	service, base, repo := newGraphQualificationTest(test)
 	storage := &graphProjectionReferenceTestStore{graphQualificationTestStore: base,
-		page: graphCapturePage(base.source, "baseline", nil, "")}
+		page: graphProjectionCapturePage(base.source, "baseline", nil, "")}
 	service.meta = storage
 	ctx, cancel := context.WithCancel(systemTestContext())
 	defer cancel()

@@ -113,6 +113,12 @@ func decodeRepositorySourceRow(ctx context.Context, entry RepositoryViewSourceEn
 			return nil, ErrIntegrity
 		}
 	}
+	switch row := value.(type) {
+	case *SessionArchive:
+		row.ArchivedAt = row.ArchivedAt.UTC()
+	case *RefLogEntry:
+		row.CreatedAt = row.CreatedAt.UTC()
+	}
 	return value, nil
 }
 
@@ -129,6 +135,7 @@ func decodeRepositorySnapshotSource(ctx context.Context, raw []byte) (*Snapshot,
 	if _, err := snapshot.CreatedAt.MarshalJSON(); err != nil {
 		return nil, ErrIntegrity
 	}
+	snapshot.CreatedAt = snapshot.CreatedAt.UTC()
 	snapshot.DocIdentity = input.DocIdentity.value
 	return (*Snapshot)(&snapshot), nil
 }

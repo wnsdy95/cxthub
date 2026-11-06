@@ -35,7 +35,7 @@ func TestGraphQualificationInputsRequireOwnedReadSnapshot(t *testing.T) {
 
 func TestGraphQualificationInputTableCoverage(t *testing.T) {
 	expected := []string{"repos", "snapshots", "refs", "context_history", "pending_contexts", "unsync_contexts", "session_archives", "reflog", "repository_revisions",
-		"git_commit_trees", "git_tree_nodes", "git_commit_deltas", "git_ref_observations", "pr_history_checkpoints", "pr_participations", "pr_contributions",
+		"git_commit_trees", "git_ref_observations", "pr_history_checkpoints", "pr_participations", "pr_contributions",
 		"git_contributions", "git_head_receipts", "git_contribution_admissions", "git_context_heads", "git_contribution_proofs"}
 	var actual []string
 	for _, table := range regexp.MustCompile(`FROM (\w+) source WHERE source\.(\w+)=\$1`).FindAllStringSubmatch(graphQualificationInputSizesSQL, -1) {
@@ -50,6 +50,6 @@ func TestGraphQualificationInputTableCoverage(t *testing.T) {
 	}
 	if !slices.Equal(expected, actual) || strings.Count(graphQualificationInputSizesSQL, "octet_length(to_jsonb(source)::text)") != len(expected) ||
 		!strings.Contains(graphQualificationInputSizesSQL, "LIMIT $2") {
-		t.Fatalf("qualification no longer budgets every actual input independently: %v", actual)
+		t.Fatalf("qualification no longer budgets every graph dependency independently: %v", actual)
 	}
 }

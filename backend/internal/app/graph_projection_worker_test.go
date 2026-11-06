@@ -155,9 +155,10 @@ func graphProjectionWorkerFixture(t *testing.T) (*Service, *graphProjectionWorke
 	if err != nil {
 		t.Fatal(err)
 	}
+	commit := domain.GitCommitTree{Commit: strings.Repeat("a", 40), Tree: tree.OID, Parents: []string{}}
 	storage := &graphProjectionWorkerStore{metadata: metadata, jobs: []domain.GraphProjectionLease{job}, calls: map[string]int{}}
 	storage.inputs = []domain.RepositoryViewSourceEntry{
-		{Sequence: 2, Kind: "git_tree", Key: string(marshal([]string{metadata.GitRemoteURL, tree.OID})), Value: marshal(map[string]any{"repo_id": repo, "origin": metadata.GitRemoteURL, "oid": tree.OID, "payload": tree})},
+		{Sequence: 2, Kind: "git_commit", Key: string(marshal([]string{metadata.GitRemoteURL, commit.Commit})), Value: marshal(map[string]any{"repo_id": repo, "origin": metadata.GitRemoteURL, "commit_oid": commit.Commit, "payload": commit})},
 		{Sequence: 1, Kind: "pending", Key: "session", Value: marshal(domain.Pending{RepoID: repo, SessionID: "session", Target: snapshot.ID, Branch: "main"})},
 		{Sequence: 1, Kind: "protocol", Key: string(repo), Value: marshal(map[string]any{"context_protocol": 1})},
 		{Sequence: 1, Kind: "repository", Key: string(repo), Value: marshal(struct {
@@ -170,6 +171,12 @@ func graphProjectionWorkerFixture(t *testing.T) (*Service, *graphProjectionWorke
 	}
 	service := &Service{meta: storage}
 	return service, storage, job, checkpoint
+}
+
+func graphProjectionCapturePage(checkpoint domain.RepositoryViewSourceCheckpoint, mode string, entries []domain.RepositoryViewSourceEntry, cursor string) domain.RepositoryViewSourcePage {
+	page := graphCapturePage(checkpoint, mode, entries, cursor)
+	page.Profile = domain.RepositoryGraphProjectionSourceProfile
+	return page
 }
 
 func TestGraphProjectionWorkerCapabilitiesAndConfiguration(t *testing.T) {
@@ -232,7 +239,7 @@ func TestGraphProjectionWorkerCapturesOnePagePerLeaseThenPublishesFrozenGenerati
 	second.Cursor, second.Fence = "next", first.Fence+1
 	project.Fence = second.Fence + 1
 	storage.jobs = []domain.GraphProjectionLease{first, second, project}
-	storage.pages = []domain.RepositoryViewSourcePage{graphCapturePage(checkpoint, "baseline", storage.inputs[:2], "next"), graphCapturePage(checkpoint, "baseline", storage.inputs[2:], "")}
+	storage.pages = []domain.RepositoryViewSourcePage{graphProjectionCapturePage(checkpoint, "baseline", storage.inputs[:2], "next"), graphProjectionCapturePage(checkpoint, "baseline", storage.inputs[2:], "")}
 	original, err := json.Marshal(storage.inputs)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +254,7 @@ func TestGraphProjectionWorkerCapturesOnePagePerLeaseThenPublishesFrozenGenerati
 		}
 	}
 	for index, request := range storage.requests {
-		if request.Limit != domain.DefaultRepositoryViewSourceLimit || request.After != nil || index == 1 && request.Cursor != "next" {
+		if request.Profile != domain.RepositoryGraphProjectionSourceProfile || request.Limit != domain.DefaultRepositoryViewSourceLimit || request.After != nil || index == 1 && request.Cursor != "next" {
 			t.Fatal("capture request lost durable cursor or bound", request)
 		}
 	}
@@ -256,7 +263,7 @@ func TestGraphProjectionWorkerCapturesOnePagePerLeaseThenPublishesFrozenGenerati
 		t.Fatal(err)
 	}
 	got, err := domain.DecodeGraphViewProjection(context.Background(), project.RepoID, storage.published)
-	if err != nil || got.Graph == nil || got.Revision.Graph != 4 || got.Graph.PositionEvent != "" || len(got.Graph.SnapshotIDs) != 1 || got.Graph.HoldCounts["main"] != 1 || storage.checkpoint != checkpoint || len(storage.proof) != 1 || storage.proof[0].Kind != "git_tree" {
+	if err != nil || got.Graph == nil || got.Revision.Graph != 4 || got.Graph.PositionEvent != "" || len(got.Graph.SnapshotIDs) != 1 || got.Graph.HoldCounts["main"] != 1 || storage.checkpoint != checkpoint || len(storage.proof) != 1 || storage.proof[0].Kind != "git_commit" {
 		t.Fatalf("published generation is not captured graph: %+v, %v, checkpoint=%+v", got, err, storage.checkpoint)
 	}
 	captured := CapturedGraphSource{checkpoint: checkpoint, entries: storage.inputs}
@@ -282,7 +289,7 @@ func TestGraphProjectionWorkerDeltaUsesGraphCheckpoint(t *testing.T) {
 	service, storage, job, checkpoint := graphProjectionWorkerFixture(t)
 	job.Phase, job.AppliedSequence, job.InputSequence = "capture", 3, -1
 	storage.jobs = []domain.GraphProjectionLease{job}
-	storage.pages = []domain.RepositoryViewSourcePage{graphCapturePage(checkpoint, "delta", nil, "")}
+	storage.pages = []domain.RepositoryViewSourcePage{graphProjectionCapturePage(checkpoint, "delta", nil, "")}
 	if err := service.ProcessGraphProjections(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +305,7 @@ func TestGraphProjectionWorkerRejectsWrongScopeAndIncompletePages(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			service, storage, job, checkpoint := graphProjectionWorkerFixture(t)
 			job.Phase, job.InputSequence = "capture", -1
-			page := graphCapturePage(checkpoint, "baseline", storage.inputs, "")
+			page := graphProjectionCapturePage(checkpoint, "baseline", storage.inputs, "")
 			wantErr, reason := domain.ErrIntegrity, "invalid_source"
 			switch name {
 			case "scope":
@@ -443,7 +450,7 @@ func TestGraphProjectionWorkerCancellationDoesNotFailLease(t *testing.T) {
 			if stage == "source" || stage == "save" {
 				job.Phase, job.InputSequence = "capture", -1
 				storage.jobs = []domain.GraphProjectionLease{job}
-				storage.pages = []domain.RepositoryViewSourcePage{graphCapturePage(checkpoint, "baseline", storage.inputs, "")}
+				storage.pages = []domain.RepositoryViewSourcePage{graphProjectionCapturePage(checkpoint, "baseline", storage.inputs, "")}
 			}
 			storage.step = func(_ context.Context, step string) error {
 				if step == stage {
@@ -489,7 +496,7 @@ func TestGraphProjectionWorkerContextAndProcessingLimits(t *testing.T) {
 	capture := job
 	capture.Phase, capture.InputSequence = "capture", -1
 	storage.jobs = []domain.GraphProjectionLease{capture, job}
-	storage.pages = []domain.RepositoryViewSourcePage{graphCapturePage(checkpoint, "baseline", storage.inputs, "")}
+	storage.pages = []domain.RepositoryViewSourcePage{graphProjectionCapturePage(checkpoint, "baseline", storage.inputs, "")}
 	if err := service.ProcessGraphProjections(ctx, 128); err != nil || storage.calls["claim"] != 3 || storage.calls["publish"] != 1 {
 		t.Fatal("worker did not stop at empty queue", err, storage.calls)
 	}
