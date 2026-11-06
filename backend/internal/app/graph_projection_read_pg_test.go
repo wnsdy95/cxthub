@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,12 @@ import (
 type graphBundleReadPG struct {
 	*store.PostgresStore
 	liveReads int
+	bodyReads atomic.Int64
+}
+
+func (storage *graphBundleReadPG) ReadQualifiedGraphProjection(ctx context.Context, repo domain.ContentHash) (domain.GraphProjectionRead, error) {
+	storage.bodyReads.Add(1)
+	return storage.PostgresStore.ReadQualifiedGraphProjection(ctx, repo)
 }
 
 func (storage *graphBundleReadPG) ListSnapshots(context.Context, domain.ContentHash, string) ([]domain.Snapshot, error) {
@@ -45,7 +52,26 @@ func assertGraphBundleServingPG(t *testing.T, storage *store.PostgresStore, repo
 		t.Fatal(err)
 	}
 	defer release()
-	full, err := reader.GetRepositoryView(ctx, repo)
+	notice, err := reader.RepositoryChangeState(ctx, repo)
+	if err != nil || notice.GraphProjection == nil || !notice.GraphProjection.Complete || guard.bodyReads.Load() != 0 {
+		t.Fatal("metadata-only status blocked on bulk work or read graph bodies", err)
+	}
+	type readResult struct {
+		view domain.RepositoryView
+		err  error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		view, err := reader.GetRepositoryView(ctx, repo)
+		done <- readResult{view: view, err: err}
+	}()
+	waitResourceQueue(t, gate, ResourceBulk, 1)
+	if guard.bodyReads.Load() != 0 {
+		t.Fatal("full published bundle loaded before bulk admission")
+	}
+	release()
+	result := <-done
+	full, err := result.view, result.err
 	if err != nil || full.ReadGeneration == nil || !full.ReadGeneration.Complete || full.ReadGeneration.Current != current ||
 		!reflect.DeepEqual(full.ReadGeneration, full.Graph.ReadGeneration) {
 		t.Fatal("published full-view generation", full.ReadGeneration, err)
@@ -72,12 +98,10 @@ func assertGraphBundleServingPG(t *testing.T, storage *store.PostgresStore, repo
 	if err != nil || !reflect.DeepEqual(live, expected) {
 		t.Fatal("live endpoint differs from published bundle", err)
 	}
-	notice, err := reader.RepositoryChangeState(ctx, repo)
-	if err != nil || notice.GraphProjection == nil || notice.GraphProjection.Generation != generation.Generation ||
+	if notice.GraphProjection.Generation != generation.Generation ||
 		notice.GraphProjection.Current != current || !notice.GraphProjection.Complete {
 		t.Fatal("notice differs from bundle", notice, err)
 	}
-	release()
 	if len(want.Graph.Positions) == 0 {
 		t.Fatal("fixture must exercise historical selection")
 	}
