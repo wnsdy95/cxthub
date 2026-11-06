@@ -219,7 +219,15 @@ context is retained without inferring that it proves MFA. IdP-initiated login,
 transient/email subject identifiers, encrypted assertions, artifact binding,
 metadata aggregates and single logout are not supported. Unsupported input fails
 closed. XML size/depth, directives, duplicate IDs and ambiguous assertion shapes
-are checked before the protocol library.
+are checked before signature verification. Inbound claims use private,
+namespace-qualified types and are decoded from the verified assertion subtree.
+Protocol attributes must be unqualified; foreign or duplicate identity fields
+and nested scalar identities are rejected. Both response and assertion issuance
+must be no more than 90 seconds old, with at most one minute of future clock skew.
+The vulnerable inbound parser reported in
+[GO-2026-6909](https://pkg.go.dev/vuln/GO-2026-6909) is not called. The existing
+library remains responsible for outbound AuthnRequests and SP metadata; scanning
+continues without vulnerability exceptions or module substitutions.
 
 Cross-site POST cannot rely on the main SameSite=Lax cookie. The ACS endpoint
 ignores cookie authority: it validates the signed response against a durable
