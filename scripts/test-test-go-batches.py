@@ -285,6 +285,57 @@ class GoBatchesTest(unittest.TestCase):
         self.assertTrue(all(run["count"] == 3 for run in runs))
         self.assertIn("selected=3 expected=9 run=9 pass=9 fail=0 skip=0 missing=0", result.stdout)
 
+    def test_shards_partition_the_ordered_selection_in_snake_order(self):
+        config = self.configure(names=[f"TestPGCase{number:03d}" for number in range(1, 11)] + ["TestOutsideSelection"])
+        first = ["TestPGCase010", "TestPGCase009", "TestPGCase008"]
+        arguments = [argument for name in first for argument in ("--first-test", name)]
+        ordered = first + [f"TestPGCase{number:03d}" for number in range(1, 8)]
+        expected = {
+            1: [ordered[0], ordered[5], ordered[6]],
+            2: [ordered[1], ordered[4], ordered[7]],
+            3: [ordered[2], ordered[3], ordered[8], ordered[9]],
+        }
+        seen = Counter()
+        for index in (1, 2, 3):
+            with self.subTest(shard=index):
+                (self.root / "batches.jsonl").unlink(missing_ok=True)
+                result = self.run_fixture(*arguments, "--batch-size", "1", "--shard", f"{index}/3")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = self.read_log("batches.jsonl")
+                self.assertEqual([run["tests"] for run in runs], [[name] for name in expected[index]])
+                self.assertTrue(all(run["count"] == 3 for run in runs))
+                self.assertIn(f"shard {index}/3: {len(expected[index])} of 10 discovered tests", result.stdout)
+                self.assertIn(f"selected={len(expected[index])} expected={3 * len(expected[index])} run={3 * len(expected[index])} "
+                              f"pass={3 * len(expected[index])} fail=0 skip=0 missing=0", result.stdout)
+                seen.update(name for run in runs for name in run["tests"])
+        self.assertEqual(seen, Counter(name for name in config["names"] if name.startswith("TestPG")))
+
+    def test_shards_validate_names_against_the_whole_selection(self):
+        self.configure(names=["TestPGOne", "TestPGTwo", "TestPGThree", "TestPGFour"], outcomes={"TestPGThree": ["skip"] * 3})
+        result = self.run_fixture("--shard", "1/2", "--batch-size", "1", "--require-test", "TestPGTwo", "--allow-skip", "TestPGThree",
+                                  "--no-batch-timeout", "TestPGThree")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([run["tests"] for run in self.read_log("batches.jsonl")], [["TestPGFour"], ["TestPGTwo"]])
+        self.assertIn("selected=2 expected=6 run=6 pass=6 fail=0 skip=0 missing=0", result.stdout)
+        for arguments, message in (
+            (["--require-test", "TestPGUnknown"], "--require-test names not in discovered selection"),
+            (["--allow-skip", "TestPGUnknown"], "--allow-skip names not in discovered selection"),
+            (["--first-test", "TestPGUnknown"], "--first-test names not in discovered selection"),
+            ([], "unexpected top-level test skip"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_fixture("--shard", "2/2", "--batch-size", "1", *arguments)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn("[go-batches] passed", result.stdout)
+
+    def test_shards_reject_more_shards_than_tests(self):
+        self.configure(names=["TestPGOne", "TestPGTwo"])
+        result = self.run_fixture("--shard", "1/3")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exceeds the 2 discovered tests", result.stderr)
+        self.assertEqual(self.read_log("batches.jsonl"), [])
+
     def test_first_names_reject_duplicates_unknown_patterns_and_unselected_tests(self):
         cases = (
             (["TestPGOne", "TestPGTwo", "TestPGOne"], "duplicate --first-test"),
@@ -597,7 +648,8 @@ class GoBatchesTest(unittest.TestCase):
                 self.assertEqual(len(self.read_log("batches.jsonl")), 1 if stage == "batch_status" else 0)
 
     def test_invalid_bounds_fail_before_go(self):
-        for option, value in (("--count", "0"), ("--count", "-1"), ("--batch-size", "0"), ("--batch-size", "6")):
+        for option, value in (("--count", "0"), ("--count", "-1"), ("--batch-size", "0"), ("--batch-size", "6"),
+                              ("--shard", "0/2"), ("--shard", "3/2"), ("--shard", "1/0"), ("--shard", "2"), ("--shard", "a/b"), ("--shard", "01/2")):
             with self.subTest(option=option, value=value):
                 result = subprocess.run(self.command() + [option, value], cwd=self.root, env=self.env, text=True, capture_output=True, timeout=5)
                 self.assertEqual(result.returncode, 2)
