@@ -87,7 +87,7 @@ func TestPGGraphQualificationInputsSmallSnapshotAndForeignIsolation(t *testing.T
 	if _, err := storage.PutRepo(ctx, domain.Repo{ID: foreign}); err != nil {
 		t.Fatal(err)
 	}
-	graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO git_tree_nodes(repo_id,origin,oid,payload)
+	graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO git_commit_trees(repo_id,origin,commit_oid,payload)
 		VALUES($1,'qualification','foreign',jsonb_build_object('oversized',repeat('x',$2)))`, string(foreign), domain.MaxRepositoryViewSourceImageBytes)
 	after, err := graphQualificationInputCheckPG(t, ctx, storage, key.RepoID)
 	if err != nil || observed.rows != after.rows {
@@ -100,7 +100,7 @@ func TestPGGraphQualificationInputsSmallSnapshotAndForeignIsolation(t *testing.T
 		if err := storage.CheckGraphQualificationInputs(bound, key.RepoID); err != nil {
 			return err
 		}
-		graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO git_tree_nodes(repo_id,origin,oid,payload)
+		graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO git_commit_trees(repo_id,origin,commit_oid,payload)
 			VALUES($1,'qualification','later',jsonb_build_object('oversized',repeat('x',$2)))`, string(key.RepoID), domain.MaxRepositoryViewSourceImageBytes)
 		return storage.CheckGraphQualificationInputs(bound, key.RepoID)
 	}); err != nil {
@@ -115,7 +115,7 @@ func TestPGGraphQualificationInputsSmallSnapshotAndForeignIsolation(t *testing.T
 }
 
 func TestPGGraphQualificationInputsBoundLogicalRowsWithoutJournalCoverage(t *testing.T) {
-	for _, table := range []string{"metadata", "git_tree", "git_proof"} {
+	for _, table := range []string{"metadata", "git_commit", "git_proof"} {
 		t.Run(table, func(t *testing.T) {
 			storage, ctx, key := graphQualificationPG(t)
 			before := catalogReadStatePG(t, ctx, storage, key.RepoID)
@@ -123,8 +123,8 @@ func TestPGGraphQualificationInputsBoundLogicalRowsWithoutJournalCoverage(t *tes
 			switch table {
 			case "metadata":
 				query = `INSERT INTO pending_contexts(repo_id,session_id,data) VALUES($1,'oversized',jsonb_build_object('padding',repeat('x',$2)))`
-			case "git_tree":
-				query = `INSERT INTO git_tree_nodes(repo_id,origin,oid,payload) VALUES($1,'qualification','oversized',jsonb_build_object('padding',repeat('x',$2)))`
+			case "git_commit":
+				query = `INSERT INTO git_commit_trees(repo_id,origin,commit_oid,payload) VALUES($1,'qualification','oversized',jsonb_build_object('padding',repeat('x',$2)))`
 			case "git_proof":
 				query = `INSERT INTO git_contribution_proofs(repo_id,id,admission_id,context_head_id,contribution_id,payload)
 					VALUES($1,repeat('a',64),repeat('b',64),repeat('c',64),repeat('d',64),jsonb_build_object('padding',repeat('x',$2)))`
@@ -149,7 +149,7 @@ func TestPGGraphQualificationInputsBoundCountAndTotalBytes(t *testing.T) {
 				graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO pending_contexts(repo_id,session_id,data)
 					SELECT $1,'limit-'||ordinal::text,'{}'::jsonb FROM generate_series(1,$2::integer) AS ordinal`, string(key.RepoID), domain.MaxPendingProjectionInputRows+1)
 			} else {
-				graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO git_tree_nodes(repo_id,origin,oid,payload)
+				graphQualificationUnjournaledInputPG(t, ctx, storage, `INSERT INTO git_commit_trees(repo_id,origin,commit_oid,payload)
 					SELECT $1,'qualification',ordinal::text,jsonb_build_object('padding',repeat('x',524288)) FROM generate_series(1,65) AS ordinal`, string(key.RepoID))
 			}
 			observed, err := graphQualificationInputCheckPG(t, ctx, storage, key.RepoID)

@@ -6,14 +6,15 @@ import (
 )
 
 const (
-	RepositoryViewSourceVersion       = 1
-	RepositoryViewSourceScope         = "repository-view-v1"
-	RepositoryGraphSourceScope        = "repository-graph-v1"
-	DefaultRepositoryViewSourceLimit  = 128
-	MaxRepositoryViewSourceLimit      = 1000
-	MaxRepositoryViewSourceImageBytes = 1 << 20
-	MaxRepositoryViewSourcePageBytes  = 4 << 20
-	MaxRepositoryViewSourceKeyBytes   = 4 << 10
+	RepositoryViewSourceVersion            = 1
+	RepositoryViewSourceScope              = "repository-view-v1"
+	RepositoryGraphSourceScope             = "repository-graph-v1"
+	RepositoryGraphProjectionSourceProfile = "graph-projection-v1"
+	DefaultRepositoryViewSourceLimit       = 128
+	MaxRepositoryViewSourceLimit           = 1000
+	MaxRepositoryViewSourceImageBytes      = 1 << 20
+	MaxRepositoryViewSourcePageBytes       = 4 << 20
+	MaxRepositoryViewSourceKeyBytes        = 4 << 10
 )
 
 var ErrRepositoryViewSourceLimit = errors.New("repository view source metadata exceeds read budget")
@@ -38,6 +39,7 @@ func (checkpoint RepositoryViewSourceCheckpoint) Validate() error {
 
 type RepositoryViewSourceRequest struct {
 	Version int
+	Profile string `json:"profile,omitempty"`
 	After   *RepositoryViewSourceCheckpoint
 	Cursor  string
 	Limit   int
@@ -47,7 +49,13 @@ func (request RepositoryViewSourceRequest) Validate() error {
 	if request.Version != RepositoryViewSourceVersion || request.Limit < 0 || request.Limit > MaxRepositoryViewSourceLimit || (request.After != nil && request.Cursor != "") || len(request.Cursor) > 16<<10 {
 		return ErrValidation
 	}
+	if request.Profile != "" && request.Profile != RepositoryGraphProjectionSourceProfile {
+		return ErrValidation
+	}
 	if request.After != nil {
+		if request.Profile == RepositoryGraphProjectionSourceProfile && request.After.Scope != RepositoryGraphSourceScope {
+			return ErrValidation
+		}
 		return request.After.Validate()
 	}
 	return nil
@@ -74,6 +82,10 @@ func RepositoryGraphSourceKindValid(kind string) bool {
 	}
 }
 
+func RepositoryGraphProjectionSourceKindValid(kind string) bool {
+	return RepositoryGraphSourceKindValid(kind) && kind != "git_tree" && kind != "git_delta"
+}
+
 type RepositoryViewSourceEntry struct {
 	Sequence int64           `json:"sequence,string"`
 	Kind     string          `json:"kind"`
@@ -85,6 +97,7 @@ type RepositoryViewSourceEntry struct {
 type RepositoryViewSourcePage struct {
 	Version    int                             `json:"version"`
 	Scope      string                          `json:"scope"`
+	Profile    string                          `json:"profile,omitempty"`
 	RepoID     ContentHash                     `json:"repo_id"`
 	Epoch      string                          `json:"epoch"`
 	Through    int64                           `json:"through,string"`

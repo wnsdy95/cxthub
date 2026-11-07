@@ -175,22 +175,16 @@ func decodeRepositoryViewSourceRows(ctx context.Context, repo ContentHash, entri
 		}
 		return view.Snapshots[left].CreatedAt.After(view.Snapshots[right].CreatedAt)
 	})
-	sort.Slice(view.Refs, func(left, right int) bool {
-		if view.Refs[left].Kind == view.Refs[right].Kind {
-			return view.Refs[left].Name < view.Refs[right].Name
-		}
-		return view.Refs[left].Kind < view.Refs[right].Kind
-	})
 	var err error
+	view, err = OrderRepositoryViewMetadata(ctx, view)
+	if err != nil {
+		return pendingProjectionRepository{}, RepositoryView{}, err
+	}
 	if metadata.ContextProtocol == 0 {
 		view.Refs, err = ProjectBranchLifecycleRefs(view.Refs)
 		if err != nil {
 			return pendingProjectionRepository{}, RepositoryView{}, err
 		}
-	}
-	view.History, err = OrderHistoryEvents(view.History)
-	if err != nil {
-		return pendingProjectionRepository{}, RepositoryView{}, fmt.Errorf("%w: %v", ErrIntegrity, err)
 	}
 	if _, err := ProjectContextBranches(view.History); err != nil {
 		return pendingProjectionRepository{}, RepositoryView{}, fmt.Errorf("%w: %v", ErrIntegrity, err)
@@ -199,15 +193,6 @@ func decodeRepositoryViewSourceRows(ctx context.Context, repo ContentHash, entri
 	for _, entry := range reflog {
 		view.Reflog = append(view.Reflog, entry.entry)
 	}
-	sort.Slice(view.Unsync, func(left, right int) bool {
-		if !view.Unsync[left].UpdatedAt.Equal(view.Unsync[right].UpdatedAt) {
-			return view.Unsync[left].UpdatedAt.After(view.Unsync[right].UpdatedAt)
-		}
-		if view.Unsync[left].User != view.Unsync[right].User {
-			return view.Unsync[left].User < view.Unsync[right].User
-		}
-		return view.Unsync[left].Branch < view.Unsync[right].Branch
-	})
 	if err := ctx.Err(); err != nil {
 		return pendingProjectionRepository{}, RepositoryView{}, err
 	}

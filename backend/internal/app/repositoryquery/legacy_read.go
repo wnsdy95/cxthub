@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app/graphdiagnostics"
@@ -165,13 +166,16 @@ func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers Re
 			return domain.RepositoryView{}, err
 		}
 	}
-	for _, archive := range archives {
+	archives = slices.Clone(archives)
+	for index := range archives {
 		if err := ctx.Err(); err != nil {
 			return domain.RepositoryView{}, err
 		}
+		archive := &archives[index]
 		if archive.RepoID != repo {
 			return domain.RepositoryView{}, domain.ErrIntegrity
 		}
+		archive.ArchivedAt = archive.ArchivedAt.UTC()
 	}
 	if readers.Revisions != nil {
 		if view.Revision, err = graphdiagnostics.Read(ctx, graphdiagnostics.Revision, func(bound context.Context) (domain.RepositoryRevision, error) {
@@ -185,6 +189,10 @@ func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers Re
 	if err := domain.ValidateRepositoryViewScope(ctx, repo, view); err != nil {
 		return domain.RepositoryView{}, err
 	}
+	view, err = domain.OrderRepositoryViewMetadata(ctx, view)
+	if err != nil {
+		return domain.RepositoryView{}, err
+	}
 	memberships, err := domain.ProjectSnapshotBranchMemberships(ctx, view.Snapshots, view.Reflog)
 	if err != nil {
 		return domain.RepositoryView{}, err
@@ -196,6 +204,7 @@ func LoadRepositoryView(ctx context.Context, repo domain.ContentHash, readers Re
 			return domain.RepositoryView{}, err
 		}
 		snapshot := &view.Snapshots[index]
+		snapshot.CreatedAt = snapshot.CreatedAt.UTC()
 		snapshot.Branches = nil
 		for branch := range memberships[snapshot.ID] {
 			snapshot.Branches = append(snapshot.Branches, branch)

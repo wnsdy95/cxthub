@@ -307,13 +307,10 @@ func newGraphOwnerFixture(test *testing.T) *graphOwnerFixture {
 	}
 	snapshot := domain.Snapshot{ID: domain.HashContent([]byte("snapshot")), RepoID: repo, DocHash: domain.HashContent([]byte("snapshot")),
 		Provider: domain.ProviderCodex, SessionID: "session", CreatedAt: time.Unix(123, 0).UTC()}
-	tree, err := domain.NewGitTreeNode(map[string]domain.GitEntry{}, 40)
-	if err != nil {
-		test.Fatal(err)
-	}
+	commit := domain.GitCommitTree{Commit: strings.Repeat("a", 40), Tree: strings.Repeat("b", 40), Parents: []string{}}
 	storage := &graphOwnerStore{repo: repo, jobs: []domain.GraphProjectionLease{job}, calls: make(map[string]int)}
 	storage.inputs = []domain.RepositoryViewSourceEntry{
-		{Sequence: 2, Kind: "git_tree", Key: string(marshal([]string{metadata.GitRemoteURL, tree.OID})), Value: marshal(map[string]any{"repo_id": repo, "origin": metadata.GitRemoteURL, "oid": tree.OID, "payload": tree})},
+		{Sequence: 2, Kind: "git_commit", Key: string(marshal([]string{metadata.GitRemoteURL, commit.Commit})), Value: marshal(map[string]any{"repo_id": repo, "origin": metadata.GitRemoteURL, "commit_oid": commit.Commit, "payload": commit})},
 		{Sequence: 1, Kind: "pending", Key: "session", Value: marshal(domain.Pending{RepoID: repo, SessionID: "session", Target: snapshot.ID, Branch: "main"})},
 		{Sequence: 1, Kind: "protocol", Key: string(repo), Value: marshal(map[string]any{"context_protocol": 1})},
 		{Sequence: 1, Kind: "repository", Key: string(repo), Value: marshal(struct {
@@ -352,7 +349,7 @@ func (fixture *graphOwnerFixture) capture(cursor string, applied int64) domain.G
 
 func graphOwnerPage(checkpoint domain.RepositoryViewSourceCheckpoint, mode string, entries []domain.RepositoryViewSourceEntry, cursor string) domain.RepositoryViewSourcePage {
 	page := domain.RepositoryViewSourcePage{Version: checkpoint.Version, Scope: checkpoint.Scope, RepoID: checkpoint.RepoID,
-		Epoch: checkpoint.Epoch, Through: checkpoint.Sequence, Mode: mode, Entries: entries, NextCursor: cursor}
+		Profile: domain.RepositoryGraphProjectionSourceProfile, Epoch: checkpoint.Epoch, Through: checkpoint.Sequence, Mode: mode, Entries: entries, NextCursor: cursor}
 	if cursor == "" {
 		page.Checkpoint = &checkpoint
 	}
@@ -547,7 +544,7 @@ func TestGraphOwnerCapturesOnePagePerLeaseAndPublishesFrozenInputs(test *testing
 		assertGraphOwnerReleased(test, fixture)
 	}
 	for index, request := range fixture.storage.requests {
-		if request.Limit != domain.DefaultRepositoryViewSourceLimit || request.After != nil || index == 1 && request.Cursor != "next" {
+		if request.Profile != domain.RepositoryGraphProjectionSourceProfile || request.Limit != domain.DefaultRepositoryViewSourceLimit || request.After != nil || index == 1 && request.Cursor != "next" {
 			test.Fatal("capture lost the durable graph cursor or page bound", request)
 		}
 	}
@@ -558,7 +555,7 @@ func TestGraphOwnerCapturesOnePagePerLeaseAndPublishesFrozenInputs(test *testing
 	if err != nil || got.Graph == nil || got.Revision.Graph != 4 || len(got.Graph.SnapshotIDs) != 1 || got.Graph.HoldCounts["main"] != 1 || got.Graph.PositionEvent != "" {
 		test.Fatal("published graph does not contain the captured generation", got, err)
 	}
-	if fixture.storage.metadata.DefaultBranch != "main" || fixture.storage.checkpoint != fixture.checkpoint || len(fixture.storage.proof) != 1 || fixture.storage.proof[0].Kind != "git_tree" || fixture.storage.publishJob != fixture.job || !reflect.DeepEqual(fixture.storage.loaded, []domain.GraphProjectionLease{fixture.job}) {
+	if fixture.storage.metadata.DefaultBranch != "main" || fixture.storage.checkpoint != fixture.checkpoint || len(fixture.storage.proof) != 1 || fixture.storage.proof[0].Kind != "git_commit" || fixture.storage.publishJob != fixture.job || !reflect.DeepEqual(fixture.storage.loaded, []domain.GraphProjectionLease{fixture.job}) {
 		test.Fatal("projection lost source generation, evidence, or lease fencing", fixture.storage)
 	}
 	metadata, view, proof, err := repositoryquery.DecodeCapturedGraphInputs(context.Background(), fixture.checkpoint, fixture.storage.inputs)
@@ -612,11 +609,11 @@ func TestGraphOwnerCapturesFirstPageReferenceWithinOnePinnedRead(test *testing.T
 			if !reflect.DeepEqual(fixture.references.references, []domain.GraphProjectionReference{want}) || !reflect.DeepEqual(fixture.references.jobs, []domain.GraphProjectionLease{first}) || !reflect.DeepEqual(fixture.references.pages, []domain.RepositoryViewSourcePage{firstPage}) || !reflect.DeepEqual(fixture.storage.saved, []domain.GraphProjectionLease{second}) {
 				test.Fatal("first page and independent reference were not saved atomically", fixture.references)
 			}
-			if fixture.scope.readCalls != 1 || fixture.storage.calls["generation"] != 1 || fixture.storage.calls["reference"] != 1 || fixture.storage.requests[1].After != nil || fixture.storage.requests[1].Cursor != "next" {
+			if fixture.scope.readCalls != 1 || fixture.storage.calls["generation"] != 1 || fixture.storage.calls["reference"] != 1 || fixture.storage.requests[1].Profile != domain.RepositoryGraphProjectionSourceProfile || fixture.storage.requests[1].After != nil || fixture.storage.requests[1].Cursor != "next" {
 				test.Fatal("continuation recaptured generation or lost its cursor", fixture.storage.calls, fixture.storage.requests)
 			}
 			request := fixture.storage.requests[0]
-			if applied < 0 && request.After != nil || applied >= 0 && (request.After == nil || request.After.Scope != domain.RepositoryGraphSourceScope || request.After.Sequence != applied) || request.Limit != domain.DefaultRepositoryViewSourceLimit {
+			if request.Profile != domain.RepositoryGraphProjectionSourceProfile || applied < 0 && request.After != nil || applied >= 0 && (request.After == nil || request.After.Scope != domain.RepositoryGraphSourceScope || request.After.Sequence != applied) || request.Limit != domain.DefaultRepositoryViewSourceLimit {
 				test.Fatal("first page lost baseline/delta graph source semantics", request)
 			}
 			assertGraphOwnerReleased(test, fixture)
@@ -698,7 +695,7 @@ func TestGraphOwnerFirstPageRejectsIncoherentGenerationAndReturnsNoPartialCaptur
 }
 
 func TestGraphOwnerPageValidationPreservesBoundsAndErrorPriority(test *testing.T) {
-	for _, scenario := range []string{"version", "scope", "epoch", "repo", "sequence", "mode", "missing checkpoint", "wrong checkpoint", "empty nonfinal", "both cursors", "repeated cursor", "rows", "cursor size", "key size", "image size", "page bytes", "canceled"} {
+	for _, scenario := range []string{"version", "scope", "epoch", "repo", "sequence", "mode", "profile", "unknown profile", "git_tree", "git_delta", "unknown kind", "missing checkpoint", "wrong checkpoint", "empty nonfinal", "both cursors", "repeated cursor", "rows", "cursor size", "key size", "image size", "page bytes", "canceled"} {
 		test.Run(scenario, func(test *testing.T) {
 			fixture := newGraphOwnerFixture(test)
 			job := fixture.capture("", -1)
@@ -720,6 +717,14 @@ func TestGraphOwnerPageValidationPreservesBoundsAndErrorPriority(test *testing.T
 				job.AppliedSequence, page.Through = fixture.checkpoint.Sequence+1, fixture.checkpoint.Sequence
 			case "mode":
 				page.Mode = "delta"
+			case "profile":
+				page.Profile = ""
+			case "unknown profile":
+				page.Profile = "unknown"
+			case "git_tree", "git_delta":
+				page.Entries[0].Kind = scenario
+			case "unknown kind":
+				page.Entries[0].Kind = "unknown"
 			case "missing checkpoint":
 				page.Checkpoint = nil
 			case "wrong checkpoint":
@@ -742,6 +747,7 @@ func TestGraphOwnerPageValidationPreservesBoundsAndErrorPriority(test *testing.T
 				image := json.RawMessage(strings.Repeat("x", domain.MaxRepositoryViewSourceImageBytes))
 				page.Entries, want = make([]domain.RepositoryViewSourceEntry, 4), domain.ErrRepositoryViewSourceLimit
 				for index := range page.Entries {
+					page.Entries[index].Kind = "snapshot"
 					page.Entries[index].Value = image
 				}
 			case "canceled":
@@ -763,6 +769,7 @@ func TestGraphOwnerSourcePageBudgetRetainsKeyValueAndFixedOverhead(test *testing
 	}
 	page := graphOwnerPage(fixture.checkpoint, "baseline", make([]domain.RepositoryViewSourceEntry, 4), "")
 	for index := range page.Entries {
+		page.Entries[index].Kind = "snapshot"
 		page.Entries[index].Value = json.RawMessage(strings.Repeat("x", domain.MaxRepositoryViewSourcePageBytes/4-128))
 	}
 	job := fixture.capture("", -1)
@@ -774,6 +781,9 @@ func TestGraphOwnerSourcePageBudgetRetainsKeyValueAndFixedOverhead(test *testing
 		test.Fatal("source page byte budget allowed an extra byte", err)
 	}
 	page = graphOwnerPage(fixture.checkpoint, "baseline", make([]domain.RepositoryViewSourceEntry, domain.DefaultRepositoryViewSourceLimit), "")
+	for index := range page.Entries {
+		page.Entries[index].Kind = "snapshot"
+	}
 	if err := ValidateGraphProjectionPage(context.Background(), job, page); err != nil {
 		test.Fatal("exact source page row budget was rejected", err)
 	}

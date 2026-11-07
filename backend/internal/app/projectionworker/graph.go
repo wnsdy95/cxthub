@@ -101,6 +101,7 @@ func (graph *Graph) RunLease(ctx context.Context, job domain.GraphProjectionLeas
 				break
 			}
 			request := job.SourceRequest()
+			request.Profile = domain.RepositoryGraphProjectionSourceProfile
 			request.Limit = domain.DefaultRepositoryViewSourceLimit
 			var page domain.RepositoryViewSourcePage
 			page, err = graph.source.RepositoryGraphSourceChanges(work, job.RepoID, request)
@@ -151,7 +152,7 @@ func ValidateGraphProjectionPage(ctx context.Context, job domain.GraphProjection
 	if job.AppliedSequence >= 0 {
 		mode = "delta"
 	}
-	if checkpoint.RepoID != job.RepoID || checkpoint.Sequence < job.AppliedSequence || page.Mode != mode {
+	if checkpoint.RepoID != job.RepoID || checkpoint.Sequence < job.AppliedSequence || page.Mode != mode || page.Profile != domain.RepositoryGraphProjectionSourceProfile {
 		return domain.ErrIntegrity
 	}
 	if len(page.Entries) > domain.DefaultRepositoryViewSourceLimit || len(page.NextCursor) > 16<<10 {
@@ -173,6 +174,9 @@ func ValidateGraphProjectionPage(ctx context.Context, job domain.GraphProjection
 		if size > domain.MaxRepositoryViewSourcePageBytes || len(entry.Key) > domain.MaxRepositoryViewSourceKeyBytes || len(entry.Value) > domain.MaxRepositoryViewSourceImageBytes {
 			return domain.ErrRepositoryViewSourceLimit
 		}
+		if !domain.RepositoryGraphProjectionSourceKindValid(entry.Kind) {
+			return domain.ErrIntegrity
+		}
 	}
 	return ctx.Err()
 }
@@ -188,6 +192,7 @@ func CaptureFirstPage(ctx context.Context, scope GraphScope, source outbound.Rep
 	var captured domain.GraphProjectionReference
 	err := scope.WithinRepositoryRead(ctx, job.RepoID, func(bound context.Context) error {
 		request := job.SourceRequest()
+		request.Profile = domain.RepositoryGraphProjectionSourceProfile
 		request.Limit = domain.DefaultRepositoryViewSourceLimit
 		var err error
 		page, err = source.RepositoryGraphSourceChanges(bound, job.RepoID, request)

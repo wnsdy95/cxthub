@@ -18,6 +18,7 @@ var _ outbound.RepositoryGraphSourceStore = (*PostgresStore)(nil)
 
 type repositoryViewSourceCursor struct {
 	Checkpoint domain.RepositoryViewSourceCheckpoint `json:"checkpoint"`
+	Profile    string                                `json:"profile,omitempty"`
 	Floor      int64                                 `json:"floor,string"`
 	Baseline   int64                                 `json:"baseline,string"`
 	Mode       string                                `json:"mode"`
@@ -46,6 +47,12 @@ func decodeRepositoryViewSourceCursor(encoded string) (repositoryViewSourceCurso
 	validKind := domain.RepositoryViewSourceKindValid(cursor.Kind)
 	if cursor.Checkpoint.Scope == domain.RepositoryGraphSourceScope {
 		validKind = domain.RepositoryGraphSourceKindValid(cursor.Kind)
+	}
+	if cursor.Profile != "" {
+		if cursor.Profile != domain.RepositoryGraphProjectionSourceProfile || cursor.Checkpoint.Scope != domain.RepositoryGraphSourceScope {
+			return cursor, domain.ErrValidation
+		}
+		validKind = domain.RepositoryGraphProjectionSourceKindValid(cursor.Kind)
 	}
 	if cursor.Floor < 0 || cursor.Baseline < 0 || cursor.Floor > cursor.Checkpoint.Sequence || cursor.Baseline > cursor.Checkpoint.Sequence || cursor.After < 0 || cursor.After > cursor.Checkpoint.Sequence || cursor.Sequence < 0 || cursor.Sequence > cursor.Checkpoint.Sequence || !validKind || cursor.Key == "" {
 		return cursor, domain.ErrValidation
@@ -81,10 +88,14 @@ func (s *PostgresStore) repositorySourceChanges(ctx context.Context, repo domain
 	if err := request.Validate(); err != nil {
 		return out, err
 	}
+	if request.Profile != "" && scope != domain.RepositoryGraphSourceScope {
+		return out, domain.ErrValidation
+	}
 	if request.After != nil && request.After.Scope != scope {
 		return out, domain.ErrCatalogResetRequired
 	}
 	sourceView := "repository_view_source_images"
+	kindFilter := ""
 	validKind := domain.RepositoryViewSourceKindValid
 	stateQuery := `SELECT catalog.epoch::text,catalog.head_seq,catalog.floor_seq,source.epoch::text,source.baseline_seq
 		FROM repository_catalog_state catalog JOIN repository_view_source_state source USING(repo_id)
@@ -92,6 +103,10 @@ func (s *PostgresStore) repositorySourceChanges(ctx context.Context, repo domain
 	if scope == domain.RepositoryGraphSourceScope {
 		sourceView, validKind = "repository_graph_source_images", domain.RepositoryGraphSourceKindValid
 		stateQuery = repositoryGraphSourceStateSQL
+	}
+	if request.Profile == domain.RepositoryGraphProjectionSourceProfile {
+		kindFilter = ` AND entity_kind NOT IN ('git_tree','git_delta')`
+		validKind = domain.RepositoryGraphProjectionSourceKindValid
 	}
 	err := s.WithinReadSnapshot(ctx, func(bound context.Context) error {
 		if !s.InReadOnlyTransaction(bound) {
@@ -109,14 +124,14 @@ func (s *PostgresStore) repositorySourceChanges(ctx context.Context, repo domain
 		if epoch != sourceEpoch || baseline < 0 || baseline > head || floor < 0 || floor > head || checkpoint.Validate() != nil {
 			return domain.ErrIntegrity
 		}
-		cursor := repositoryViewSourceCursor{Checkpoint: checkpoint, Floor: floor, Baseline: baseline, Mode: "baseline"}
+		cursor := repositoryViewSourceCursor{Checkpoint: checkpoint, Profile: request.Profile, Floor: floor, Baseline: baseline, Mode: "baseline"}
 		if request.Cursor != "" {
 			var err error
 			cursor, err = decodeRepositoryViewSourceCursor(request.Cursor)
 			if err != nil {
 				return err
 			}
-			if cursor.Checkpoint.Scope != scope || cursor.Checkpoint.RepoID != repo || cursor.Checkpoint.Epoch != epoch || cursor.Checkpoint.Sequence > head || cursor.Checkpoint.Sequence < max(floor, baseline) || cursor.Floor != floor || cursor.Baseline != baseline {
+			if cursor.Profile != request.Profile || cursor.Checkpoint.Scope != scope || cursor.Checkpoint.RepoID != repo || cursor.Checkpoint.Epoch != epoch || cursor.Checkpoint.Sequence > head || cursor.Checkpoint.Sequence < max(floor, baseline) || cursor.Floor != floor || cursor.Baseline != baseline {
 				return domain.ErrCatalogResetRequired
 			}
 		} else if request.After != nil {
@@ -130,16 +145,16 @@ func (s *PostgresStore) repositorySourceChanges(ctx context.Context, repo domain
 		if limit == 0 {
 			limit = domain.DefaultRepositoryViewSourceLimit
 		}
-		out = domain.RepositoryViewSourcePage{Version: checkpoint.Version, Scope: checkpoint.Scope, RepoID: repo, Epoch: epoch, Through: cursor.Checkpoint.Sequence, Mode: cursor.Mode, Entries: []domain.RepositoryViewSourceEntry{}}
+		out = domain.RepositoryViewSourcePage{Version: checkpoint.Version, Scope: checkpoint.Scope, Profile: request.Profile, RepoID: repo, Epoch: epoch, Through: cursor.Checkpoint.Sequence, Mode: cursor.Mode, Entries: []domain.RepositoryViewSourceEntry{}}
 		query := `SELECT seq,entity_kind,entity_key,deleted,after_image FROM ` + sourceView + `
-			WHERE repo_id=$1 AND epoch=$2 AND seq<=$3 AND seq>$4
+			WHERE repo_id=$1 AND epoch=$2 AND seq<=$3 AND seq>$4` + kindFilter + `
 			AND (seq,entity_kind,entity_key)>($5,$6 COLLATE "C",$7 COLLATE "C")
 			ORDER BY seq,entity_kind,entity_key LIMIT $8`
 		args := []any{string(repo), epoch, cursor.Checkpoint.Sequence, cursor.After, cursor.Sequence, cursor.Kind, cursor.Key, limit + 1}
 		if cursor.Mode == "baseline" {
 			query = `SELECT seq,entity_kind,entity_key,deleted,after_image FROM (
 				SELECT DISTINCT ON (entity_kind,entity_key) seq,entity_kind,entity_key,deleted,after_image
-				FROM ` + sourceView + ` WHERE repo_id=$1 AND epoch=$2 AND seq<=$3
+				FROM ` + sourceView + ` WHERE repo_id=$1 AND epoch=$2 AND seq<=$3` + kindFilter + `
 				AND (entity_kind,entity_key)>($4 COLLATE "C",$5 COLLATE "C")
 				ORDER BY entity_kind,entity_key,seq DESC
 			) latest WHERE NOT deleted ORDER BY entity_kind,entity_key LIMIT $6`

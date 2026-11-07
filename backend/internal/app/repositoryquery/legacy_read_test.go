@@ -286,6 +286,20 @@ func TestLegacyGraphLoaderOwnsOneCoherentMetadataRead(test *testing.T) {
 	}
 }
 
+func TestLegacyGraphLoaderNormalizesCaptureTimeWithoutMutatingStorage(test *testing.T) {
+	fixture := newLegacyReadFixture(test, PinnedSnapshots)
+	probe := fixture.probe
+	stamp := probe.view.Snapshots[1].CreatedAt.In(time.FixedZone("database", 9*60*60))
+	probe.view.Snapshots[1].CreatedAt = stamp
+	view, err := fixture.load(fixture.ctx, probe.repo)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if view.Snapshots[1].CreatedAt != stamp.UTC() || view.Pending[0].UpdatedAt != stamp.UTC() || probe.view.Snapshots[1].CreatedAt != stamp {
+		test.Fatal("capture time normalization changed its instant or raw storage")
+	}
+}
+
 func TestLegacyGraphEndpointsReuseBoundPortsCacheAndGate(test *testing.T) {
 	for _, profile := range []Profile{LegacyCompatibility, PinnedSnapshots} {
 		test.Run(fmt.Sprint(profile), func(test *testing.T) {
