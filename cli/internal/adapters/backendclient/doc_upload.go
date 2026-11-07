@@ -86,7 +86,7 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	var neg negotiateResp
 	negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
 	outbound.RecordSyncDiagnostic(negotiationCtx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Documents: 1, Chunks: len(chunkHaves)}, nil)
-	if err := c.do(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: docHaves, ChunkHaves: chunkHaves}, &neg); err != nil {
+	if err := c.doIdempotent(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: docHaves, ChunkHaves: chunkHaves}, &neg); err != nil {
 		return true, err
 	}
 	// Validate every response field even for an unsupported or already-current

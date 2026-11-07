@@ -517,14 +517,55 @@ func TestCapturePushExhaustedRequestVisibleAndRearmed(t *testing.T) {
 	if n, err := rearmCapturePushes(ctx, f.cwd, p.Proof.Branch); err != nil || n != 1 {
 		t.Fatalf("selected branch was not re-armed: %d %v", n, err)
 	}
-	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 1 || listed[0].Exhausted || listed[0].Tries != 0 {
-		t.Fatalf("re-armed request still exhausted: %+v", listed)
+	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 1 || listed[0].Exhausted || listed[0].Tries != 0 || listed[0].Error != "" {
+		t.Fatalf("re-armed request kept exhausted state or a stale error: %+v", listed)
+	}
+	// While the new attempt runs, its durable claim must not show the old
+	// attempt's failure as if it were this attempt's outcome.
+	spy.before = func() {
+		_, claimed, _ := readCapturePushRequest(t, f.cwd)
+		if claimed.Tries != 1 || claimed.Error != "" {
+			t.Fatalf("in-flight claim carries a stale error: %+v", claimed)
+		}
 	}
 	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || spy.accepted != 1 {
 		t.Fatal("re-armed request was not delivered", err)
 	}
 	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 0 {
 		t.Fatalf("delivered request still listed: %+v", listed)
+	}
+}
+
+func TestCapturePushClaimClearsPreviousAttemptError(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "stale-error", domain.DocumentIdentityLegacy, true)
+	ctx := context.Background()
+	if err := processFrozenCapture(ctx, f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(ctx, f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	rel, request, _ := readCapturePushRequest(t, f.cwd)
+	request.Tries, request.Error = 2, "previous attempt: context deadline exceeded"
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileDurable(f.cwd, rel, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	spy := capturePushSpy(t, f, p)
+	spy.before = func() {
+		_, claimed, _ := readCapturePushRequest(t, f.cwd)
+		if claimed.Tries != 3 || claimed.Error != "" {
+			t.Fatalf("in-flight claim carries a stale error: %+v", claimed)
+		}
+	}
+	f.c.Sync = spy
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || spy.accepted != 1 {
+		t.Fatal("delivery did not run", err)
 	}
 }
 

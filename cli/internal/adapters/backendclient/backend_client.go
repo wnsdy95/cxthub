@@ -267,7 +267,7 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 	if resp.StatusCode >= 300 {
 		b, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		rejection := newHTTPError(resp.StatusCode, method, path, b)
-		if readErr == nil && rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" {
+		if readErr == nil && (rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" || proxyTransientStatus(rejection)) {
 			rejection.retryAfter, rejection.retryAfterValid = uploadRetryAfter(resp.Header.Values("Retry-After"), time.Now())
 		}
 		return rejection
@@ -687,7 +687,7 @@ func (c *BackendClient) PushSettingsObject(ctx context.Context, repoID string, h
 	if err := domain.ValidateSettingsBundle(bundle.Kind, hash, bundle); err != nil {
 		return err
 	}
-	return c.do(ctx, http.MethodPut, c.reposPath(repoID)+"/settings-objects/"+url.PathEscape(string(hash)), bundle, nil)
+	return c.doIdempotent(ctx, http.MethodPut, c.reposPath(repoID)+"/settings-objects/"+url.PathEscape(string(hash)), bundle, nil)
 }
 
 // PullSettingsObject downloads a settings object.
@@ -856,7 +856,7 @@ func (c *BackendClient) NegotiatePushObjects(ctx context.Context, repoID string,
 	}
 	var neg negotiateResp
 	outbound.RecordSyncDiagnostic(ctx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Snapshots: len(snapshotHaves), Documents: len(docHaves)}, nil)
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{
+	if err := c.doIdempotent(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{
 		SnapshotHaves: snapshotHaves,
 		DocHaves:      docHaves,
 	}, &neg); err != nil {
@@ -969,7 +969,7 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 	if len(snapHaves) > 0 || len(docHaves) > 0 {
 		negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
 		outbound.RecordSyncDiagnostic(negotiationCtx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Snapshots: len(snapHaves), Documents: len(docHaves), Chunks: len(chunkHaves)}, nil)
-		if err := c.do(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
+		if err := c.doIdempotent(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
 			return err
 		}
 	}

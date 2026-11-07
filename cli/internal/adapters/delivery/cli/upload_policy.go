@@ -26,7 +26,7 @@ const (
 	// pre-push runs under the 60s hook deadline; a deferred request follows.
 	prePushUploadStall = 20 * time.Second
 	// Detached workers stay bounded and retry on their next wake.
-	backgroundUploadStall = 2 * time.Minute
+	backgroundUploadStall = 5 * time.Minute
 	// Background batches poll the foreground marker at this interval.
 	backgroundYieldPoll = time.Second
 )

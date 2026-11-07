@@ -106,7 +106,7 @@ func rearmCapturePushes(ctx context.Context, root, branch string) (int, error) {
 			continue
 		}
 		_, err := providerfs.WithCxtLock(ctx, root, "capture-push", id, syscall.LOCK_EX, true, func() error {
-			request.Tries, request.Next, request.MigrationRetries = 0, time.Time{}, nil
+			request.Tries, request.Next, request.MigrationRetries, request.Error = 0, time.Time{}, nil, ""
 			raw, err := json.Marshal(request)
 			if err != nil {
 				return err

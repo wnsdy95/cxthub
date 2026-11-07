@@ -39,7 +39,11 @@ func patientChunkFixture(t *testing.T, n int, exchange func(request *http.Reques
 		if err := json.NewDecoder(request.Body).Decode(&wire); err != nil {
 			t.Fatal(err)
 		}
-		return exchange(request, len(wire.Chunks)), nil
+		// A nil response models a request that never got an answer.
+		if response := exchange(request, len(wire.Chunks)); response != nil {
+			return response, nil
+		}
+		return nil, request.Context().Err()
 	})
 	doc := outbound.DocumentChunks{ReadChunk: func(_ context.Context, hash domain.ContentHash) ([]byte, error) { return bodies[hash], nil }}
 	return func(ctx context.Context) error { return client.pushRequestedDocChunks(ctx, repo, doc, order, wants) }

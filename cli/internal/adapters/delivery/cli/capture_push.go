@@ -327,6 +327,9 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		retry.Tries++
 		retry.Next = time.Now().Add(time.Duration(1<<retry.Tries) * time.Second)
 		r.setRetry(route, retry)
+		// The claim starts a new attempt: a previous attempt's error must not
+		// read as this attempt's outcome while delivery is still running.
+		r.Error = ""
 		raw, _ = json.Marshal(r)
 		if err := providerfs.WriteRepoFileDurable(root, rel, raw, 0600); err != nil {
 			return next, err
