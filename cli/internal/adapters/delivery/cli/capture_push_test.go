@@ -92,14 +92,15 @@ func readCapturePushRequest(t *testing.T, root string) (string, capturePushReque
 
 type capturePushSyncSpy struct {
 	inbound.SyncRepo
-	t        *testing.T
-	store    *storage.FileStore
-	branch   domain.PublicationBranch
-	target   domain.ContentHash
-	inputs   []inbound.SyncInput
-	failure  error
-	accepted int
-	before   func()
+	t         *testing.T
+	store     *storage.FileStore
+	branch    domain.PublicationBranch
+	target    domain.ContentHash
+	inputs    []inbound.SyncInput
+	failure   error
+	accepted  int
+	before    func()
+	deadlines []time.Time
 }
 
 func (s *capturePushSyncSpy) Push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
@@ -113,6 +114,8 @@ func (s *capturePushSyncSpy) Push(ctx context.Context, in inbound.SyncInput) (in
 	scope.ExpectedTargets = map[string]domain.ContentHash{s.branch.BranchID: in.Publication.ExpectedTargets[s.branch.BranchID]}
 	copy.Publication = &scope
 	s.inputs = append(s.inputs, copy)
+	deadline, _ := ctx.Deadline()
+	s.deadlines = append(s.deadlines, deadline)
 	if s.before != nil {
 		s.before()
 	}
@@ -446,6 +449,51 @@ func TestCapturePushLostAcknowledgementPersistsBoundedRetry(t *testing.T) {
 	}
 	if _, _, after := readCapturePushRequest(t, f.cwd); !bytes.Equal(before, after) || len(spy.inputs) != 2 {
 		t.Fatal("requeue reset exhausted transport budget")
+	}
+}
+
+// A long provider thread cannot be prepared and uploaded in one minute. The
+// detached worker must hand a lone pending delivery its own deadline instead
+// of timing out every bounded retry until the request is abandoned.
+func TestCapturePushJobUsesWorkerDeadlineShare(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "large-thread", domain.DocumentIdentityLegacy, true)
+	if err := processFrozenCapture(context.Background(), f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(context.Background(), f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	spy := capturePushSpy(t, f, p)
+	f.c.Sync = spy
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(spy.deadlines) != 1 || spy.accepted != 1 {
+		t.Fatal("pending delivery did not reach transport")
+	}
+	if left := time.Until(spy.deadlines[0]); left < 25*time.Minute {
+		t.Fatalf("lone delivery received %v of a 30m worker budget", left)
+	}
+}
+
+func TestCapturePushJobBudgetSharesAndBounds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if got := capturePushJobBudget(ctx, 3); got < 9*time.Minute || got > 10*time.Minute {
+		t.Fatalf("three eligible deliveries got %v each", got)
+	}
+	if got := capturePushJobBudget(ctx, 0); got < 29*time.Minute {
+		t.Fatalf("zero count must not divide by zero or shrink: %v", got)
+	}
+	if got := capturePushJobBudget(ctx, 1000); got != capturePushMinJobBudget {
+		t.Fatalf("many deliveries must keep the minimum floor: %v", got)
+	}
+	if got := capturePushJobBudget(context.Background(), 1); got != capturePushMaxJobBudget {
+		t.Fatalf("undeadlined caller must stay bounded: %v", got)
 	}
 }
 

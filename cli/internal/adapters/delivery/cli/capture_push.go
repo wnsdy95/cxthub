@@ -22,6 +22,47 @@ import (
 
 const capturePushDir = ".cxt/capture/push-requests"
 
+// A deferred delivery runs in the detached capture worker, never under a Git
+// hook. Its budget is a share of the worker deadline: a fixed one-minute cap
+// could not even prepare a long provider thread, so every retry timed out
+// and the request was abandoned after its bounded tries.
+const (
+	capturePushMinJobBudget = time.Minute
+	capturePushMaxJobBudget = 30 * time.Minute
+)
+
+// capturePushJobBudget reserves a share of the parent deadline for each of the
+// remaining undone requests, so one slow identity cannot win every wake while
+// a single large one may use the whole worker budget.
+func capturePushJobBudget(ctx context.Context, remaining int) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return capturePushMaxJobBudget
+	}
+	if remaining < 1 {
+		remaining = 1
+	}
+	budget := time.Until(deadline) / time.Duration(remaining)
+	return max(capturePushMinJobBudget, min(budget, capturePushMaxJobBudget))
+}
+
+// Requests are revalidated by the drain loop; this count only sizes budgets,
+// so exhausted or backing-off requests must not dilute the eligible share.
+func countUndoneCapturePushes(root string, files []os.DirEntry) int {
+	undone, now := 0, time.Now()
+	for _, file := range files {
+		if file.IsDir() || filepath.Ext(file.Name()) != ".json" {
+			continue
+		}
+		raw, err := providerfs.ReadRepoFile(root, filepath.Join(capturePushDir, file.Name()))
+		var r capturePushRequest
+		if err != nil || json.Unmarshal(raw, &r) != nil || (!r.Done && r.Tries < 8 && !now.Before(r.Next)) {
+			undone++
+		}
+	}
+	return undone
+}
+
 // CapturePushDestination is an observed destination, not a remote selector.
 // APIOnly preserves the documented CXT_REMOTE API-base fallback semantics.
 // Credentials stay in the prepared transport and never enter the intent.
@@ -216,6 +257,7 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 	if err != nil {
 		return next, err
 	}
+	undone := countUndoneCapturePushes(root, files)
 	for _, file := range files {
 		if skip, err := capturePushAtomicTemp(dir, file); err != nil {
 			return next, err
@@ -289,7 +331,8 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		if err := providerfs.WriteRepoFileDurable(root, rel, raw, 0600); err != nil {
 			return next, err
 		}
-		job, cancel := context.WithTimeout(ctx, time.Minute)
+		job, cancel := context.WithTimeout(ctx, capturePushJobBudget(ctx, undone))
+		undone--
 		err = deliverCapturePush(job, c, cwd, root, r.Intent, p, destination)
 		cancel()
 		if pendingTransportMismatch(err) {
