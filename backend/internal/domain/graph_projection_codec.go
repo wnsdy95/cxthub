@@ -66,7 +66,10 @@ func graphProjectionTypedField[Value any](key string, value *Value) graphProject
 			if err := graphProjectionJSONSchema(ctx, raw, reflect.TypeFor[graphProjectionValue[Value]](), budget); err != nil {
 				return err
 			}
-			if err := DecodeRepositorySourceJSON(ctx, raw, &row); err != nil {
+			if err := json.Unmarshal(raw, &row); err != nil {
+				return fmt.Errorf("%w: graph projection JSON: %v", ErrIntegrity, err)
+			}
+			if err := ctx.Err(); err != nil {
 				return err
 			}
 			*value = row.Value
@@ -209,8 +212,8 @@ func graphProjectionDecodeFieldHeader(ctx context.Context, part GraphProjectionP
 	if err := graphProjectionJSONSchema(ctx, part.Value, reflect.TypeFor[graphProjectionHeader](), &budget); err != nil {
 		return header, err
 	}
-	if err := DecodeRepositorySourceJSON(ctx, part.Value, &header); err != nil {
-		return header, err
+	if err := json.Unmarshal(part.Value, &header); err != nil {
+		return header, fmt.Errorf("%w: graph projection header: %v", ErrIntegrity, err)
 	}
 	if header.Version != 1 || header.Rules != rules || header.Projection != projection || ValidateContentHash(header.RepoID) != nil || len(header.Parts) != len(fields) {
 		return graphProjectionHeader{}, ErrIntegrity
