@@ -18,7 +18,9 @@ func (c *BackendClient) PushHistoryEvent(ctx context.Context, e domain.HistoryEv
 		// An unsupported route is an error; never retry through ordinary history.
 		path += "/memory-selection"
 	}
-	return c.do(ctx, http.MethodPost, path, e, nil)
+	// An exact replay of a recorded event is accepted unchanged by the
+	// server, so the post is safe to repeat under an upload policy.
+	return c.doIdempotent(ctx, http.MethodPost, path, e, nil)
 }
 func (c *BackendClient) PullHistoryEvents(ctx context.Context, repoID string) ([]domain.HistoryEvent, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
