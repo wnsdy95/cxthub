@@ -192,6 +192,28 @@ def positive_int(value):
     return number
 
 
+def shard_spec(value):
+    match = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", value)
+    if match is None or int(match[1]) > int(match[2]):
+        raise argparse.ArgumentTypeError("must be INDEX/TOTAL with 1 <= INDEX <= TOTAL")
+    return int(match[1]), int(match[2])
+
+
+def shard_tests(tests, index, total):
+    # Deal the ordered selection in snake order (1..N, N..1, ...). Every shard
+    # derives the same discovery and order, so the shards are disjoint and their
+    # union is the complete selection. Listing the slowest tests first with
+    # --first-test spreads them across shards instead of stacking them.
+    if total > len(tests):
+        raise ValueError(f"--shard total {total} exceeds the {len(tests)} discovered tests")
+    selected = []
+    for position, name in enumerate(tests):
+        lap, offset = divmod(position, total)
+        if (offset if lap % 2 == 0 else total - 1 - offset) == index - 1:
+            selected.append(name)
+    return selected
+
+
 def run_batches(args):
     cwd = Path.cwd()
     tags = ["-tags", args.tags] if args.tags else []
@@ -234,7 +256,11 @@ def run_batches(args):
         if no_timeout and args.batch_size != 1:
             raise ValueError("--no-batch-timeout requires --batch-size 1 to isolate the selected tests")
         tests = args.first_test + [name for name in tests if name not in first_tests]
-        batches = [tests[start:start + args.batch_size] for start in range(0, len(tests), args.batch_size)]
+        if args.shard is not None:
+            discovered = len(tests)
+            tests = shard_tests(tests, *args.shard)
+            print(f"[go-batches] shard {args.shard[0]}/{args.shard[1]}: {len(tests)} of {discovered} discovered tests", flush=True)
+        batches =[tests[start:start + args.batch_size] for start in range(0, len(tests), args.batch_size)]
         print(f"[go-batches] {len(tests)} tests, {len(batches)} serial batches, {args.count} repetitions; cwd={package_dir}", flush=True)
         results = []
         try:
@@ -284,6 +310,7 @@ def main(argv=None):
     parser.add_argument("--race", action="store_true")
     parser.add_argument("--count", type=positive_int, default=1)
     parser.add_argument("--batch-size", type=int, choices=range(1, 6), default=5)
+    parser.add_argument("--shard", type=shard_spec, metavar="INDEX/TOTAL", help="run only this shard of the ordered selection; name validation still covers the whole selection")
     args = parser.parse_args(argv)
     handlers = {signum: signal.signal(signum, cancel) for signum in (signal.SIGINT, signal.SIGTERM)}
     try:
