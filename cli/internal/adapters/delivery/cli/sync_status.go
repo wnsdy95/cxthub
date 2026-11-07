@@ -23,6 +23,7 @@ type syncStatus struct {
 	Historical       []domain.SnapshotBackfill `json:"historical_uploads"`
 	Branches         []branchOperationStatus   `json:"branch_operations"`
 	Merges           []mergeDeliveryStatus     `json:"merge_deliveries"`
+	DeferredPushes   []deferredPushStatus      `json:"deferred_pushes"`
 	Issues           []string                  `json:"issues"`
 }
 
@@ -42,7 +43,7 @@ type mergeDeliveryStatus struct {
 // network, replay, provider discovery, mutation locks or repair are involved.
 // A zero queue is not a claim of server acknowledgement or replica integrity.
 func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, cwd string, asJSON bool, w io.Writer) error {
-	report := syncStatus{ObservedAt: time.Now().UTC(), Historical: []domain.SnapshotBackfill{}, Branches: []branchOperationStatus{}, Issues: []string{}}
+	report := syncStatus{ObservedAt: time.Now().UTC(), Historical: []domain.SnapshotBackfill{}, Branches: []branchOperationStatus{}, DeferredPushes: []deferredPushStatus{}, Issues: []string{}}
 	state := gitctx.InspectContextRoot(ctx, cwd)
 	if !state.Initialized {
 		report.Issues = append(report.Issues, "no initialized local replica; use cxt doctor to inspect registration and damage")
@@ -65,6 +66,11 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 				report.Merges = append(report.Merges, mergeDeliveryStatus{ID: key, Repository: job.Evidence.RepoID, Branch: job.Evidence.Branch, BranchID: job.Evidence.BranchID, Before: job.Evidence.Before, After: job.Evidence.After, Attempts: job.Attempts, Reason: job.Reason, LeaseUntil: job.LeaseUntil})
 			}
 			sort.Slice(report.Merges, func(left, right int) bool { return report.Merges[left].ID < report.Merges[right].ID })
+			if deferred, err := listDeferredPushes(state.Root); err != nil {
+				report.Issues = append(report.Issues, "deferred context pushes: "+err.Error())
+			} else {
+				report.DeferredPushes = append(report.DeferredPushes, deferred...)
+			}
 			jobs, err := reader.ListBackfills(ctx, state.Root, report.Repository)
 			if err != nil {
 				report.Issues = append(report.Issues, "historical upload queue: "+err.Error())
@@ -108,6 +114,20 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 		fmt.Fprintf(w, "Unresolved merge deliveries: %d (automatic retry while the original branch observer is active; cxt push or cxt pull also retries).\n", len(report.Merges))
 		for _, job := range report.Merges {
 			fmt.Fprintf(w, "  %s  %s  attempts=%d  %s\n", job.ID[:12], job.Branch, job.Attempts, job.Reason)
+		}
+		exhausted := 0
+		for _, job := range report.DeferredPushes {
+			if job.Exhausted {
+				exhausted++
+			}
+		}
+		fmt.Fprintf(w, "Deferred context pushes: %d pending; %d exhausted (rerun with cxt push origin <branch> to retry).\n", len(report.DeferredPushes), exhausted)
+		for _, job := range report.DeferredPushes {
+			state := "retrying"
+			if job.Exhausted {
+				state = "exhausted"
+			}
+			fmt.Fprintf(w, "  %s  %s  %s  tries=%d  %s\n", job.ID[:12], job.Branch, state, job.Tries, job.Error)
 		}
 		for _, issue := range report.Issues {
 			fmt.Fprintf(w, "- %s\n", issue)

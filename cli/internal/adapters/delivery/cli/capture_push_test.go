@@ -480,6 +480,54 @@ func TestCapturePushJobUsesWorkerDeadlineShare(t *testing.T) {
 	}
 }
 
+// An exhausted deferred publication is visible in status and a manual push
+// re-arms it, after which the worker delivers it again.
+func TestCapturePushExhaustedRequestVisibleAndRearmed(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "exhausted", domain.DocumentIdentityLegacy, true)
+	ctx := context.Background()
+	if err := processFrozenCapture(ctx, f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(ctx, f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	rel, request, _ := readCapturePushRequest(t, f.cwd)
+	request.Tries, request.Error = 8, "context deadline exceeded"
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileDurable(f.cwd, rel, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	spy := capturePushSpy(t, f, p)
+	f.c.Sync = spy
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || len(spy.inputs) != 0 {
+		t.Fatal("exhausted request retried automatically", err)
+	}
+	listed, err := listDeferredPushes(f.cwd)
+	if err != nil || len(listed) != 1 || !listed[0].Exhausted || listed[0].Tries != 8 || listed[0].Branch != p.Proof.Branch || listed[0].Error == "" {
+		t.Fatalf("exhausted request not visible: %+v %v", listed, err)
+	}
+	if n, err := rearmCapturePushes(ctx, f.cwd, "some-other-branch"); err != nil || n != 0 {
+		t.Fatalf("re-armed another branch's request: %d %v", n, err)
+	}
+	if n, err := rearmCapturePushes(ctx, f.cwd, p.Proof.Branch); err != nil || n != 1 {
+		t.Fatalf("selected branch was not re-armed: %d %v", n, err)
+	}
+	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 1 || listed[0].Exhausted || listed[0].Tries != 0 {
+		t.Fatalf("re-armed request still exhausted: %+v", listed)
+	}
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || spy.accepted != 1 {
+		t.Fatal("re-armed request was not delivered", err)
+	}
+	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 0 {
+		t.Fatalf("delivered request still listed: %+v", listed)
+	}
+}
+
 func TestCapturePushJobBudgetSharesAndBounds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()

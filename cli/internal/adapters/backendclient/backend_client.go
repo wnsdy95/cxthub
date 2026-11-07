@@ -34,6 +34,8 @@ type BackendClient struct {
 	memoryReuse  memoryReuseCache
 	metadata     outbound.MetadataCheckpointStore
 	catalogCache outbound.CatalogCacheStore
+	// pace spaces patient bulk batches after recent server backpressure.
+	pace uploadPacer
 }
 
 // NewBackendClient creates a BackendClient.
