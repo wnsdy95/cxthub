@@ -76,6 +76,40 @@ completed source capture, publication, qualification and selected serving with
 an identical full-view digest and unchanged source generation. This is local
 verification, not evidence that production routing has been enabled.
 
+## Publication validation cost
+
+The first production source-profile rollout passed capture but repeatedly reached
+the existing 30-second work deadline while validating the encoded graph for
+publication. Worker startup flags were drained again; reads were not enabled.
+The field named in a cancellation error is where cancellation was observed, not
+proof that the field is corrupt or solely responsible for the elapsed time.
+
+Graph schema validation now owns duplicate map-key and depth checks as well as
+its existing required-field, type and aggregate structural-budget checks. The
+typed decoder consumes that validated JSON without a second generic token walk.
+Source and pending decoders keep their original contracts. Canonical field hashes,
+manifest validation, repository scope, publication fences and work deadlines are
+unchanged. String budget measurement checks cancellation in bounded byte batches
+instead of taking a context lock for every character; UTF-8 and escape-size
+accounting still cover every character.
+
+Qualification additionally seals the fully validated parts into a request-local,
+opaque receipt bound to the repository, dataset, source checkpoint and comparison
+result. The short final transaction checks the complete part set and output
+limits against that receipt under the existing publication fences, then upserts
+the serving head and copies the JSONB rows in one PostgreSQL statement that only
+accepts rows whose SHA-256 matches the receipt. It does not download, decode and
+upload the entire bundle again while holding write locks, and later changes to
+candidate rows in the same transaction cannot reach the serving copy.
+Changed, missing, extra or oversized rows fail atomically. Callers without a
+receipt retain the original full-validation path. The receipt is not a persisted
+cache, does not bypass authorization, and cannot authorize a different generation.
+
+Measure publication and qualified serving with deadline-bearing contexts and
+CPU-constrained restored data before attempting the rollout again. A faster local
+codec benchmark does not prove that production publication or qualification fits
+its resource budget.
+
 ## Remaining boundary
 
 Qualified serving currently reads the entire field-part bundle. It removes

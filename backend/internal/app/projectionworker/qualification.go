@@ -188,7 +188,7 @@ func (qualification *Qualification) Compare(ctx context.Context, lease domain.Gr
 	if err != nil {
 		return result, err
 	}
-	_, err = domain.DecodeGraphViewProjection(ctx, lease.RepoID, projection.Parts)
+	verified, err := domain.VerifyGraphQualificationParts(ctx, lease.GraphQualificationKey, result.Expected, projection.Parts)
 	if err != nil {
 		failure := &domain.GraphProjectionCorruption{RepoID: lease.RepoID, Dataset: projection.Dataset,
 			Applied: projection.Applied, Rules: projection.Rules, Cause: err}
@@ -197,9 +197,7 @@ func (qualification *Qualification) Compare(ctx context.Context, lease domain.Gr
 		}
 		return result, err
 	}
-	result.GraphQualificationKey = lease.GraphQualificationKey
-	result.Actual, err = domain.GraphViewProjectionManifestDigest(ctx, lease.RepoID, projection.Parts)
-	return result, err
+	return verified, nil
 }
 
 func (qualification *Qualification) Repair(ctx context.Context, lease domain.GraphQualificationLease, readErr error) error {
