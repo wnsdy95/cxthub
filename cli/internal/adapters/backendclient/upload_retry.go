@@ -25,6 +25,9 @@ const (
 	uploadPatientRequestTimeout = 2 * time.Minute
 	uploadPaceMin               = 250 * time.Millisecond
 	uploadPaceMax               = 5 * time.Second
+	// uploadBatchYield is the minimum gap before every patient bulk batch,
+	// so other users' queued requests reach a shared server between batches.
+	uploadBatchYield = 150 * time.Millisecond
 )
 
 // uploadPacer is shared by every patient batch of one client. Backpressure
@@ -123,7 +126,10 @@ func (c *BackendClient) patientRetry(ctx context.Context, policy outbound.Upload
 			return err
 		}
 		c.pace.observe(true)
-		delay := max(min(time.Second<<min(retries, 5), uploadPatientMaxBackoff), hint) + time.Duration(1+rand.IntN(250))*time.Millisecond
+		// Full jitter spreads competing clients across the backoff window;
+		// the server's Retry-After remains a floor.
+		window := min(time.Second<<min(retries, 5), uploadPatientMaxBackoff)
+		delay := max(hint, uploadPaceMin, time.Duration(rand.Int64N(int64(window)+1)))
 		if time.Since(stalled)+delay > policy.StallBudget {
 			return err
 		}
@@ -226,7 +232,9 @@ func (c *BackendClient) uploadBatchPatient(ctx context.Context, path string, bod
 		gate = func(_ context.Context, request func() error) error { return request() }
 	}
 	// Pacing spaces batches; retries of one batch already wait out backoff.
-	if err := uploadSleep(ctx, c.pace.next()); err != nil {
+	// Even an unthrottled uploader yields briefly (jittered) between batches.
+	yield := uploadBatchYield + time.Duration(rand.Int64N(int64(uploadBatchYield)))
+	if err := uploadSleep(ctx, max(c.pace.next(), yield)); err != nil {
 		return err
 	}
 	return c.patientRetry(ctx, policy, func() error {

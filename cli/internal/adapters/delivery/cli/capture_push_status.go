@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 const capturePushMaxTries = 8
@@ -82,10 +83,8 @@ func listDeferredPushes(root string) ([]deferredPushStatus, error) {
 		if request.Done {
 			continue
 		}
-		message := request.Error
-		if len(message) > 240 {
-			message = message[:240] + "…"
-		}
+		// Requests written by earlier binaries may hold unsanitized text.
+		message := domain.SanitizeErrorText(request.Error, 240)
 		out = append(out, deferredPushStatus{ID: id, Branch: request.Intent.Branch.Branch, BranchID: request.Intent.Branch.BranchID, GitCommit: request.Intent.Update.LocalOID, Tries: request.Tries, Next: request.Next, Exhausted: request.exhausted(), Error: message})
 	}
 	sort.Slice(out, func(left, right int) bool { return out[left].ID < out[right].ID })

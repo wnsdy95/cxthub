@@ -63,7 +63,7 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 				if job.Completed {
 					continue
 				}
-				report.Merges = append(report.Merges, mergeDeliveryStatus{ID: key, Repository: job.Evidence.RepoID, Branch: job.Evidence.Branch, BranchID: job.Evidence.BranchID, Before: job.Evidence.Before, After: job.Evidence.After, Attempts: job.Attempts, Reason: job.Reason, LeaseUntil: job.LeaseUntil})
+				report.Merges = append(report.Merges, mergeDeliveryStatus{ID: key, Repository: job.Evidence.RepoID, Branch: job.Evidence.Branch, BranchID: job.Evidence.BranchID, Before: job.Evidence.Before, After: job.Evidence.After, Attempts: job.Attempts, Reason: domain.SanitizeErrorText(job.Reason, 240), LeaseUntil: job.LeaseUntil})
 			}
 			sort.Slice(report.Merges, func(left, right int) bool { return report.Merges[left].ID < report.Merges[right].ID })
 			if deferred, err := listDeferredPushes(state.Root); err != nil {

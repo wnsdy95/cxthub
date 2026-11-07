@@ -191,3 +191,82 @@ func TestPatientIdempotentRequestRetriesClientTimeout(t *testing.T) {
 		}
 	})
 }
+
+func TestHTTPErrorNeverCopiesProxyPagesOrTokens(t *testing.T) {
+	token := strings.Repeat("Q7x_", 24) + ".Nt" // synthetic opaque run; never a real credential
+	html := newHTTPError(502, http.MethodPost, "/repos/x/push/objects", []byte("<!DOCTYPE html><html><script>window.__cf={t:'"+token+"'}</script></html>"))
+	if strings.Contains(html.Error(), token) || strings.Contains(html.Error(), "<html") || !strings.Contains(html.Error(), "non-JSON response body omitted") {
+		t.Fatalf("proxy page copied into error: %s", html.Error())
+	}
+	text := newHTTPError(503, http.MethodGet, "/repos/x", []byte("upstream reset token="+token))
+	app := newHTTPError(503, http.MethodGet, "/repos/x", []byte(`{"error":{"code":"resource_overloaded","message":"busy `+token+`"}}`))
+	for _, err := range []*HTTPError{text, app} {
+		if strings.Contains(err.Error(), token) {
+			t.Fatalf("opaque token copied into error: %s", err.Error())
+		}
+	}
+	if app.Code != "resource_overloaded" || !strings.Contains(app.Error(), "busy") {
+		t.Fatalf("application classification lost: %s", app.Error())
+	}
+}
+
+// A manual push's preparation reads (history, repository, catalogs) wait out
+// the same transient failures as its uploads.
+func TestPatientReadsRetryTransientFailures(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		client := NewBackendClient(func() string { return "https://synthetic.invalid" }, func() string { return "" }, domain.TeamIdentity{})
+		client.httpc.Transport = reviewTransferRoundTripper(func(request *http.Request) (*http.Response, error) {
+			calls++
+			switch calls {
+			case 1:
+				return uploadOverloadResponse(request), nil
+			case 2:
+				return proxyResponse(request, http.StatusBadGateway, ""), nil
+			}
+			return reviewWireResponse(request, http.StatusOK, map[string]any{"events": []any{}}), nil
+		})
+		var out map[string]any
+		if err := client.do(patient(time.Minute), http.MethodGet, "/repos/x/history", nil, &out); err != nil || calls != 3 {
+			t.Fatalf("preparation read failed fast: err=%v calls=%d", err, calls)
+		}
+		calls = 0
+		if err := client.do(context.Background(), http.MethodGet, "/repos/x/history", nil, &out); err == nil || calls != 1 {
+			t.Fatalf("read without a policy changed: err=%v calls=%d", err, calls)
+		}
+		// Mutations stay single-shot unless routed through doIdempotent.
+		calls = 0
+		if err := client.do(patient(time.Minute), http.MethodDelete, "/repos/x/pending/y", nil, nil); err == nil || calls != 1 {
+			t.Fatalf("mutation retried implicitly: err=%v calls=%d", err, calls)
+		}
+	})
+}
+
+// Recording history is the last step of a long push. The server accepts an
+// exact replay unchanged, so a slow or shedding server must not discard the
+// whole publication at this point.
+func TestPatientHistoryRecordRetriesTransientFailures(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(domain.HashContent([]byte("repo"))), BranchID: "identity", Branch: "main", Kind: "position", CreatedAt: time.Unix(1, 0).UTC(), BindingParent: strings.Repeat("2", 32)}
+		calls := 0
+		client := NewBackendClient(func() string { return "https://synthetic.invalid" }, func() string { return "" }, domain.TeamIdentity{})
+		client.httpc.Transport = reviewTransferRoundTripper(func(request *http.Request) (*http.Response, error) {
+			calls++
+			switch calls {
+			case 1:
+				<-request.Context().Done() // client timeout while awaiting headers
+				return nil, request.Context().Err()
+			case 2:
+				return uploadOverloadResponse(request, "3"), nil
+			}
+			return reviewWireResponse(request, http.StatusOK, map[string]string{"id": e.ID}), nil
+		})
+		if err := client.PushHistoryEvent(patient(10*time.Minute), e); err != nil || calls != 3 {
+			t.Fatalf("history record failed fast: err=%v calls=%d", err, calls)
+		}
+		calls = 0
+		if err := client.PushHistoryEvent(context.Background(), e); err == nil || calls != 1 {
+			t.Fatalf("history record without a policy changed: err=%v calls=%d", err, calls)
+		}
+	})
+}

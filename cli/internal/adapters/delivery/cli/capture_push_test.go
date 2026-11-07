@@ -569,6 +569,44 @@ func TestCapturePushClaimClearsPreviousAttemptError(t *testing.T) {
 	}
 }
 
+func TestCapturePushPersistsSanitizedErrors(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "sanitized-error", domain.DocumentIdentityLegacy, true)
+	ctx := context.Background()
+	if err := processFrozenCapture(ctx, f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(ctx, f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("Q7x_", 24) + ".Nt" // synthetic opaque run; never a real credential
+	spy := capturePushSpy(t, f, p)
+	spy.failure = errors.New(`Get "https://api.invalid/x?remote_url=https%3A%2F%2Fu%3Asecret%40h%2Fr": proxy said ` + token)
+	f.c.Sync = spy
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, stored, raw := readCapturePushRequest(t, f.cwd)
+	if stored.Error == "" || bytes.Contains(raw, []byte(token)) || bytes.Contains(raw, []byte("secret")) {
+		t.Fatalf("queue persisted secrets: %s", raw)
+	}
+	// A request written by an older binary is sanitized on display.
+	rel, legacy, _ := readCapturePushRequest(t, f.cwd)
+	legacy.Error = "older binary wrote " + token
+	legacyRaw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileDurable(f.cwd, rel, legacyRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := listDeferredPushes(f.cwd)
+	if err != nil || len(listed) != 1 || strings.Contains(listed[0].Error, token) {
+		t.Fatalf("status displays a stored token: %+v %v", listed, err)
+	}
+}
+
 func TestCapturePushJobBudgetSharesAndBounds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()

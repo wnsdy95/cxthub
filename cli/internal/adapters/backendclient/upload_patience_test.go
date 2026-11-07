@@ -80,7 +80,7 @@ func TestPatientUploadStallBudgetRestartsOnProgress(t *testing.T) {
 		upload := patientChunkFixture(t, 65, func(request *http.Request, _ int) *http.Response {
 			if rejected < 4 {
 				rejected++
-				return uploadOverloadResponse(request, "1")
+				return uploadOverloadResponse(request, "3")
 			}
 			rejected = 0
 			batches++
@@ -172,6 +172,26 @@ func TestPatientUploadGatesEachRequestAndReportsProgress(t *testing.T) {
 		}
 		if got := strings.Join(progress, " "); got != "0/65 32/65 64/65 65/65" {
 			t.Fatalf("progress=%q", got)
+		}
+	})
+}
+
+// An unthrottled uploader still leaves a jittered gap between accepted
+// batches, so another user's queued request reaches the shared server.
+func TestPatientUploadYieldsBetweenAcceptedBatches(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var starts []time.Time
+		upload := patientChunkFixture(t, 97, func(request *http.Request, _ int) *http.Response {
+			starts = append(starts, time.Now())
+			return reviewWireResponse(request, http.StatusOK, nil)
+		})
+		if err := upload(patient(time.Minute)); err != nil || len(starts) != 4 {
+			t.Fatalf("err=%v batches=%d", err, len(starts))
+		}
+		for index := 1; index < len(starts); index++ {
+			if gap := starts[index].Sub(starts[index-1]); gap < uploadBatchYield || gap >= 2*uploadBatchYield {
+				t.Fatalf("batch %d gap=%s outside the bounded yield", index, gap)
+			}
 		}
 	})
 }

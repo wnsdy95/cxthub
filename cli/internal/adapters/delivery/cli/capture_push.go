@@ -346,7 +346,9 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		if err == nil {
 			r.Done = true
 		} else {
-			r.Error = err.Error()
+			// Persisted queue state never carries response bodies, query
+			// strings or opaque tokens; see domain.SanitizeErrorText.
+			r.Error = domain.SanitizeErrorText(err.Error(), 600)
 		}
 		raw, _ = json.Marshal(r)
 		if err := providerfs.WriteRepoFileDurable(root, rel, raw, 0600); err != nil {

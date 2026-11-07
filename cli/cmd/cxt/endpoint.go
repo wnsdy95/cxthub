@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -14,20 +15,32 @@ import (
 func verifyEndpointRepository(ctx context.Context, client *backendclient.BackendClient, binding remotecfg.EndpointBinding) (remotecfg.EndpointBinding, error) {
 	connection, err := client.ResolveRepositoryConnection(ctx, binding.RemoteURL)
 	if err != nil {
-		return binding, fmt.Errorf("destination repository connection verification failed")
+		return binding, fmt.Errorf("destination repository connection verification failed: %w", endpointVerificationCause(err))
 	}
 	if connection.RemoteURL != binding.RemoteURL || connection.RepoID != binding.RepoID || connection.RepositoryID == "" || binding.RepositoryID != "" && connection.RepositoryID != binding.RepositoryID {
 		return binding, fmt.Errorf("%w: destination does not match the existing repository identity", remotecfg.ErrEndpointBindingMismatch)
 	}
 	repo, err := client.Repository(ctx, binding.RepoID)
 	if err != nil {
-		return binding, fmt.Errorf("destination existing repository verification failed")
+		return binding, fmt.Errorf("destination existing repository verification failed: %w", endpointVerificationCause(err))
 	}
 	if repo.ID != binding.RepoID || repo.RemoteURL != binding.RemoteURL || repo.RepositoryID != connection.RepositoryID {
 		return binding, fmt.Errorf("%w: destination existing repository binding does not match", remotecfg.ErrEndpointBindingMismatch)
 	}
 	binding.Version, binding.RepositoryID = 1, connection.RepositoryID
 	return binding, binding.Validate()
+}
+
+// endpointVerificationCause keeps the classifiable cause (HTTP status/code,
+// timeout, cancellation) while dropping the request URL, whose query carries
+// the remote URL. Transient causes are retried by the client under an upload
+// policy before they reach here.
+func endpointVerificationCause(err error) error {
+	var transport *url.Error
+	if errors.As(err, &transport) {
+		return fmt.Errorf("%s request: %w", transport.Op, transport.Err)
+	}
+	return err
 }
 
 func resolveEndpointConnection(ctx context.Context, client *backendclient.BackendClient, binding remotecfg.EndpointBinding) (domain.RepositoryConnection, error) {

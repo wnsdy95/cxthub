@@ -190,7 +190,16 @@ func (c *BackendClient) do(ctx context.Context, method, path string, body, out a
 
 // doLimited decodes bounded endpoint responses only below an explicit upper limit. max=0 is
 // the existing general JSON path.
-func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
+func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) error {
+	// Reads are idempotent: under an upload policy a push's preparation reads
+	// wait out the same transient failures as its uploads.
+	if policy, ok := outbound.UploadPolicyFromContext(ctx); ok && method == http.MethodGet {
+		return c.patientRetry(ctx, policy, func() error { return c.doLimitedOnce(ctx, method, path, body, out, max) })
+	}
+	return c.doLimitedOnce(ctx, method, path, body, out, max)
+}
+
+func (c *BackendClient) doLimitedOnce(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
 	ctx = outbound.NextSyncDiagnosticRequest(ctx)
 	diagnosticCtx := ctx // Best-effort ACK cleanup must not look like caller cancellation.
 	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
@@ -353,7 +362,7 @@ func (e *HTTPError) Error() string {
 func (e *HTTPError) StatusCode() int { return e.Status }
 
 func newHTTPError(status int, method, path string, body []byte) *HTTPError {
-	he := &HTTPError{Status: status, raw: string(body)}
+	he := &HTTPError{Status: status, raw: responseBodySummary(body)}
 	he.Operation = method
 	if u, err := url.Parse(path); err == nil {
 		he.Operation += " " + u.EscapedPath()
@@ -366,11 +375,27 @@ func newHTTPError(status int, method, path string, body []byte) *HTTPError {
 	}
 	if json.Unmarshal(body, &env) == nil && env.Error.Code != "" {
 		he.Code = env.Error.Code
-		he.Message = env.Error.Message
+		he.Message = domain.SanitizeErrorText(env.Error.Message, maxErrorMessageBytes)
 	} else {
-		he.Message = strings.TrimSpace(string(body))
+		he.Message = he.raw
 	}
 	return he
+}
+
+const maxErrorMessageBytes = 300
+
+// responseBodySummary keeps a short, sanitized text body for diagnosis. A
+// non-JSON page from a proxy (HTML, challenge pages) can embed opaque tokens
+// and is never copied into errors that queues persist or status prints.
+func responseBodySummary(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return ""
+	}
+	if strings.HasPrefix(text, "<") {
+		return fmt.Sprintf("non-JSON response body omitted (%d bytes)", len(body))
+	}
+	return domain.SanitizeErrorText(text, maxErrorMessageBytes)
 }
 
 func (c *BackendClient) reposPath(repoID string) string {
