@@ -123,11 +123,12 @@ jobs:
       - name: test (FS) + openapi drift guard
         working-directory: backend
         run: go test ./...
+      # The race-detector variant of this check runs in CI heavy.
       - name: test admission progress on one CPU
         working-directory: backend
         env:
           GOMAXPROCS: "1"
-        run: go test -race ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
+        run: go test ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
       - name: vulnerability scan (FS and production PostgreSQL)
         working-directory: backend
         run: |
@@ -146,21 +147,20 @@ jobs:
         working-directory: ${{ runner.temp }}/backend/backend
         run: go build -tags postgres ./... && go vet -tags postgres ./...
 
-  # Every PostgreSQL contract runs once per PR and main push; the store and app lanes
-  # are sharded. Repetition (COUNT=3) of the race-checked lanes runs in CI stress.
+  # Required PR tier: every PostgreSQL contract that is not listed in
+  # scripts/ci-heavy-tests.txt runs once, without the race detector, on four workers that
+  # each own a freshly created database. The listed heavy tests and the race-detector
+  # repetitions run in the "CI heavy" workflow (main pushes, nightly, ci:full PRs).
   backend-contracts:
-    name: backend-contracts (${{ matrix.lane }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
+    name: backend-contracts (${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     strategy:
       fail-fast: false
       matrix:
-        lane: [store, app]
-        shard: [1/4, 2/4, 3/4, 4/4]
-        include:
-          - lane: transports
+        lane: [store, app, transports]
     services:
       postgres:
         image: postgres:16
@@ -175,17 +175,18 @@ jobs:
     env:
       CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
       CXT_ROOT_WRITER_COST: "1"
+      TIER: fast
+      WORKERS: "4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
           cache-dependency-path: backend/go.sum
-      - name: test (PG ${{ matrix.lane }} contracts)
+      - name: test (PG ${{ matrix.lane }} contracts, fast tier)
         working-directory: backend
         env:
           LANE: ${{ matrix.lane }}
-          SHARD: ${{ matrix.shard }}
         run: bash ../scripts/ci-backend-contracts.sh "$LANE"
 
   backend:

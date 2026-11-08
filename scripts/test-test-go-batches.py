@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -27,6 +28,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 root = Path(os.environ["GO_BATCH_FIXTURE"])
 config = json.loads((root / "config.json").read_text())
 args = sys.argv[1:]
@@ -38,18 +40,22 @@ pattern = next(arg.split("=", 1)[1] for arg in args if arg.startswith("-test.run
 count = int(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-test.count=")))
 selected = [name for name in config["names"] if re.search(pattern, name)]
 with (root / "batches.jsonl").open("a") as output:
-    output.write(json.dumps({"tests": selected, "count": count, "cwd": os.getcwd(), "args": args}) + "\\n")
+    output.write(json.dumps({"tests": selected, "count": count, "cwd": os.getcwd(), "args": args,
+                             "dsn": os.environ.get("CXT_TEST_DSN"), "started": time.time()}) + "\\n")
 def frame(line):
     print("\\x16" + line, flush=True)
 if config.get("cancel"):
     frame("=== RUN   " + selected[0])
     (root / "child.pid").write_text(str(os.getpid()))
+    with (root / "child.pids").open("a") as pids:
+        pids.write(str(os.getpid()) + "\\n")
     if config.get("descendant"):
         child = subprocess.Popen([sys.executable, "-c", "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); signal.pause()"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         assert child.stdout.readline().strip() == "ready"
         (root / "descendant.pid").write_text(str(child.pid))
     print("fixture-batch-ready", flush=True)
     signal.pause()
+time.sleep(config.get("sleep", 0))
 for repetition in range(config.get("actual_count", count)):
     for name in selected:
         if name in config.get("omit", []):
@@ -104,6 +110,8 @@ if args[:2] == ["tool", "test2json"]:
     emit("start")
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     (root / "converter.pid").write_text(str(os.getpid()))
+    with (root / "converter.pids").open("a") as pids:
+        pids.write(str(os.getpid()) + "\\n")
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     current = ""
@@ -335,6 +343,136 @@ class GoBatchesTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exceeds the 2 discovered tests", result.stderr)
         self.assertEqual(self.read_log("batches.jsonl"), [])
+
+    def write_heavy_list(self, text):
+        path = self.root / "heavy.txt"
+        path.write_text(text)
+        return str(path)
+
+    def test_heavy_list_tiers_partition_the_selection(self):
+        names = [f"TestPGCase{number:03d}" for number in range(1, 9)]
+        self.configure(names=names + ["TestOutsideSelection"])
+        heavy = self.write_heavy_list("# reviewed list\n./package TestPGCase002\n./package/ TestPGCase005  # slow\n"
+                                      "./other TestPGCase001\n./package TestOutsideSelection\n")
+        seen = {}
+        for tier, expected in (("fast", [n for n in names if n not in ("TestPGCase002", "TestPGCase005")]),
+                               ("heavy", ["TestPGCase002", "TestPGCase005"]), ("all", names)):
+            with self.subTest(tier=tier):
+                (self.root / "batches.jsonl").unlink(missing_ok=True)
+                result = self.run_fixture("--heavy-list", heavy, "--tier", tier, "--batch-size", "1")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("tier " + tier + ": discovered=8 fast=6 heavy=2", result.stdout)
+                ran = [name for run in self.read_log("batches.jsonl") for name in run["tests"]]
+                self.assertEqual(ran, expected)
+                self.assertIn(f"selected={len(expected)} expected={3 * len(expected)}", result.stdout)
+                seen[tier] = ran
+        self.assertEqual(sorted(seen["fast"] + seen["heavy"]), sorted(seen["all"]))
+
+    def test_heavy_list_rejects_stale_malformed_and_duplicate_entries(self):
+        self.configure(names=["TestPGOne", "TestPGTwo"])
+        for text, message in (
+            ("./package TestPGGone\n", "--heavy-list names not in package: TestPGGone"),
+            ("./package\n", "malformed --heavy-list line 1"),
+            ("./package TestPGOne extra\n", "malformed --heavy-list line 1"),
+            ("./package TestPG.*\n", "malformed --heavy-list line 1"),
+            ("./package TestPGOne\n./package/ TestPGOne\n", "duplicate --heavy-list entries"),
+        ):
+            with self.subTest(text=text):
+                result = self.run_fixture("--heavy-list", self.write_heavy_list(text), "--tier", "fast")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(self.read_log("batches.jsonl"), [])
+        result = self.run_fixture("--tier", "fast")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--tier requires --heavy-list", result.stderr)
+
+    def test_empty_heavy_tier_runs_nothing_and_reports_counts(self):
+        self.configure(names=["TestPGOne", "TestPGTwo"])
+        result = self.run_fixture("--heavy-list", self.write_heavy_list("./other TestPGOne\n"), "--tier", "heavy")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("tier heavy: discovered=2 fast=2 heavy=0", result.stdout)
+        self.assertIn("selected=0 expected=0 run=0", result.stdout)
+        self.assertEqual(self.read_log("batches.jsonl"), [])
+
+    def test_workers_run_every_test_once_with_their_own_environment(self):
+        config = self.configure(names=[f"TestPGCase{number:03d}" for number in range(1, 9)], sleep=0.3)
+        result = self.run_fixture("--batch-size", "1", "--workers", "3",
+                                  "--worker-env", "CXT_TEST_DSN=postgres://ci/db_w{worker}?sslmode=disable")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = self.read_log("batches.jsonl")
+        self.assertEqual(Counter(name for run in runs for name in run["tests"]), Counter(config["names"]))
+        self.assertTrue(all(run["count"] == 3 for run in runs))
+        dsns = {run["dsn"] for run in runs}
+        self.assertLessEqual(dsns, {f"postgres://ci/db_w{worker}?sslmode=disable" for worker in (1, 2, 3)})
+        self.assertGreater(len(dsns), 1)
+        starts = sorted(run["started"] for run in runs)
+        self.assertLess(starts[-1] - starts[0], 0.3 * len(runs) - 0.3)
+        self.assertIn("8 tests, 8 batches on 3 worker(s)", result.stdout)
+        self.assertIn("selected=8 expected=24 run=24 pass=24 fail=0 skip=0 missing=0 cancelled=0 unfinished=0", result.stdout)
+        lines = result.stdout.splitlines()
+        for name in config["names"]:
+            done = next(index for index, line in enumerate(lines) if line.endswith(": " + name + " (done)"))
+            following = next((index for index in range(done + 1, len(lines)) if lines[index].startswith("[go-batches] worker")), len(lines))
+            self.assertEqual(sum(line == "=== RUN   " + name for line in lines[done:following]), 3)
+            self.assertFalse(any(line.startswith("=== RUN") and not line.endswith(name) for line in lines[done:following]))
+
+    def test_workers_stop_scheduling_after_a_failure(self):
+        names = [f"TestPGCase{number:03d}" for number in range(1, 13)]
+        self.configure(names=names, sleep=0.3, outcomes={"TestPGCase001": "fail"})
+        result = self.run_fixture("--batch-size", "1", "--workers", "2", "--worker-env", "CXT_TEST_DSN=db_w{worker}")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("reported failed tests", result.stderr)
+        self.assertIn("TestPGCase001 (failed)", result.stdout)
+        self.assertNotIn("[go-batches] passed", result.stdout)
+        self.assertLess(len(self.read_log("batches.jsonl")), len(names))
+
+    def test_worker_env_requires_placeholder_and_unique_names(self):
+        self.configure()
+        for arguments in (["--worker-env", "CXT_TEST_DSN=fixed"], ["--worker-env", "1BAD={worker}"],
+                          ["--worker-env", "A={worker}", "--worker-env", "A={worker}x"]):
+            with self.subTest(arguments=arguments):
+                result = self.run_fixture("--workers", "2", *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--worker-env", result.stderr)
+                self.assertEqual(self.read_log("batches.jsonl"), [])
+
+    def test_cancel_reaps_every_parallel_batch(self):
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=signum):
+                for name in ("batches.jsonl", "child.pids", "converter.pids"):
+                    (self.root / name).unlink(missing_ok=True)
+                self.configure(names=["TestPGOne", "TestPGTwo", "TestPGThree"], cancel=True)
+                process = subprocess.Popen(self.command() + ["--batch-size", "1", "--workers", "2", "--worker-env", "CXT_TEST_DSN=db_w{worker}"],
+                                           cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                children, converters = [], []
+                try:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        pids = self.root / "child.pids"
+                        if pids.exists() and len(pids.read_text().split()) == 2:
+                            break
+                        time.sleep(0.05)
+                    children = [int(pid) for pid in (self.root / "child.pids").read_text().split()]
+                    converters = [int(pid) for pid in (self.root / "converter.pids").read_text().split()]
+                    self.assertEqual(len(children), 2)
+                    process.send_signal(signum)
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 128 + signum, output.decode())
+                    for pid in children + converters:
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(pid, 0)
+                    self.assertIn(b"cancelled=2", output)
+                    self.assertNotIn(b"[go-batches] passed", output)
+                    self.assertEqual(len(self.read_log("batches.jsonl")), 2)
+                finally:
+                    for pid in converters:
+                        try:
+                            os.killpg(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
 
     def test_first_names_reject_duplicates_unknown_patterns_and_unselected_tests(self):
         cases = (
