@@ -61,12 +61,18 @@ func (batch *legacyNormalizationCheckpointBatch) flush(ctx context.Context) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if batch.transaction == nil || batch.state != batch.owner.state || batch.state.stage.plan != "" ||
-		len(batch.objects) > domain.DocLegacyByteBackfillBatchBlocks || batch.bytes < 0 || batch.bytes > domain.LegacyCanonicalEncodingBytes {
+	if batch.closed || batch.transaction == nil && !batch.deferred || batch.state != batch.owner.state || batch.state.stage.plan != "" ||
+		len(batch.objects) > legacyNormalizationCheckpointBatchObjects || batch.bytes < 0 || batch.bytes > domain.LegacyCanonicalEncodingBytes {
 		return domain.ErrConflict
 	}
 	if len(batch.objects) == 0 {
 		return nil
+	}
+	if err := batch.open(ctx); err != nil {
+		return err
+	}
+	if err := batch.protocols(ctx); err != nil {
+		return err
 	}
 	missing, err := batch.verify(ctx, batch.objects, true)
 	if err != nil {

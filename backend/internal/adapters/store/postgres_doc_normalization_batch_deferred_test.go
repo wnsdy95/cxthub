@@ -135,13 +135,16 @@ func TestNormalizationCheckpointPGDeferredBatchScopesAndExpectedState(test *test
 			} else if change == "local change" {
 				work.state.sequence++
 			} else if change == "promotion failure" {
+				// Puts buffer without SQL; the stale state fails when finish promotes.
+				queries := trace.snapshot().queries
 				object := legacyCheckpointPGObject("stale-promotion")
-				if err := work.stageParserObjects(bound, []legacyByteCheckpointObject{object}); !errors.Is(err, domain.ErrConflict) || !batch.closed || batch.transaction != nil {
-					test.Fatal("failed promotion left reusable authority", err)
+				if err := work.stageParserObjects(bound, []legacyByteCheckpointObject{object}); err != nil || batch.closed || batch.transaction != nil ||
+					len(batch.objects) != 1 || trace.snapshot().queries != queries {
+					test.Fatal("deferred put promoted before it had to write", err)
 				}
 			}
 			if err := batch.finish(bound, nil); !errors.Is(err, domain.ErrConflict) || !batch.closed || batch.transaction != nil {
-				test.Fatal("empty batch accepted changed expected state", change, err)
+				test.Fatal("batch accepted changed expected state", change, err)
 			}
 		})
 	}
@@ -170,13 +173,18 @@ func TestNormalizationCheckpointPGDeferredBatchIOStillProvesCurrentBytes(test *t
 				}
 				legacyNormalizationParserReusePGDamage(test, storage, ctx, job, state, object.hash, corrupt)
 				public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
+				queries := trace.snapshot().queries
 				if operation == "read" {
 					_, err = work.readParserObject(bound, object.hash, len(object.data))
+					if batch.transaction == nil {
+						test.Fatal("read did not acquire the original fenced transaction", err)
+					}
 				} else {
+					// A put buffers; finish promotes and proves the stored bytes.
 					err = work.stageParserObjects(bound, []legacyByteCheckpointObject{object})
-				}
-				if batch.transaction == nil {
-					test.Fatal("first I/O did not acquire the original fenced transaction", err)
+					if err != nil || batch.transaction != nil || trace.snapshot().queries != queries {
+						test.Fatal("deferred put promoted before it had to write", err)
+					}
 				}
 				if err = batch.finish(bound, err); !errors.Is(err, domain.ErrPreparedDocRangeObject) || !batch.closed || batch.transaction != nil {
 					test.Fatal("deferred I/O accepted corrupt bytes or retained authority", err)
@@ -223,6 +231,9 @@ func TestNormalizationCheckpointPGDeferredBatchPostQueryCancelClosesCapture(test
 	normalizationCheckpointPGCut(test, work, ctx, job, func(checkpoint *legacyNormalizationCheckpointWork) bool {
 		return checkpoint.capture != nil && checkpoint.position == 14 && checkpoint.next.Parser != nil && checkpoint.next.State.Count > 0 && checkpoint.next.Parser.Input.Tree.DataBytes == len(stored)
 	})
+	// A pure batch needs a step whose quanta stage no object; eight-quantum steps
+	// reach one in this fixture, while default steps stage objects every time.
+	work.checkpoint.parserStepQuanta = domain.DocLegacyByteBackfillBatchBlocks
 	selected, cancel := context.WithCancel(ctx)
 	defer cancel()
 	probed := false

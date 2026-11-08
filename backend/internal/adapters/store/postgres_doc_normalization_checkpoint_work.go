@@ -89,6 +89,9 @@ type legacyNormalizationCheckpointWork struct {
 	parserPinCounts    [8]uint8
 	parserPosition     int
 	nextParserPosition int
+	// parserStepQuanta overrides legacyNormalizationParserStepQuanta when
+	// positive. Only tests set it, to reach steps that stage no objects.
+	parserStepQuanta int
 }
 
 func (work *legacyNormalizationCheckpointWork) busy() bool {
