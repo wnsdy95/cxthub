@@ -9,7 +9,7 @@
 #               Runs on main pushes, nightly, and pull requests labelled ci:full.
 #   WORKERS=N   run N batches at once; each worker gets its own freshly created database
 #               derived from CXT_TEST_DSN (<database>_w1 .. <database>_wN).
-#   SHARD=I/N   optional; split the ordered selection across jobs (used by heavy app).
+#   SHARD=I/N   optional; split the ordered selection across jobs (fast store and app, heavy app).
 #   COUNT=N     repetitions for the race-checked heavy lanes (default 1).
 #
 # --first-test order matters: the slowest tests are listed first so they start first, and the

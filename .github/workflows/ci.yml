@@ -148,11 +148,16 @@ jobs:
         run: go build -tags postgres ./... && go vet -tags postgres ./...
 
   # Required PR tier: every PostgreSQL contract that is not listed in
-  # scripts/ci-heavy-tests.txt runs once, without the race detector, on four workers that
-  # each own a freshly created database. The listed heavy tests and the race-detector
-  # repetitions run in the "CI heavy" workflow (main pushes, nightly, ci:full PRs).
+  # scripts/ci-heavy-tests.txt runs once, without the race detector. Store and app are
+  # sharded across runners, and each shard runs two workers that each own a freshly
+  # created database. On a 4-vCPU runner shared with PostgreSQL, four workers only gave a
+  # ~1.3x speedup, because the tests are CPU-bound, so extra runners scale better.
+  # Transport tests run serially: their HTTP requests wait at most 1 s for an in-process
+  # admission permit, and CPU contention from parallel test processes turned that into 503
+  # responses. The listed heavy tests and the race-detector repetitions run in "CI heavy"
+  # (main pushes, nightly, ci:full PRs).
   backend-contracts:
-    name: backend-contracts (${{ matrix.lane }})
+    name: backend-contracts (${{ matrix.lane }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: changes
@@ -160,7 +165,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [store, app, transports]
+        include:
+          - { lane: store, shard: 1/4, workers: "2" }
+          - { lane: store, shard: 2/4, workers: "2" }
+          - { lane: store, shard: 3/4, workers: "2" }
+          - { lane: store, shard: 4/4, workers: "2" }
+          - { lane: app, shard: 1/2, workers: "2" }
+          - { lane: app, shard: 2/2, workers: "2" }
+          - { lane: transports, workers: "1" }
     services:
       postgres:
         image: postgres:16
@@ -176,7 +188,7 @@ jobs:
       CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
       CXT_ROOT_WRITER_COST: "1"
       TIER: fast
-      WORKERS: "4"
+      WORKERS: ${{ matrix.workers }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -187,6 +199,7 @@ jobs:
         working-directory: backend
         env:
           LANE: ${{ matrix.lane }}
+          SHARD: ${{ matrix.shard }}
         run: bash ../scripts/ci-backend-contracts.sh "$LANE"
 
   backend:
