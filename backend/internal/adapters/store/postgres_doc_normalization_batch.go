@@ -12,6 +12,13 @@ import (
 
 type legacyNormalizationCheckpointBatchKey struct{}
 
+// legacyNormalizationCheckpointBatchObjects bounds the objects one batch flush
+// sends. Checkpoint objects are usually a few hundred bytes, unlike the 64 KiB
+// blocks that domain.DocLegacyByteBackfillBatchBlocks was sized for, so the
+// byte bound below (domain.LegacyCanonicalEncodingBytes) still caps memory and
+// statement size while a flush carries more than eight objects.
+const legacyNormalizationCheckpointBatchObjects = 64
+
 type legacyNormalizationCheckpointBatch struct {
 	owner       *legacyNormalizationCheckpointWork
 	state       legacyByteCheckpoint
@@ -52,7 +59,9 @@ func (batch *legacyNormalizationCheckpointBatch) finish(ctx context.Context, fai
 		if !batch.deferred {
 			return domain.ErrConflict
 		}
-		return batch.owner.confirmDeferredBatch(ctx, batch.state)
+		if len(batch.objects) == 0 {
+			return batch.owner.confirmDeferredBatch(ctx, batch.state)
+		}
 	}
 	if err := batch.flush(ctx); err != nil {
 		return err
@@ -66,34 +75,64 @@ func (batch *legacyNormalizationCheckpointBatch) finish(ctx context.Context, fai
 	return ctx.Err()
 }
 
-func (work *legacyNormalizationCheckpointWork) currentBatch(ctx context.Context) (*legacyNormalizationCheckpointBatch, error) {
+// pendingBatch returns the batch bound to ctx without opening its transaction.
+func (work *legacyNormalizationCheckpointWork) pendingBatch(ctx context.Context) (*legacyNormalizationCheckpointBatch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	batch, _ := ctx.Value(legacyNormalizationCheckpointBatchKey{}).(*legacyNormalizationCheckpointBatch)
-	if batch != nil {
-		if batch.owner != work || batch.closed || batch.state != work.state || batch.transaction == nil && !batch.deferred {
-			return nil, domain.ErrConflict
-		}
-		if batch.transaction == nil {
-			transaction, state, err := work.store.openLegacyByteCheckpoint(ctx, work.job, batch.state.stage, &batch.state, false)
-			if err != nil {
-				batch.closed = true
-				return nil, err
-			}
-			if state != batch.state || state.stage.plan != "" {
-				rollbackPG(transaction)
-				batch.closed = true
-				return nil, domain.ErrConflict
-			}
-			batch.transaction = transaction
-		}
+	if batch != nil && (batch.owner != work || batch.closed || batch.state != work.state || batch.transaction == nil && !batch.deferred) {
+		return nil, domain.ErrConflict
 	}
 	return batch, nil
 }
 
+// currentBatch returns the batch bound to ctx with its fenced transaction open.
+func (work *legacyNormalizationCheckpointWork) currentBatch(ctx context.Context) (*legacyNormalizationCheckpointBatch, error) {
+	batch, err := work.pendingBatch(ctx)
+	if err != nil || batch == nil {
+		return batch, err
+	}
+	return batch, batch.open(ctx)
+}
+
+// open promotes a deferred batch to the fenced checkpoint transaction, which
+// locks the job row. Deferred batches buffer objects first and open only when
+// they must flush or read, so the lock is not held while quanta compute and the
+// worker's own lease renewal can take it between steps.
+func (batch *legacyNormalizationCheckpointBatch) open(ctx context.Context) error {
+	if batch.transaction != nil {
+		return nil
+	}
+	work := batch.owner
+	transaction, state, err := work.store.openLegacyByteCheckpoint(ctx, work.job, batch.state.stage, &batch.state, false)
+	if err != nil {
+		batch.closed = true
+		return err
+	}
+	if state != batch.state || state.stage.plan != "" {
+		rollbackPG(transaction)
+		batch.closed = true
+		return domain.ErrConflict
+	}
+	batch.transaction = transaction
+	return nil
+}
+
+// protocols checks checkpoint object protocols once per transaction.
+func (batch *legacyNormalizationCheckpointBatch) protocols(ctx context.Context) error {
+	if batch.protocol || batch.transaction == nil {
+		return nil
+	}
+	if err := legacyByteCheckpointProtocols(ctx, batch.transaction); err != nil {
+		return err
+	}
+	batch.protocol = true
+	return nil
+}
+
 func (work *legacyNormalizationCheckpointWork) stageParserObjects(ctx context.Context, objects []legacyByteCheckpointObject) error {
-	batch, err := work.currentBatch(ctx)
+	batch, err := work.pendingBatch(ctx)
 	if err != nil {
 		return err
 	}
@@ -104,11 +143,8 @@ func (work *legacyNormalizationCheckpointWork) stageParserObjects(ctx context.Co
 	if err != nil {
 		return err
 	}
-	if !batch.protocol {
-		if err := legacyByteCheckpointProtocols(ctx, batch.transaction); err != nil {
-			return err
-		}
-		batch.protocol = true
+	if err := batch.protocols(ctx); err != nil {
+		return err
 	}
 	for _, object := range owned {
 		duplicate := false
@@ -128,7 +164,7 @@ func (work *legacyNormalizationCheckpointWork) stageParserObjects(ctx context.Co
 		}
 		batch.objects = append(batch.objects, object)
 		batch.bytes += len(object.data)
-		if len(batch.objects) == domain.DocLegacyByteBackfillBatchBlocks || batch.bytes == domain.LegacyCanonicalEncodingBytes {
+		if len(batch.objects) == legacyNormalizationCheckpointBatchObjects || batch.bytes == domain.LegacyCanonicalEncodingBytes {
 			if err := batch.flush(ctx); err != nil {
 				return err
 			}

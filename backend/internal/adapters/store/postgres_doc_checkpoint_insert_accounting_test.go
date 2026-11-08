@@ -66,13 +66,13 @@ func TestLegacyCheckpointPGInsertAccountingBatchesExactUsageAndRollback(test *te
 			}
 		}
 		after := trace.snapshot()
-		if after.objectInserts-before.objectInserts != count/domain.DocLegacyByteBackfillBatchBlocks ||
+		if after.objectInserts-before.objectInserts != count/legacyNormalizationCheckpointBatchObjects ||
 			after.hashReads-before.hashReads != 2*count || after.bodyArguments-before.bodyArguments != count ||
-			int64(after.bodyBytes-before.bodyBytes) != total || after.maxBodyArguments != domain.DocLegacyByteBackfillBatchBlocks ||
+			int64(after.bodyBytes-before.bodyBytes) != total || after.maxBodyArguments != legacyNormalizationCheckpointBatchObjects ||
 			after.maxBodyBytes > domain.LegacyCanonicalEncodingBytes {
 			test.Fatal("bounded INSERT lost per-object byte proofs, payload accounting or statement limits", before, after)
 		}
-		checkpointInsertPGAssert(test, bound, batch.transaction, job.DocHash, count, total, count/domain.DocLegacyByteBackfillBatchBlocks)
+		checkpointInsertPGAssert(test, bound, batch.transaction, job.DocHash, count, total, count/legacyNormalizationCheckpointBatchObjects)
 		for offset := 0; offset < count; offset += domain.DocLegacyByteBackfillBatchBlocks {
 			if err := work.stageParserObjects(bound, objects[offset:offset+domain.DocLegacyByteBackfillBatchBlocks]); err != nil {
 				test.Fatal(err)
@@ -83,7 +83,7 @@ func TestLegacyCheckpointPGInsertAccountingBatchesExactUsageAndRollback(test *te
 			reused.bodyBytes != after.bodyBytes || reused.hashReads-after.hashReads != count {
 			test.Fatal("duplicate batch resent payload, updated usage or skipped current byte proofs", after, reused)
 		}
-		checkpointInsertPGAssert(test, bound, batch.transaction, job.DocHash, count, total, count/domain.DocLegacyByteBackfillBatchBlocks)
+		checkpointInsertPGAssert(test, bound, batch.transaction, job.DocHash, count, total, count/legacyNormalizationCheckpointBatchObjects)
 		var failure error
 		if outcome == "rollback" {
 			failure = domain.ErrIntegrity
@@ -97,7 +97,7 @@ func TestLegacyCheckpointPGInsertAccountingBatchesExactUsageAndRollback(test *te
 			if err != nil {
 				test.Fatal(err)
 			}
-			checkpointInsertPGAssert(test, ctx, storage.pool, job.DocHash, count, total, count/domain.DocLegacyByteBackfillBatchBlocks)
+			checkpointInsertPGAssert(test, ctx, storage.pool, job.DocHash, count, total, count/legacyNormalizationCheckpointBatchObjects)
 		} else {
 			want := domain.ErrIntegrity
 			if outcome == "final-fence" {
