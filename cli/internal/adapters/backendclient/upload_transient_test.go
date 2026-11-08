@@ -115,8 +115,10 @@ func TestPatientRetryBoundedByStallBudget(t *testing.T) {
 			calls++
 			return proxyResponse(request, http.StatusGatewayTimeout, "")
 		})
+		// The stall budget covers consecutive retries of one batch; the
+		// jittered pre-batch yield (at most 2*uploadBatchYield) precedes it.
 		started := time.Now()
-		if err := upload(patient(20 * time.Second)); err == nil || time.Since(started) > 20*time.Second || calls < 2 {
+		if err := upload(patient(20 * time.Second)); err == nil || time.Since(started) > 20*time.Second+2*uploadBatchYield || calls < 2 {
 			t.Fatalf("stall budget not honored: err=%v elapsed=%s calls=%d", err, time.Since(started), calls)
 		}
 	})

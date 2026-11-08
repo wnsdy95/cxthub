@@ -149,8 +149,18 @@ func newExecutionProcessFixtureWithMigrations(test *testing.T, ctx context.Conte
 	test.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		// A server backend leaves pg_stat_activity asynchronously after its client
+		// closes, so allow closed sessions a bounded moment to exit; any session that
+		// is still present after that was genuinely retained.
 		var sessions int
-		if err := admin.QueryRow(cleanup, `SELECT count(*) FROM pg_stat_activity WHERE datname=$1`, database).Scan(&sessions); err != nil || sessions != 0 {
+		var err error
+		for drained := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			err = admin.QueryRow(cleanup, `SELECT count(*) FROM pg_stat_activity WHERE datname=$1`, database).Scan(&sessions)
+			if err != nil || sessions == 0 || time.Now().After(drained) {
+				break
+			}
+		}
+		if err != nil || sessions != 0 {
 			test.Error("owned fixture retained sessions after child reaping and pool close", sessions)
 		}
 		if _, err := admin.Exec(cleanup, "DROP DATABASE "+quoted+" WITH (FORCE)"); err != nil {
