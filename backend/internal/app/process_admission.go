@@ -11,6 +11,10 @@ import (
 type ProcessAdmissionLimits struct {
 	Active int
 	Queue  int
+	// BulkWait, when longer than the ordinary admission wait, lets queued
+	// bulk requests outlast one in-flight bulk request (see
+	// ResourceBulkWaitLimit). Zero keeps the ordinary wait.
+	BulkWait time.Duration
 }
 
 type processAdmissionConfiguration struct {
@@ -19,7 +23,7 @@ type processAdmissionConfiguration struct {
 }
 
 func ConfigureProcessAdmission(governor outbound.ProcessAdmission, limits ProcessAdmissionLimits) (func(), error) {
-	if !rootAdapterPresent(governor) || governor.Context() == nil || limits.Active < 0 || limits.Active > 2 || limits.Queue < 0 {
+	if !rootAdapterPresent(governor) || governor.Context() == nil || limits.Active < 0 || limits.Active > 2 || limits.Queue < 0 || limits.BulkWait < 0 || limits.BulkWait > ResourceBulkWaitLimit {
 		return nil, domain.ErrValidation
 	}
 	gate := processResources

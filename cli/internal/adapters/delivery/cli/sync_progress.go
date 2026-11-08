@@ -19,6 +19,7 @@ func syncProgressPrinter(w io.Writer) func(inbound.SyncProgress) {
 			"negotiate":                     "checking which objects the server needs",
 			"verify-memory":                 "verifying memory dependencies",
 			"upload-and-verify-documents":   "uploading and verifying documents",
+			"upload-chunks":                 "uploading document chunks; accepted chunks resume on the next run",
 			"download-and-verify-documents": "downloading and verifying documents",
 			"verify-history-and-memory":     "verifying history and memory",
 			"store-verified-objects":        "storing verified objects",
