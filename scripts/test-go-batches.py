@@ -11,6 +11,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 
 class Cancelled(Exception):
@@ -25,12 +27,18 @@ def cancel(signum, frame):
     raise Cancelled(signum)
 
 
-def run_command(command, cwd, capture=False, on_line=None):
-    print("[go-batches] " + shlex.join(command), flush=True)
+def echo(text):
+    print(text, flush=True)
+
+
+def run_command(command, cwd, capture=False, on_line=None, env=None, log=echo, started=None):
+    log("[go-batches] " + shlex.join(command))
     process = subprocess.Popen(
-        command, cwd=cwd, text=True, start_new_session=True,
+        command, cwd=cwd, text=True, start_new_session=True, env=env,
         stdout=subprocess.PIPE if capture or on_line is not None else None,
     )
+    if started is not None:
+        started(process)
     try:
         if on_line is not None:
             for line in process.stdout:
@@ -87,6 +95,8 @@ class BatchResults:
         self.package_outcome = None
         self.failed = False
         self.cancelled = 0
+        self.output = None
+        self.finished = False
 
     def feed(self, line):
         if not line.endswith("\n"):
@@ -119,7 +129,10 @@ class BatchResults:
         if action == "output":
             if not isinstance(event.get("Output"), str):
                 raise ValueError("malformed test2json output event")
-            print(event["Output"], end="", flush=True)
+            if self.output is None:
+                print(event["Output"], end="", flush=True)
+            else:
+                self.output.append(event["Output"])
             return
         if not name:
             if action not in ("pass", "fail", "skip"):
@@ -160,6 +173,7 @@ class BatchResults:
             raise ValueError(f"unexpected test2json {action} for {name}: {state or 'not running'}")
 
     def verify(self):
+        self.finished = True
         if self.active:
             raise ValueError("unfinished test2json tests: " + ", ".join(sorted(self.active)))
         missing = sorted(name for name in self.names if self.completed[name] != self.count)
@@ -190,6 +204,73 @@ def positive_int(value):
     if number <= 0:
         raise argparse.ArgumentTypeError("must be positive")
     return number
+
+
+def shard_spec(value):
+    match = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", value)
+    if match is None or int(match[1]) > int(match[2]):
+        raise argparse.ArgumentTypeError("must be INDEX/TOTAL with 1 <= INDEX <= TOTAL")
+    return int(match[1]), int(match[2])
+
+
+def shard_tests(tests, index, total):
+    # Deal the ordered selection in snake order (1..N, N..1, ...). Every shard
+    # derives the same discovery and order, so the shards are disjoint and their
+    # union is the complete selection. Listing the slowest tests first with
+    # --first-test spreads them across shards instead of stacking them.
+    if total > len(tests):
+        raise ValueError(f"--shard total {total} exceeds the {len(tests)} discovered tests")
+    selected = []
+    for position, name in enumerate(tests):
+        lap, offset = divmod(position, total)
+        if (offset if lap % 2 == 0 else total - 1 - offset) == index - 1:
+            selected.append(name)
+    return selected
+
+
+def read_heavy_list(path, package):
+    # One "<package> <TestName>" pair per line; "#" starts a comment. Only the
+    # entries whose package equals this invocation's package apply.
+    pairs = []
+    for number, raw in enumerate(Path(path).read_text().splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        fields = line.split()
+        if len(fields) != 2 or re.fullmatch(r"Test[A-Za-z0-9_]+", fields[1]) is None:
+            raise ValueError(f"malformed --heavy-list line {number}: {raw.strip()}")
+        pairs.append((fields[0].rstrip("/"), fields[1]))
+    if len(set(pairs)) != len(pairs):
+        raise ValueError("duplicate --heavy-list entries")
+    return {name for owner, name in pairs if owner == package.rstrip("/")}
+
+
+def worker_environment(specs):
+    values = {}
+    for spec in specs:
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", spec, re.S)
+        if match is None or "{worker}" not in match[2]:
+            raise ValueError("--worker-env must be NAME=VALUE with a {worker} placeholder in VALUE")
+        if match[1] in values:
+            raise ValueError("duplicate --worker-env name: " + match[1])
+        values[match[1]] = match[2]
+    return values
+
+
+def stop_processes(processes):
+    for process in processes:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(process.poll() is None for process in processes):
+        time.sleep(0.05)
+    for process in processes:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def run_batches(args):
@@ -234,25 +315,55 @@ def run_batches(args):
         if no_timeout and args.batch_size != 1:
             raise ValueError("--no-batch-timeout requires --batch-size 1 to isolate the selected tests")
         tests = args.first_test + [name for name in tests if name not in first_tests]
+        if args.heavy_list is not None:
+            listed = read_heavy_list(args.heavy_list, args.package)
+            package_tests = set(discover_tests(run_command([binary, "-test.list=^Test"], package_dir, capture=True)))
+            stale = sorted(listed - package_tests)
+            if stale:
+                raise ValueError("--heavy-list names not in package: " + ", ".join(stale))
+            heavy = [name for name in tests if name in listed]
+            fast = [name for name in tests if name not in listed]
+            print(f"[go-batches] tier {args.tier}: discovered={len(tests)} fast={len(fast)} heavy={len(heavy)}", flush=True)
+            tests = {"all": tests, "fast": fast, "heavy": heavy}[args.tier]
+        elif args.tier != "all":
+            raise ValueError("--tier requires --heavy-list")
+        if args.shard is not None:
+            discovered = len(tests)
+            tests = shard_tests(tests, *args.shard)
+            print(f"[go-batches] shard {args.shard[0]}/{args.shard[1]}: {len(tests)} of {discovered} discovered tests", flush=True)
         batches = [tests[start:start + args.batch_size] for start in range(0, len(tests), args.batch_size)]
-        print(f"[go-batches] {len(tests)} tests, {len(batches)} serial batches, {args.count} repetitions; cwd={package_dir}", flush=True)
+        environment = worker_environment(args.worker_env)
+        print(f"[go-batches] {len(tests)} tests, {len(batches)} batches on {args.workers} worker(s), {args.count} repetitions; cwd={package_dir}", flush=True)
+
+        def command_for(batch):
+            pattern = "^(" + "|".join(re.escape(name) for name in batch) + ")$"
+            timeout = "0" if batch[0] in no_timeout else "120s"
+            return [
+                "go", "tool", "test2json", "-t", "-p", args.package,
+                binary, "-test.run=" + pattern, f"-test.count={args.count}",
+                "-test.timeout=" + timeout, "-test.parallel=1", "-test.v=test2json",
+            ]
+
+        def env_for(worker):
+            if not environment:
+                return None
+            return dict(os.environ, **{name: value.replace("{worker}", str(worker)) for name, value in environment.items()})
+
         results = []
         try:
-            for number, batch in enumerate(batches, 1):
-                print(f"[go-batches] batch {number}/{len(batches)}: " + ", ".join(batch), flush=True)
-                pattern = "^(" + "|".join(re.escape(name) for name in batch) + ")$"
-                result = BatchResults(batch, args.count, args.package, allow_skip.intersection(batch))
-                results.append(result)
-                timeout = "0" if batch[0] in no_timeout else "120s"
-                run_command([
-                    "go", "tool", "test2json", "-t", "-p", args.package,
-                    binary, "-test.run=" + pattern, f"-test.count={args.count}",
-                    "-test.timeout=" + timeout, "-test.parallel=1", "-test.v=test2json",
-                ], package_dir, on_line=result.feed)
-                result.verify()
+            if args.workers == 1:
+                for number, batch in enumerate(batches, 1):
+                    print(f"[go-batches] batch {number}/{len(batches)}: " + ", ".join(batch), flush=True)
+                    result = BatchResults(batch, args.count, args.package, allow_skip.intersection(batch))
+                    results.append(result)
+                    run_command(command_for(batch), package_dir, on_line=result.feed, env=env_for(1))
+                    result.verify()
+            else:
+                run_parallel(batches, args, allow_skip, results, command_for, env_for, package_dir)
         except Cancelled:
-            if results:
-                results[-1].cancelled = sum("/" not in name for name in results[-1].active)
+            for result in results:
+                if not result.finished:
+                    result.cancelled = sum("/" not in name for name in result.active)
             raise
         finally:
             outcomes = Counter()
@@ -272,6 +383,75 @@ def run_batches(args):
         print(f"[go-batches] passed {outcomes['pass']} top-level test runs; allowed skips={allowed_skips}", flush=True)
 
 
+def run_parallel(batches, args, allow_skip, results, command_for, env_for, package_dir):
+    # Each worker owns one environment (for example its own database) and runs
+    # one batch at a time; the next batch in priority order goes to whichever
+    # worker is free. Batch output is printed whole when the batch ends. After a
+    # failure no new batch starts, and the first failure is raised.
+    lock = threading.Lock()
+    pending = list(enumerate(batches, 1))
+    running = {}
+    errors = []
+    state = {"stop": False, "cancel": False}
+
+    def work(worker):
+        env = env_for(worker)
+        while True:
+            with lock:
+                if state["stop"] or not pending:
+                    return
+                number, batch = pending.pop(0)
+                result = BatchResults(batch, args.count, args.package, allow_skip.intersection(batch))
+                result.output = []
+                results.append(result)
+                header = f"[go-batches] worker {worker} batch {number}/{len(batches)}: " + ", ".join(batch)
+                echo(header + " (started)")
+
+            def started(process):
+                # A batch that starts while cancellation is in progress is stopped here,
+                # because the canceller may already have collected the running set.
+                with lock:
+                    running[worker] = process
+                    stopping = state["cancel"]
+                if stopping:
+                    stop_processes([process])
+
+            error = None
+            try:
+                run_command(command_for(batch), package_dir, on_line=result.feed, env=env,
+                            log=lambda text: result.output.append(text + "\n"), started=started)
+                result.verify()
+            except Exception as failure:
+                error = failure
+            finally:
+                with lock:
+                    running.pop(worker, None)
+            with lock:
+                print(header + (" (failed)" if error else " (done)") + "\n" + "".join(result.output), end="", flush=True)
+                if error is not None and not state["stop"]:
+                    errors.append(error)
+                if error is not None:
+                    state["stop"] = True
+
+    threads = [threading.Thread(target=work, args=(worker,), daemon=True) for worker in range(1, args.workers + 1)]
+    for thread in threads:
+        thread.start()
+    try:
+        for thread in threads:
+            while thread.is_alive():
+                thread.join(0.1)
+    except Cancelled:
+        with lock:
+            state["stop"] = state["cancel"] = True
+            processes = list(running.values())
+        stop_processes(processes)
+        for thread in threads:
+            thread.join(10)
+        raise
+    if errors:
+        raise errors[0]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Compile one Go package once and run serial batches with a default 120s timeout.")
     parser.add_argument("package")
@@ -284,6 +464,11 @@ def main(argv=None):
     parser.add_argument("--race", action="store_true")
     parser.add_argument("--count", type=positive_int, default=1)
     parser.add_argument("--batch-size", type=int, choices=range(1, 6), default=5)
+    parser.add_argument("--shard", type=shard_spec, metavar="INDEX/TOTAL", help="run only this shard of the ordered selection; name validation still covers the whole selection")
+    parser.add_argument("--heavy-list", metavar="FILE", help="checked-in '<package> <TestName>' list; names for this package must exist in it")
+    parser.add_argument("--tier", choices=("all", "fast", "heavy"), default="all", help="with --heavy-list, run all discovered tests, only the unlisted (fast) ones, or only the listed (heavy) ones")
+    parser.add_argument("--workers", type=positive_int, default=1, help="run batches concurrently on this many workers, each with its own --worker-env values")
+    parser.add_argument("--worker-env", action="append", default=[], metavar="NAME=VALUE", help="per-worker environment; {worker} in VALUE becomes the worker number (1..N)")
     args = parser.parse_args(argv)
     handlers = {signum: signal.signal(signum, cancel) for signum in (signal.SIGINT, signal.SIGTERM)}
     try:

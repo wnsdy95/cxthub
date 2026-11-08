@@ -1,0 +1,88 @@
+# Heavy PostgreSQL contract tests: excluded from the required PR tier and run by the
+# "CI heavy" workflow (every main push, nightly, and pull requests labelled ci:full).
+#
+# Format: <package as passed to scripts/test-go-batches.py> <TestName>. The runner rejects
+# names that no longer exist in the package, so this list cannot go stale silently.
+#
+# Rule used for the initial list: mean per-run duration >= 10 s in CI run 42379902418
+# (store: no race detector; app and mcp: race detector, mean of 3 runs). Seconds are
+# shown for review. Change entries deliberately, in review, not by a timing heuristic.
+
+# ./internal/adapters/store
+./internal/adapters/store TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes  # 171s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFences  # 151s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesOwnership  # 77s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellation  # 76s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesArgumentFence  # 74s
+./internal/adapters/store TestDocToolValuesPGColdPreparationCounts  # 63s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeOwnershipFailure  # 61s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeArgumentFence  # 60s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceVersion  # 60s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeSourceConflict  # 58s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesJobFence  # 57s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesLeaseExpiry  # 57s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceIncarnation  # 56s
+./internal/adapters/store TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSnapshotIdentity  # 56s
+./internal/adapters/store TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress  # 51s
+./internal/adapters/store TestDocToolOrdersPGColdPreparationCost  # 43s
+./internal/adapters/store TestNormalizationCheckpointPGAutomaticObjectPressureRestartsAndPublishes  # 38s
+./internal/adapters/store TestNormalizationCheckpointPGAutomaticBytePressureRestartsAndPublishes  # 35s
+./internal/adapters/store TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed  # 19s
+./internal/adapters/store TestDocNativeBlockPGActivePagesRetainFencesAndPublish  # 18s
+./internal/adapters/store TestDocToolOrdersPGBoundedSelectedPath  # 17s
+./internal/adapters/store TestPGDocJobLifetimeOfflineResetRejectsStaleCommands  # 16s
+./internal/adapters/store TestDocToolKeyMapPGColdPreparationCounts  # 13s
+./internal/adapters/store TestDocDisplayMaintenanceSelectionPGFreshAfterFence  # 11s
+
+# ./internal/app
+./internal/app TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement  # 533s
+./internal/app TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement  # 491s
+./internal/app TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementSourceVersion  # 230s
+./internal/app TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementLeaseExpiry  # 228s
+./internal/app TestPGDocPublishedReuseMissingOrCorruptEvidence  # 35s
+./internal/app TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparation  # 34s
+./internal/app TestPGDocDisplayWorkerResumesLegacyBoundedBatchesWithoutPublishingStaging  # 33s
+./internal/app TestPGDocDisplayWorkerResumesBoundedBatchesWithoutPublishingStaging  # 33s
+./internal/app TestPGDocVisibleReplayReproducesUnitsAndFolds  # 30s
+./internal/app TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences  # 29s
+./internal/app TestPGDocPublishedReuseAcrossRootAndLegacySources  # 29s
+./internal/app TestPGLegacyViewUsesSelectedPreparedMetadata  # 28s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsGenericRoot  # 28s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsGenericLegacy  # 28s
+./internal/app TestPGDocToolTreeActualWorkerRootAndLegacy  # 28s
+./internal/app TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparationLeaseExpiry  # 27s
+./internal/app TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparationSourceVersion  # 27s
+./internal/app TestPGLegacyFindGenerationSelectedMetadataDoesNotScaleWithHistory  # 27s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsResultRoot  # 26s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsResultLegacy  # 26s
+./internal/app TestPGDocToolPolicyAutomaticDemandAndReadOnlySearch  # 23s
+./internal/app TestPGDocDisplayMaintenanceSameSourceRejectedAndActiveJobs  # 21s
+./internal/app TestPGDocMessageDenseDisplayDemandThenSearchLatePagesReasoningLegacy  # 20s
+./internal/app TestPGDocMessageDenseDisplayDemandThenSearchLatePagesReasoningRoot  # 20s
+./internal/app TestPGDocPreparedFindWarmCostIndependentOfOutputLength  # 20s
+./internal/app TestPGDocRangeLegacyRecoveryWorkerAutomaticallyRetriesCurrentSourceAndPreparedFailures  # 19s
+./internal/app TestPGDocDisplayRepeatedSourceCostAndRetention  # 18s
+./internal/app TestPGDocVisiblePagesAndFoldsReconstructEveryOriginalOrdinal  # 18s
+./internal/app TestPGDocMessageDenseDisplayDemandThenSearchLatePagesMessageRoot  # 17s
+./internal/app TestPGDocMessageDenseDisplayDemandThenSearchLatePagesMessageLegacy  # 17s
+./internal/app TestPGRepositoryRefOwnerCurrentAuthorityBothSQLOrders  # 15s
+./internal/app TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesLeaseExpiry  # 15s
+./internal/app TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesSourceVersion  # 15s
+./internal/app TestPGDocMessageDisplayFindRestartsOrdinaryCompactAndSeed  # 14s
+./internal/app TestPGDocRangeSourceHeaderCandidateParksAndRechecksFences  # 13s
+./internal/app TestPGGitAdmissionLookupFrozenEvidenceSurvivesLowerIDs  # 13s
+./internal/app TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFences  # 12s
+./internal/app TestPGDocDisplayCatalogReuseAcrossRepositoriesAndCompletedRepair  # 11s
+./internal/app TestPGGitHeadSourcesOptionalBudgetPreservesPageProgress  # 11s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsReasoningLegacy  # 11s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsReasoningRoot  # 11s
+./internal/app TestPGRepositoryRefOwnerConditionalFences  # 10s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsEditLegacy  # 10s
+./internal/app TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsEditRoot  # 10s
+
+# ./internal/adapters/delivery/mcp
+./internal/adapters/delivery/mcp TestPGConversationFindMCPPreparationRoundTripToolGeneric  # 12s
+./internal/adapters/delivery/mcp TestPGConversationFindMCPPreparationRoundTripToolWrite  # 12s
+./internal/adapters/delivery/mcp TestPGConversationFindMCPPreparationRoundTripToolEdit  # 12s
+./internal/adapters/delivery/mcp TestPGConversationFindMCPPreparationRoundTripToolBash  # 11s
+./internal/adapters/delivery/mcp TestPGConversationFindMCPPreparationRoundTrip  # 11s

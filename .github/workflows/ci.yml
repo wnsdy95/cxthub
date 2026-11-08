@@ -8,7 +8,54 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # A newer push to the same pull request supersedes its older run. Main runs are
+  # never cancelled because repository distribution follows each successful main run.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Pull requests skip suites their changes cannot affect. Main pushes always run
+  # everything. If this job fails, every gated job still runs (the conditions below
+  # only skip on an explicit "false") and the required backend check fails.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.scope.outputs.go }}
+      web: ${{ steps.scope.outputs.web }}
+    steps:
+      # A pull_request run checks out the test merge commit; its first parent is the
+      # base tip, so HEAD^1..HEAD is exactly the change that would be merged.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Classify changed paths
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          go=true web=true
+          if [ "$EVENT" = pull_request ]; then
+            go=false web=false
+            files="$(git diff --no-renames --name-only HEAD^1 HEAD)"
+            while IFS= read -r file; do
+              case "$file" in
+                "") ;;
+                docs/*) ;;                    # documentation only
+                */*) case "$file" in
+                       frontend/web/*) web=true ;;
+                       *) go=true web=true ;;
+                     esac ;;
+                *.md) ;;                      # root-level Markdown only
+                *) go=true web=true ;;
+              esac
+            done <<< "$files"
+            printf 'Changed paths:\n%s\n' "$files"
+          fi
+          printf 'go=%s\nweb=%s\n' "$go" "$web" | tee -a "$GITHUB_OUTPUT"
+
   public-safety:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -28,8 +75,12 @@ jobs:
           result="$(PATH=/nonexistent /bin/bash scripts/public-preflight.sh tree 2>&1)" || status=$?
           test "$status" -eq 1
           test "$result" = "[public-check] required dependency is missing: rg (ripgrep)"
-      - name: Validate the publishable tree
-        run: bash scripts/public-preflight.sh tree
+      # "full" runs every "tree" check and then scans the complete public history,
+      # so a public repository needs only the single full pass.
+      - name: Validate the publishable tree and complete public history
+        env:
+          MODE: ${{ github.event.repository.private == false && 'full' || 'tree' }}
+        run: bash scripts/public-preflight.sh "$MODE"
       - name: Verify local dogfood auth resolution
         run: bash scripts/test-dogfood-daemon.sh
       - name: Verify independent local service lifecycle
@@ -49,12 +100,12 @@ jobs:
           python3 scripts/test-e2e-repair-proof.py
           python3 scripts/test-e2e-wrapper-proof.py
           python3 scripts/test-e2e-wrapper-gate.py
-      - name: Validate the complete public history
-        if: github.event.repository.private == false
-        run: bash scripts/public-preflight.sh full
 
   backend-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -72,23 +123,56 @@ jobs:
       - name: test (FS) + openapi drift guard
         working-directory: backend
         run: go test ./...
+      # The race-detector variant of this check runs in CI heavy.
       - name: test admission progress on one CPU
         working-directory: backend
         env:
           GOMAXPROCS: "1"
-        run: go test -race ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
+        run: go test ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
       - name: vulnerability scan (FS and production PostgreSQL)
         working-directory: backend
         run: |
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags postgres ./...
+      # The backend and mcp distributions export the same backend/ and schemas/
+      # trees, so the standalone server source is built and vetted once.
+      - name: Export standalone server sources
+        run: |
+          for component in backend mcp; do
+            python3 scripts/distribute-repositories.py export --ref HEAD --component "$component" --output "$RUNNER_TEMP/$component"
+          done
+          diff -r "$RUNNER_TEMP/backend/backend" "$RUNNER_TEMP/mcp/backend"
+          diff -r "$RUNNER_TEMP/backend/schemas" "$RUNNER_TEMP/mcp/schemas"
+      - name: Build standalone server source
+        working-directory: ${{ runner.temp }}/backend/backend
+        run: go build -tags postgres ./... && go vet -tags postgres ./...
 
+  # Required PR tier: every PostgreSQL contract that is not listed in
+  # scripts/ci-heavy-tests.txt runs once, without the race detector. Store and app are
+  # sharded across runners, and each shard runs two workers that each own a freshly
+  # created database. On a 4-vCPU runner shared with PostgreSQL, four workers only gave a
+  # ~1.3x speedup, because the tests are CPU-bound, so extra runners scale better.
+  # Transport tests run serially: their HTTP requests wait at most 1 s for an in-process
+  # admission permit, and CPU contention from parallel test processes turned that into 503
+  # responses. The listed heavy tests and the race-detector repetitions run in "CI heavy"
+  # (main pushes, nightly, ci:full PRs).
   backend-contracts:
+    name: backend-contracts (${{ matrix.lane }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     strategy:
       fail-fast: false
       matrix:
-        lane: [store, app, transports]
+        include:
+          - { lane: store, shard: 1/4, workers: "2" }
+          - { lane: store, shard: 2/4, workers: "2" }
+          - { lane: store, shard: 3/4, workers: "2" }
+          - { lane: store, shard: 4/4, workers: "2" }
+          - { lane: app, shard: 1/2, workers: "2" }
+          - { lane: app, shard: 2/2, workers: "2" }
+          - { lane: transports, workers: "1" }
     services:
       postgres:
         image: postgres:16
@@ -103,183 +187,70 @@ jobs:
     env:
       CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
       CXT_ROOT_WRITER_COST: "1"
+      TIER: fast
+      WORKERS: ${{ matrix.workers }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
           cache-dependency-path: backend/go.sum
-      - name: test (PG store contracts)
-        if: matrix.lane == 'store'
+      - name: test (PG ${{ matrix.lane }} contracts, fast tier)
         working-directory: backend
-        run: |
-          python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres --batch-size 1 \
-            --first-test TestDocRangeEnqueueBudgetPGTotalTimeoutRollback \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFences \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceVersion \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceIncarnation \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesOwnership \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesLeaseExpiry \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesJobFence \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSnapshotIdentity \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesArgumentFence \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellation \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeSourceConflict \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeOwnershipFailure \
-            --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeArgumentFence \
-            --no-batch-timeout TestDocNativeBlockPGActivePagesRetainFencesAndPublish \
-            --no-batch-timeout TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes \
-            --no-batch-timeout TestDocToolValuesPGColdPreparationCounts \
-            --no-batch-timeout TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
-            --no-batch-timeout TestNormalizationCheckpointPGPreparingColdRestart \
-            --no-batch-timeout TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed \
-            --require-test TestLegacyByteRecoveryPGColdChild \
-            --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
-            --require-test TestNormalizationCheckpointPGColdChild \
-            --require-test TestNormalizationCheckpointPGColdRestartPublishes \
-            --require-test TestPGRootWriterCost \
-            --require-test TestPGRootWriterCostPreparationReferenceRead \
-            --require-test TestPGRootWriterWait \
-            --allow-skip TestLegacyProofStreamAllocationQualification \
-            --allow-skip TestLegacyStreamingPGMemoryQualification \
-            --allow-skip TestPGCycleValidationComparison \
-            --allow-skip TestPGDocSearchStageQualification \
-            --allow-skip TestPGMemoryCapturePersistenceCostD3ac \
-            --allow-skip TestPGRootPublicationCost \
-            --allow-skip TestPGRootPublicationCostWriterBarrier \
-            --allow-skip TestRootReaderLegacyClassificationCost \
-            --allow-skip TestStoredConversationReferencePerformance
-      - name: test (PG app contracts)
-        if: matrix.lane == 'app'
-        working-directory: backend
-        run: |
-          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3 --batch-size 1 \
-            --first-test TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph \
-            --first-test TestPGInvitationEmailWorkerDirectClaimAndCompletionRollback \
-            --first-test TestPGPRPromotionWorkerDirectSharedAdmissionLeaseReplacementAndRecovery \
-            --first-test TestPGPendingProjectionWorkerMatchesDirectClassificationAcrossMutations \
-            --first-test TestPGWave40ProjectionWorkersCaptureRestartPublishAndQualifyWithoutService \
-            --first-test TestPGWave41NotificationFactoryDurableRetryRestartAndStableEventID \
-            --first-test TestPGWave41NotificationFactoryFencesStaleLeaseAndCurrentPolicy \
-            --first-test TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
-            --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
-            --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
-            --no-batch-timeout TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
-            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
-            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
-            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementLeaseExpiry \
-            --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementSourceVersion \
-            --allow-skip TestPGMemoryPreparationCostD3ab \
-            --allow-skip TestPGReadModelMixedProgress
-          go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v
-          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestActivityCommitHistoryPG$'
-          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race \
-            --run '^TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads$' \
-            --require-test TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads
-      - name: test (PG transport contracts)
-        if: matrix.lane == 'transports'
-        working-directory: backend
-        run: |
-          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/http/ --tags postgres --race --run '^TestPG' --count 3 --batch-size 1 \
-            --require-test TestPGDocFindPreparedHTTPQueuesThenContinuesRoot \
-            --require-test TestPGDocFindPreparedHTTPQueuesThenContinuesLegacy
-          go test -tags postgres ./internal/adapters/federation/ -race -run '^TestPG' -count=3 -timeout=120s -v
-          go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
-          python3 ../scripts/test-go-batches.py ./internal/serverruntime/ --tags postgres --race --run '^Test(ExecutionProfilePostgres|BoundedExecutionProcessesPG|InfrastructurePostgres|RuntimePostgresCallersReuseInfrastructurePool)'
-          python3 ../scripts/test-go-batches.py ./cmd/cxtd/ --tags postgres --race --run '^TestServerLifecyclePGProcess(SIGTERM|BindFailure)'
-          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --count 3 --batch-size 1 \
-            --run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip.*)$' \
-            --require-test TestRootProjectionPGConsumersWithoutPersistentIndex \
-            --require-test TestPRContributionTransportParity \
-            --require-test TestPGConversationFindMCPPreparationRoundTrip \
-            --require-test TestPGConversationFindMCPPreparationRoundTripReasoning \
-            --require-test TestPGConversationFindMCPPreparationRoundTripMessage \
-            --require-test TestPGConversationFindMCPPreparationRoundTripSummary \
-            --require-test TestPGConversationFindMCPPreparationRoundTripSeed \
-            --require-test TestPGConversationFindMCPPreparationRoundTripToolEdit \
-            --require-test TestPGConversationFindMCPPreparationRoundTripToolWrite \
-            --require-test TestPGConversationFindMCPPreparationRoundTripToolBash \
-            --require-test TestPGConversationFindMCPPreparationRoundTripToolGeneric
-          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --run '^TestPGMCPResourceCutover$'
-          python3 ../scripts/test-go-batches.py ./cmd/cxt-admin/ --tags postgres --race --run '^TestIdentityKeyCommandRejectsSecretsWithoutEchoingConfiguration$'
+        env:
+          LANE: ${{ matrix.lane }}
+          SHARD: ${{ matrix.shard }}
+        run: bash ../scripts/ci-backend-contracts.sh "$LANE"
 
   backend:
     runs-on: ubuntu-latest
     if: ${{ always() }}
-    needs: [backend-checks, backend-contracts]
+    needs: [changes, backend-checks, backend-contracts]
     steps:
       - name: Require all backend jobs to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          GO_CHANGED: ${{ needs.changes.outputs.go }}
         run: |
-          jq -e 'keys == ["backend-checks", "backend-contracts"] and all(.[]; .result == "success")' <<< "$NEEDS_JSON"
+          jq -e --arg go "$GO_CHANGED" '
+            keys == ["backend-checks", "backend-contracts", "changes"] and .changes.result == "success" and
+            (if $go == "false" then all(.["backend-checks"], .["backend-contracts"]; .result == "skipped")
+             else all(.["backend-checks"], .["backend-contracts"]; .result == "success") end)' <<< "$NEEDS_JSON"
 
   cli:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
           cache: false
-      - name: build · vet · test
-        working-directory: cli
-        run: |
-          go build ./...
-          go vet ./...
-          go test $(go list ./... | grep -v '/internal/adapters/delivery/cli$')
-          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/cli/
       - name: vulnerability scan
         working-directory: cli
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Verify cross-module contracts explicitly
         working-directory: cli
         run: go test -tags monorepo ./internal/domain -count=1
-
-  distribution-build:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        component: [cli, backend, frontend, mcp]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: "1.26.10"
-          cache: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: "22"
-      - name: Export committed source into an isolated root
-        env:
-          COMPONENT: ${{ matrix.component }}
-        run: python3 scripts/distribute-repositories.py export --ref HEAD --component "$COMPONENT" --output "$RUNNER_TEMP/component"
-      - name: Validate standalone CLI
-        if: matrix.component == 'cli'
+      # The CLI is built, vetted and tested once, as the exported standalone public
+      # repository, which is exactly the source tree that distribution publishes.
+      - name: Export committed CLI source into an isolated root
+        run: python3 scripts/distribute-repositories.py export --ref HEAD --component cli --output "$RUNNER_TEMP/component"
+      - name: build · vet · test (standalone CLI)
         working-directory: ${{ runner.temp }}/component
         run: |
           go build ./...
           go vet ./...
           go test $(go list ./... | grep -v '/internal/adapters/delivery/cli$')
           python3 scripts/test-go-batches.py ./internal/adapters/delivery/cli/
-      - name: Build standalone server source
-        if: matrix.component == 'backend' || matrix.component == 'mcp'
-        working-directory: ${{ runner.temp }}/component/backend
-        run: go build -tags postgres ./... && go vet -tags postgres ./...
-      - name: Validate standalone frontend
-        if: matrix.component == 'frontend'
-        working-directory: ${{ runner.temp }}/component
-        run: |
-          npm ci
-          npm run test:unit
-          npm run check:architecture
-          npm run check:i18n
-          npm run check:vercel
-          npm run build
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.web != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -302,8 +273,21 @@ jobs:
           npm run check:vercel
           npx tsc --noEmit
           npx vite build
+      - name: Export committed frontend source into an isolated root
+        run: python3 scripts/distribute-repositories.py export --ref HEAD --component frontend --output "$RUNNER_TEMP/component"
+      - name: Validate standalone frontend
+        working-directory: ${{ runner.temp }}/component
+        run: |
+          npm ci
+          npm run test:unit
+          npm run check:architecture
+          npm run check:i18n
+          npm run check:vercel
+          npm run build
 
   web-browser-e2e:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.web != 'false' }}
     services:
       postgres:
         image: postgres:16
@@ -360,6 +344,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -373,6 +360,9 @@ jobs:
 
   e2e-sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     services:
       postgres:
         image: postgres:16
@@ -422,6 +412,9 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Deployment image build validation (no push)

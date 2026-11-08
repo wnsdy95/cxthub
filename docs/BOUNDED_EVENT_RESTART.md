@@ -54,9 +54,10 @@ acceptance limit. Cancellation, live lease ownership, bounded per-step work and
 all publication assertions remain required. Elapsed time is diagnostic evidence,
 not a substitute for exact completion.
 
-The `Normalization restart` workflow checks this bounded scope independently of
-the unfinished foundation's broader CI. It does not replace those required
-checks or make the foundation ready to merge.
+CI runs these restart tests in the PostgreSQL store lane, or in the `CI heavy`
+workflow when they are listed in `scripts/ci-heavy-tests.txt`. `CI heavy` also runs
+them under the race detector (formerly the separate `Normalization restart` workflow). Passing them does not replace the other
+required checks or make the foundation ready to merge.
 
 ## Limits
 
