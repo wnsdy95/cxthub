@@ -34,6 +34,8 @@ type BackendClient struct {
 	memoryReuse  memoryReuseCache
 	metadata     outbound.MetadataCheckpointStore
 	catalogCache outbound.CatalogCacheStore
+	// pace spaces patient bulk batches after recent server backpressure.
+	pace uploadPacer
 }
 
 // NewBackendClient creates a BackendClient.
@@ -188,7 +190,16 @@ func (c *BackendClient) do(ctx context.Context, method, path string, body, out a
 
 // doLimited decodes bounded endpoint responses only below an explicit upper limit. max=0 is
 // the existing general JSON path.
-func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
+func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) error {
+	// Reads are idempotent: under an upload policy a push's preparation reads
+	// wait out the same transient failures as its uploads.
+	if policy, ok := outbound.UploadPolicyFromContext(ctx); ok && method == http.MethodGet {
+		return c.patientRetry(ctx, policy, func() error { return c.doLimitedOnce(ctx, method, path, body, out, max) })
+	}
+	return c.doLimitedOnce(ctx, method, path, body, out, max)
+}
+
+func (c *BackendClient) doLimitedOnce(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
 	ctx = outbound.NextSyncDiagnosticRequest(ctx)
 	diagnosticCtx := ctx // Best-effort ACK cleanup must not look like caller cancellation.
 	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
@@ -265,7 +276,7 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 	if resp.StatusCode >= 300 {
 		b, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		rejection := newHTTPError(resp.StatusCode, method, path, b)
-		if readErr == nil && rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" {
+		if readErr == nil && (rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" || proxyTransientStatus(rejection)) {
 			rejection.retryAfter, rejection.retryAfterValid = uploadRetryAfter(resp.Header.Values("Retry-After"), time.Now())
 		}
 		return rejection
@@ -351,7 +362,7 @@ func (e *HTTPError) Error() string {
 func (e *HTTPError) StatusCode() int { return e.Status }
 
 func newHTTPError(status int, method, path string, body []byte) *HTTPError {
-	he := &HTTPError{Status: status, raw: string(body)}
+	he := &HTTPError{Status: status, raw: responseBodySummary(body)}
 	he.Operation = method
 	if u, err := url.Parse(path); err == nil {
 		he.Operation += " " + u.EscapedPath()
@@ -364,11 +375,27 @@ func newHTTPError(status int, method, path string, body []byte) *HTTPError {
 	}
 	if json.Unmarshal(body, &env) == nil && env.Error.Code != "" {
 		he.Code = env.Error.Code
-		he.Message = env.Error.Message
+		he.Message = domain.SanitizeErrorText(env.Error.Message, maxErrorMessageBytes)
 	} else {
-		he.Message = strings.TrimSpace(string(body))
+		he.Message = he.raw
 	}
 	return he
+}
+
+const maxErrorMessageBytes = 300
+
+// responseBodySummary keeps a short, sanitized text body for diagnosis. A
+// non-JSON page from a proxy (HTML, challenge pages) can embed opaque tokens
+// and is never copied into errors that queues persist or status prints.
+func responseBodySummary(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return ""
+	}
+	if strings.HasPrefix(text, "<") {
+		return fmt.Sprintf("non-JSON response body omitted (%d bytes)", len(body))
+	}
+	return domain.SanitizeErrorText(text, maxErrorMessageBytes)
 }
 
 func (c *BackendClient) reposPath(repoID string) string {
@@ -685,7 +712,7 @@ func (c *BackendClient) PushSettingsObject(ctx context.Context, repoID string, h
 	if err := domain.ValidateSettingsBundle(bundle.Kind, hash, bundle); err != nil {
 		return err
 	}
-	return c.do(ctx, http.MethodPut, c.reposPath(repoID)+"/settings-objects/"+url.PathEscape(string(hash)), bundle, nil)
+	return c.doIdempotent(ctx, http.MethodPut, c.reposPath(repoID)+"/settings-objects/"+url.PathEscape(string(hash)), bundle, nil)
 }
 
 // PullSettingsObject downloads a settings object.
@@ -854,7 +881,7 @@ func (c *BackendClient) NegotiatePushObjects(ctx context.Context, repoID string,
 	}
 	var neg negotiateResp
 	outbound.RecordSyncDiagnostic(ctx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Snapshots: len(snapshotHaves), Documents: len(docHaves)}, nil)
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{
+	if err := c.doIdempotent(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{
 		SnapshotHaves: snapshotHaves,
 		DocHaves:      docHaves,
 	}, &neg); err != nil {
@@ -967,7 +994,7 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 	if len(snapHaves) > 0 || len(docHaves) > 0 {
 		negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
 		outbound.RecordSyncDiagnostic(negotiationCtx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Snapshots: len(snapHaves), Documents: len(docHaves), Chunks: len(chunkHaves)}, nil)
-		if err := c.do(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
+		if err := c.doIdempotent(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
 			return err
 		}
 	}

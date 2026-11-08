@@ -20,6 +20,17 @@ const (
 const resourceQueueLimit = 8
 const resourceWaitLimit = time.Second
 
+// resourceBulkWaitLimit lets a queued bulk request outlast one in-flight bulk
+// request (a multi-megabyte batch can take seconds on a small instance), so
+// the FIFO dispatch on release hands the slot to a waiting user instead of
+// every waiter timing out and the active uploader re-acquiring an empty
+// queue. Concurrency and queue capacity are unchanged; long bulk waiters may
+// hold at most a quarter of the queue (at least one), because production
+// shares one queue across classes and viewer reads must keep their room.
+// It applies only where configured (the API process, which serves pushes and
+// viewers); other roles and unconfigured gates keep resourceWaitLimit.
+const ResourceBulkWaitLimit = 10 * time.Second
+
 type resourcePermitKey struct{}
 type resourceAdmissionKey struct{}
 
@@ -60,6 +71,20 @@ type resourceAdmission struct {
 }
 
 var processResources = &resourceAdmission{wait: resourceWaitLimit}
+
+// waitLimit is the admission wait for one class. Only a configured longer
+// bulk wait changes behavior; interactive requests always keep gate.wait.
+func (gate *resourceAdmission) waitLimit(class ResourceClass) time.Duration {
+	if class == ResourceBulk && gate.limits.BulkWait > gate.wait {
+		return gate.limits.BulkWait
+	}
+	return gate.wait
+}
+
+// bulkQueueShareFull bounds long bulk waiters to a quarter of the queue.
+func (gate *resourceAdmission) bulkQueueShareFull(class ResourceClass) bool {
+	return class == ResourceBulk && gate.limits.BulkWait > gate.wait && len(gate.waiters[ResourceBulk]) >= max(1, gate.queueCapacity()/4)
+}
 
 func AcquireResources(ctx context.Context, class ResourceClass) (context.Context, func(), error) {
 	return acquireResources(ctx, class, true)
@@ -118,12 +143,12 @@ func (gate *resourceAdmission) acquireWithWait(ctx context.Context, class Resour
 	waitCtx := workCtx
 	if governor != nil {
 		var cancelWait context.CancelFunc
-		waitCtx, cancelWait = context.WithDeadline(workCtx, started.Add(gate.wait))
+		waitCtx, cancelWait = context.WithDeadline(workCtx, started.Add(gate.waitLimit(class)))
 		defer cancelWait()
 	}
 	waiter := &resourceWaiter{ready: make(chan struct{})}
 	gate.mu.Lock()
-	if gate.configuration != configuration || (configuration != nil && configuration.restoring) || (governor == nil && gate.resourceQueueFull(class)) {
+	if gate.configuration != configuration || (configuration != nil && configuration.restoring) || (governor == nil && gate.resourceQueueFull(class)) || gate.bulkQueueShareFull(class) {
 		gate.mu.Unlock()
 		return ctx, nil, domain.ErrResourceOverloaded
 	}
@@ -145,9 +170,9 @@ func (gate *resourceAdmission) acquireWithWait(ctx context.Context, class Resour
 	}
 	gate.mu.Unlock()
 	if !granted {
-		duration := gate.wait
+		duration := gate.waitLimit(class)
 		if governor != nil {
-			duration = time.Until(started.Add(gate.wait))
+			duration = time.Until(started.Add(gate.waitLimit(class)))
 		}
 		timer := time.NewTimer(duration)
 		defer timer.Stop()
