@@ -432,32 +432,42 @@ jobs:
         run: |
           python3 -m pip install -r deploy/requirements-preflight.txt
           python3 scripts/check-render-blueprint.py
+      # Provider packages and their checksum files are served from GitHub release assets, and a
+      # GitHub 504 there failed this required check. A warm cache leaves init with only the
+      # registry.terraform.io version lookups. Terraform still checks each cached package against
+      # the h1 hashes in the lock file, so a cache entry cannot change which provider is installed.
+      - name: Restore Terraform provider cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/terraform-plugin-cache
+          key: terraform-providers-${{ runner.os }}-1.15.8-${{ hashFiles('deploy/terraform/.terraform.lock.hcl') }}
       - name: Terraform fmt · provider lock · schema/input tests (no apply)
         run: |
-          mkdir -p "$RUNNER_TEMP/terraform-data"
-          docker run --rm \
-            -e TF_DATA_DIR=/tmp/terraform-data \
-            -v "$PWD/deploy/terraform:/workspace:ro" \
-            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
-            -w /workspace \
-            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 fmt -check -recursive
-          docker run --rm \
-            -e TF_DATA_DIR=/tmp/terraform-data \
-            -v "$PWD/deploy/terraform:/workspace:ro" \
-            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
-            -w /workspace \
-            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 init -backend=false -input=false -lockfile=readonly
-          docker run --rm \
-            -e TF_DATA_DIR=/tmp/terraform-data \
-            -v "$PWD/deploy/terraform:/workspace:ro" \
-            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
-            -w /workspace \
-            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 validate
-          docker run --rm \
-            -e TF_DATA_DIR=/tmp/terraform-data \
-            -v "$PWD/deploy/terraform:/workspace:ro" \
-            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
-            -w /workspace \
-            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 test
+          mkdir -p "$RUNNER_TEMP/terraform-data" "$RUNNER_TEMP/terraform-plugin-cache"
+          # init links providers from the cache, so every command mounts it at the same path.
+          tf() {
+            docker run --rm \
+              -e TF_DATA_DIR=/tmp/terraform-data \
+              -e TF_PLUGIN_CACHE_DIR=/tmp/terraform-plugin-cache \
+              -v "$PWD/deploy/terraform:/workspace:ro" \
+              -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
+              -v "$RUNNER_TEMP/terraform-plugin-cache:/tmp/terraform-plugin-cache" \
+              -w /workspace \
+              hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 "$@"
+          }
+          tf fmt -check -recursive
+          # A cold cache still downloads from GitHub, so retry init across a short outage.
+          for attempt in 1 2 3; do
+            if tf init -backend=false -input=false -lockfile=readonly; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "::warning::terraform init failed (attempt $attempt of 3); retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          tf validate
+          tf test
       - name: Signed GitHub webhook operator tests
         run: bash scripts/test-github-webhook.sh
