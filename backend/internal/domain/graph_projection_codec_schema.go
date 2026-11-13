@@ -102,31 +102,37 @@ func (budget *graphProjectionBudget) measureString(value string) error {
 		if err := budget.ctx.Err(); err != nil {
 			return err
 		}
-		character, width := utf8.DecodeRuneInString(value[offset:])
-		if character == utf8.RuneError && width == 1 {
-			return ErrIntegrity
-		}
+		end := min(offset+1024, len(value))
 		extra := 0
-		switch character {
-		case '\\', '"', '\n', '\r', '\t', '\b', '\f':
-			extra = 1
-		case '<', '>', '&':
-			extra = 5
-		case '\u2028', '\u2029':
-			extra = 3
-		default:
-			if character < 0x20 {
-				extra = 5
+		for offset < end {
+			character, width := rune(value[offset]), 1
+			if character >= utf8.RuneSelf {
+				character, width = utf8.DecodeRuneInString(value[offset:])
+				if character == utf8.RuneError && width == 1 {
+					return ErrIntegrity
+				}
 			}
+			switch character {
+			case '\\', '"', '\n', '\r', '\t', '\b', '\f':
+				extra++
+			case '<', '>', '&':
+				extra += 5
+			case '\u2028', '\u2029':
+				extra += 3
+			default:
+				if character < 0x20 {
+					extra += 5
+				}
+			}
+			offset += width
 		}
 		if extra != 0 {
 			if err := budget.addBytes(extra); err != nil {
 				return err
 			}
 		}
-		offset += width
 	}
-	return nil
+	return budget.ctx.Err()
 }
 
 func (budget *graphProjectionBudget) measure(value reflect.Value) error {
@@ -236,7 +242,7 @@ func graphProjectionJSONSchema(ctx context.Context, raw []byte, schema reflect.T
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	if err := graphProjectionJSONValue(decoder, schema, false, budget); err != nil {
+	if err := graphProjectionJSONValue(decoder, schema, false, budget, 0); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -245,9 +251,12 @@ func graphProjectionJSONSchema(ctx context.Context, raw []byte, schema reflect.T
 	return ctx.Err()
 }
 
-func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted bool, budget *graphProjectionBudget) error {
+func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted bool, budget *graphProjectionBudget, depth int) error {
 	if err := budget.ctx.Err(); err != nil {
 		return err
+	}
+	if depth > 64 {
+		return ErrIntegrity
 	}
 	token, err := decoder.Token()
 	if err != nil {
@@ -287,7 +296,7 @@ func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted
 			if err := budget.addRows(1); err != nil {
 				return err
 			}
-			if err := graphProjectionJSONValue(decoder, schema.Elem(), false, budget); err != nil {
+			if err := graphProjectionJSONValue(decoder, schema.Elem(), false, budget, depth+1); err != nil {
 				return err
 			}
 		}
@@ -301,6 +310,7 @@ func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted
 		}
 		var compiled *graphProjectionJSONStructSchema
 		var seen []bool
+		var mapKeys map[string]struct{}
 		required := 0
 		if schema.Kind() == reflect.Struct {
 			compiled, err = graphProjectionJSONStruct(schema)
@@ -309,6 +319,8 @@ func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted
 			}
 			seen = make([]bool, len(compiled.fields))
 			required = compiled.required
+		} else {
+			mapKeys = make(map[string]struct{})
 		}
 		for decoder.More() {
 			keyToken, err := decoder.Token()
@@ -317,10 +329,14 @@ func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted
 				return ErrIntegrity
 			}
 			if schema.Kind() == reflect.Map {
+				if _, duplicate := mapKeys[key]; duplicate {
+					return ErrIntegrity
+				}
 				if err := budget.addRows(1); err != nil {
 					return err
 				}
-				if err := graphProjectionJSONValue(decoder, schema.Elem(), false, budget); err != nil {
+				mapKeys[key] = struct{}{}
+				if err := graphProjectionJSONValue(decoder, schema.Elem(), false, budget, depth+1); err != nil {
 					return err
 				}
 				continue
@@ -333,7 +349,7 @@ func graphProjectionJSONValue(decoder *json.Decoder, schema reflect.Type, quoted
 			if field.required {
 				required--
 			}
-			if err := graphProjectionJSONValue(decoder, field.definition.Type, field.quoted, budget); err != nil {
+			if err := graphProjectionJSONValue(decoder, field.definition.Type, field.quoted, budget, depth+1); err != nil {
 				return err
 			}
 		}

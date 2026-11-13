@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -53,54 +52,71 @@ func (s *PostgresStore) promoteGraphServing(ctx context.Context, transaction pgx
 	if quarantined {
 		return domain.ErrGraphProjectionFailed
 	}
-	projection := s.graphProjection()
-	parts, err := projection.readReadyPartsFrom(ctx, transaction, lease.RepoID, lease.Dataset, lease.Applied.Sequence)
+	verified, prepared, err := result.VerifiedParts()
 	if err != nil {
 		return err
 	}
-	if err := projection.validateParts(ctx, lease.RepoID, parts); err != nil {
-		return err
-	}
-	digest, err := domain.GraphViewProjectionManifestDigest(ctx, lease.RepoID, parts)
-	if err != nil {
-		return err
-	}
-	if digest != result.Actual {
-		return domain.ErrIntegrity
-	}
-	raw, err := json.Marshal(parts)
-	if err != nil {
-		return err
-	}
-	var storedBytes int64
-	if err := transaction.QueryRow(ctx, `SELECT COALESCE(sum(octet_length(value::text)+octet_length(kind)+octet_length(key)+128),0)
-		FROM jsonb_to_recordset($1::jsonb) AS part(kind text,key text,value jsonb)`, raw).Scan(&storedBytes); err != nil {
-		return err
-	}
-	if storedBytes > int64(projection.outputBytes()) {
-		return domain.ErrRepositoryViewSourceLimit
+	var kinds, keys, digests []string
+	if prepared {
+		if kinds, keys, digests, err = s.verifyGraphServingParts(ctx, transaction, lease, verified); err != nil {
+			return err
+		}
+	} else {
+		projection := s.graphProjection()
+		parts, err := projection.readReadyPartsFrom(ctx, transaction, lease.RepoID, lease.Dataset, lease.Applied.Sequence)
+		if err != nil {
+			return err
+		}
+		if err := projection.validateParts(ctx, lease.RepoID, parts); err != nil {
+			return err
+		}
+		digest, err := domain.GraphViewProjectionManifestDigest(ctx, lease.RepoID, parts)
+		if err != nil {
+			return err
+		}
+		if digest != result.Actual {
+			return domain.ErrIntegrity
+		}
+		for _, part := range parts {
+			kinds, keys = append(kinds, part.Kind), append(keys, part.Key)
+			digests = append(digests, string(domain.HashContent(part.Value)))
+		}
 	}
 	if _, err := transaction.Exec(ctx, `DELETE FROM graph_serving_parts WHERE repo_id=$1`, string(lease.RepoID)); err != nil {
 		return err
 	}
-	command, err := transaction.Exec(ctx, `INSERT INTO graph_serving_heads
+	// One statement: the head upsert and the part copy share a snapshot, and
+	// each copied row must hash to the digest that was validated. Changes to
+	// candidate rows by anything later in this transaction (including triggers
+	// on graph_serving_heads, which fire at statement end) cannot reach the
+	// serving copy, and the 28MB image never leaves PostgreSQL.
+	var heads, copied int64
+	if err := transaction.QueryRow(ctx, `WITH head AS (INSERT INTO graph_serving_heads
 		(repo_id,dataset,source_epoch,source_seq,rules,comparison_rules,expected_hash,actual_hash)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(repo_id) DO UPDATE SET dataset=EXCLUDED.dataset,
 		source_epoch=EXCLUDED.source_epoch,source_seq=EXCLUDED.source_seq,rules=EXCLUDED.rules,
 		comparison_rules=EXCLUDED.comparison_rules,serving_fence=EXCLUDED.serving_fence,
 		expected_hash=EXCLUDED.expected_hash,actual_hash=EXCLUDED.actual_hash,completed_at=clock_timestamp()
-		WHERE graph_serving_heads.serving_fence<EXCLUDED.serving_fence`, string(lease.RepoID), lease.Dataset, lease.Applied.Epoch,
-		lease.Applied.Sequence, lease.Rules, lease.ComparisonRules, string(result.Expected), string(result.Actual))
-	if err != nil {
+		WHERE graph_serving_heads.serving_fence<EXCLUDED.serving_fence
+		RETURNING repo_id,dataset,source_seq),
+	copied AS (INSERT INTO graph_serving_parts(repo_id,dataset,source_seq,kind,entity_key,image)
+		SELECT head.repo_id,head.dataset,head.source_seq,wanted.kind,wanted.entity_key,latest.image
+		FROM head CROSS JOIN unnest($9::text[],$10::text[],$11::text[]) AS wanted(kind,entity_key,digest)
+		JOIN LATERAL (SELECT image,deleted FROM graph_projection_parts
+			WHERE repo_id=$1 AND dataset=$2 AND source_seq<=$4 AND kind=wanted.kind AND entity_key=wanted.entity_key
+			ORDER BY source_seq DESC LIMIT 1) latest
+			ON NOT latest.deleted AND 'sha256:'||encode(sha256(convert_to(latest.image::text,'UTF8')),'hex')=wanted.digest
+		RETURNING 1)
+	SELECT (SELECT count(*) FROM head),(SELECT count(*) FROM copied)`,
+		string(lease.RepoID), lease.Dataset, lease.Applied.Epoch, lease.Applied.Sequence, lease.Rules, lease.ComparisonRules,
+		string(result.Expected), string(result.Actual), kinds, keys, digests).Scan(&heads, &copied); err != nil {
 		return err
 	}
-	if command.RowsAffected() != 1 {
+	if heads != 1 {
 		return domain.ErrRefConflict
 	}
-	if _, err := transaction.Exec(ctx, `INSERT INTO graph_serving_parts(repo_id,dataset,source_seq,kind,entity_key,image)
-		SELECT $1,$2,$3,kind,key,value FROM jsonb_to_recordset($4::jsonb) AS part(kind text,key text,value jsonb)`,
-		string(lease.RepoID), lease.Dataset, lease.Applied.Sequence, raw); err != nil {
-		return err
+	if copied != int64(len(keys)) {
+		return domain.ErrIntegrity
 	}
 	var unexpired bool
 	if err := transaction.QueryRow(ctx, `SELECT $1::timestamptz>clock_timestamp()`, lease.LeaseUntil).Scan(&unexpired); err != nil {

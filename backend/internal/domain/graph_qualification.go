@@ -32,8 +32,9 @@ type GraphProjectionReference struct {
 
 type GraphQualificationResult struct {
 	GraphQualificationKey
-	Expected ContentHash
-	Actual   ContentHash
+	Expected     ContentHash
+	Actual       ContentHash
+	verification *graphQualificationVerification
 }
 
 func (key GraphQualificationKey) Validate() error {
@@ -62,6 +63,9 @@ func (reference GraphProjectionReference) Validate() error {
 
 func (result GraphQualificationResult) Validate() error {
 	if ValidateContentHash(result.Expected) != nil || ValidateContentHash(result.Actual) != nil {
+		return ErrValidation
+	}
+	if proof := result.verification; proof != nil && (proof.key != result.GraphQualificationKey || proof.expected != result.Expected || proof.actual != result.Actual) {
 		return ErrValidation
 	}
 	return result.GraphQualificationKey.Validate()
