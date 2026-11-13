@@ -149,8 +149,18 @@ if git ls-files -s | awk '$1 == "160000" {found=1} END {exit !found}'; then
   exit 1
 fi
 
+# A lockfile integrity value is random base64, so a case-insensitive term can occur
+# inside one by chance; a Dependabot package-lock.json sha512 once did. Matching
+# lines that consist only of such a value are not text and are ignored; every other
+# match still fails.
+integrity_only='^[[:space:]]*"integrity":[[:space:]]*"sha(256|384|512)-[A-Za-z0-9+/]+=*",?[[:space:]]*$'
+has_text_match() {
+  [ -n "$1" ] && printf '%s\n' "$1" | rg -v -q -e "$integrity_only"
+}
+
 for term in 's''wyg' 'rii''do' 'team-context-save-''fork' 'jy''min'; do
-  if xargs -0 rg -i -l -- "$term" <"$candidate_list" >/dev/null 2>&1; then
+  matches="$(xargs -0 rg -i --no-filename --no-line-number -- "$term" <"$candidate_list" 2>/dev/null || true)"
+  if has_text_match "$matches"; then
     echo "[public-check] forbidden legacy identifier found: $term" >&2
     exit 1
   fi
@@ -170,7 +180,8 @@ if [ "$MODE" = full ]; then
   python3 scripts/check-public-git-metadata.py
   legacy_re='s''wyg|rii''do|team-context-save-''fork|jy''min'
   while IFS= read -r rev; do
-    if git grep -I -i -q -E "$legacy_re" "$rev" -- 2>/dev/null; then
+    matches="$(git grep -I -i -h -E "$legacy_re" "$rev" -- 2>/dev/null || true)"
+    if has_text_match "$matches"; then
       echo "[public-check] Git blob history contains a forbidden identifier: $rev" >&2
       exit 1
     fi
