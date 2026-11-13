@@ -54,7 +54,11 @@ test('live sessions precede stored captures, follow replacement, expire offline 
   generation = 7;
   await page.clock.fastForward(6_000);
   await expect(page.getByText('Capture generation 7', {exact:true})).toBeVisible();
-  expect(fullReads).toBe(initialReads + 1);
+  // The live viewer follows On Hold at once. The graph's own pending read is spaced
+  // a minute after the previous one, and only then finds that it needs the full view.
+  expect(fullReads).toBe(initialReads);
+  await page.clock.fastForward(60_000);
+  await expect.poll(() => fullReads).toBe(initialReads + 1);
   await page.clock.fastForward(6_000);
   expect(fullReads).toBe(initialReads + 1);
   offline = true;

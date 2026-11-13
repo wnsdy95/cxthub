@@ -17,6 +17,15 @@ export const graphReadRetry = {
   retryDelay: (attempt: number, error: Error) => Math.min(capacityRetryDelay(attempt, error), 10_000),
 };
 
+// A pending-only change without a published graph makes the server rebuild the
+// whole graph for one merged capture. A live session changes pending every few
+// seconds, so the next such read waits at least a minute, and at least four times
+// what the last one took, which keeps one tab under a fifth of the server's graph
+// capacity. The On Hold state has its own read and is not delayed.
+export function pendingGraphSpacing(lastReadMs: number): number {
+  return Math.min(300_000, Math.max(60_000, 4 * lastReadMs));
+}
+
 export function sameRevision(current: RepositoryRevision | undefined, wanted: RepositoryRevision | null) {
   return Boolean(current && wanted && revisionCovers(current, wanted) && revisionCovers(wanted, current));
 }
@@ -89,6 +98,15 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient, deferHeavy
   let evidence = 0n;
   let unsubscribe: (() => void) | undefined;
   const clearRetry = () => { if (retry) clearTimeout(retry); retry = undefined; };
+  let graphCooldown: ReturnType<typeof setTimeout> | undefined, graphDeferred = false;
+  // The latest notice is read once when the cooldown ends, if one arrived meanwhile.
+  const coolGraph = (lastReadMs: number) => {
+    if (disposed) return;
+    graphCooldown = setTimeout(() => {
+      graphCooldown = undefined;
+      if (graphDeferred) { graphDeferred = false; void sync(); }
+    }, pendingGraphSpacing(lastReadMs));
+  };
   const pendingCurrent = (current: PendingStateView | undefined, notice: RepositoryRevision) => pendingMatches(current, notice) &&
     (notice.pending_projection?.state !== 'disabled' || samePendingProjection(disabledSource, notice.pending_projection));
   const denied = () => Boolean(qc.getQueryState(noticeKey)?.error);
@@ -249,11 +267,15 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient, deferHeavy
         const next = await readFull();
         if (!active(requestedAccess) || !next.revision) return;
       } else {
-        const live = await api.pendingView(repo);
-        if (!active(requestedAccess)) return;
-        const latest = qc.getQueryData<RepositoryView>(key);
-        if (!latest || pendingViewNeedsFull(latest, live)) await readFull();
-        else qc.setQueryData<RepositoryView>(key, old => old ? mergePendingView(old, live) : old);
+        if (graphCooldown) { graphDeferred = true; return; }
+        const started = performance.now();
+        try {
+          const live = await api.pendingView(repo);
+          if (!active(requestedAccess)) return;
+          const latest = qc.getQueryData<RepositoryView>(key);
+          if (!latest || pendingViewNeedsFull(latest, live)) await readFull();
+          else qc.setQueryData<RepositoryView>(key, old => old ? mergePendingView(old, live) : old);
+        } finally { coolGraph(performance.now() - started); }
       }
       if (!active(requestedAccess)) return;
       const next = qc.getQueryData<RepositoryView>(key)?.revision;
@@ -308,5 +330,9 @@ export function startRepositoryUpdates(repo: string, qc: QueryClient, deferHeavy
     void readRevision().catch(recover);
   };
   visible(); document.addEventListener('visibilitychange', visible);
-  return () => { disposed = true; unsubscribe?.(); clearRetry(); document.removeEventListener('visibilitychange', visible); };
+  return () => {
+    disposed = true; unsubscribe?.(); clearRetry();
+    if (graphCooldown) clearTimeout(graphCooldown);
+    document.removeEventListener('visibilitychange', visible);
+  };
 }

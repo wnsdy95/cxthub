@@ -38,7 +38,9 @@ export function PRPromotions({ repoId, canRetry }: { repoId: string; canRetry: b
  const t = useT();
  const qc = useQueryClient();
  const key = ['pr-promotions', repoId];
- const jobs = useQuery({ queryKey: key, queryFn: ({ signal }) => api.prPromotions(repoId, signal), refetchInterval: 10000 });
+ // A job that can still change is followed closely. A list with none only has to notice a new job.
+ const jobs = useQuery({ queryKey: key, queryFn: ({ signal }) => api.prPromotions(repoId, signal),
+  refetchInterval: query => query.state.data?.some(job => job.state !== 'completed') ? 10_000 : 60_000 });
  const retry = useMutation({ mutationFn: (id: string) => api.retryPRPromotion(repoId, id), onSuccess: () => qc.invalidateQueries({ queryKey: key }) });
  const labels = { waiting: t('promotion.waiting'), retrying: t('promotion.retrying'), running: t('promotion.running'), completed: t('promotion.completed'), attention: t('promotion.attention') };
  const reasons: Record<string,string> = { policy_changed: t('promotion.policy'), source_context_pending: t('promotion.source'), source_finalization_required: t('promotion.finalization'), ordering_evidence_pending: t('promotion.ordering'), integrity_check_failed: t('promotion.integrity'), identity_or_history_conflict: t('promotion.conflict'), repository_or_base_missing: t('promotion.missing'), temporary_failure: t('promotion.temporary'), retry_limit_reached: t('promotion.exhausted'), invalid_request: t('promotion.invalid') };

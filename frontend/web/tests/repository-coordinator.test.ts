@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
 import { api, ApiError, ApiTransportError } from '../src/api';
-import { readRepositoryPending, startRepositoryUpdates } from '../src/useRepositoryUpdates';
+import { pendingGraphSpacing, readRepositoryPending, startRepositoryUpdates } from '../src/useRepositoryUpdates';
 import { parseRevision } from '../src/repositoryUpdates';
 import { pendingStateRows } from '../src/pendingState';
 import type { PendingStateView, PendingView, RepositoryRevision, RepositoryView } from '../src/types';
@@ -740,7 +740,7 @@ test('a mismatching replica gets one refresh pass before scheduled recovery, not
 });
 
 for (const graphChanges of [true, false]) {
-  test(`in-flight ${graphChanges ? 'full' : 'compact'} reads coalesce distinct notices into an immediate latest-wanted pass`, async context => {
+  test(`in-flight ${graphChanges ? 'full reads coalesce distinct notices into an immediate' : 'compact reads coalesce distinct notices into one spaced'} latest-wanted pass`, async context => {
     const previous = { graph: '1', pending: '1' };
     const first = { graph: graphChanges ? '2' : '1', pending: '2' };
     const middle = { graph: graphChanges ? '3' : '1', pending: '3' };
@@ -768,6 +768,17 @@ for (const graphChanges of [true, false]) {
     firstView.resolve(pendingFixture('first', first));
     firstPending.resolve(pendingStateFixture(pendingFixture('first', first)));
     await flush();
+    if (!graphChanges) {
+      // On Hold follows at once; the compact graph read waits out its spacing.
+      assert.equal(view.mock.callCount(), 1);
+      assert.equal(pending.mock.callCount(), 2);
+      assert.deepEqual(fixture.client.getQueryData<RepositoryView>(fullKey)?.revision, first);
+      context.mock.timers.tick(pendingGraphSpacing(0) - 1);
+      await flush();
+      assert.equal(view.mock.callCount(), 1);
+      context.mock.timers.tick(1);
+      await flush();
+    }
     assert.equal(view.mock.callCount(), 2);
     assert.equal(pending.mock.callCount(), 2);
     assert.deepEqual(fixture.client.getQueryData<RepositoryView>(fullKey)?.revision, latest);
@@ -966,3 +977,53 @@ for (const [error, retryable] of [
     assert.equal(full.mock.callCount(), 0);
   });
 }
+
+test('compact graph spacing is at least a minute, four times the last read, and at most five minutes', () => {
+  assert.equal(pendingGraphSpacing(0), 60_000);
+  assert.equal(pendingGraphSpacing(15_000), 60_000);
+  assert.equal(pendingGraphSpacing(25_000), 100_000);
+  assert.equal(pendingGraphSpacing(120_000), 300_000);
+});
+
+test('pending-only notices keep On Hold current while compact graph reads are spaced and stop with the observer', async context => {
+  const previous = { graph: '1', pending: '1' };
+  const notice = (pending: number) => ({ graph: '1', pending: String(pending) });
+  const fixture = setup(context, previous);
+  let current = notice(2);
+  context.mock.method(api, 'repositoryRevision', async () => current);
+  const pending = context.mock.method(api, 'pendingState', async () => pendingStateFixture(pendingFixture('live', current)));
+  const full = context.mock.method(api, 'repositoryView', async () => fullFixture(pendingFixture('live', current)));
+  const patch = context.mock.method(api, 'pendingView', async () => pendingFixture('live', current));
+  fixture.start();
+  await flush();
+  assert.equal(patch.mock.callCount(), 1);
+  assert.deepEqual(fixture.client.getQueryData<RepositoryView>(fullKey)?.revision, notice(2));
+  for (const next of [3, 4, 5]) {
+    current = notice(next);
+    fixture.emit(current);
+    await flush();
+    assert.equal(patch.mock.callCount(), 1);
+    assert.deepEqual(fixture.client.getQueryData<PendingStateView>(pendingKey)?.revision, current);
+  }
+  assert.equal(pending.mock.callCount(), 4);
+  context.mock.timers.tick(pendingGraphSpacing(0));
+  await flush();
+  assert.equal(patch.mock.callCount(), 2);
+  assert.deepEqual(fixture.client.getQueryData<RepositoryView>(fullKey)?.revision, notice(5));
+  // No notice arrived during the second spacing, so its end reads nothing.
+  context.mock.timers.tick(pendingGraphSpacing(0));
+  await flush();
+  assert.equal(patch.mock.callCount(), 2);
+  current = notice(6);
+  fixture.emit(current);
+  await flush();
+  assert.equal(patch.mock.callCount(), 3);
+  current = notice(7);
+  fixture.emit(current);
+  await flush();
+  fixture.stop();
+  context.mock.timers.tick(pendingGraphSpacing(0));
+  await flush();
+  assert.equal(patch.mock.callCount(), 3);
+  assert.equal(full.mock.callCount(), 0);
+});
