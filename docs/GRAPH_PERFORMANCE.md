@@ -192,7 +192,11 @@ it holds an outer permit itself.
 
 Each class queues at most eight callers for at most one second. Saturation or
 an expired admission wait returns `resource_overloaded` (HTTP 503 with
-`Retry-After: 1`); caller cancellation preserves its context error. A nested
+`Retry-After: 1`); caller cancellation preserves its context error. A graph read
+(`/view`, `/pending-view`, `/graph-state`) that was admitted, loaded its inputs
+and then found no capacity to finish answers `Retry-After: 15` instead: the web
+client retries a short delay up to four times, and each retry would load the
+whole repository view again. A nested
 bulk permit can serve interactive work. Interactive-to-bulk escalation succeeds
 only immediately when bulk capacity is free and no bulk caller is queued;
 otherwise it returns overload, never waits while holding the interactive slot.

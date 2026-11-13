@@ -1580,7 +1580,10 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string)
 		w.Header().Set("Retry-After", "3")
 	}
 	if code == "resource_overloaded" || code == "doc_range_index_unavailable" || code == "graph_projection_pending" || code == "doc_find_fields_pending" || code == "doc_display_pending" {
-		w.Header().Set("Retry-After", "1")
+		// A handler that knows a quick retry repeats expensive work sets a longer delay first.
+		if w.Header().Get("Retry-After") == "" {
+			w.Header().Set("Retry-After", "1")
+		}
 	}
 	if code == "internal" {
 		msg = "internal server error"

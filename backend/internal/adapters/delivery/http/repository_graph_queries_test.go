@@ -256,7 +256,8 @@ func TestRepositoryGraphHTTPErrorContract(test *testing.T) {
 		{cause: domain.ErrNotFound, status: http.StatusNotFound, code: "not_found"},
 		{cause: domain.ErrForbidden, status: http.StatusForbidden, code: "forbidden"},
 		{cause: domain.ErrUnauthorized, status: http.StatusUnauthorized, code: "unauthenticated"},
-		{cause: domain.ErrResourceOverloaded, status: http.StatusServiceUnavailable, code: "resource_overloaded", retry: "1"},
+		// The query ran before it reported overload, so a quick retry would repeat its reads.
+		{cause: domain.ErrResourceOverloaded, status: http.StatusServiceUnavailable, code: "resource_overloaded", retry: graphBuildRetryAfter},
 		{cause: domain.ErrGraphProjectionNotReady, status: http.StatusServiceUnavailable, code: "graph_projection_pending", retry: "1"},
 		{cause: fmt.Errorf("wrapped: %w", domain.ErrGraphProjectionNotReady), status: http.StatusServiceUnavailable, code: "graph_projection_pending", retry: "1"},
 		{cause: domain.ErrGraphProjectionFailed, status: http.StatusServiceUnavailable, code: "graph_projection_failed"},
