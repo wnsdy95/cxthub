@@ -162,7 +162,8 @@ setting `synchronous_commit=on` alone does not provision replicas. See PostgreSQ
 
 ## Regression evidence
 
-CI runs real PostgreSQL tests, including repeated Go race-detector runs:
+Every pull request runs these real PostgreSQL tests once; the `CI heavy` workflow
+(main pushes, nightly, `ci:full` pull requests) repeats them under the Go race detector:
 
 - Two separate server pools limited to two connections each, six parallel PRs with duplicate deliveries, and a
   concurrent ordinary push: every source remains reachable, one completion per PR.

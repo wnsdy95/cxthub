@@ -173,7 +173,10 @@ func runGitPrePush(ctx context.Context, c *Container, cwd string, args []string,
 		// same-name branch must never inherit an earlier operation's authority.
 		frozen := scope
 		frozen.Branches = slices.Clone(scope.Branches)
-		out, err = c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true, Append: attempt == 2, Publication: &frozen})
+		err = runForegroundUpload(pushCtx, cwd, prePushUploadStall, nil, func(uploadCtx context.Context) (err error) {
+			out, err = c.Sync.Push(uploadCtx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true, Append: attempt == 2, Publication: &frozen})
+			return err
+		})
 		if attempt == 2 {
 			if err == nil {
 				fmt.Println("cxt: repositioned and appended after the remote head — no history lost")

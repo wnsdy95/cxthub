@@ -92,14 +92,15 @@ func readCapturePushRequest(t *testing.T, root string) (string, capturePushReque
 
 type capturePushSyncSpy struct {
 	inbound.SyncRepo
-	t        *testing.T
-	store    *storage.FileStore
-	branch   domain.PublicationBranch
-	target   domain.ContentHash
-	inputs   []inbound.SyncInput
-	failure  error
-	accepted int
-	before   func()
+	t         *testing.T
+	store     *storage.FileStore
+	branch    domain.PublicationBranch
+	target    domain.ContentHash
+	inputs    []inbound.SyncInput
+	failure   error
+	accepted  int
+	before    func()
+	deadlines []time.Time
 }
 
 func (s *capturePushSyncSpy) Push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
@@ -113,6 +114,8 @@ func (s *capturePushSyncSpy) Push(ctx context.Context, in inbound.SyncInput) (in
 	scope.ExpectedTargets = map[string]domain.ContentHash{s.branch.BranchID: in.Publication.ExpectedTargets[s.branch.BranchID]}
 	copy.Publication = &scope
 	s.inputs = append(s.inputs, copy)
+	deadline, _ := ctx.Deadline()
+	s.deadlines = append(s.deadlines, deadline)
 	if s.before != nil {
 		s.before()
 	}
@@ -446,6 +449,178 @@ func TestCapturePushLostAcknowledgementPersistsBoundedRetry(t *testing.T) {
 	}
 	if _, _, after := readCapturePushRequest(t, f.cwd); !bytes.Equal(before, after) || len(spy.inputs) != 2 {
 		t.Fatal("requeue reset exhausted transport budget")
+	}
+}
+
+// A long provider thread cannot be prepared and uploaded in one minute. The
+// detached worker must hand a lone pending delivery its own deadline instead
+// of timing out every bounded retry until the request is abandoned.
+func TestCapturePushJobUsesWorkerDeadlineShare(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "large-thread", domain.DocumentIdentityLegacy, true)
+	if err := processFrozenCapture(context.Background(), f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(context.Background(), f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	spy := capturePushSpy(t, f, p)
+	f.c.Sync = spy
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(spy.deadlines) != 1 || spy.accepted != 1 {
+		t.Fatal("pending delivery did not reach transport")
+	}
+	if left := time.Until(spy.deadlines[0]); left < 25*time.Minute {
+		t.Fatalf("lone delivery received %v of a 30m worker budget", left)
+	}
+}
+
+// An exhausted deferred publication is visible in status and a manual push
+// re-arms it, after which the worker delivers it again.
+func TestCapturePushExhaustedRequestVisibleAndRearmed(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "exhausted", domain.DocumentIdentityLegacy, true)
+	ctx := context.Background()
+	if err := processFrozenCapture(ctx, f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(ctx, f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	rel, request, _ := readCapturePushRequest(t, f.cwd)
+	request.Tries, request.Error = 8, "context deadline exceeded"
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileDurable(f.cwd, rel, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	spy := capturePushSpy(t, f, p)
+	f.c.Sync = spy
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || len(spy.inputs) != 0 {
+		t.Fatal("exhausted request retried automatically", err)
+	}
+	listed, err := listDeferredPushes(f.cwd)
+	if err != nil || len(listed) != 1 || !listed[0].Exhausted || listed[0].Tries != 8 || listed[0].Branch != p.Proof.Branch || listed[0].Error == "" {
+		t.Fatalf("exhausted request not visible: %+v %v", listed, err)
+	}
+	if n, err := rearmCapturePushes(ctx, f.cwd, "some-other-branch"); err != nil || n != 0 {
+		t.Fatalf("re-armed another branch's request: %d %v", n, err)
+	}
+	if n, err := rearmCapturePushes(ctx, f.cwd, p.Proof.Branch); err != nil || n != 1 {
+		t.Fatalf("selected branch was not re-armed: %d %v", n, err)
+	}
+	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 1 || listed[0].Exhausted || listed[0].Tries != 0 || listed[0].Error != "" {
+		t.Fatalf("re-armed request kept exhausted state or a stale error: %+v", listed)
+	}
+	// While the new attempt runs, its durable claim must not show the old
+	// attempt's failure as if it were this attempt's outcome.
+	spy.before = func() {
+		_, claimed, _ := readCapturePushRequest(t, f.cwd)
+		if claimed.Tries != 1 || claimed.Error != "" {
+			t.Fatalf("in-flight claim carries a stale error: %+v", claimed)
+		}
+	}
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || spy.accepted != 1 {
+		t.Fatal("re-armed request was not delivered", err)
+	}
+	if listed, _ := listDeferredPushes(f.cwd); len(listed) != 0 {
+		t.Fatalf("delivered request still listed: %+v", listed)
+	}
+}
+
+func TestCapturePushClaimClearsPreviousAttemptError(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "stale-error", domain.DocumentIdentityLegacy, true)
+	ctx := context.Background()
+	if err := processFrozenCapture(ctx, f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(ctx, f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	rel, request, _ := readCapturePushRequest(t, f.cwd)
+	request.Tries, request.Error = 2, "previous attempt: context deadline exceeded"
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileDurable(f.cwd, rel, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	spy := capturePushSpy(t, f, p)
+	spy.before = func() {
+		_, claimed, _ := readCapturePushRequest(t, f.cwd)
+		if claimed.Tries != 3 || claimed.Error != "" {
+			t.Fatalf("in-flight claim carries a stale error: %+v", claimed)
+		}
+	}
+	f.c.Sync = spy
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil || spy.accepted != 1 {
+		t.Fatal("delivery did not run", err)
+	}
+}
+
+func TestCapturePushPersistsSanitizedErrors(t *testing.T) {
+	f := newCapturePushDriver(t)
+	p := f.attempt(t, "sanitized-error", domain.DocumentIdentityLegacy, true)
+	ctx := context.Background()
+	if err := processFrozenCapture(ctx, f.c, f.cwd, f.cwd, p); err != nil {
+		t.Fatal(err)
+	}
+	updates, scope := capturePushSelection(p)
+	if err := queueCapturePush(ctx, f.c, f.cwd, updates, scope); err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("Q7x_", 24) + ".Nt" // synthetic opaque run; never a real credential
+	spy := capturePushSpy(t, f, p)
+	spy.failure = errors.New(`Get "https://api.invalid/x?remote_url=https%3A%2F%2Fu%3Asecret%40h%2Fr": proxy said ` + token)
+	f.c.Sync = spy
+	if _, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, stored, raw := readCapturePushRequest(t, f.cwd)
+	if stored.Error == "" || bytes.Contains(raw, []byte(token)) || bytes.Contains(raw, []byte("secret")) {
+		t.Fatalf("queue persisted secrets: %s", raw)
+	}
+	// A request written by an older binary is sanitized on display.
+	rel, legacy, _ := readCapturePushRequest(t, f.cwd)
+	legacy.Error = "older binary wrote " + token
+	legacyRaw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileDurable(f.cwd, rel, legacyRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := listDeferredPushes(f.cwd)
+	if err != nil || len(listed) != 1 || strings.Contains(listed[0].Error, token) {
+		t.Fatalf("status displays a stored token: %+v %v", listed, err)
+	}
+}
+
+func TestCapturePushJobBudgetSharesAndBounds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if got := capturePushJobBudget(ctx, 3); got < 9*time.Minute || got > 10*time.Minute {
+		t.Fatalf("three eligible deliveries got %v each", got)
+	}
+	if got := capturePushJobBudget(ctx, 0); got < 29*time.Minute {
+		t.Fatalf("zero count must not divide by zero or shrink: %v", got)
+	}
+	if got := capturePushJobBudget(ctx, 1000); got != capturePushMinJobBudget {
+		t.Fatalf("many deliveries must keep the minimum floor: %v", got)
+	}
+	if got := capturePushJobBudget(context.Background(), 1); got != capturePushMaxJobBudget {
+		t.Fatalf("undeadlined caller must stay bounded: %v", got)
 	}
 }
 

@@ -86,7 +86,7 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	var neg negotiateResp
 	negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
 	outbound.RecordSyncDiagnostic(negotiationCtx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Documents: 1, Chunks: len(chunkHaves)}, nil)
-	if err := c.do(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: docHaves, ChunkHaves: chunkHaves}, &neg); err != nil {
+	if err := c.doIdempotent(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: docHaves, ChunkHaves: chunkHaves}, &neg); err != nil {
 		return true, err
 	}
 	// Validate every response field even for an unsupported or already-current
@@ -157,6 +157,29 @@ func (c *BackendClient) pushRequestedDocChunks(ctx context.Context, repoID strin
 			rootSizes[chunk.Hash] = int(chunk.Bytes)
 		}
 	}
+	// Negotiation wants only chunks the server lacks, so accepted batches are
+	// durable progress: a later run resumes from the remaining count.
+	policy, _ := outbound.UploadPolicyFromContext(ctx)
+	total, sent := 0, 0
+	for _, hash := range order {
+		if wants[hash] {
+			total++
+		}
+	}
+	report := func() {
+		if policy.Progress != nil && total > 0 {
+			policy.Progress(sent, total)
+		}
+	}
+	push := func(batch []chunkObjWire) error {
+		if err := c.pushChunkBatches(ctx, repoID, batch); err != nil {
+			return err
+		}
+		sent += len(batch)
+		report()
+		return nil
+	}
+	report()
 	var pending []chunkObjWire
 	for _, hash := range order {
 		if !wants[hash] {
@@ -182,11 +205,14 @@ func (c *BackendClient) pushRequestedDocChunks(ctx context.Context, repoID strin
 			return err
 		}
 		for _, batch := range batches[:len(batches)-1] {
-			if err := c.pushChunkBatches(ctx, repoID, batch); err != nil {
+			if err := push(batch); err != nil {
 				return err
 			}
 		}
 		pending = batches[len(batches)-1]
 	}
-	return c.pushChunkBatches(ctx, repoID, pending)
+	if len(pending) == 0 {
+		return nil
+	}
+	return push(pending)
 }

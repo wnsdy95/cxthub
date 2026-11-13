@@ -15,6 +15,11 @@ const legacyNormalizationParserHeapBudget int64 = 64 << 20
 const legacyNormalizationParserCheckpointQuanta = 64
 const legacyNormalizationParserBatchHeap = 2 * domain.LegacyCanonicalEncodingBytes
 
+// legacyNormalizationParserStepQuanta bounds parser and stage checkpoint quanta
+// in one worker step. A step ends early once its batch opens a transaction, so
+// it commits about one full batch instead of every eight small objects.
+const legacyNormalizationParserStepQuanta = legacyNormalizationCheckpointBatchObjects
+
 type legacyNormalizationParserCheckpoint struct {
 	Ref   legacyNormalizationBufferRef `json:"ref"`
 	Pins  legacyNormalizationBufferRef `json:"pins"`
@@ -150,7 +155,13 @@ func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) 
 			work.capture.Close()
 		}
 	}()
-	for quantum := 0; quantum < domain.DocLegacyByteBackfillBatchBlocks; quantum++ {
+	quanta := legacyNormalizationParserStepQuanta
+	if work.parserStepQuanta > 0 {
+		quanta = work.parserStepQuanta
+	}
+	// Stop once the batch has opened its transaction (a full flush or a read),
+	// so the job row lock covers the current quantum only.
+	for quantum := 0; quantum < quanta && batch.transaction == nil; quantum++ {
 		if parser.Ref.Bytes == 0 {
 			ref, complete, err := work.capture.ParserStep(ctx, binding, store, legacyNormalizationParserHeapBudget-legacyNormalizationParserBatchHeap)
 			if err != nil {

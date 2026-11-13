@@ -831,6 +831,13 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 }
 
 func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, rest []string, publish func(string)) error {
+	// Every hook and detached worker uploads as a bounded, paced background
+	// client that yields to a foreground push. pre-push narrows this to its
+	// own foreground publication below. live-watch only observes; the
+	// live-publish processes it spawns enter here with their own policy.
+	if len(rest) == 0 || rest[0] != "live-watch" {
+		ctx = withBackgroundUploads(ctx, cwd)
+	}
 	if len(rest) > 0 && rest[0] == "capture-replay" {
 		return runCommitCaptureWorker(ctx, c, cwd)
 	}

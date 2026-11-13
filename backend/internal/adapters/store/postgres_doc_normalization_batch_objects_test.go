@@ -54,7 +54,7 @@ func TestNormalizationCheckpointPGBatchPipelinesBoundedOwnedObjects(test *testin
 	storage, ctx, _, job, state := legacyNormalizationParserReusePGStart(test)
 	peer, trace := normalizationBatchPGPeer(test, storage, ctx)
 	work := &legacyNormalizationCheckpointWork{store: peer, job: job, state: state}
-	objects := make([]legacyByteCheckpointObject, domain.DocLegacyByteBackfillBatchBlocks)
+	objects := make([]legacyByteCheckpointObject, legacyNormalizationCheckpointBatchObjects)
 	for ordinal := range objects {
 		objects[ordinal] = legacyCheckpointPGObject(fmt.Sprintf("bounded-pipeline-%d", ordinal))
 	}
@@ -71,8 +71,8 @@ func TestNormalizationCheckpointPGBatchPipelinesBoundedOwnedObjects(test *testin
 				test.Fatal(err)
 			}
 			borrowed.data[0] ^= 1
-			if len(batch.objects) > domain.DocLegacyByteBackfillBatchBlocks || batch.bytes > domain.LegacyCanonicalEncodingBytes {
-				test.Fatal("pipeline exceeded its original object bound", len(batch.objects))
+			if len(batch.objects) > legacyNormalizationCheckpointBatchObjects || batch.bytes > domain.LegacyCanonicalEncodingBytes {
+				test.Fatal("pipeline exceeded its object bound", len(batch.objects))
 			}
 		}
 		if err := batch.finish(bound, nil); err != nil || batch.transaction != nil || batch.objects != nil {
@@ -92,8 +92,8 @@ func TestNormalizationCheckpointPGBatchPipelinesBoundedOwnedObjects(test *testin
 	trace.mutex.Lock()
 	maximum := trace.maximum
 	trace.mutex.Unlock()
-	if maximum != domain.DocLegacyByteBackfillBatchBlocks {
-		test.Fatal("pipeline did not use exactly its existing eight-object bound", maximum)
+	if maximum != legacyNormalizationCheckpointBatchObjects {
+		test.Fatal("pipeline did not use exactly its object bound", maximum)
 	}
 }
 
@@ -197,7 +197,7 @@ func TestNormalizationCheckpointPGBatchBufferedDuplicatesPreserveFlushBounds(tes
 				test.Fatal(err)
 			}
 			defer rollbackPG(batch.transaction)
-			limit := min(domain.DocLegacyByteBackfillBatchBlocks, domain.LegacyCanonicalEncodingBytes/size)
+			limit := min(legacyNormalizationCheckpointBatchObjects, domain.LegacyCanonicalEncodingBytes/size)
 			for window := 0; window < 2; window++ {
 				before := trace.snapshot()
 				for ordinal := 1; ordinal <= limit; ordinal++ {
@@ -250,7 +250,7 @@ func TestNormalizationCheckpointPGBatchUniquePendingBounds(test *testing.T) {
 				test.Fatal(err)
 			}
 			defer rollbackPG(batch.transaction)
-			limit := min(domain.DocLegacyByteBackfillBatchBlocks, domain.LegacyCanonicalEncodingBytes/size)
+			limit := min(legacyNormalizationCheckpointBatchObjects, domain.LegacyCanonicalEncodingBytes/size)
 			for ordinal := 1; ordinal <= limit; ordinal++ {
 				body := bytes.Repeat([]byte{byte(ordinal)}, size)
 				object := legacyByteCheckpointObject{hash: domain.HashContent(body), data: body}

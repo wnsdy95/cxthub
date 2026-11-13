@@ -855,9 +855,30 @@ func Run(c *Container, args []string) error {
 		force := parsed.has("--force") || parsed.has("-f")
 		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
+		// A manual push is the user's retry: give exhausted deferred
+		// publications for the selected branch (or all) a fresh budget, and
+		// wake the capture worker to deliver them afterwards.
+		// Deferred publications are bound to origin.
+		if remoteName == "origin" {
+			if rearmed, rearmErr := rearmCapturePushes(ctx, cxtRepoRoot(ctx, cwd), strings.TrimPrefix(selectedRef, "refs/heads/")); rearmErr != nil {
+				hookWarn("deferred context pushes could not be re-armed: %v", rearmErr)
+			} else if rearmed > 0 {
+				fmt.Fprintf(os.Stderr, "push: re-armed %d exhausted deferred context push(es)\n", rearmed)
+				if c.WakeCommitCapture != nil {
+					defer c.WakeCommitCapture(cwd)
+				}
+			}
+		}
 		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
-		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, Publication: publication, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		var out inbound.SyncOutput
+		err = runForegroundUpload(pushCtx, cwd, foregroundUploadStall, os.Stderr, func(uploadCtx context.Context) (err error) {
+			out, err = c.Sync.Push(uploadCtx, inbound.SyncInput{Cwd: cwd, Publication: publication, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+			return err
+		})
 		if err != nil {
+			if uploadInterrupted(err) {
+				fmt.Fprintln(os.Stderr, "push: chunks already accepted by the server are kept; rerun the same command to resume the remaining upload")
+			}
 			if errors.Is(err, domain.ErrSyncConflict) {
 				if strings.Contains(err.Error(), "memory attachment") {
 					return fmt.Errorf("! [rejected] %w (memory fork)\nhint: Preview the specific memory pointer with 'cxt repair --preview --snapshot <hash> --reason <text> --output <file>', then apply its exact plan ID.\nhint: Then run 'cxt memorize' and 'cxt push' to project the local session again", err)

@@ -175,9 +175,7 @@ func (profile *executionProfile) configure(ctx context.Context, storage any) (fa
 		stopControl()
 		cancelControl()
 	}
-	restoreAdmission, err := app.ConfigureProcessAdmission(admission, app.ProcessAdmissionLimits{
-		Active: int(profile.role.Active), Queue: int(profile.role.Queue),
-	})
+	restoreAdmission, err := app.ConfigureProcessAdmission(admission, processAdmissionLimits(profile.role.Role, profile.role.Active, profile.role.Queue))
 	if err != nil {
 		profile.cancel()
 		profile.controlDone()
@@ -277,4 +275,16 @@ func (runtime *Runtime) BoundedDocuments() bool {
 
 func (runtime *Runtime) ExternalWorkers() bool {
 	return runtime.execution != nil && runtime.execution.budget.Profile == outbound.BoundedWorkersProfile
+}
+
+// processAdmissionLimits maps a bounded role to its process admission. Only
+// the API process, which serves pushes and repository viewers, lets queued
+// bulk requests outlast one in-flight bulk request; MCP and worker roles keep
+// the ordinary admission wait.
+func processAdmissionLimits(role outbound.ProcessRole, active, queue int32) app.ProcessAdmissionLimits {
+	limits := app.ProcessAdmissionLimits{Active: int(active), Queue: int(queue)}
+	if role == outbound.ProcessAPI {
+		limits.BulkWait = app.ResourceBulkWaitLimit
+	}
+	return limits
 }

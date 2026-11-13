@@ -60,7 +60,7 @@ func (c *BackendClient) PublishMemoryArchive(ctx context.Context, repoID string,
 			return domain.ErrUnsupportedDocumentIdentity
 		}
 		var neg negotiateResp
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: []domain.ContentHash{doc.Hash}}, &neg); err != nil {
+		if err := c.doIdempotent(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: []domain.ContentHash{doc.Hash}}, &neg); err != nil {
 			return err
 		}
 		if !neg.PreparedMemoryArchivesSupported || !neg.AsyncDocsSupported || !supportsRootIdentity(neg.DocIdentitiesSupported) {
@@ -96,7 +96,7 @@ func (c *BackendClient) PublishMemoryArchive(ctx context.Context, repoID string,
 		}
 	} else if chunked {
 		var neg negotiateResp
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{ChunkHaves: plan.Order}, &neg); err != nil {
+		if err := c.doIdempotent(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{ChunkHaves: plan.Order}, &neg); err != nil {
 			return err
 		}
 		if !neg.BoundedChunksSupported || !containsString(neg.ChunkFormatsSupported, plan.Manifest.Format) {

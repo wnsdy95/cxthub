@@ -404,31 +404,103 @@ func readLegacyNormalizationCheckpointObject(ctx context.Context, transaction pg
 	return data, nil
 }
 
+// legacyCheckpointDiscardObjects bounds the checkpoint objects one discard
+// transaction scans and deletes, matching checkpoint GC. Each delete runs
+// per-row guard and cascade triggers (about 2ms a row locally) while the
+// transaction holds the job row lock; one unbounded DELETE of a large
+// checkpoint ran past the 5s lease renewal timeout and cancelled the job, so
+// discard commits in short transactions the renewal can interleave.
+const legacyCheckpointDiscardObjects = 128
+
 func (storage *PostgresStore) discardLegacyNormalizationCheckpoint(ctx context.Context, job domain.DocRangeIndexJob, expected legacyByteCheckpoint) error {
 	if expected.hash == "" || expected.sequence == math.MaxInt64 {
 		return domain.ErrValidation
 	}
-	transaction, state, err := storage.openLegacyByteCheckpoint(ctx, job, expected.stage, &expected, false)
+	state, err := storage.unpinLegacyNormalizationCheckpoint(ctx, job, expected)
 	if err != nil {
 		return err
 	}
+	cursor, progressed := domain.ContentHash(""), false
+	for {
+		scanned, removed, last, err := storage.drainLegacyNormalizationCheckpoint(ctx, job, state, cursor)
+		if err != nil {
+			return err
+		}
+		progressed = progressed || removed > 0
+		if scanned == legacyCheckpointDiscardObjects {
+			cursor = last
+			continue
+		}
+		// One pass over the remaining objects ended. Parents go first, so a
+		// pass that removed nothing either found no objects or a broken graph.
+		if !progressed {
+			if scanned != 0 || cursor != "" {
+				return errors.Join(domain.ErrPreparedDocRangeObject, errLegacyByteStageCorrupt)
+			}
+			return nil
+		}
+		cursor, progressed = "", false
+	}
+}
+
+// unpinLegacyNormalizationCheckpoint clears the current root and advances the
+// sequence, leaving every checkpoint object unreferenced for bounded deletion.
+func (storage *PostgresStore) unpinLegacyNormalizationCheckpoint(ctx context.Context, job domain.DocRangeIndexJob, expected legacyByteCheckpoint) (legacyByteCheckpoint, error) {
+	transaction, state, err := storage.openLegacyByteCheckpoint(ctx, job, expected.stage, &expected, false)
+	if err != nil {
+		return legacyByteCheckpoint{}, err
+	}
 	defer rollbackPG(transaction)
 	if err := legacyByteCheckpointProtocols(ctx, transaction); err != nil {
-		return err
+		return legacyByteCheckpoint{}, err
 	}
 	if err := transaction.QueryRow(ctx, `UPDATE doc_legacy_byte_stages_v1 SET checkpoint_sequence=checkpoint_sequence+1,
  checkpoint_hash=NULL,checkpoint_bytes=0 WHERE doc_hash=$1 AND stage_id=$2::uuid AND checkpoint_sequence=$3
  AND checkpoint_hash=$4 RETURNING checkpoint_sequence`, job.DocHash, expected.stage.incarnation, expected.sequence, expected.hash).Scan(&state.sequence); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.ErrConflict
+			return legacyByteCheckpoint{}, domain.ErrConflict
 		}
-		return err
+		return legacyByteCheckpoint{}, err
 	}
-	if _, err := transaction.Exec(ctx, `DELETE FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid`, job.DocHash, state.stage.incarnation); err != nil {
-		return err
+	state.hash, state.bytes = "", 0
+	if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
+		return legacyByteCheckpoint{}, err
+	}
+	return state, transaction.Commit(ctx)
+}
+
+// drainLegacyNormalizationCheckpoint scans up to legacyCheckpointDiscardObjects
+// objects after cursor and deletes those no remaining structure references.
+func (storage *PostgresStore) drainLegacyNormalizationCheckpoint(ctx context.Context, job domain.DocRangeIndexJob, state legacyByteCheckpoint, cursor domain.ContentHash) (scanned, removed int64, last domain.ContentHash, failure error) {
+	transaction, _, err := storage.openLegacyByteCheckpoint(ctx, job, state.stage, &state, false)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	defer rollbackPG(transaction)
+	if err := legacyByteCheckpointProtocols(ctx, transaction); err != nil {
+		return 0, 0, "", err
+	}
+	// Like checkpoint GC, keep the planner off a hash join that scans every
+	// stage's objects; each pass must stay proportional to its bound.
+	if _, err := transaction.Exec(ctx, `SET LOCAL enable_seqscan=off`); err != nil {
+		return 0, 0, "", err
+	}
+	if err := transaction.QueryRow(ctx, `WITH scanned AS MATERIALIZED (
+ SELECT hash FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash>$3
+ ORDER BY hash LIMIT $4
+), removed AS (
+ DELETE FROM doc_legacy_byte_stage_checkpoint_objects_v1 object USING scanned
+ WHERE object.doc_hash=$1 AND object.stage_id=$2::uuid AND object.hash=scanned.hash
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_checkpoint_edges_v1 edge
+ WHERE edge.doc_hash=object.doc_hash AND edge.stage_id=object.stage_id AND edge.child_hash=object.hash)
+ RETURNING 1
+)
+ SELECT (SELECT count(*) FROM scanned),(SELECT count(*) FROM removed),COALESCE((SELECT max(hash) FROM scanned),'')`,
+		job.DocHash, state.stage.incarnation, cursor, legacyCheckpointDiscardObjects).Scan(&scanned, &removed, &last); err != nil {
+		return 0, 0, "", err
 	}
 	if err := liveLegacyByteJob(ctx, transaction, job); err != nil {
-		return err
+		return 0, 0, "", err
 	}
-	return transaction.Commit(ctx)
+	return scanned, removed, last, transaction.Commit(ctx)
 }
