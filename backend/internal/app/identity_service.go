@@ -51,6 +51,11 @@ func (service *IdentityService) Authenticate(ctx context.Context, idToken string
 	if err != nil {
 		return domain.User{}, err
 	}
+	return service.authenticateVerified(ctx, verified)
+}
+
+// authenticateVerified upserts the user of an already verified token.
+func (service *IdentityService) authenticateVerified(ctx context.Context, verified domain.User) (domain.User, error) {
 	return identityResult(ctx, service, func(ctx context.Context) (domain.User, error) {
 		user := verified
 		existing, readErr := service.repositories.GetUser(ctx, verified.ID)
@@ -65,6 +70,7 @@ func (service *IdentityService) Authenticate(ctx context.Context, idToken string
 			user.CreatedAt = time.Now().UTC()
 		}
 		if user.Username == "" {
+			var err error
 			user.Username, err = service.uniqueUsername(ctx, user)
 			if err != nil {
 				return domain.User{}, err
@@ -1068,7 +1074,24 @@ const sessionTTL = 30 * 24 * time.Hour
 // Login validates and upserts an IDP token (Firebase ID token / dev token), issuing a server session (stored in DB).
 // label is the device display name (browser/OS summary — derived from UA in the delivery layer).
 func (s *IdentityService) Login(ctx context.Context, idpToken, label string) (domain.User, domain.Session, error) {
-	u, err := s.Authenticate(ctx, idpToken)
+	return s.LoginAdmitted(ctx, idpToken, label, nil)
+}
+
+// LoginAdmitted is Login with an admission check between token verification and
+// the first write. admit receives the verified user ID, so a caller can limit
+// logins per account without trusting client-supplied addresses. An admit error is
+// returned unchanged and nothing is written.
+func (s *IdentityService) LoginAdmitted(ctx context.Context, idpToken, label string, admit func(context.Context, string) error) (domain.User, domain.Session, error) {
+	verified, err := s.verifier.Verify(ctx, idpToken)
+	if err != nil {
+		return domain.User{}, domain.Session{}, err
+	}
+	if admit != nil {
+		if err := admit(ctx, verified.ID); err != nil {
+			return domain.User{}, domain.Session{}, err
+		}
+	}
+	u, err := s.authenticateVerified(ctx, verified)
 	if err != nil {
 		return domain.User{}, domain.Session{}, err
 	}

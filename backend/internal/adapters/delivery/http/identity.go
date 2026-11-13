@@ -3,8 +3,8 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,7 +23,8 @@ type IdentityBackend interface {
 	EnterpriseIdentity
 	ResolveRepositoryConnection(context.Context, string, string) (app.RepositoryConnection, error)
 	// Session: IDP token exchange → server session issuance/revoke, Bearer interpretation.
-	Login(ctx context.Context, idpToken, label string) (domain.User, domain.Session, error)
+	// LoginAdmitted runs admit with the verified user ID before any write; its error is returned unchanged.
+	LoginAdmitted(ctx context.Context, idpToken, label string, admit func(context.Context, string) error) (domain.User, domain.Session, error)
 	Logout(ctx context.Context, sessionToken string) error
 	ResolveUser(ctx context.Context, bearer string) (domain.User, error)
 
@@ -216,7 +217,8 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	s.registerNamespaceAdministration(mux)
 	s.registerMCPApplications(mux)
 	// Session exchange: IDP token (Bearer) → server session token issuance (requireUser not applied — login entry point).
-	mux.HandleFunc("POST /api/v1/auth/session", s.rateLimit(20, time.Minute, s.createSession))
+	// Its allowance is per verified account and is checked inside createSession.
+	mux.HandleFunc("POST /api/v1/auth/session", s.createSession)
 	// Device flow (CLI token issuance automation) — start is unauthenticated (rate limit), approve is login required.
 	mux.HandleFunc("POST /api/v1/auth/device/start", s.rateLimit(10, time.Minute, s.deviceStart))
 	mux.HandleFunc("POST /api/v1/auth/device/approve", s.requireUser(s.deviceApprove))
@@ -279,31 +281,40 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/break-glass", s.requireUser(s.createBreakGlassGrant))
 }
 
-// rateLimit uses a shared GCRA allowance. Proxy forwarding headers are never
-// trusted implicitly; deployments should additionally enforce source limits at the edge.
+// rateLimit uses a shared GCRA allowance per route and subject (see allowanceSubject).
+// Proxy forwarding headers are never trusted implicitly; deployments should
+// additionally enforce source limits at the edge.
 func (s *Server) rateLimit(limit int, window time.Duration, fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.runtime == nil {
-			s.writeError(w, 503, "unavailable", "shared request allowance unavailable")
-			return
+		if s.writeAllowance(w, r.Context(), "http:"+r.URL.Path+":"+allowanceSubject(r), limit, window) {
+			fn(w, r)
 		}
-		ip := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(ip); err == nil {
-			ip = host
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		allowed, err := s.runtime.AllowRequest(ctx, "http:"+r.URL.Path+":"+domain.HashToken(ip), limit, window, time.Time{})
+	}
+}
+
+// loginsPerAccount is the session-exchange allowance of one verified account.
+const loginsPerAccount = 20
+
+// errLoginRateLimited and errLoginAllowanceUnavailable carry a refused login out
+// of IdentityBackend.LoginAdmitted, which returns admission errors unchanged.
+var (
+	errLoginRateLimited          = errors.New("login rate limited")
+	errLoginAllowanceUnavailable = errors.New("login allowance unavailable")
+)
+
+// admitLogin spends one login of the verified account. Keying by account instead
+// of address keeps people behind the same proxy from exhausting each other's
+// logins, and an unverifiable token is refused before it reaches this check.
+func (s *Server) admitLogin(path string) func(context.Context, string) error {
+	return func(ctx context.Context, userID string) error {
+		allowed, err := s.admitRequest(ctx, "http:"+path+":user:"+domain.HashToken(userID), loginsPerAccount, time.Minute)
 		if err != nil {
-			s.writeError(w, 503, "unavailable", "request allowance unavailable")
-			return
+			return fmt.Errorf("%w: %w", errLoginAllowanceUnavailable, err)
 		}
 		if !allowed {
-			w.Header().Set("Retry-After", fmt.Sprint(max(1, int(window.Seconds()))))
-			s.writeError(w, 429, "rate_limited", "Too many requests — please retry later")
-			return
+			return errLoginRateLimited
 		}
-		fn(w, r)
+		return nil
 	}
 }
 
@@ -326,7 +337,18 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	if c, cerr := r.Cookie(sessionCookie); cerr == nil {
 		replaced = c.Value
 	}
-	u, sess, err := s.id.Login(r.Context(), idp, uaLabel(r.UserAgent()))
+	u, sess, err := s.id.LoginAdmitted(r.Context(), idp, uaLabel(r.UserAgent()), s.admitLogin(r.URL.Path))
+	switch {
+	case errors.Is(err, errLoginRateLimited):
+		writeRateLimited(s, w, time.Minute)
+		return
+	case errors.Is(err, errSharedAllowanceUnavailable):
+		s.writeError(w, http.StatusServiceUnavailable, "unavailable", errSharedAllowanceUnavailable.Error())
+		return
+	case errors.Is(err, errLoginAllowanceUnavailable):
+		s.writeError(w, http.StatusServiceUnavailable, "unavailable", "request allowance unavailable")
+		return
+	}
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())

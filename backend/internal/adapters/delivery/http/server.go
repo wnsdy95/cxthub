@@ -131,6 +131,7 @@ type Server struct {
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (repository ID set).
 	syncInflight sync.Map
 	runtime      outbound.RuntimeStore
+	allowance    localAllowance // per-process GCRA checked before, and used instead of, runtime allowances
 	b            Backend
 	id           IdentityBackend
 	cookie       cookieCfg // session cookie attributes (env injected; tuned per deployment topology)
