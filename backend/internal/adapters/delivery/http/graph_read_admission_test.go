@@ -220,3 +220,63 @@ func TestColdGraphHTTPExpiredCredentialsFollowPublicGuard(t *testing.T) {
 		})
 	}
 }
+
+func TestColdGraphHTTPOverloadDelaysRetryOnlyAfterWork(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		interactive bool // also hold the other active permit, so the read is never admitted
+		calls       int64
+		retryAfter  string
+	}{
+		{name: "build finds no capacity", calls: 1, retryAfter: graphBuildRetryAfter},
+		{name: "never admitted", interactive: true, calls: 0, retryAfter: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := systemTestContext()
+			storage := store.NewFSStore(t.TempDir())
+			identity := app.NewIdentityService(auth.NewDevVerifier(), storage)
+			const token = "dev:overload-owner@example.test:Owner"
+			owner, err := identity.Authenticate(ctx, token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := identity.CreateRepository(ctx, owner, "overload-retry")
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := domain.HashContent([]byte(record.ID))
+			if _, err := storage.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: record.ID}); err != nil {
+				t.Fatal(err)
+			}
+			service := app.NewService(storage, storage, nil, nil, storage)
+			queries, err := service.GraphQueriesForProfile(inbound.RepositoryGraphCompatibility)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend := &coldGraphBackend{Backend: service, queries: queries, attempts: make(chan coldGraphAttempt, 2)}
+			server := NewServer(backend, identity)
+			if err := server.SetRepositoryGraphQueries(backend, inbound.RepositoryGraphCompatibility); err != nil {
+				t.Fatal(err)
+			}
+			_, releaseBulk, err := app.AcquireResources(ctx, app.ResourceBulk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer releaseBulk()
+			if test.interactive {
+				_, releaseInteractive, err := app.AcquireResources(ctx, app.ResourceInteractive)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer releaseInteractive()
+			}
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/repos/"+string(repo)+"/pending-view?graph_encoding=indexed-v2", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != test.retryAfter || backend.calls.Load() != test.calls {
+				t.Fatalf("status=%d retry-after=%q calls=%d body=%s", response.Code, response.Header().Get("Retry-After"), backend.calls.Load(), response.Body)
+			}
+		})
+	}
+}

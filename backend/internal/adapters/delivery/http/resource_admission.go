@@ -15,6 +15,15 @@ import (
 
 const resourceRequestLimit = 2 * time.Minute
 
+// graphBuildRetryAfter is the Retry-After, in seconds, of a graph read that ran,
+// loaded its inputs and then found no capacity to finish. The web client retries
+// an overloaded read up to four times when the server asks for at most ten
+// seconds, and each retry loads the whole repository view again before it can
+// fail the same way. A longer delay leaves the retry to the client's slower
+// revision recovery. A read that was never admitted did no work and keeps the
+// one-second default.
+const graphBuildRetryAfter = "15"
+
 type documentResponseResources struct {
 	mutex    sync.Mutex
 	open     bool
@@ -124,6 +133,9 @@ func (s *Server) graphRead(w http.ResponseWriter, r *http.Request, read func(*ht
 		return nil
 	})
 	if err != nil {
+		if attempt > 0 && errors.Is(err, domain.ErrResourceOverloaded) {
+			w.Header().Set("Retry-After", graphBuildRetryAfter)
+		}
 		s.respond(w, nil, err)
 	}
 }
