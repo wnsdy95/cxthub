@@ -72,9 +72,47 @@ func TestFinalizedDocReferenceNeedsAValidCompletedLegacyJob(t *testing.T) {
 	if _, err := FinalizedDocReference(forged); err == nil {
 		t.Fatal("job with a mismatching identity attested a document")
 	}
-	root := job
-	root.DocIdentity = DocumentIdentityRootV1
-	if _, err := FinalizedDocReference(root); err == nil {
-		t.Fatal("root job attested a legacy reference")
+	relabeled := job
+	relabeled.DocIdentity = DocumentIdentityRootV1
+	if _, err := FinalizedDocReference(relabeled); err == nil {
+		t.Fatal("legacy job relabeled as root attested a reference")
+	}
+}
+
+func TestFinalizedDocReferenceAttestsACompletedRootJob(t *testing.T) {
+	manifest, _, err := ConversationManifestForCIR(CIRDocument{Envelope: CIREnvelope{CIRVersion: "1", SourceProvider: ProviderCodex, SessionOriginID: t.Name()},
+		Events: []CIREvent{{Kind: EventMessage, Seq: 1, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "finalized root"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := ConversationManifestHash(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalConversationManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := HashContent([]byte("repository"))
+	job, err := NewDocFinalizationJobForRepresentation(repo, DocumentRepresentation{Hash: hash, Identity: DocumentIdentityRootV1, RootManifest: raw}, time.Unix(1, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FinalizedDocReference(job); !errors.Is(err, ErrValidation) {
+		t.Fatalf("waiting root job attested a document: %v", err)
+	}
+	job.State = "completed"
+	proof, err := FinalizedDocReference(job)
+	want := DocumentRef{Hash: hash, Identity: DocumentIdentityRootV1}
+	if err != nil || proof.DocumentRef() != want || !proof.Matches(Snapshot{ID: hash, DocHash: hash, DocIdentity: DocumentIdentityRootV1}) {
+		t.Fatalf("completed root job not attested: %+v %v", proof.DocumentRef(), err)
+	}
+	if proof.Matches(Snapshot{ID: hash, DocHash: hash}) {
+		t.Fatal("root reference matched a legacy snapshot")
+	}
+	stripped := job
+	stripped.RootManifest = nil
+	if _, err := FinalizedDocReference(stripped); err == nil {
+		t.Fatal("root job without its manifest attested a reference")
 	}
 }

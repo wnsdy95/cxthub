@@ -53,8 +53,12 @@ func TestPublicationSourcesReadDocumentBytesOnlyWithoutAFinalizationRecord(t *te
 		{name: "no record and damaged bytes", probe: publicationSourceProbe{verifyFailure: domain.ErrIntegrity}, snapshot: snapshot, want: domain.ErrIntegrity, attested: 1, read: 1},
 		{name: "record lookup fails", probe: publicationSourceProbe{proof: proof, found: true, attestFailure: failure}, snapshot: snapshot, want: failure, attested: 1},
 		{name: "record for another document", probe: publicationSourceProbe{proof: proof, found: true}, snapshot: domain.Snapshot{ID: other, DocHash: other, RepoID: repo}, want: domain.ErrIntegrity, attested: 1},
-		{name: "root identity is not attested by a legacy record", probe: publicationSourceProbe{proof: proof, found: true, verifyFailure: failure},
-			snapshot: domain.Snapshot{ID: hash, DocHash: hash, RepoID: repo, DocIdentity: domain.DocumentIdentityRootV1}, want: failure, read: 1},
+		// A root snapshot whose stored document is a legacy document gets the
+		// same refusal the byte verifier's legacy proof would give.
+		{name: "root snapshot of a legacy record", probe: publicationSourceProbe{proof: proof, found: true},
+			snapshot: domain.Snapshot{ID: hash, DocHash: hash, RepoID: repo, DocIdentity: domain.DocumentIdentityRootV1}, want: domain.ErrIntegrity, attested: 1},
+		{name: "root snapshot without a record", probe: publicationSourceProbe{verifyFailure: failure},
+			snapshot: domain.Snapshot{ID: hash, DocHash: hash, RepoID: repo, DocIdentity: domain.DocumentIdentityRootV1}, want: failure, attested: 1, read: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			probe := test.probe
