@@ -60,9 +60,28 @@ canonicalizes the full document before checking its output size. Untrusted
 external loading must use bounded readers and the context-aware manifest
 verifier. Neither helper grants storage ownership or permission to publish.
 
-This preparation adds no durable verification certificates. Existing body
-checks remain mandatory. A metadata catalog root, completed upload, cache hit
-or known chunk ID never substitutes for current-byte verification.
+Body checks remain mandatory when a document is finalized and whenever its
+bytes are read. A metadata catalog root, completed upload, cache hit or known
+chunk ID never substitutes for current-byte verification.
+
+There is one durable verification record: the completed finalization job. A
+job becomes completed only in the transaction that verified the whole document
+and published it, and its identity binds the repository, the document hash and
+the exact manifest. Publishing a snapshot or history event that references a
+legacy v2 document accepts that record in place of reading the document again,
+when all of these hold in the publishing transaction:
+
+- the repository owns the document object;
+- the job identity recomputed from the manifest stored now names a completed
+  job with that manifest;
+- the repository owns every chunk the manifest names, and each chunk exists.
+
+Otherwise, including for documents stored without a job and for root
+documents, the bytes are verified as before. The record shows that the document
+was verified once. It does not show that the stored bytes are still intact:
+damage after finalization is found when the bytes are read, not when a snapshot
+is published. Without this record, every snapshot of a growing session read the
+whole cumulative document again, so publishing cost grew with session length.
 
 ## Explicit readers and retention
 

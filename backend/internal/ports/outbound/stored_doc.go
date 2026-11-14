@@ -10,8 +10,20 @@ import (
 // mutable decoded CIR to a metadata-only command. Cache hints can avoid repeated
 // schema parsing only after rereading and hashing actual bytes; an index, file
 // timestamp, grant from another repo or old successful read is never sufficient.
+// FinalizedDocAttestor is the one alternative a publishing command may accept.
 type StoredDocVerifier interface {
 	VerifyStoredDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.VerifiedDocReference, error)
+}
+
+// FinalizedDocAttestor reports whether a completed finalization job already
+// verified exactly the document representation that the repository stores now.
+// It reads ownership and the job record, never chunk bodies, so its cost does
+// not grow with the document. found is false whenever no such record matches,
+// including for a missing or unowned document; the caller then verifies the
+// bytes with StoredDocVerifier, which stays the only source of a refusal. An
+// error means the record could not be read.
+type FinalizedDocAttestor interface {
+	FinalizedDocReference(context.Context, domain.ContentHash, domain.ContentHash) (proof domain.VerifiedDocReference, found bool, err error)
 }
 
 // VerifiedDocReader returns owned content verified against every current,

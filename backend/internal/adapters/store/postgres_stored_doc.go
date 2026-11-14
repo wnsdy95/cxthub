@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -98,6 +100,72 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 	}
 	s.rememberHistoryRootReference(ctx, repo, proof)
 	return proof, nil
+}
+
+// FinalizedDocReference implements outbound.FinalizedDocAttestor for legacy
+// v2 documents. It recomputes the finalization job identity from the manifest
+// that is stored now, so a completed job for another representation of the same
+// hash does not match, and it requires the repository to still own the document
+// object and every chunk the manifest names. No chunk body is read. Anything
+// that does not match, including a document the repository does not own, is
+// reported as not found, so the byte verifier remains the only place that
+// refuses a document.
+func (s *PostgresStore) FinalizedDocReference(ctx context.Context, repo, hash domain.ContentHash) (proof domain.VerifiedDocReference, found bool, err error) {
+	err = s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
+		raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		data, err := docDecompress(raw)
+		if err != nil {
+			return nil
+		}
+		manifest, chunked := domain.ParseDocChunkManifest(data)
+		if !chunked || manifest.Format != domain.ChunkFormatV2 {
+			return nil
+		}
+		wanted, err := domain.NewDocFinalizationJob(repo, hash, manifest, time.Unix(0, 0).UTC())
+		if err != nil {
+			return nil
+		}
+		job, err := s.GetDocJob(ctx, repo, wanted.ID)
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if job.State != "completed" || job.DocHash != hash || !sameDocManifest(job.Manifest, manifest) {
+			return nil
+		}
+		seen := make(map[domain.ContentHash]bool, len(manifest.Chunks))
+		chunks := make([]string, 0, len(manifest.Chunks))
+		for _, chunk := range manifest.Chunks {
+			if !seen[chunk] {
+				seen[chunk] = true
+				chunks = append(chunks, string(chunk))
+			}
+		}
+		var unowned bool
+		if err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM unnest($2::text[]) AS wanted(hash)
+ WHERE NOT EXISTS (SELECT 1 FROM repo_blobs owned JOIN blobs body ON body.hash=owned.hash
+  WHERE owned.repo_id=$1 AND owned.kind='chunk' AND owned.hash=wanted.hash))`, string(repo), chunks).Scan(&unowned); err != nil {
+			return err
+		}
+		if unowned {
+			return nil
+		}
+		proof, err = domain.FinalizedDocReference(job)
+		found = err == nil
+		return err
+	})
+	if err != nil {
+		return domain.VerifiedDocReference{}, false, err
+	}
+	return proof, found, nil
 }
 
 func (s *PostgresStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (doc domain.VerifiedSessionDoc, err error) {
