@@ -67,17 +67,19 @@ chunk ID never substitutes for current-byte verification.
 There is one durable verification record: the completed finalization job. A
 job becomes completed only in the transaction that verified the whole document
 and published it, and its identity binds the repository, the document hash and
-the exact manifest. Publishing a snapshot or history event that references a
-legacy v2 document accepts that record in place of reading the document again,
-when all of these hold in the publishing transaction:
+the exact manifest: the chunk manifest of a legacy v2 document, or the
+canonical root manifest of a root. Publishing a snapshot or history event that
+references either kind accepts that record in place of reading the document
+again, when all of these hold in the publishing transaction:
 
 - the repository owns the document object;
 - the job identity recomputed from the manifest stored now names a completed
-  job with that manifest;
+  job with that same manifest and identity;
 - the repository owns every chunk the manifest names, and each chunk exists.
 
-Otherwise, including for documents stored without a job and for root
-documents, the bytes are verified as before. The record shows that the document
+Root publication still requires the repository's root requirement and peer
+compatibility first. Otherwise, including for documents stored without a job,
+the bytes are verified as before. The record shows that the document
 was verified once. It does not show that the stored bytes are still intact:
 damage after finalization is found when the bytes are read, not when a snapshot
 is published. Without this record, every snapshot of a growing session read the
@@ -124,8 +126,9 @@ page proportional to page size: full current-byte verification remains required.
 Reference-only verification also streams every current chunk without retaining
 the full conversation. It returns a domain-owned reference only after complete
 validation. Neither that reference nor an event page is a persistent certificate.
-History preparation may reuse that successful reference only inside the same
-active request, repository, store and exact read transaction. Capture still
+History preparation may reuse that successful reference, or a root reference
+attested by its completed finalization job, only inside the same active request,
+repository, store and exact read transaction. Capture still
 checks the descriptor and records all dependency versions; the later write
 transaction pins those versions and rechecks authorization. Another read
 transaction, failed verification or ended proof scope cannot reuse it.

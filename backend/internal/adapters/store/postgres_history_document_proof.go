@@ -21,8 +21,9 @@ type historyRootReferencePG struct {
 	proof domain.VerifiedDocReference
 }
 
-// Only version metadata survives preparation. This evidence is neither a
-// durable certificate nor a replacement for this request's full byte reads.
+// Only version metadata survives preparation. This evidence is not a durable
+// certificate. A root reference it reuses was established in the same read
+// transaction, by full byte reads or by the completed finalization record.
 type historyDocumentProofPG struct {
 	owner                       *PostgresStore
 	repo                        domain.ContentHash

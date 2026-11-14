@@ -67,9 +67,10 @@ func (sources *documentPublicationSources) verifyReference(ctx context.Context, 
 			return domain.ErrValidation
 		}
 		// A document that finalization already verified and published is not
-		// read again here: its completed job is the evidence. Anything else,
-		// including a document stored without a job, has its bytes verified.
-		if snapshot.DocIdentity == domain.DocumentIdentityLegacy && rootAdapterPresent(sources.finalized) {
+		// read again here: its completed job is the evidence, for legacy and
+		// root documents alike. Anything else, including a document stored
+		// without a job, has its bytes verified.
+		if rootAdapterPresent(sources.finalized) {
 			proof, found, err := sources.finalized.FinalizedDocReference(ctx, repo, snapshot.DocHash)
 			if err != nil {
 				return err

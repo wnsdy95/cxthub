@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -103,13 +104,14 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 }
 
 // FinalizedDocReference implements outbound.FinalizedDocAttestor for legacy
-// v2 documents. It recomputes the finalization job identity from the manifest
-// that is stored now, so a completed job for another representation of the same
-// hash does not match, and it requires the repository to still own the document
-// object and every chunk the manifest names. No chunk body is read. Anything
-// that does not match, including a document the repository does not own, is
-// reported as not found, so the byte verifier remains the only place that
-// refuses a document.
+// v2 documents and conversation roots. It recomputes the finalization job
+// identity from the manifest that is stored now, so a completed job for another
+// representation of the same hash does not match, and it requires the
+// repository to still own the document object and every chunk the manifest
+// names. No chunk body is read. Anything that does not match, including a
+// document the repository does not own, is reported as not found, so the byte
+// verifier remains the only place that refuses a document. Inside history
+// preparation an attested root is remembered like a byte-verified one.
 func (s *PostgresStore) FinalizedDocReference(ctx context.Context, repo, hash domain.ContentHash) (proof domain.VerifiedDocReference, found bool, err error) {
 	err = s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
 		raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
@@ -119,31 +121,23 @@ func (s *PostgresStore) FinalizedDocReference(ctx context.Context, repo, hash do
 		if err != nil {
 			return err
 		}
-		data, err := docDecompress(raw)
-		if err != nil {
+		id, matches, chunkList, ok := finalizedDocJobKey(ctx, repo, hash, raw)
+		if !ok {
 			return nil
 		}
-		manifest, chunked := domain.ParseDocChunkManifest(data)
-		if !chunked || manifest.Format != domain.ChunkFormatV2 {
-			return nil
-		}
-		wanted, err := domain.NewDocFinalizationJob(repo, hash, manifest, time.Unix(0, 0).UTC())
-		if err != nil {
-			return nil
-		}
-		job, err := s.GetDocJob(ctx, repo, wanted.ID)
+		job, err := s.GetDocJob(ctx, repo, id)
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if job.State != "completed" || job.DocHash != hash || !sameDocManifest(job.Manifest, manifest) {
+		if job.State != "completed" || job.DocHash != hash || !matches(job) {
 			return nil
 		}
-		seen := make(map[domain.ContentHash]bool, len(manifest.Chunks))
-		chunks := make([]string, 0, len(manifest.Chunks))
-		for _, chunk := range manifest.Chunks {
+		seen := make(map[domain.ContentHash]bool, len(chunkList))
+		chunks := make([]string, 0, len(chunkList))
+		for _, chunk := range chunkList {
 			if !seen[chunk] {
 				seen[chunk] = true
 				chunks = append(chunks, string(chunk))
@@ -165,7 +159,53 @@ func (s *PostgresStore) FinalizedDocReference(ctx context.Context, repo, hash do
 	if err != nil {
 		return domain.VerifiedDocReference{}, false, err
 	}
+	if found {
+		// History preparation reuses a root reference established in its own
+		// read transaction instead of reading the root again, whether bytes or
+		// this record established it.
+		s.rememberHistoryRootReference(ctx, repo, proof)
+	}
 	return proof, found, nil
+}
+
+// finalizedDocJobKey derives, from the stored document object alone, the
+// finalization job identity that would have published exactly that object, a
+// check that the job record carries the same manifest, and the chunks the
+// manifest names. ok is false for anything that is neither a legacy v2 chunk
+// manifest nor a canonical conversation root.
+func finalizedDocJobKey(ctx context.Context, repo, hash domain.ContentHash, raw []byte) (id string, matches func(domain.DocFinalizationJob) bool, chunks []domain.ContentHash, ok bool) {
+	root, isRoot, err := storedConversationManifest(ctx, raw)
+	if err != nil {
+		return "", nil, nil, false
+	}
+	if isRoot {
+		canonical, err := domain.CanonicalConversationManifest(root)
+		if err != nil {
+			return "", nil, nil, false
+		}
+		id, err := domain.RootDocFinalizationID(repo, domain.DocumentRepresentation{Hash: hash, Identity: domain.DocumentIdentityRootV1, RootManifest: canonical})
+		if err != nil {
+			return "", nil, nil, false
+		}
+		return id, func(job domain.DocFinalizationJob) bool {
+			return job.DocIdentity == domain.DocumentIdentityRootV1 && bytes.Equal(job.RootManifest, canonical)
+		}, conversationChunkOrder(root), true
+	}
+	data, err := docDecompress(raw)
+	if err != nil {
+		return "", nil, nil, false
+	}
+	manifest, chunked := domain.ParseDocChunkManifest(data)
+	if !chunked || manifest.Format != domain.ChunkFormatV2 {
+		return "", nil, nil, false
+	}
+	wanted, err := domain.NewDocFinalizationJob(repo, hash, manifest, time.Unix(0, 0).UTC())
+	if err != nil {
+		return "", nil, nil, false
+	}
+	return wanted.ID, func(job domain.DocFinalizationJob) bool {
+		return job.DocIdentity == domain.DocumentIdentityLegacy && sameDocManifest(job.Manifest, manifest)
+	}, manifest.Chunks, true
 }
 
 func (s *PostgresStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (doc domain.VerifiedSessionDoc, err error) {
