@@ -311,7 +311,10 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 	}
 	assertNoIndex()
 	// Reopen without any caches/indexes; a corrupt unrequested tail must block
-	// no-hit search and new history publication, leaving its receipt absent.
+	// no-hit search. New history publication accepts the root's completed
+	// finalization record instead of reading the root again, so damage after
+	// finalization is found when the bytes are read, not when history is
+	// published (docs/CONVERSATION_IDENTITY.md, "Verification and cancellation").
 	reopened, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -329,12 +332,15 @@ func TestRootProjectionPGConsumersWithoutPersistentIndex(t *testing.T) {
 	}
 	event.ID = strings.Repeat("2", 32)
 	event.CreatedAt = time.Now().UTC()
-	if err = svc.RecordHistory(user, event); !errors.Is(err, domain.ErrIntegrity) {
-		t.Fatal("history lost corrupt current root error", err)
+	if err = svc.RecordHistory(user, event); err != nil {
+		t.Fatal("history did not accept the finalized root's completion record", err)
 	}
 	history, err = svc.ListHistory(user, repo.ID)
-	if err != nil || len(history) != 1 {
-		t.Fatal("failed history changed receipts", err)
+	if err != nil || len(history) != 2 {
+		t.Fatal("finalized root history receipt", len(history), err)
+	}
+	if _, err = svc.SearchDocEvents(user, repo.ID, snap.ID, "absent", -1, 10); !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatal("search after history publication skipped corrupted tail", err)
 	}
 	if _, err = db.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, tail, bodies[tail]); err != nil {
 		t.Fatal(err)
