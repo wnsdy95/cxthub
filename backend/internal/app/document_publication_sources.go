@@ -23,6 +23,7 @@ type documentPublicationIntegrityVerifier interface {
 type documentPublicationSources struct {
 	metadata  documentRequirementReader
 	stored    outbound.StoredDocVerifier
+	finalized outbound.FinalizedDocAttestor
 	legacy    documentPublicationLegacyReader
 	integrity documentPublicationIntegrityVerifier
 	supported []domain.DocumentIdentity
@@ -30,7 +31,8 @@ type documentPublicationSources struct {
 
 func documentPublicationSourcesFromStores(metadata documentRequirementReader, blobs outbound.BlobStore, engine outbound.GitEngine, supported []domain.DocumentIdentity) *documentPublicationSources {
 	stored, _ := blobs.(outbound.StoredDocVerifier)
-	return &documentPublicationSources{metadata: metadata, stored: stored, legacy: blobs, integrity: engine,
+	finalized, _ := blobs.(outbound.FinalizedDocAttestor)
+	return &documentPublicationSources{metadata: metadata, stored: stored, finalized: finalized, legacy: blobs, integrity: engine,
 		supported: append([]domain.DocumentIdentity(nil), supported...)}
 }
 
@@ -63,6 +65,21 @@ func (sources *documentPublicationSources) verifyReference(ctx context.Context, 
 	if sources.stored != nil {
 		if !rootAdapterPresent(sources.stored) {
 			return domain.ErrValidation
+		}
+		// A document that finalization already verified and published is not
+		// read again here: its completed job is the evidence. Anything else,
+		// including a document stored without a job, has its bytes verified.
+		if snapshot.DocIdentity == domain.DocumentIdentityLegacy && rootAdapterPresent(sources.finalized) {
+			proof, found, err := sources.finalized.FinalizedDocReference(ctx, repo, snapshot.DocHash)
+			if err != nil {
+				return err
+			}
+			if found {
+				if proof.DocumentRef() != snapshot.DocumentRef() || !proof.Matches(snapshot) {
+					return domain.ErrIntegrity
+				}
+				return nil
+			}
 		}
 		proof, err := sources.stored.VerifyStoredDoc(ctx, repo, snapshot.DocHash)
 		if err != nil {

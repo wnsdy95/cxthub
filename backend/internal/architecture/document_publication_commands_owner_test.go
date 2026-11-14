@@ -100,7 +100,9 @@ func dpc1Fields(set wave42LegacyGitSourceSet, owner string, allowed, required []
 func dpc1NarrowSource(set wave42LegacyGitSourceSet, expression ast.Expr, active map[string]bool) bool {
 	kind := wave42LegacyGitType(expression)
 	switch kind {
-	case "[]domain.DocumentIdentity", "outbound.RepositoryReader", "outbound.StoredDocVerifier":
+	// FinalizedDocAttestor is a single-method port: it looks up the completed
+	// finalization job that already verified the stored document.
+	case "[]domain.DocumentIdentity", "outbound.RepositoryReader", "outbound.StoredDocVerifier", "outbound.FinalizedDocAttestor":
 		return true
 	}
 	if declaration := set.types[kind]; declaration != nil && !active[kind] {

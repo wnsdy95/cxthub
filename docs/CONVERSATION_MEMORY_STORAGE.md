@@ -113,8 +113,10 @@ Full current-byte checks remain mandatory. A root makes identity hashing
 proportional to the manifest and allows stored chunks to be reused; it does not
 make verification, initial indexing or capture constant-time. The first root
 capture implementation decodes and scrubs the current native source again,
-then reuses unchanged chunks. Incremental native-source parsing and durable
-verification certificates are separate optimizations.
+then reuses unchanged chunks. Incremental native-source parsing and incremental
+finalization are separate optimizations. Snapshot and history publication no
+longer read a finalized legacy document again; see the verification record in
+[conversation identity](CONVERSATION_IDENTITY.md#verification-and-cancellation).
 
 Compatible peers declare `X-Cxt-Doc-Identities: cxt-manifest-sha256-v1`.
 Browser event streams use the `doc_identities` query parameter instead because

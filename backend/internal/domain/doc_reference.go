@@ -25,6 +25,24 @@ func (d VerifiedSessionDoc) Reference() VerifiedDocReference {
 	return VerifiedDocReference{hash: d.Hash(), identity: d.identity}
 }
 
+// FinalizedDocReference is the reference that a completed legacy finalization
+// job attests. A job becomes completed only in the transaction that verified the
+// whole document and published it, so the record stands for that verification
+// without the body being read again. Its identity binds the repository, the
+// document hash and the exact manifest. The caller must have found the job
+// under that identity for the manifest stored now, and must check that the
+// repository still owns the document and its chunks. The record does not show
+// that the stored bytes are still intact; readers verify the bytes they return.
+func FinalizedDocReference(job DocFinalizationJob) (VerifiedDocReference, error) {
+	if err := job.Validate(); err != nil {
+		return VerifiedDocReference{}, err
+	}
+	if job.State != "completed" || job.DocIdentity != DocumentIdentityLegacy || job.RootManifest != nil {
+		return VerifiedDocReference{}, ErrValidation
+	}
+	return VerifiedDocReference{hash: job.DocHash, identity: job.DocIdentity}, nil
+}
+
 // VerifyStoredDocBytes also accepts legacy non-canonical representations when
 // decoding and canonical validation reproduce the claimed content address.
 func VerifyStoredDocBytes(hash ContentHash, raw []byte) (VerifiedDocReference, error) {
