@@ -16,11 +16,13 @@ import (
 )
 
 type pgLegacyStreamingPublication struct {
-	store *PostgresStore
-	job   domain.DocFinalizationJob
-	doc   domain.VerifiedLegacyStream
-	spool *legacyDocSpool
-	read  preparedReadIndexPG
+	store  *PostgresStore
+	job    domain.DocFinalizationJob
+	doc    domain.VerifiedLegacyStream
+	spool  *legacyDocSpool
+	read   preparedReadIndexPG
+	reuse  legacyPrefixReuse
+	source *legacyPrefixSource
 }
 
 func (storage *PostgresStore) legacyJobChunk(ctx context.Context, repo, hash domain.ContentHash, lock bool) ([]byte, error) {
@@ -53,9 +55,24 @@ func (storage *PostgresStore) PrepareLegacyDocJob(ctx context.Context, job domai
 			_ = spool.Close()
 		}
 	}()
-	doc, err := storage.docProofs.rootVerifier.VerifyLegacyStream(ctx, job.DocHash, job.Manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
+	var reuse legacyPrefixReuse
+	if base, ok := storage.legacyBases.get(job.RepoID); ok && base != job.DocHash {
+		if reuse, err = storage.legacyReusablePrefix(ctx, job.RepoID, base, job.Manifest.Chunks); err != nil {
+			return nil, err
+		}
+	}
+	source := &legacyPrefixSource{spool: spool, load: func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 		return storage.legacyJobChunk(ctx, job.RepoID, hash, false)
-	}, spool)
+	}}
+	loaded := 0
+	doc, err := storage.docProofs.rootVerifier.VerifyLegacyStream(ctx, job.DocHash, job.Manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
+		body, err := storage.legacyJobChunk(ctx, job.RepoID, hash, false)
+		if err == nil && loaded < reuse.chunks {
+			source.reuse(hash, len(body))
+		}
+		loaded++
+		return body, err
+	}, source)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +84,7 @@ func (storage *PostgresStore) PrepareLegacyDocJob(ctx context.Context, job domai
 	if err != nil {
 		return nil, err
 	}
-	publication := &pgLegacyStreamingPublication{store: storage, job: job, doc: doc, spool: spool,
+	publication := &pgLegacyStreamingPublication{store: storage, job: job, doc: doc, spool: spool, reuse: reuse, source: source,
 		read: preparedReadIndexPG{hash: job.DocHash, blocks: plan.Blocks(), envelope: envelope, eventCount: plan.EventCount()}}
 	prepared = true
 	return publication, nil
@@ -165,7 +182,7 @@ func (publication *pgLegacyStreamingPublication) Complete(ctx context.Context, j
 		return err
 	}
 	storage := publication.store
-	return storage.WithinRepository(ctx, job.RepoID, func(write context.Context) error {
+	err := storage.WithinRepository(ctx, job.RepoID, func(write context.Context) error {
 		bound := write.Value(repositoryTxKey{}).(*repositoryTx)
 		current, err := publication.current(write, bound, job)
 		if err != nil {
@@ -192,6 +209,10 @@ func (publication *pgLegacyStreamingPublication) Complete(ctx context.Context, j
 		current.UpdatedAt, current.LeaseUntil = now, time.Time{}
 		return storage.writeDocJob(write, current)
 	})
+	if err == nil {
+		storage.legacyBases.put(job.RepoID, job.DocHash)
+	}
+	return err
 }
 
 func (publication *pgLegacyStreamingPublication) publish(ctx context.Context, tx pgx.Tx) error {
@@ -220,10 +241,16 @@ func (publication *pgLegacyStreamingPublication) publish(ctx context.Context, tx
 			return err
 		}
 	}
+	// Reused chunks were verified when this job was prepared and are listed by
+	// a document this repository already owns; only their rows are locked here.
+	reused, err := publication.lockReusedLegacyPrefix(ctx, tx)
+	if err != nil {
+		return err
+	}
 	originals := append([]domain.ContentHash(nil), job.Manifest.Chunks...)
 	sort.Slice(originals, func(left, right int) bool { return originals[left] < originals[right] })
 	for index, hash := range originals {
-		if index > 0 && originals[index-1] == hash {
+		if (index > 0 && originals[index-1] == hash) || reused[hash] {
 			continue
 		}
 		body, err := publication.store.legacyJobChunk(ctx, job.RepoID, hash, true)
@@ -244,6 +271,9 @@ func (publication *pgLegacyStreamingPublication) publish(ctx context.Context, tx
 	}
 	sort.Slice(ordered, func(left, right int) bool { return ordered[left] < ordered[right] })
 	for _, hash := range ordered {
+		if reused[hash] {
+			continue
+		}
 		ordinal := ordinals[hash]
 		body, err := publication.doc.Chunk(ctx, ordinal)
 		if err != nil {

@@ -85,6 +85,25 @@ damage after finalization is found when the bytes are read, not when a snapshot
 is published. Without this record, every snapshot of a growing session read the
 whole cumulative document again, so publishing cost grew with session length.
 
+Finalizing a legacy v2 document still reads and hashes every chunk once. The
+legacy hash covers the envelope before the events, and the envelope changes
+between captures, so that pass cannot resume from an earlier capture. What a
+finalization can skip is the repeated prefix. When the repository owns an
+earlier legacy document that this process published, and that document's stored
+manifest starts with the same chunks, finalization handles those leading chunks
+differently:
+
+- it does not write them to its spool, and reads of that range while indexing
+  load the stored chunk again and check its hash;
+- the publishing transaction locks those chunk rows and the earlier document's
+  ownership row instead of reading and comparing the chunk bytes a second time.
+
+If the earlier document is no longer owned at publication, every chunk is
+checked as before. The hint that names the earlier document is per process, so
+after a restart the next document is finalized in full. This targets retained
+history uploads, which finalize many captures of one long session in capture
+order, each repeating almost all of the previous one.
+
 ## Explicit readers and retention
 
 The server's `ReadVerifiedDoc` and CLI's `GetDocReference` and
