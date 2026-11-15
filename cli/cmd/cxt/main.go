@@ -68,6 +68,12 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Pausing touches only local upload metadata, so it shares this early
+		// path with status instead of building the provider-capable container.
+		if pause, resume := slices.Contains(args[2:], "pause-history"), slices.Contains(args[2:], "resume-history"); pause || resume {
+			c := &delivcli.Container{Inspection: localReplicaInspector{}, SetHistoryPaused: setHistoryPaused, WakeHistoricalSync: delivcli.SpawnHistoricalSync}
+			return delivcli.RunHistoricalUploadsPause(context.Background(), c, cwd, pause, os.Stdout)
+		}
 		return delivcli.RunSyncStatus(context.Background(), localReplicaInspector{}, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
 	}
 	if args[1] == "doctor" || (args[1] == "branch" && len(args) > 2 && args[2] == "operations") {
@@ -367,17 +373,7 @@ func buildContainer(cfg config) container {
 		WithBackfillDaemon: func(ctx context.Context, root string, work func() error) (bool, error) {
 			return storage.NewFileStore(root).WithBackfillDaemon(ctx, work)
 		},
-		SetHistoryPaused: func(ctx context.Context, root, repo string, paused bool) (domain.HistoricalUploadControl, error) {
-			return storage.NewFileStore(root).UpdateHistoricalUploadControl(ctx, repo, func(control domain.HistoricalUploadControl) domain.HistoricalUploadControl {
-				switch {
-				case !paused:
-					control.PausedAt = time.Time{}
-				case control.PausedAt.IsZero():
-					control.PausedAt = time.Now().UTC()
-				}
-				return control
-			})
-		},
+		SetHistoryPaused:        setHistoryPaused,
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
 		PrepareCapturePush:      prepareCapturePush(cfg, store),
 		Queries:                 app.NewLocalRefQueryService(gitCtx, store),
@@ -491,4 +487,18 @@ func inspectCaptureRecovery(ctx context.Context, cwd string) ([]domain.CaptureRe
 	}
 	service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), storage.NewCaptureEvidenceReader(state.Root))
 	return service.Inspect(ctx, string(repo.ID))
+}
+
+// setHistoryPaused keeps the first pause time across repeated pauses and never
+// touches queue records, so retention pins are unchanged.
+func setHistoryPaused(ctx context.Context, root, repo string, paused bool) (domain.HistoricalUploadControl, error) {
+	return storage.NewFileStore(root).UpdateHistoricalUploadControl(ctx, repo, func(control domain.HistoricalUploadControl) domain.HistoricalUploadControl {
+		switch {
+		case !paused:
+			control.PausedAt = time.Time{}
+		case control.PausedAt.IsZero():
+			control.PausedAt = time.Now().UTC()
+		}
+		return control
+	})
 }
