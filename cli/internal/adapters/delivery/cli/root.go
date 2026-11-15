@@ -64,6 +64,7 @@ type Container struct {
 	Inspection         outbound.LocalReplicaInspector
 	WithSecretsLock    func(context.Context, string, func() error) error
 	WithBackfillDaemon func(context.Context, string, func() error) (bool, error)
+	SetHistoryPaused   func(context.Context, string, string, bool) (domain.HistoricalUploadControl, error) // retention pins untouched
 	Init               inbound.InitRepo
 	Save               inbound.SaveSession
 	Fork               inbound.ForkSession
@@ -138,6 +139,9 @@ func Run(c *Container, args []string) error {
 	var inspection outbound.LocalReplicaInspector
 	if c != nil {
 		inspection = c.Inspection
+	}
+	if cmd == "sync" && (parsed.first() == "pause-history" || parsed.first() == "resume-history") {
+		return RunHistoricalUploadsPause(ctx, c, cwd, parsed.first() == "pause-history", os.Stdout)
 	}
 	if cmd == "sync" {
 		return RunSyncStatus(ctx, inspection, cwd, parsed.has("--json"), os.Stdout)
@@ -889,7 +893,11 @@ func Run(c *Container, args []string) error {
 		}
 		fmt.Printf("pushed %d snapshot(s), checked %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
 		if out.BackfillPending > 0 {
-			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
+			if out.BackfillPaused {
+				fmt.Printf("retained history: %d snapshot(s) queued; background upload is paused (resume with 'cxt sync resume-history', or upload now with 'cxt push --wait-history')\n", out.BackfillPending)
+			} else {
+				fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
+			}
 		}
 		if appendDiverged {
 			// Server grafted remote head onto local ancestry — pull will reflect in local history.
@@ -1432,6 +1440,8 @@ usage: cxt <command> [flags]
   hooks install|uninstall   manage Git hooks manually
   config <key> [value]      inspect or set checkout, load, boundary, capture, or scrub behavior
   sync status [--json]      inspect local upload queues without reading objects
+  sync pause-history|resume-history
+                            pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization

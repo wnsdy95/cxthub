@@ -13,9 +13,13 @@ type HistoricalSync interface {
 }
 
 type HistoricalSyncOutput struct {
-	Completed   int
-	Failed      int
-	Pending     int
-	Busy        bool
+	Completed int
+	Failed    int
+	Pending   int
+	Busy      bool
+	// Paused means the user paused background uploads; nothing was attempted.
+	Paused bool
+	// NextAttempt is the earliest time a background upload may start, after
+	// per-snapshot retry backoff and any repository-wide hold.
 	NextAttempt time.Time
 }

@@ -20,6 +20,8 @@ type syncStatus struct {
 	IntegrityChecked bool                      `json:"integrity_checked"`
 	Ready            int                       `json:"ready"`
 	RetryWaiting     int                       `json:"retry_waiting"`
+	HistoryPaused    bool                      `json:"historical_uploads_paused"`
+	HistoryHeldUntil time.Time                 `json:"historical_uploads_held_until,omitzero"`
 	Historical       []domain.SnapshotBackfill `json:"historical_uploads"`
 	Branches         []branchOperationStatus   `json:"branch_operations"`
 	Merges           []mergeDeliveryStatus     `json:"merge_deliveries"`
@@ -71,6 +73,14 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 			} else {
 				report.DeferredPushes = append(report.DeferredPushes, deferred...)
 			}
+			if control, err := reader.HistoricalUploadControl(ctx, state.Root, report.Repository); err != nil {
+				report.Issues = append(report.Issues, "historical upload control: "+err.Error())
+			} else {
+				report.HistoryPaused = control.Paused()
+				if control.HoldUntil.After(report.ObservedAt) {
+					report.HistoryHeldUntil = control.HoldUntil
+				}
+			}
 			jobs, err := reader.ListBackfills(ctx, state.Root, report.Repository)
 			if err != nil {
 				report.Issues = append(report.Issues, "historical upload queue: "+err.Error())
@@ -103,6 +113,12 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 	} else {
 		fmt.Fprintln(w, "Local synchronization queues (server and full object integrity not checked):")
 		fmt.Fprintf(w, "Retained history: %d pending; %d eligible now; %d waiting for retry.\n", len(report.Historical), report.Ready, report.RetryWaiting)
+		switch {
+		case report.HistoryPaused:
+			fmt.Fprintln(w, "Retained history uploads are paused (cxt sync resume-history to continue; snapshots stay retained).")
+		case !report.HistoryHeldUntil.IsZero():
+			fmt.Fprintf(w, "Retained history uploads resume after %s (spacing after a long upload or a busy server).\n", report.HistoryHeldUntil.Format(time.RFC3339))
+		}
 		for _, job := range report.Historical {
 			reason := job.Reason
 			if reason == "" {

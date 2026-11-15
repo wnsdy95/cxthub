@@ -10,4 +10,5 @@ type LocalReplicaInspector interface {
 	ResolveRepo(context.Context, string, string) (domain.Repo, error)
 	InspectReplica(context.Context, string) domain.ReplicaInspection
 	ListBackfills(context.Context, string, string) ([]domain.SnapshotBackfill, error)
+	HistoricalUploadControl(context.Context, string, string) (domain.HistoricalUploadControl, error)
 }

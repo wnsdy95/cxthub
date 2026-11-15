@@ -195,7 +195,11 @@ func runGitPrePush(ctx context.Context, c *Container, cwd string, args []string,
 	clearAuthHint(cwd)
 	fmt.Printf("cxt: pushed %d snapshot(s), checked %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
 	if out.BackfillPending > 0 {
-		fmt.Printf("cxt: %d retained historical snapshot(s) remain queued; current publication completed\n", out.BackfillPending)
+		if out.BackfillPaused {
+			fmt.Printf("cxt: %d retained historical snapshot(s) remain queued with background upload paused; current publication completed\n", out.BackfillPending)
+		} else {
+			fmt.Printf("cxt: %d retained historical snapshot(s) remain queued; current publication completed\n", out.BackfillPending)
+		}
 	}
 	return nil
 }

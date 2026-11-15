@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
@@ -365,6 +366,17 @@ func buildContainer(cfg config) container {
 		},
 		WithBackfillDaemon: func(ctx context.Context, root string, work func() error) (bool, error) {
 			return storage.NewFileStore(root).WithBackfillDaemon(ctx, work)
+		},
+		SetHistoryPaused: func(ctx context.Context, root, repo string, paused bool) (domain.HistoricalUploadControl, error) {
+			return storage.NewFileStore(root).UpdateHistoricalUploadControl(ctx, repo, func(control domain.HistoricalUploadControl) domain.HistoricalUploadControl {
+				switch {
+				case !paused:
+					control.PausedAt = time.Time{}
+				case control.PausedAt.IsZero():
+					control.PausedAt = time.Now().UTC()
+				}
+				return control
+			})
 		},
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
 		PrepareCapturePush:      prepareCapturePush(cfg, store),

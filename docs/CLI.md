@@ -127,6 +127,8 @@ context store.
 
 ```text
 cxt sync status [--json]
+cxt sync pause-history
+cxt sync resume-history
 ```
 
 Reads local retained-history upload jobs and unresolved branch operations without
@@ -136,8 +138,16 @@ Eligible jobs can be retried now; that count does not mean a worker is running.
 An empty queue does not establish server acknowledgement or object integrity.
 Unreadable queue metadata produces a nonzero exit status without repairing it.
 
+Status also shows whether retained-history uploads are paused, or held until a
+given time. The background uploader rests after each long upload for as long as
+it took, and waits at least a minute after the server answers that it is busy.
+
+`pause-history` stops background retained-history uploads for this repository;
+`resume-history` lets them continue and wakes the uploader. Neither changes the
+queued records, so paused snapshots stay retained on this machine.
+
 Run `cxt push` to retry current work and wake retained-history uploads, or
-`cxt push --wait-history` to wait for the retained backlog. Explicit `push` and
+`cxt push --wait-history` to wait for the retained backlog, even while paused. Explicit `push` and
 `pull` print phase progress to stderr. Item counts advance after acknowledgement
 and apply only to the named phase, not to the entire synchronization. Use
 `cxt doctor` for a complete local object audit and `cxt fsck` for a server audit.

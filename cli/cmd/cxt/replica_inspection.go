@@ -25,3 +25,7 @@ func (localReplicaInspector) InspectReplica(ctx context.Context, root string) do
 func (localReplicaInspector) ListBackfills(ctx context.Context, root, repo string) ([]domain.SnapshotBackfill, error) {
 	return storage.NewFileStore(root).ListBackfills(ctx, repo)
 }
+
+func (localReplicaInspector) HistoricalUploadControl(ctx context.Context, root, repo string) (domain.HistoricalUploadControl, error) {
+	return storage.NewFileStore(root).HistoricalUploadControl(ctx, repo)
+}

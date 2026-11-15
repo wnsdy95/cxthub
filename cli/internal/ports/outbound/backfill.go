@@ -14,4 +14,8 @@ type HistoricalBackfillStore interface {
 	HasBackfillPin(context.Context, domain.ContentHash) (bool, error)
 	UpdateBackfill(context.Context, domain.SnapshotBackfill, *domain.SnapshotBackfill) error
 	WithBackfillWorker(context.Context, func() error) (bool, error)
+	// The upload control is a schedule, not a pin: pausing or holding uploads
+	// never changes which snapshots are retained.
+	HistoricalUploadControl(context.Context, string) (domain.HistoricalUploadControl, error)
+	UpdateHistoricalUploadControl(context.Context, string, func(domain.HistoricalUploadControl) domain.HistoricalUploadControl) (domain.HistoricalUploadControl, error)
 }
