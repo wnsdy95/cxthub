@@ -24,6 +24,7 @@ import (
 // PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
 type PostgresStore struct {
 	docProofs                    docProofCache
+	legacyBases                  legacyBaseHints
 	pool                         *pgxpool.Pool
 	legacyByteRangePublication   bool
 	legacyDerivedBytePublication bool
