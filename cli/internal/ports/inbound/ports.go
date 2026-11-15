@@ -438,6 +438,8 @@ type SyncProgress struct {
 type SyncOutput struct {
 	// BackfillPending counts retained historical snapshots still queued locally.
 	BackfillPending int
+	// BackfillPaused reports that the user paused background uploads of them.
+	BackfillPaused bool
 	// Pushed is the number of snapshots pushed.
 	Pushed int
 	// Pulled is the number of snapshots pulled.

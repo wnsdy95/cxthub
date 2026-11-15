@@ -585,6 +585,11 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (resul
 			return out, errors.Join(pendingErr, err)
 		}
 		out.BackfillPending = len(jobs)
+		if len(jobs) > 0 {
+			if control, err := backfill.HistoricalUploadControl(ctx, repoID); err == nil {
+				out.BackfillPaused = control.Paused()
+			}
+		}
 	}
 	if pendingErr == nil {
 		syncProgress(in, "push", "complete", 0, 0)

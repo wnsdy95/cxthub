@@ -33,3 +33,25 @@ func (j SnapshotBackfill) Validate() error {
 	}
 	return nil
 }
+
+// HistoricalUploadControl is a repository's switch and pacing state for
+// retained-history uploads. It never pins or releases a snapshot: queue entries
+// keep their retention pins whether uploads are paused, held or running.
+type HistoricalUploadControl struct {
+	Version int `json:"version"`
+	// PausedAt is set while the user has paused background uploads. An explicit
+	// `cxt push --wait-history` still uploads everything.
+	PausedAt time.Time `json:"paused_at,omitzero"`
+	// HoldUntil spaces uploads out: after a long upload, or after the server
+	// said it was busy, no background upload starts before this time.
+	HoldUntil time.Time `json:"hold_until,omitzero"`
+}
+
+func (c HistoricalUploadControl) Paused() bool { return !c.PausedAt.IsZero() }
+
+func (c HistoricalUploadControl) Validate() error {
+	if c.Version != 1 {
+		return ErrHashMismatch
+	}
+	return nil
+}

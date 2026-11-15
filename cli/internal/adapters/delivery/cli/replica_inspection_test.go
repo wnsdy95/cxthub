@@ -30,6 +30,10 @@ func (inspectionReaderForTest) ListBackfills(ctx context.Context, root, repo str
 	return storage.NewFileStore(root).ListBackfills(ctx, repo)
 }
 
+func (inspectionReaderForTest) HistoricalUploadControl(ctx context.Context, root, repo string) (domain.HistoricalUploadControl, error) {
+	return storage.NewFileStore(root).HistoricalUploadControl(ctx, repo)
+}
+
 type recordingReplicaInspector struct {
 	inspectionReaderForTest
 	root       string

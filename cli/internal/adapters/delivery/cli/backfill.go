@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
@@ -59,7 +61,7 @@ func runHistoricalSync(ctx context.Context, c *Container, cwd string) error {
 			if err != nil {
 				return err
 			}
-			if out.Busy || out.Pending == 0 {
+			if out.Busy || out.Paused || out.Pending == 0 {
 				return nil
 			}
 			wait := time.Until(out.NextAttempt)
@@ -76,4 +78,41 @@ func runHistoricalSync(ctx context.Context, c *Container, cwd string) error {
 		}
 	})
 	return err
+}
+
+// RunHistoricalUploadsPause pauses or resumes background uploads of retained
+// history. Queue entries, and so retention pins, are untouched; an explicit
+// `cxt push --wait-history` still uploads everything.
+func RunHistoricalUploadsPause(ctx context.Context, c *Container, cwd string, pause bool, w io.Writer) error {
+	if c == nil || c.SetHistoryPaused == nil || c.Inspection == nil {
+		return fmt.Errorf("historical upload control unavailable")
+	}
+	state := gitctx.InspectContextRoot(ctx, cwd)
+	if !state.Initialized {
+		return fmt.Errorf("no initialized local replica; use cxt doctor to inspect registration and damage")
+	}
+	repo, err := c.Inspection.ResolveRepo(ctx, state.Root, cwd)
+	if err != nil {
+		return err
+	}
+	control, err := c.SetHistoryPaused(ctx, state.Root, string(repo.ID), pause)
+	if err != nil {
+		return err
+	}
+	jobs, err := c.Inspection.ListBackfills(ctx, state.Root, string(repo.ID))
+	if err != nil {
+		return err
+	}
+	if pause {
+		fmt.Fprintf(w, "Retained history uploads paused: %d snapshot(s) stay queued and retained on this machine. Resume with cxt sync resume-history.\n", len(jobs))
+		return nil
+	}
+	fmt.Fprintf(w, "Retained history uploads resumed: %d snapshot(s) queued.\n", len(jobs))
+	if control.HoldUntil.After(time.Now()) {
+		fmt.Fprintf(w, "The next upload starts after %s.\n", control.HoldUntil.Format(time.RFC3339))
+	}
+	if len(jobs) > 0 {
+		wakeHistoricalSync(c, cwd)
+	}
+	return nil
 }

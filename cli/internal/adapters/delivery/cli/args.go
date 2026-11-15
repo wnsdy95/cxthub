@@ -96,7 +96,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"fsck":      {usage: "cxt fsck"},
 	"repair":    {usage: "cxt repair --from-server [--remote <repository-url>] | --preview --ref <branch>|--snapshot <hash> --reason <text> --output <file> | --apply <file> --expect <plan-id>", effect: commandLocalWrite, flags: commandFlags([]string{"--remote", "--ref", "--snapshot", "--reason", "--output", "--apply", "--expect"}, []string{"--from-server", "--preview"})},
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", minArgs: 1, maxArgs: 2, flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
-	"sync":      {usage: "cxt sync status [--json]", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
+	"sync":      {usage: "cxt sync status [--json] | cxt sync pause-history | cxt sync resume-history", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"status":    {usage: "cxt status [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"diff":      {usage: "cxt diff [--staged] [--json]", flags: commandFlags(nil, []string{"--staged", "--json"})},
@@ -379,7 +379,10 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 	case "hook":
 		valid = flags["--provider"] != "" && flags["--event"] != ""
 	case "sync":
-		valid = sub == "status"
+		valid = sub == "status" || ((sub == "pause-history" || sub == "resume-history") && only())
+		if sub == "pause-history" || sub == "resume-history" {
+			p.effect = commandLocalWrite
+		}
 	case "hooks":
 		valid = sub == "install" || sub == "uninstall"
 	case "config":

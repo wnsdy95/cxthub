@@ -132,3 +132,88 @@ func TestSyncStatusReportsMergeDeliveriesWithoutMutating(t *testing.T) {
 		t.Fatal("merge status changed local files")
 	}
 }
+
+func TestSyncHistoryPauseArguments(t *testing.T) {
+	for _, sub := range []string{"pause-history", "resume-history"} {
+		if _, err := PreflightArgs([]string{"cxt", "sync", sub}); err != nil {
+			t.Fatal(sub, err)
+		}
+		if ReadOnlyInvocation([]string{"cxt", "sync", sub}) {
+			t.Fatal("pausing history must use the writing container", sub)
+		}
+		for _, args := range [][]string{{"cxt", "sync", sub, "--json"}, {"cxt", "sync", sub, "now"}} {
+			if _, err := PreflightArgs(args); err == nil {
+				t.Fatal("unexpected arguments accepted", args)
+			}
+		}
+	}
+	if !ReadOnlyInvocation([]string{"cxt", "sync", "status"}) {
+		t.Fatal("sync status became a write")
+	}
+}
+
+func TestSyncHistoryPauseKeepsQueueAndShowsInStatus(t *testing.T) {
+	cwd, _, st, repo, id := historyFixture(t)
+	ctx := context.Background()
+	snap, err := st.GetSnapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.StageBackfills(ctx, repo, []domain.Snapshot{snap}); err != nil {
+		t.Fatal(err)
+	}
+	queue := filepath.Join(cwd, ".cxt", "historical-backfill")
+	before := treeBytes(t, queue)
+	woken := 0
+	c := &Container{
+		Inspection:         inspectionReaderForTest{},
+		WakeHistoricalSync: func(string) { woken++ },
+		SetHistoryPaused: func(ctx context.Context, root, repo string, paused bool) (domain.HistoricalUploadControl, error) {
+			return st.UpdateHistoricalUploadControl(ctx, repo, func(control domain.HistoricalUploadControl) domain.HistoricalUploadControl {
+				control.PausedAt = time.Time{}
+				if paused {
+					control.PausedAt = time.Now().UTC()
+				}
+				return control
+			})
+		},
+	}
+	var out bytes.Buffer
+	if err = RunHistoricalUploadsPause(ctx, c, cwd, true, &out); err != nil || !strings.Contains(out.String(), "paused: 1 snapshot(s)") || woken != 0 {
+		t.Fatal("pause", out.String(), woken, err)
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, queue)) {
+		t.Fatal("pause rewrote the retention queue")
+	}
+	if pinned, err := st.HasBackfillPin(ctx, id); err != nil || !pinned {
+		t.Fatal("pause released the retention pin", pinned, err)
+	}
+	status := func() (syncStatus, string) {
+		t.Helper()
+		var raw, text bytes.Buffer
+		if err := RunSyncStatus(ctx, inspectionReaderForTest{}, cwd, true, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunSyncStatus(ctx, inspectionReaderForTest{}, cwd, false, &text); err != nil {
+			t.Fatal(err)
+		}
+		var report syncStatus
+		if err := json.Unmarshal(raw.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		return report, text.String()
+	}
+	if report, text := status(); !report.HistoryPaused || !strings.Contains(text, "uploads are paused") {
+		t.Fatal("status hid the pause", report, text)
+	}
+	out.Reset()
+	if err = RunHistoricalUploadsPause(ctx, c, cwd, false, &out); err != nil || !strings.Contains(out.String(), "resumed: 1 snapshot(s)") || woken != 1 {
+		t.Fatal("resume", out.String(), woken, err)
+	}
+	if report, text := status(); report.HistoryPaused || strings.Contains(text, "uploads are paused") {
+		t.Fatal("status still paused", report, text)
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, queue)) {
+		t.Fatal("resume rewrote the retention queue")
+	}
+}

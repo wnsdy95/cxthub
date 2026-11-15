@@ -265,6 +265,28 @@ survives exits, cancellation and machine restarts, and the next push wakes it.
 This is durable local retry, not an always-on OS scheduler. Git hook timeouts
 are unchanged. Narrow adapters without coordinated retention retain full push.
 
+Retained uploads share the server with live work, and the server verifies every
+uploaded document in full while it holds its single bulk slot. The helper
+therefore spaces them out:
+
+- Due jobs are uploaded in snapshot capture order, so retained captures of one
+  session usually extend the previous upload. Unreadable snapshots go last in
+  queue order.
+- An upload that took a second or more is followed by an equal rest (at most 15
+  minutes) before the next one, so retained history uses at most about half of
+  the server's time. Shorter uploads continue the batch as before.
+- A 429, 502, 503 or 504 answer ends the batch: the job records its usual
+  backoff, and no retained upload starts for at least a minute (or until that
+  backoff ends, if later), instead of asking a busy server for the next snapshot.
+- `cxt sync pause-history` stops background uploads for the repository until
+  `cxt sync resume-history`. Queue records, and so their retention pins, are not
+  touched. `cxt push --wait-history` still uploads everything.
+
+The rest, the busy hold and the pause are stored in
+`.cxt/historical-uploads/<repository>.json`, outside the queue directory, because
+any file in the queue directory counts as tracking intent for first-tracking and
+capture-bootstrap checks.
+
 `cxt sync status` / `cxt sync status --json` read only the local queue and branch
 journal metadata. They show eligible/waiting jobs, attempts, safe failure categories
 and retry times without loading document or memory bodies, contacting the server,
