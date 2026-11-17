@@ -169,3 +169,20 @@ func TestPGGitScansDependentPublicationRollback(t *testing.T) {
 		t.Fatal("observation escaped rollback", count, err)
 	}
 }
+
+func TestPGGitScanProviderEvidenceResume(t *testing.T) {
+	dsn := os.Getenv("CXT_TEST_DSN")
+	if dsn == "" {
+		t.Skip("CXT_TEST_DSN unset")
+	}
+	ctx := context.Background()
+	st, err := NewPostgresStore(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err = st.ApplyMigrations(ctx, "../../../../schemas/db/migrations"); err != nil {
+		t.Fatal(err)
+	}
+	checkGitScanProviderEvidenceResume(t, st)
+}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func TestGitHubReadsExactTreesAndRejectsIncompleteEvidence(t *testing.T) {
@@ -177,5 +178,81 @@ func TestGitHubCommitTreeRehashesCompleteProviderResponse(t *testing.T) {
 	truncated = true
 	if _, e = g.ReadCommitTree(context.Background(), "https://github.com/org/project", commit); !errors.Is(e, domain.ErrIntegrity) {
 		t.Fatal("partial tree accepted", e)
+	}
+}
+
+func TestGitHubReportsUnavailableCommitOnlyWhenRepositoryIsReadable(t *testing.T) {
+	commit := strings.Repeat("d", 40)
+	for _, scenario := range []struct {
+		name        string
+		commit      int
+		branches    int
+		unavailable bool
+		status      int
+	}{
+		{"unknown commit", http.StatusNotFound, http.StatusOK, true, http.StatusNotFound},
+		{"unresolvable commit", http.StatusUnprocessableEntity, http.StatusOK, true, http.StatusUnprocessableEntity},
+		{"repository hidden from credential", http.StatusNotFound, http.StatusNotFound, false, http.StatusNotFound},
+		{"repository probe outage", http.StatusNotFound, http.StatusBadGateway, false, http.StatusNotFound},
+		{"provider outage", http.StatusServiceUnavailable, http.StatusOK, false, http.StatusServiceUnavailable},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			probes := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/org/project/git/commits/" + commit:
+					w.WriteHeader(scenario.commit)
+					_, _ = w.Write([]byte(`{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}`))
+				case "/repos/org/project/branches":
+					probes++
+					if r.URL.Query().Get("per_page") != "1" {
+						t.Error("repository probe is unbounded")
+					}
+					if scenario.branches != http.StatusOK {
+						w.WriteHeader(scenario.branches)
+						return
+					}
+					_, _ = w.Write([]byte(`[]`))
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			g := NewGitHub(func() string { return "test" })
+			g.base = server.URL
+			_, treeErr := g.ReadCommitTree(context.Background(), "https://github.com/org/project", commit)
+			_, deltaErr := g.ReadCommitDeltas(context.Background(), "https://github.com/org/project", commit)
+			for _, err := range []error{treeErr, deltaErr} {
+				var status outbound.GitProviderStatusError
+				if errors.Is(err, outbound.ErrGitCommitUnavailable) != scenario.unavailable || !errors.As(err, &status) || status.Status != scenario.status {
+					t.Fatal("provider miss classified incorrectly", err)
+				}
+				if strings.Contains(err.Error(), commit) || strings.Contains(err.Error(), "docs.github.com") || strings.Contains(err.Error(), server.URL) {
+					t.Fatal("provider error leaked request details", err)
+				}
+			}
+			if wantProbes := map[bool]int{true: 2, false: 0}[scenario.commit == http.StatusNotFound || scenario.commit == http.StatusUnprocessableEntity]; probes != wantProbes {
+				t.Fatal("repository probe count", probes, wantProbes)
+			}
+		})
+	}
+}
+
+func TestGitHubCooldownIsReportedAsRateLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	g := NewGitHub(nil)
+	g.base = server.URL
+	commit := strings.Repeat("e", 40)
+	var status outbound.GitProviderStatusError
+	if _, err := g.ReadCommitTree(context.Background(), "https://github.com/org/project", commit); !errors.As(err, &status) || status.Status != http.StatusTooManyRequests || errors.Is(err, outbound.ErrGitCommitUnavailable) {
+		t.Fatal("rate-limited response lost its status", err)
+	}
+	if _, err := g.ReadCommitTree(context.Background(), "https://github.com/org/project", commit); !errors.Is(err, outbound.ErrGitProviderRateLimited) {
+		t.Fatal("cooldown not reported as a rate limit", err)
 	}
 }
