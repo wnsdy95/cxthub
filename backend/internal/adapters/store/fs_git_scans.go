@@ -52,6 +52,27 @@ func (s *FSStore) enqueueGitScan(ctx context.Context, j domain.GitScanJob) error
 	}
 	return s.writeGitScan(j)
 }
+
+// enqueueObservedGitScan inserts a scan named by provider evidence. When the
+// scan already exists and resume is set, a scan stopped for an unavailable
+// commit or exhausted retries is reopened; other states are left alone.
+func (s *FSStore) enqueueObservedGitScan(ctx context.Context, j domain.GitScanJob, resume bool, now time.Time) error {
+	if err := j.Validate(); err != nil {
+		return err
+	}
+	current, err := s.GetGitScan(ctx, j.RepoID, j.ID)
+	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		return s.writeGitScan(j)
+	}
+	if err != nil || !resume {
+		return err
+	}
+	next, resumed, err := current.ResumeOnProviderEvidence(now)
+	if err != nil || !resumed {
+		return err
+	}
+	return s.writeGitScan(next)
+}
 func (s *FSStore) EnqueueGitScan(ctx context.Context, j domain.GitScanJob) error {
 	l := s.oauthLock()
 	l.Lock()
@@ -199,8 +220,9 @@ func (s *FSStore) FinishGitScan(ctx context.Context, p domain.GitScanFinish) err
 			return e
 		}
 	}
+	// A parent named by a provider commit object exists at the provider.
 	for _, j := range p.Parents {
-		if err = s.enqueueGitScan(ctx, j); err != nil {
+		if err = s.enqueueObservedGitScan(ctx, j, true, p.Job.UpdatedAt); err != nil {
 			return err
 		}
 	}
@@ -337,9 +359,12 @@ func (s *FSStore) recordGitObservation(ctx context.Context, o domain.GitRefObser
 	if err = writeAtomic(s.gitEvidencePath("git-observations", o.RepoID, o.ID), b); err != nil {
 		return err
 	}
+	// Only a new observation reopens stopped scans. Reconciliation re-reads the
+	// same heads every pass; replaying them must not become a retry loop.
+	fresh := existing != nil
 	for _, sha := range []string{o.Before, o.After} {
 		if sha != "" {
-			if err = s.enqueueGitScan(ctx, domain.NewGitScan(o.RepoID, o.GitOrigin, sha, now)); err != nil {
+			if err = s.enqueueObservedGitScan(ctx, domain.NewGitScan(o.RepoID, o.GitOrigin, sha, now), fresh, now); err != nil {
 				return err
 			}
 		}

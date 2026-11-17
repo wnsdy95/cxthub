@@ -1292,7 +1292,9 @@ export const en: Messages = {
     "completed": "Discovery pass finished",
     "empty": "No observed commits yet.",
     "indexed": "File changes indexed",
-    "reading": "Waiting for complete Git objects"
+    "reading": "Waiting for complete Git objects",
+    "commitPending": "Commit not on the Git host yet. Retrying while it may still be pushed.",
+    "commitUnavailable": "Commit is not on the Git host (never pushed or rewritten). Resumes when the commit is pushed."
 },
   gitChanges: {
     title: "Git reversal evidence",

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -107,6 +109,15 @@ func (workers *GitIntegrationWorkers) run(ctx context.Context, job domain.GitSca
 	fail.Job.LeaseUntil = time.Time{}
 	fail.Job.NextAttempt = fail.Job.UpdatedAt.Add(time.Second << min(job.Attempts, 9))
 	switch {
+	case errors.Is(err, outbound.ErrGitCommitUnavailable):
+		// A local commit may be pushed shortly after its context arrives, so a
+		// young job keeps its normal backoff. After that, provider evidence for
+		// the commit (push, branch head, indexed descendant) reopens it.
+		fail.Job.Reason = domain.GitScanCommitPending
+		if fail.Job.UpdatedAt.Sub(job.CreatedAt) >= gitCommitArrivalGrace {
+			fail.Job.State = "attention"
+			fail.Job.Reason = domain.GitScanCommitUnavailable
+		}
 	case errors.Is(err, domain.ErrIntegrity):
 		fail.Job.State = "attention"
 		fail.Job.Reason = "integrity_check_failed"
@@ -117,10 +128,72 @@ func (workers *GitIntegrationWorkers) run(ctx context.Context, job domain.GitSca
 		fail.Job.State = "attention"
 		fail.Job.Reason = "origin_or_lease_changed"
 	}
+	if fail.Job.State == "retrying" && job.Attempts >= gitScanRetryLimit {
+		fail.Job.State = "attention"
+		fail.Job.Reason = domain.GitScanRetryLimit
+	}
 	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
 	operationErr := repositoryWriteErrorWithWork(evidenceWriteContext(finish), workers.work, job.RepoID, func(tx context.Context) error { return workers.store.FinishGitScan(tx, fail) })
+	outcome := "deferred"
+	if fail.Job.State == "attention" {
+		outcome = "stopped"
+	}
+	recorded := ""
+	if operationErr != nil {
+		recorded = " record=" + gitObservationFailureClass(operationErr)
+	}
+	log.Printf("Git observation %s attempt %d %s: class=%s reason=%s%s", job.ID, job.Attempts, outcome, gitObservationFailureClass(err), fail.Job.Reason, recorded)
 	return errors.Join(err, operationErr)
+}
+
+const (
+	// About a day of continuous failure at the 512s backoff ceiling. Attempts
+	// also count successful phase claims, which stay far below this.
+	gitScanRetryLimit = 200
+	// How long a commit that the provider does not serve keeps ordinary retries.
+	gitCommitArrivalGrace = time.Hour
+)
+
+// gitObservationFailureClass names a failure from a fixed vocabulary. Error
+// text is never logged: provider errors can carry URLs.
+func gitObservationFailureClass(err error) string {
+	var status outbound.GitProviderStatusError
+	var network net.Error
+	switch {
+	case errors.Is(err, outbound.ErrGitCommitUnavailable):
+		return "commit_unavailable_at_provider"
+	case errors.Is(err, outbound.ErrGitProviderRateLimited):
+		return "provider_rate_limited"
+	case errors.As(err, &status):
+		if status.Status < 100 || status.Status > 599 {
+			return "provider_http_invalid"
+		}
+		return "provider_http_" + strconv.Itoa(status.Status)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, domain.ErrResourceOverloaded):
+		return "resource_overloaded"
+	case errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired):
+		return "document_identity_upgrade_required"
+	case errors.Is(err, domain.ErrIntegrity):
+		return "integrity"
+	case errors.Is(err, domain.ErrValidation):
+		return "validation"
+	case errors.Is(err, domain.ErrConflict):
+		return "conflict"
+	case errors.Is(err, domain.ErrForbidden):
+		return "forbidden"
+	case errors.Is(err, domain.ErrUnauthorized):
+		return "unauthorized"
+	case errors.Is(err, domain.ErrNotFound):
+		return "not_found"
+	case errors.As(err, &network):
+		return "network"
+	}
+	return "unclassified"
 }
 
 func (workers *GitIntegrationWorkers) Process(ctx context.Context, limit int) error {
@@ -135,9 +208,8 @@ func (workers *GitIntegrationWorkers) Process(ctx context.Context, limit int) er
 			}
 			return workers.store.ClaimGitScan(bound, "", time.Now().UTC(), 2*time.Minute)
 		}, func(bound context.Context, job domain.GitScanJob) error {
-			if err := workers.run(bound, job); err != nil {
-				log.Printf("Git observation %s attempt %d deferred", job.ID, job.Attempts)
-			}
+			// run logs each failure with its class; the next job proceeds.
+			_ = workers.run(bound, job)
 			return nil
 		})
 		if errors.Is(err, domain.ErrNotFound) {

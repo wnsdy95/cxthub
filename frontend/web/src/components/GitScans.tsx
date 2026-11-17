@@ -14,7 +14,7 @@ export function GitScans({repoId, canRetry}: {repoId: string; canRetry: boolean}
  const retry = useMutation({mutationFn: (id: string) => api.retryGitScan(repoId, id),
   onSuccess: () => qc.invalidateQueries({queryKey: key})});
  const labels = {waiting: t('promotion.waiting'), running: t('promotion.running'), retrying: t('promotion.retrying'), attention: t('promotion.attention'), completed: t('gitScans.completed')};
- const reasons: Record<string, string> = {temporary_provider_or_storage_failure: t('promotion.temporary'), integrity_check_failed: t('promotion.integrity'), invalid_or_ambiguous_git_evidence: t('gitChanges.ambiguous'), origin_or_lease_changed: t('gitChanges.changed')};
+ const reasons: Record<string, string> = {temporary_provider_or_storage_failure: t('promotion.temporary'), integrity_check_failed: t('promotion.integrity'), invalid_or_ambiguous_git_evidence: t('gitChanges.ambiguous'), origin_or_lease_changed: t('gitChanges.changed'), commit_not_yet_at_provider: t('gitScans.commitPending'), commit_unavailable_at_provider: t('gitScans.commitUnavailable'), retry_limit_reached: t('promotion.exhausted')};
  const heads = jobs.data?.pages[0].reconciliation;
  const rows = jobs.data?.pages.flatMap(p => p.items) ?? [];
  return <details className="git-scans" open={open} onToggle={e => setOpen(e.currentTarget.open)}>

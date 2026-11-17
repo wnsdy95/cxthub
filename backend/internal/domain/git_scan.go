@@ -89,6 +89,30 @@ func (j GitScanJob) Retry(now time.Time) (GitScanJob, error) {
 	return j, j.Validate()
 }
 
+// Scan reasons for commits the provider does not serve, and for generic
+// failures that exhausted automatic retries.
+const (
+	GitScanCommitPending     = "commit_not_yet_at_provider"
+	GitScanCommitUnavailable = "commit_unavailable_at_provider"
+	GitScanRetryLimit        = "retry_limit_reached"
+)
+
+// ResumeOnProviderEvidence reopens a scan that stopped only because the
+// provider had not served its commit, or because generic retries ran out, once
+// provider evidence (a push, a branch head, an indexed descendant) names the
+// commit. Integrity, validation and origin failures stay stopped, and a
+// running lease is never touched.
+func (j GitScanJob) ResumeOnProviderEvidence(now time.Time) (GitScanJob, bool, error) {
+	if j.State != "attention" || (j.Reason != GitScanCommitUnavailable && j.Reason != GitScanRetryLimit) {
+		return j, false, nil
+	}
+	next, err := j.Retry(now)
+	if err != nil {
+		return j, false, err
+	}
+	return next, true, nil
+}
+
 // GitDeltaRecord contains provider evidence, never client-supplied source code.
 // Index keys include the exact path, bytes and mode. They are candidate lookup
 // keys only; domain reversal assessment and ancestry verification still run.

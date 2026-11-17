@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -157,13 +158,9 @@ func (s *PostgresStore) FinishGitScan(ctx context.Context, p domain.GitScanFinis
 			return domain.ErrIntegrity
 		}
 	}
+	// A parent named by a provider commit object exists at the provider.
 	for _, j := range p.Parents {
-		b, err = json.Marshal(j)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO git_scan_jobs(repo_id,id,payload,state,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil)
-		if err != nil {
+		if err = enqueueObservedGitScanPG(ctx, tx, j, true, p.Job.UpdatedAt); err != nil {
 			return err
 		}
 	}
@@ -270,7 +267,7 @@ func putGitObservationPG(ctx context.Context, tx pgx.Tx, o domain.GitRefObservat
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO git_ref_observations(repo_id,id,payload,observed_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, o.RepoID, o.ID, b, now)
+	inserted, err := tx.Exec(ctx, `INSERT INTO git_ref_observations(repo_id,id,payload,observed_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, o.RepoID, o.ID, b, now)
 	if err != nil {
 		return err
 	}
@@ -281,21 +278,48 @@ func putGitObservationPG(ctx context.Context, tx pgx.Tx, o domain.GitRefObservat
 	if !same {
 		return domain.ErrConflict
 	}
+	// Only a new observation reopens stopped scans. Reconciliation re-reads the
+	// same heads every pass; replaying them must not become a retry loop.
+	fresh := inserted.RowsAffected() == 1
 	for _, sha := range []string{o.Before, o.After} {
 		if sha == "" {
 			continue
 		}
-		j := domain.NewGitScan(o.RepoID, o.GitOrigin, sha, now)
-		b, err = json.Marshal(j)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO git_scan_jobs(repo_id,id,payload,state,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil)
-		if err != nil {
+		if err = enqueueObservedGitScanPG(ctx, tx, domain.NewGitScan(o.RepoID, o.GitOrigin, sha, now), fresh, now); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// enqueueObservedGitScanPG inserts a scan named by provider evidence. When the
+// scan already exists and resume is set, a scan stopped for an unavailable
+// commit or exhausted retries is reopened; other states are left alone.
+func enqueueObservedGitScanPG(ctx context.Context, tx pgx.Tx, j domain.GitScanJob, resume bool, now time.Time) error {
+	b, err := json.Marshal(j)
+	if err != nil {
+		return err
+	}
+	inserted, err := tx.Exec(ctx, `INSERT INTO git_scan_jobs(repo_id,id,payload,state,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil)
+	if err != nil || inserted.RowsAffected() == 1 || !resume {
+		return err
+	}
+	var current domain.GitScanJob
+	err = tx.QueryRow(ctx, `SELECT payload FROM git_scan_jobs WHERE repo_id=$1 AND id=$2 AND state='attention' FOR UPDATE`, j.RepoID, j.ID).Scan(&b)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err = json.Unmarshal(b, &current); err != nil {
+		return err
+	}
+	next, resumed, err := current.ResumeOnProviderEvidence(now)
+	if err != nil || !resumed {
+		return err
+	}
+	return writeGitScanPG(ctx, tx, next)
 }
 
 func (s *PostgresStore) ClaimGitHeadScan(ctx context.Context, repo domain.ContentHash, origin string, now time.Time, lease time.Duration) (domain.GitHeadScan, error) {

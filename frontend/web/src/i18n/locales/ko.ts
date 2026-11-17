@@ -1295,7 +1295,9 @@ export const ko = {
     "completed": "후보 탐색 완료",
     "empty": "아직 관찰된 커밋이 없습니다.",
     "indexed": "파일 변경 색인 완료",
-    "reading": "전체 Git 객체 조회 대기"
+    "reading": "전체 Git 객체 조회 대기",
+    "commitPending": "커밋이 아직 Git 호스트에 없습니다. push될 수 있어 잠시 재시도합니다.",
+    "commitUnavailable": "커밋이 Git 호스트에 없습니다(push되지 않았거나 다시 쓰인 커밋). push되면 자동으로 다시 시도합니다."
 },
   gitChanges: {
     title: "되돌림 검증 이력",

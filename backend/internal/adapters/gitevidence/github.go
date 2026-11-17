@@ -5,6 +5,7 @@ package gitevidence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -147,7 +148,7 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 		token = g.token()
 	}
 	if g.rateLimited(bucket, time.Now()) {
-		return fmt.Errorf("Git evidence provider rate limit; retry later")
+		return outbound.ErrGitProviderRateLimited
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base+path, nil)
@@ -176,7 +177,7 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 			}
 			g.retainRateLimit(bucket, resume, time.Now())
 		}
-		return fmt.Errorf("Git evidence provider returned HTTP %d", resp.StatusCode)
+		return outbound.GitProviderStatusError{Status: resp.StatusCode}
 	}
 	// Refuse truncation; a clipped JSON response must never be interpreted as a
 	// complete tree. Provider bodies/errors/tokens are not included in diagnostics.
@@ -209,7 +210,7 @@ func (g *GitHub) commit(ctx context.Context, repo, oid string) (commitObject, er
 		return out, err
 	}
 	if err := g.get(ctx, "/repos/"+repo+"/git/commits/"+oid, &out); err != nil {
-		return out, err
+		return out, g.missingCommit(ctx, repo, err)
 	}
 	if out.SHA != oid || out.Parents == nil {
 		return out, domain.ErrIntegrity
@@ -218,6 +219,22 @@ func (g *GitHub) commit(ctx context.Context, repo, oid string) (commitObject, er
 		return out, domain.ErrIntegrity
 	}
 	return out, nil
+}
+
+// missingCommit separates "this commit is not at the provider" from "this
+// credential cannot see the repository": GitHub answers 404 for both. Only when
+// the same credential still lists the repository's branches is the miss
+// attributed to the commit. Every other outcome keeps the original error.
+func (g *GitHub) missingCommit(ctx context.Context, repo string, err error) error {
+	var status outbound.GitProviderStatusError
+	if !errors.As(err, &status) || (status.Status != http.StatusNotFound && status.Status != http.StatusUnprocessableEntity) {
+		return err
+	}
+	var branches []json.RawMessage
+	if probe := g.get(ctx, "/repos/"+repo+"/branches?per_page=1", &branches); probe != nil || branches == nil {
+		return err
+	}
+	return fmt.Errorf("%w: %w", outbound.ErrGitCommitUnavailable, err)
 }
 func (g *GitHub) tree(ctx context.Context, repo, oid string) (map[string]domain.GitEntry, bool, error) {
 	entries, complete, err := g.treeEntries(ctx, repo, oid)
