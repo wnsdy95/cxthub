@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,7 +57,7 @@ func countUndoneCapturePushes(root string, files []os.DirEntry) int {
 		}
 		raw, err := providerfs.ReadRepoFile(root, filepath.Join(capturePushDir, file.Name()))
 		var r capturePushRequest
-		if err != nil || json.Unmarshal(raw, &r) != nil || (!r.Done && r.Tries < 8 && !now.Before(r.Next)) {
+		if err != nil || json.Unmarshal(raw, &r) != nil || (!r.Done && r.Retired == "" && r.Tries < 8 && !now.Before(r.Next)) {
 			undone++
 		}
 	}
@@ -101,6 +102,71 @@ type capturePushRequest struct {
 	Done             bool
 	Error            string
 	MigrationRetries map[string]capturePushRetry `json:",omitempty"`
+	// Deferred counts consecutive attempts that ended in a server or network
+	// condition instead of a verdict on this publication. Those attempts keep
+	// the bounded retry budget and wait on capturePushDeferral instead.
+	Deferred int `json:",omitempty"`
+	// Retired names why an undelivered request stopped for good.
+	Retired string `json:",omitempty"`
+}
+
+const (
+	// capturePushSuperseded retires a request whose pushed branch no longer
+	// points at the pushed commit: delivery is bound to that exact commit, so
+	// only a later push of the branch can publish its context.
+	capturePushSuperseded  = "superseded"
+	capturePushMaxDeferred = 16
+)
+
+// capturePushDeferral is the wait after the n-th consecutive deferred attempt:
+// one minute, doubling to a 30-minute ceiling. A busy or unreachable server
+// is retried for as long as the request stays deliverable, but slowly.
+func capturePushDeferral(n int) time.Duration {
+	return min(time.Minute<<min(max(n, 1)-1, 5), 30*time.Minute)
+}
+
+// capturePushServerBusy reports a response about the server, not about this
+// publication: overload, rate limiting, or a gateway that never reached it.
+func capturePushServerBusy(err error) bool {
+	var response interface{ StatusCode() int }
+	if !errors.As(err, &response) {
+		return false
+	}
+	switch response.StatusCode() {
+	case 429, 502, 503, 504:
+		return true
+	}
+	return false
+}
+
+// capturePushTransient reports a failure that says nothing about whether this
+// publication is acceptable: a busy server, an expired or cancelled wait
+// (including accepted work still queued on the server), or a network error.
+func capturePushTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var network net.Error
+	return capturePushServerBusy(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &network)
+}
+
+// capturePushBranchMoved reports whether the pushed local branch certainly no
+// longer points at the pushed commit. A Git failure is not evidence: only a
+// successful listing that lacks the ref, or shows another commit, counts.
+func capturePushBranchMoved(ctx context.Context, cwd string, update gitPushUpdate) bool {
+	if !strings.HasPrefix(update.LocalRef, "refs/heads/") {
+		return false
+	}
+	raw, err := exec.CommandContext(ctx, "git", "-C", cwd, "for-each-ref", "--format=%(refname) %(objectname)", update.LocalRef).Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if name, oid, ok := strings.Cut(line, " "); ok && name == update.LocalRef {
+			return !strings.EqualFold(oid, update.LocalOID)
+		}
+	}
+	return true
 }
 
 type capturePushRetry struct {
@@ -121,6 +187,9 @@ func (request *capturePushRequest) setRetry(route string, retry capturePushRetry
 
 func (request capturePushRequest) validRetries() bool {
 	if request.Tries < 0 || request.Tries > 8 || len(request.MigrationRetries) > 64 {
+		return false
+	}
+	if request.Deferred < 0 || request.Deferred > capturePushMaxDeferred || (request.Retired != "" && request.Retired != capturePushSuperseded) {
 		return false
 	}
 	for route, retry := range request.MigrationRetries {
@@ -281,7 +350,7 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		if len(raw) > 65536 || json.Unmarshal(raw, &r) != nil || r.Intent.Version != 1 || r.Intent.RepoID != repoID || r.Intent.id()+".json" != file.Name() || !r.validRetries() {
 			return next, domain.ErrHashMismatch
 		}
-		if r.Done {
+		if r.Done || r.Retired != "" {
 			continue
 		}
 		// Waiting for a capture consumes no transport attempt: a large input may
@@ -289,6 +358,16 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		p, err := capturePushAttempt(root, r.Intent)
 		if err != nil {
 			return next, err
+		}
+		// A branch that moved on can never satisfy this request again. Retire it
+		// without a transport attempt instead of failing until the budget ends.
+		if capturePushBranchMoved(ctx, cwd, r.Intent.Update) {
+			r.Retired, r.Error = capturePushSuperseded, ""
+			raw, _ = json.Marshal(r)
+			if err := providerfs.WriteRepoFileDurable(root, rel, raw, 0600); err != nil {
+				return next, err
+			}
+			continue
 		}
 		if !p.Complete || !p.MemoryFinalized {
 			continue
@@ -338,9 +417,19 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		undone--
 		err = deliverCapturePush(job, c, cwd, root, r.Intent, p, destination)
 		cancel()
-		if pendingTransportMismatch(err) {
+		transient := capturePushTransient(err)
+		switch {
+		case pendingTransportMismatch(err):
 			retry = previousRetry
 			r.setRetry(route, retry)
+		case transient:
+			// The attempt was no verdict on this publication. Give the try back
+			// and wait on the slower schedule, however long the outage lasts.
+			r.Deferred = min(r.Deferred+1, capturePushMaxDeferred)
+			retry = capturePushRetry{Tries: previousRetry.Tries, Next: time.Now().Add(capturePushDeferral(r.Deferred))}
+			r.setRetry(route, retry)
+		default:
+			r.Deferred = 0
 		}
 		r.Error = ""
 		if err == nil {
@@ -356,6 +445,11 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		}
 		if !r.Done && retry.Tries < 8 && (next.IsZero() || retry.Next.Before(next)) {
 			next = retry.Next
+		}
+		// A busy server gets no further requests from this pass: the remaining
+		// ones stay due and follow one at a time on later passes.
+		if capturePushServerBusy(err) {
+			return next, nil
 		}
 	}
 	return next, nil

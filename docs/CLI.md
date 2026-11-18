@@ -138,6 +138,10 @@ Eligible jobs can be retried now; that count does not mean a worker is running.
 An empty queue does not establish server acknowledgement or object integrity.
 Unreadable queue metadata produces a nonzero exit status without repairing it.
 
+Deferred context pushes are listed as retrying, waiting for the server, or
+exhausted; requests retired because their branch moved past the pushed commit
+are only counted (`superseded_pushes` in JSON).
+
 Status also shows whether retained-history uploads are paused, or held until a
 given time. The background uploader rests after each long upload for as long as
 it took, and waits at least a minute after the server answers that it is busy.
@@ -466,11 +470,22 @@ same archived input. An unsealed capture cannot rediscover missing input later.
 If `git push origin` selects a commit whose sealed capture is still running,
 the hook records that exact Git ref, SHA, context branch identity and destination
 under `.cxt/capture/push-requests`. After capture and publication evidence complete,
-the same worker retries only that selection (eight attempts, one minute each).
-It never turns a background capture into an implicit all-branches push. Changed
-code, branch identity, destination or context target leaves the request retained;
-run an explicit `cxt push` after resolving the mismatch. A successful Git push
-alone does not prove that its context upload has completed.
+the same worker retries only that selection. An attempt the server refuses, or
+one that fails on changed branch identity, destination or context target, uses
+one of eight automatic attempts; after the eighth the request stays retained
+until an explicit `cxt push` re-arms it. An attempt that ends because the server
+is busy (429, 502, 503, 504), a wait timed out, or the network failed is not a
+verdict on the publication: it keeps the attempt budget and is retried on a
+slower schedule (one minute, doubling to 30 minutes) for as long as the request
+stays deliverable, whenever Git synchronization wakes the worker. A busy
+response also ends that pass, so the remaining requests follow one at a time.
+It never turns a background capture into an implicit all-branches push.
+
+Delivery is bound to the pushed commit. Once the pushed local branch points at
+another commit, or no longer exists, the request can never be delivered; it is
+retired without an attempt and `cxt sync status` counts it separately instead of
+listing it as exhausted. Only a later push of that branch publishes its context.
+A successful Git push alone does not prove that its context upload has completed.
 
 Replay first persists each derived memory hash and its attachment predecessor.
 Live capture and deferred commit capture share the same initial inherited memory
