@@ -1,0 +1,8 @@
+[
+  {
+    "advisory": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "ReDoS in extglob matching with no patched release: every version up to the latest (4.0.7) is affected. It is reached only through build tooling (vite, tinyglobby, fdir) matching patterns from this repository's own configuration, and is not part of the shipped bundle. Remove this entry when a patched picomatch can be installed.",
+    "expires": "2026-12-16"
+  }
+]

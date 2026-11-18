@@ -93,6 +93,8 @@ jobs:
         run: python3 scripts/test-check-public-git-metadata.py
       - name: Verify repository export and synchronization fences
         run: python3 scripts/test-distribute-repositories.py
+      - name: Verify the npm audit gate and its dated exceptions
+        run: python3 scripts/test-npm-audit-gate.py
       - name: Verify E2E publication fence and failure evidence
         run: |
           python3 scripts/test-e2e-drain-publication.py
@@ -266,7 +268,9 @@ jobs:
         working-directory: frontend/web
         run: |
           npm ci
-          npm audit --audit-level=high
+          # High and critical advisories block, except dated entries in
+          # audit-exceptions.json for advisories without a patched release.
+          python3 ../../scripts/npm-audit-gate.py
           npm test
           npm run check:architecture
           npm run check:i18n
