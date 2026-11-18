@@ -26,7 +26,10 @@ type syncStatus struct {
 	Branches         []branchOperationStatus   `json:"branch_operations"`
 	Merges           []mergeDeliveryStatus     `json:"merge_deliveries"`
 	DeferredPushes   []deferredPushStatus      `json:"deferred_pushes"`
-	Issues           []string                  `json:"issues"`
+	// SupersededPushes counts deferred pushes retired because their branch
+	// moved past the pushed commit; a later push of that branch replaces them.
+	SupersededPushes int      `json:"superseded_pushes"`
+	Issues           []string `json:"issues"`
 }
 
 type mergeDeliveryStatus struct {
@@ -72,6 +75,11 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 				report.Issues = append(report.Issues, "deferred context pushes: "+err.Error())
 			} else {
 				report.DeferredPushes = append(report.DeferredPushes, deferred...)
+				if retired, err := countRetiredCapturePushes(state.Root); err != nil {
+					report.Issues = append(report.Issues, "deferred context pushes: "+err.Error())
+				} else {
+					report.SupersededPushes = retired
+				}
 			}
 			if control, err := reader.HistoricalUploadControl(ctx, state.Root, report.Repository); err != nil {
 				report.Issues = append(report.Issues, "historical upload control: "+err.Error())
@@ -137,11 +145,13 @@ func RunSyncStatus(ctx context.Context, reader outbound.LocalReplicaInspector, c
 				exhausted++
 			}
 		}
-		fmt.Fprintf(w, "Deferred context pushes: %d pending; %d exhausted (rerun with cxt push origin <branch> to retry).\n", len(report.DeferredPushes), exhausted)
+		fmt.Fprintf(w, "Deferred context pushes: %d pending; %d exhausted (rerun with cxt push origin <branch> to retry); %d retired because the branch moved past the pushed commit.\n", len(report.DeferredPushes), exhausted, report.SupersededPushes)
 		for _, job := range report.DeferredPushes {
 			state := "retrying"
 			if job.Exhausted {
 				state = "exhausted"
+			} else if job.Deferred > 0 {
+				state = "waiting for the server"
 			}
 			fmt.Fprintf(w, "  %s  %s  %s  tries=%d  %s\n", job.ID[:12], job.Branch, state, job.Tries, job.Error)
 		}

@@ -27,7 +27,10 @@ type deferredPushStatus struct {
 	Tries     int       `json:"tries"`
 	Next      time.Time `json:"next_attempt,omitempty"`
 	Exhausted bool      `json:"exhausted"`
-	Error     string    `json:"error,omitempty"`
+	// Deferred counts consecutive attempts postponed by a busy or unreachable
+	// server; such a request keeps retrying on its own.
+	Deferred int    `json:"deferred,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 func (request capturePushRequest) exhausted() bool {
@@ -80,15 +83,31 @@ func listDeferredPushes(root string) ([]deferredPushStatus, error) {
 	}
 	var out []deferredPushStatus
 	for id, request := range requests {
-		if request.Done {
+		if request.Done || request.Retired != "" {
 			continue
 		}
 		// Requests written by earlier binaries may hold unsanitized text.
 		message := domain.SanitizeErrorText(request.Error, 240)
-		out = append(out, deferredPushStatus{ID: id, Branch: request.Intent.Branch.Branch, BranchID: request.Intent.Branch.BranchID, GitCommit: request.Intent.Update.LocalOID, Tries: request.Tries, Next: request.Next, Exhausted: request.exhausted(), Error: message})
+		out = append(out, deferredPushStatus{ID: id, Branch: request.Intent.Branch.Branch, BranchID: request.Intent.Branch.BranchID, GitCommit: request.Intent.Update.LocalOID, Tries: request.Tries, Next: request.Next, Exhausted: request.exhausted(), Deferred: request.Deferred, Error: message})
 	}
 	sort.Slice(out, func(left, right int) bool { return out[left].ID < out[right].ID })
 	return out, nil
+}
+
+// countRetiredCapturePushes reports how many undelivered requests were retired
+// because their branch moved past the pushed commit.
+func countRetiredCapturePushes(root string) (int, error) {
+	requests, err := readCapturePushRequests(root)
+	if err != nil {
+		return 0, err
+	}
+	retired := 0
+	for _, request := range requests {
+		if !request.Done && request.Retired != "" {
+			retired++
+		}
+	}
+	return retired, nil
 }
 
 // rearmCapturePushes gives exhausted deferred publications a fresh retry
@@ -101,11 +120,11 @@ func rearmCapturePushes(ctx context.Context, root, branch string) (int, error) {
 	}
 	rearmed := 0
 	for id, request := range requests {
-		if request.Done || !request.exhausted() || (branch != "" && request.Intent.Branch.Branch != branch) {
+		if request.Done || request.Retired != "" || !request.exhausted() || (branch != "" && request.Intent.Branch.Branch != branch) {
 			continue
 		}
 		_, err := providerfs.WithCxtLock(ctx, root, "capture-push", id, syscall.LOCK_EX, true, func() error {
-			request.Tries, request.Next, request.MigrationRetries, request.Error = 0, time.Time{}, nil, ""
+			request.Tries, request.Next, request.MigrationRetries, request.Error, request.Deferred = 0, time.Time{}, nil, "", 0
 			raw, err := json.Marshal(request)
 			if err != nil {
 				return err

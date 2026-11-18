@@ -323,6 +323,15 @@ func TestCapturePushChangedBindingsAndMissingPublicationStayPending(t *testing.T
 				}
 			}
 			next, err := drainCapturePush(ctx, f.c, f.cwd, f.cwd, f.repo.ID)
+			if reason == "git-ref" {
+				// A branch that moved past the pushed commit can never satisfy the
+				// request: it is retired unacknowledged, without a spent attempt.
+				_, retired, _ := readCapturePushRequest(t, f.cwd)
+				if err != nil || !next.IsZero() || retired.Done || retired.Retired != capturePushSuperseded || retired.Tries != 0 || retired.Intent != queued.Intent || len(spy.inputs) != 0 {
+					t.Fatalf("moved branch was acknowledged or retried: %+v %v", retired, err)
+				}
+				return
+			}
 			if err != nil || next.IsZero() {
 				t.Fatal("rejected request was not durably deferred", err)
 			}
