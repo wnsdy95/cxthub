@@ -369,6 +369,121 @@ func replayFetchObservation(ctx context.Context, c *Container, cwd, root string,
 	return progressed, nil
 }
 
+// fetchGapLimit bounds the Git work one replay pass spends on recovering gaps;
+// the rest follows on later passes.
+const fetchGapLimit = 16
+
+// reconcileFetchGaps records the ranges that no hooked transaction reported.
+// Each observation holds the before and after of one reference transaction. A
+// fetch that ran with hooks disabled (another tool, core.hooksPath) leaves no
+// observation, so the next hooked one starts at a commit that no earlier
+// observation ended at, and the commits in between were never searched for
+// merged pull requests. For such a start, the range from the latest earlier
+// observation of the same ref is written as an observation of its own.
+//
+// Only a fast-forward range is recoverable. A rewritten or unavailable start
+// is recorded as already scanned, so it is judged once and not on every pass.
+func reconcileFetchGaps(ctx context.Context, cwd, root string, known []fetchObservation) ([]fetchObservation, error) {
+	type scope struct {
+		Binding fetchBinding
+		Ref     string
+	}
+	groups := map[string][]fetchObservation{}
+	for _, item := range known {
+		if item.branch() == "" {
+			continue
+		}
+		key := fetchIdentity(scope{item.fetchBinding, item.Ref})
+		groups[key] = append(groups[key], item)
+	}
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var created []fetchObservation
+	var failures error
+	for _, key := range keys {
+		group := groups[key]
+		sort.SliceStable(group, func(left, right int) bool {
+			if !group[left].CreatedAt.Equal(group[right].CreatedAt) {
+				return group[left].CreatedAt.Before(group[right].CreatedAt)
+			}
+			return fetchIdentity(group[left].fetchEvidence) < fetchIdentity(group[right].fetchEvidence)
+		})
+		ends := map[string]bool{}
+		for _, item := range group {
+			if !zeroGitOID(item.After) {
+				ends[item.After] = true
+			}
+		}
+		for index, next := range group {
+			if zeroGitOID(next.Before) || ends[next.Before] {
+				continue
+			}
+			start := ""
+			for earlier := index - 1; earlier >= 0 && start == ""; earlier-- {
+				if !zeroGitOID(group[earlier].After) {
+					start = group[earlier].After
+				}
+			}
+			if start == "" {
+				continue
+			}
+			if len(created) >= fetchGapLimit {
+				return created, failures
+			}
+			if err := ctx.Err(); err != nil {
+				return created, errors.Join(failures, err)
+			}
+			gap := fetchObservation{
+				fetchEvidence: fetchEvidence{fetchBinding: next.fetchBinding, Before: start, After: next.Before, Ref: next.Ref},
+				// Just before the observation it leads to: later passes then find
+				// that observation, not this range, as the latest earlier one.
+				Version: 1, CreatedAt: next.CreatedAt.Add(-time.Nanosecond), Status: "unknown", Reason: "provider_history_unverified",
+			}
+			available := true
+			for _, oid := range []string{gap.Before, gap.After} {
+				if _, err := fetchGit(ctx, cwd, "cat-file", "-e", oid+"^{commit}"); err != nil {
+					available = false
+				}
+			}
+			if !available {
+				gap.Scanned, gap.Delivery, gap.Reason = true, "drained", "unobserved_range_unavailable"
+			} else if err := exec.CommandContext(ctx, "git", "-C", cwd, "merge-base", "--is-ancestor", gap.Before, gap.After).Run(); err != nil {
+				var exit *exec.ExitError
+				if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+					failures = errors.Join(failures, fmt.Errorf("unobserved fetch range could not be classified: %w", err))
+					continue
+				}
+				gap.Scanned, gap.Delivery, gap.Reason = true, "drained", "unobserved_range_rewritten"
+			}
+			id := fetchIdentity(gap.fetchEvidence)
+			file := filepath.Join(fetchObservationDir, id+".json")
+			wrote := false
+			_, err := providerfs.WithCxtLock(ctx, root, "fetch-observations", id, syscall.LOCK_EX, true, func() error {
+				if _, err := providerfs.ReadRepoFile(root, file); err == nil {
+					return nil
+				} else if !os.IsNotExist(err) {
+					return err
+				}
+				raw, _ := json.Marshal(gap)
+				wrote = true
+				return providerfs.WriteRepoFileDurable(root, file, raw, 0600)
+			})
+			if err != nil {
+				failures = errors.Join(failures, err)
+				continue
+			}
+			ends[gap.After] = true
+			if wrote {
+				created = append(created, gap)
+			}
+		}
+	}
+	return created, failures
+}
+
 func replayFetchObservations(ctx context.Context, c *Container, cwd string) (bool, error) {
 	pending, _, err := replayFetchObservationsWithProgress(ctx, c, cwd)
 	return pending, err
@@ -394,6 +509,7 @@ func replayFetchObservationsWithProgress(ctx context.Context, c *Container, cwd 
 		item fetchObservation
 	}
 	var work []pending
+	var known []fetchObservation
 	var failures error
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
@@ -406,8 +522,19 @@ func replayFetchObservationsWithProgress(ctx context.Context, c *Container, cwd 
 			failures = errors.Join(failures, fmt.Errorf("fetch observation %s is corrupt or unavailable", entry.Name()))
 			continue
 		}
+		known = append(known, item)
 		if (!item.Scanned || item.Delivery != "drained") && item.branch() != "" && !zeroGitOID(item.After) {
 			work = append(work, pending{file, item})
+		}
+	}
+	// A fetch that ran without hooks moved a remote ref unseen. Recover the
+	// ranges between recorded observations before replaying, so their merged
+	// pull requests are discovered like any observed range.
+	gaps, err := reconcileFetchGaps(ctx, cwd, root, known)
+	failures = errors.Join(failures, err)
+	for _, gap := range gaps {
+		if !gap.Scanned {
+			work = append(work, pending{filepath.Join(fetchObservationDir, fetchIdentity(gap.fetchEvidence)+".json"), gap})
 		}
 	}
 	sort.Slice(work, func(left, right int) bool {

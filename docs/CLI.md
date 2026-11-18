@@ -1270,6 +1270,11 @@ request cannot monopolize the per-run budget. Corrupt discovery records remain
 available for diagnosis while independent valid ranges continue. Exact source
 publication, Git order and idempotent completion remain server responsibilities.
 
+Discovery follows observed changes of `origin` remote-tracking refs. If a tool
+fetched with Git hooks disabled, the commits it brought in are searched once a
+later ordinary fetch shows where observed history resumed; see
+[Automatic context linking](AUTOMATIC_CONTEXT_LINKING.md).
+
 ### Interrupted synchronization
 
 Pull stages each verified document before proceeding to the next. Verified
