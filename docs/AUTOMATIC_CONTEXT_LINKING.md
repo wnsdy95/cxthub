@@ -127,6 +127,19 @@ refspecs, unavailable commits and shallow history retain unresolved evidence.
 There is no automatic unshallow, invented source capture, context ref movement,
 or provider restart.
 
+A fetch that runs with hooks disabled (another tool, or `core.hooksPath`) moves a
+remote-tracking ref without an observation. The next observed transaction then
+starts at a commit that no earlier observation of that ref ended at, and the
+commits in between were never searched. Before each replay the discovery worker
+compares the recorded observations of every ref: for such a start it records the
+range from the latest earlier observation as an observation of its own, and that
+range is searched like any other. Only a fast-forward range is recoverable. When
+the unseen fetch rewrote the branch, or a commit is no longer available, the
+break is recorded once as already handled (`unobserved_range_rewritten`,
+`unobserved_range_unavailable`) and never searched. Without an earlier
+observation of the ref no start is known and no range is invented. The range is
+recovered when the next observed fetch arrives, not before.
+
 Discovery and delivery are distinct checkpoints. Provider pages advance only
 after durable local handoff; a separate drain retries that outbox until server
 acceptance. Acceptance still does not mean context integration completed.
