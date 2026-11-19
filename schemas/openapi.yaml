@@ -841,6 +841,133 @@ components:
             team: { type: string }
         updated_at: { type: string, format: date-time }
         origin: { $ref: '#/components/schemas/SessionOrigin' }
+    AnchoredCommit:
+      type: object
+      required: [sha, rule]
+      description: A commit a segment ends at. The author time, author and subject are what a rebase or cherry-pick keeps, so the commit's copies can be found without the uploader's repository.
+      properties:
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        rule: { type: string, enum: [printed-number, same-folder-and-time] }
+        created_at: { type: string, format: date-time }
+        authored_at: { type: string, format: date-time }
+        author_email: { type: string }
+        subject: { type: string }
+    AnchoredSegment:
+      type: object
+      required: [first, last, first_ordinal, last_ordinal, commands, closes_turn, commits]
+      description: The part of one session that ends at one or more commits, named by the coding agent's own first and last record identifiers and their positions among the session's own records.
+      properties:
+        first: { type: string }
+        last: { type: string }
+        first_ordinal: { type: integer, minimum: 0 }
+        last_ordinal: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        closes_turn: { type: boolean }
+        commits: { type: array, minItems: 1, items: { $ref: '#/components/schemas/AnchoredCommit' } }
+    AnchoredPlace:
+      type: object
+      required: [worktree, rule]
+      description: A worktree and branch an uncommitted part passed through. Only the worktree's name is reported, never its path.
+      properties:
+        worktree: { type: string }
+        branch: { type: string }
+        removed: { type: boolean }
+        rule: { type: string, enum: [recorded-by-tool, head-log, current-branch, folder-no-longer-a-worktree] }
+    AnchoredUncommitted:
+      type: object
+      required: [first, last, first_ordinal, last_ordinal, commands, places, unplaced]
+      properties:
+        first: { type: string }
+        last: { type: string }
+        first_ordinal: { type: integer, minimum: 0 }
+        last_ordinal: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        places: { type: array, items: { $ref: '#/components/schemas/AnchoredPlace' } }
+        unplaced: { type: boolean }
+    AnchoredSpawn:
+      type: object
+      required: [at_record, rule]
+      properties:
+        at_record: { type: string }
+        rule: { type: string, enum: [tool-call, start-time] }
+    AnchoredAgentCall:
+      type: object
+      required: [tool, from, to]
+      properties:
+        tool: { type: string }
+        from: { type: string }
+        to: { type: array, items: { type: string } }
+        status: { type: string }
+        at: { type: string, format: date-time }
+        record: { type: string }
+    AnchoredSessionBody:
+      type: object
+      additionalProperties: false
+      required: [rule_version, sub, scope, records, commands, copied_records, segments]
+      description: The report a CLI computes for one coding-agent session from the records the agent and Git left behind. Every record of the session is in exactly one segment or in the uncommitted part, in order, and every commit is named once.
+      properties:
+        rule_version: { type: integer, enum: [1] }
+        sub: { type: boolean }
+        parent: { type: string }
+        spawn: { $ref: '#/components/schemas/AnchoredSpawn' }
+        scope: { type: string, enum: [working-folder, origin-url] }
+        machine: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        records: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        copied_records: { type: integer, minimum: 0 }
+        copied_from: { type: array, items: { type: string } }
+        file_copies: { type: integer, minimum: 0 }
+        segments: { type: array, items: { $ref: '#/components/schemas/AnchoredSegment' } }
+        uncommitted: { $ref: '#/components/schemas/AnchoredUncommitted' }
+        agent_calls: { type: array, items: { $ref: '#/components/schemas/AnchoredAgentCall' } }
+    AnchoredSession:
+      type: object
+      required: [repo_id, provider, session_id, uploader, revision, body_hash, created_at, updated_at, body]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        provider: { type: string }
+        session_id: { type: string }
+        uploader: { type: string }
+        revision: { type: integer, minimum: 1 }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        body: { $ref: '#/components/schemas/AnchoredSessionBody' }
+    AnchoredSessionSummary:
+      type: object
+      required: [provider, session_id, sub, revision, body_hash, records, segments, updated_at]
+      properties:
+        provider: { type: string }
+        session_id: { type: string }
+        parent: { type: string }
+        sub: { type: boolean }
+        revision: { type: integer, minimum: 1 }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        records: { type: integer, minimum: 0 }
+        segments: { type: integer, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+    AnchoredSessionReceipt:
+      type: object
+      required: [revision, body_hash, changed]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        changed: { type: boolean, description: False when the stored report already had the same content. }
+    AnchoredCommitSegment:
+      type: object
+      required: [provider, session_id, segment_no, rule, segment]
+      properties:
+        provider: { type: string }
+        session_id: { type: string }
+        segment_no: { type: integer, minimum: 1 }
+        rule: { type: string, enum: [printed-number, same-folder-and-time] }
+        segment: { $ref: '#/components/schemas/AnchoredSegment' }
     ContentHash:
       type: string
       description: "Content address hash. Format: sha256:<hex64>. Same content → same value."
@@ -4483,6 +4610,111 @@ paths:
         '415': { description: Content-Type must be application/json }
         '422': { description: Invalid repository or snapshot identity }
         '503': { description: Archive service unavailable }
+
+  /repos/{repoID}/anchored-sessions:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listAnchoredSessions
+      summary: List the caller's own anchored session reports
+      description: Member required. Returns only reports the signed-in account uploaded; until a session is published by the push of its commit, no other account can read it.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: The caller's reports, without their bodies
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredSessionSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        description: The coding agent's own session identifier.
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    get:
+      operationId: getAnchoredSession
+      summary: Read one of the caller's own anchored session reports
+      description: Member required. A report another account uploaded is reported as not found.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: The stored report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository or session identity }
+        '503': { description: Anchored session service unavailable }
+    put:
+      operationId: putAnchoredSession
+      summary: Store the report a CLI computed for one coding-agent session
+      description: Member required, rechecked inside the repository transaction. The report replaces the session's earlier report as a whole. The uploader is the signed-in account, never a body field, and a session belongs to the account that first reported it. Uploading the same content again changes nothing. The report does not advance the repository revision.
+      tags: [anchored-sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnchoredSessionBody' }
+      responses:
+        '200':
+          description: Report stored, or already stored with the same content
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSessionReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: The identifier is already reported by another account, or storage is unavailable }
+        '413': { description: Report exceeds the 4 MiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: Report is not well formed }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/anchored-commits/{sha}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: sha
+        in: path
+        required: true
+        description: Full commit number.
+        schema: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    get:
+      operationId: listAnchoredCommitSegments
+      summary: List the segments of the caller's own sessions that end at a commit
+      description: Member required. Only segments of reports the signed-in account uploaded are returned.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: Segments ending at the commit
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredCommitSegment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity or commit number }
+        '503': { description: Anchored session service unavailable }
 
   /repos/{repoID}/snapshots:
     parameters:
@@ -9006,6 +9238,8 @@ tags:
     description: Convenience branch retrieval.
   - name: snapshots
     description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
+  - name: anchored-sessions
+    description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. Readable only by the uploading account until a published-by-push rule exists."
   - name: docs
     description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
   - name: refs

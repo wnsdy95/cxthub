@@ -1,0 +1,151 @@
+package domain
+
+import (
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func anchoredTestTime(second int) *time.Time {
+	at := time.Date(2031, 1, 2, 3, 0, second, 0, time.UTC)
+	return &at
+}
+
+func anchoredTestSHA(letter string) string { return strings.Repeat(letter, 40) }
+
+// anchoredTestBody is a well-formed report: two segments and an uncommitted
+// part covering six records.
+func anchoredTestBody() AnchoredSessionBody {
+	return AnchoredSessionBody{
+		RuleVersion: AnchoredSessionRuleVersion, Scope: AnchoredScopeFolder, Machine: "workstation",
+		StartedAt: anchoredTestTime(0), EndedAt: anchoredTestTime(50), Records: 6, Commands: 3,
+		Segments: []AnchoredSegment{
+			{AnchoredRange: AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, Commands: 1, StartedAt: anchoredTestTime(0), EndedAt: anchoredTestTime(10)},
+				Commits: []AnchoredCommit{{SHA: anchoredTestSHA("a"), Rule: AnchoredLinkPrintedNumber, CreatedAt: anchoredTestTime(9), AuthoredAt: anchoredTestTime(9), AuthorEmail: "dev@example.test", Subject: "first"}}},
+			{AnchoredRange: AnchoredRange{First: "m3", Last: "m4", FirstOrdinal: 2, LastOrdinal: 3, Commands: 1}, ClosesTurn: true,
+				Commits: []AnchoredCommit{{SHA: anchoredTestSHA("b"), Rule: AnchoredLinkFolderAndTime}, {SHA: anchoredTestSHA("c"), Rule: AnchoredLinkFolderAndTime}}},
+		},
+		Uncommitted: &AnchoredUncommitted{AnchoredRange: AnchoredRange{First: "m5", Last: "m6", FirstOrdinal: 4, LastOrdinal: 5, Commands: 1},
+			Places: []AnchoredPlace{{Worktree: "app", Branch: "main", Rule: AnchoredPlaceRecorded}, {Worktree: "app-detached", Rule: AnchoredPlaceHeadLog}}},
+		AgentCalls: []AnchoredAgentCall{{Tool: "sendInput", From: "lead", To: []string{"worker"}, Status: "completed", At: anchoredTestTime(20), Record: "t1/i1"}},
+	}
+}
+
+func TestAnchoredSessionBodyValidates(t *testing.T) {
+	if err := anchoredTestBody().Validate(); err != nil {
+		t.Fatalf("a well-formed report was rejected: %v", err)
+	}
+	empty := AnchoredSessionBody{RuleVersion: AnchoredSessionRuleVersion, Scope: AnchoredScopeOriginURL}
+	if err := empty.Validate(); err != nil {
+		t.Fatalf("a session with no records was rejected: %v", err)
+	}
+	sub := anchoredTestBody()
+	sub.Sub, sub.Parent, sub.Spawn = true, "parent-session", &AnchoredSpawn{AtRecord: "p1", Rule: AnchoredSpawnToolCall}
+	if err := sub.Validate(); err != nil {
+		t.Fatalf("a spawned session was rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*AnchoredSessionBody){
+		"an unknown rule version":        func(b *AnchoredSessionBody) { b.RuleVersion = 2 },
+		"an unknown scope":               func(b *AnchoredSessionBody) { b.Scope = "elsewhere" },
+		"a parent that is not an id":     func(b *AnchoredSessionBody) { b.Parent = "../other" },
+		"a spawn point without a parent": func(b *AnchoredSessionBody) { b.Spawn = &AnchoredSpawn{AtRecord: "p1", Rule: AnchoredSpawnToolCall} },
+		"a spawn point with an unknown rule": func(b *AnchoredSessionBody) {
+			b.Parent, b.Spawn = "parent", &AnchoredSpawn{AtRecord: "p1", Rule: "guessed"}
+		},
+		"a negative count":                     func(b *AnchoredSessionBody) { b.CopiedRecords = -1 },
+		"a copied-from entry that is no id":    func(b *AnchoredSessionBody) { b.CopiedFrom = []string{"a b"} },
+		"a gap between segments":               func(b *AnchoredSessionBody) { b.Segments[1].FirstOrdinal = 3 },
+		"overlapping segments":                 func(b *AnchoredSessionBody) { b.Segments[1].FirstOrdinal = 1 },
+		"a segment that ends before it starts": func(b *AnchoredSessionBody) { b.Segments[0].LastOrdinal = -1 },
+		"a segment without a commit":           func(b *AnchoredSessionBody) { b.Segments[0].Commits = nil },
+		"a short commit number":                func(b *AnchoredSessionBody) { b.Segments[0].Commits[0].SHA = "aaaaaaa" },
+		"an upper-case commit number":          func(b *AnchoredSessionBody) { b.Segments[0].Commits[0].SHA = strings.Repeat("A", 40) },
+		"an unknown link rule":                 func(b *AnchoredSessionBody) { b.Segments[0].Commits[0].Rule = "guessed" },
+		"a commit named twice":                 func(b *AnchoredSessionBody) { b.Segments[1].Commits[1].SHA = anchoredTestSHA("a") },
+		"a segment without its first record":   func(b *AnchoredSessionBody) { b.Segments[0].First = "" },
+		"a segment that ends before starting": func(b *AnchoredSessionBody) {
+			b.Segments[0].EndedAt = anchoredTestTime(0)
+			b.Segments[0].StartedAt = anchoredTestTime(5)
+		},
+		"an uncommitted part that skips":      func(b *AnchoredSessionBody) { b.Uncommitted.FirstOrdinal = 5 },
+		"records the parts do not cover":      func(b *AnchoredSessionBody) { b.Records = 7 },
+		"a worktree path instead of a name":   func(b *AnchoredSessionBody) { b.Uncommitted.Places[0].Worktree = "/home/dev/app" },
+		"a place with an unknown rule":        func(b *AnchoredSessionBody) { b.Uncommitted.Places[0].Rule = "guessed" },
+		"unplaced with a place":               func(b *AnchoredSessionBody) { b.Uncommitted.Unplaced = true },
+		"placed without a place":              func(b *AnchoredSessionBody) { b.Uncommitted.Places = nil },
+		"an agent call without a sender":      func(b *AnchoredSessionBody) { b.AgentCalls[0].From = "" },
+		"an agent call to nobody named":       func(b *AnchoredSessionBody) { b.AgentCalls[0].To = []string{""} },
+		"a machine label with a control code": func(b *AnchoredSessionBody) { b.Machine = "work\nstation" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := anchoredTestBody().Canonical()
+			mutate(&body)
+			if err := body.Validate(); !errors.Is(err, ErrValidation) {
+				t.Fatalf("%s was accepted: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestAnchoredSessionBodyHashIsTheSameForTheSameContent(t *testing.T) {
+	body := anchoredTestBody()
+	want, err := body.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same instants in another zone, and a report that went through JSON.
+	zone := time.FixedZone("east", 9*3600)
+	shifted := anchoredTestBody()
+	moved := shifted.StartedAt.In(zone)
+	shifted.StartedAt = &moved
+	created := shifted.Segments[0].Commits[0].CreatedAt.In(zone)
+	shifted.Segments[0].Commits[0].CreatedAt = &created
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded AnchoredSessionBody
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for name, other := range map[string]AnchoredSessionBody{"another zone": shifted, "through JSON": decoded, "canonical": body.Canonical()} {
+		if got, err := other.Hash(); err != nil || got != want {
+			t.Fatalf("%s: hash %s, want %s (%v)", name, got, want, err)
+		}
+	}
+	changed := anchoredTestBody()
+	changed.Segments[0].Commits[0].Rule = AnchoredLinkFolderAndTime
+	if got, _ := changed.Hash(); got == want {
+		t.Fatal("a different rule gave the same hash")
+	}
+	if !reflect.DeepEqual(body, anchoredTestBody()) {
+		t.Fatal("hashing changed the report")
+	}
+}
+
+func TestAnchoredSessionCommitLinksAndKeys(t *testing.T) {
+	links := anchoredTestBody().CommitLinks(ProviderClaude, "session-1")
+	want := []AnchoredCommitLink{
+		{Provider: ProviderClaude, SessionID: "session-1", CommitSHA: anchoredTestSHA("a"), SegmentNo: 1, Rule: AnchoredLinkPrintedNumber},
+		{Provider: ProviderClaude, SessionID: "session-1", CommitSHA: anchoredTestSHA("b"), SegmentNo: 2, Rule: AnchoredLinkFolderAndTime},
+		{Provider: ProviderClaude, SessionID: "session-1", CommitSHA: anchoredTestSHA("c"), SegmentNo: 2, Rule: AnchoredLinkFolderAndTime},
+	}
+	if !reflect.DeepEqual(links, want) {
+		t.Fatalf("links = %+v", links)
+	}
+	for id, valid := range map[string]bool{"0f4b3c2a-1d5e-4f60-8a7b-9c0d1e2f3a4b": true, "a082eeddec4163829": true, "": false, "a/b": false, "a b": false, strings.Repeat("x", 129): false} {
+		if ValidAnchoredSessionKey(ProviderCodex, id) != valid {
+			t.Errorf("session id %q valid = %v", id, !valid)
+		}
+	}
+	if ValidAnchoredSessionKey("other", "session-1") {
+		t.Error("an unknown tool was accepted")
+	}
+	if !ValidAnchoredCommitSHA(strings.Repeat("a", 64)) || ValidAnchoredCommitSHA(strings.Repeat("a", 41)) {
+		t.Error("commit number lengths")
+	}
+}

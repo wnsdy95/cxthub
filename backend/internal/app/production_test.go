@@ -33,6 +33,10 @@ type noFence struct {
 	productionFixture
 	FencePRJob int
 }
+type noAnchoredSessions struct {
+	productionFixture
+	PutAnchoredSession int
+}
 
 func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 	for _, row := range []struct {
@@ -43,6 +47,7 @@ func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 		{noTransactions{}, "repository write/read transactions"}, {noSharedRuntime{}, "shared authentication/rate limits"},
 		{noAccessLock{}, "repository access locks"}, {noOutbox{}, "notification outbox"},
 		{noRevision{}, "evidence revisions"}, {noFence{}, "PR lease fencing"},
+		{noAnchoredSessions{}, "anchored session reports"},
 		{store.NewFSStore(t.TempDir()), "repository write/read transactions"},
 	} {
 		if err := ValidateProductionStore(row.value); err == nil || !strings.Contains(err.Error(), row.want) {

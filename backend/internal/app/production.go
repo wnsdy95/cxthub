@@ -54,6 +54,7 @@ func ValidateProductionStore(store any) error {
 		{"Git head reconciliation", supports[outbound.GitHeadScanStore](store)},
 		{"Git trees", supports[outbound.GitTreeStore](store)},
 		{"indexed document reads", supports[outbound.DocReadStore](store)},
+		{"anchored session reports", supports[outbound.AnchoredSessionStore](store)},
 	}
 	var missing []string
 	for _, capability := range required {

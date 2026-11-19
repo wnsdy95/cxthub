@@ -30,7 +30,7 @@ import (
 )
 
 const settingsSchemaHandoffPreviousCatalog = "5ccf1e9041446edf410205a978616aad20acbd3e07dac491fe80185d3a561994"
-const settingsSchemaHandoffCurrentCatalog = "ec6887aaa6fc2b75c5540d0dbceab39ff1e4b237bbded38acc3707e4bc5fecd4"
+const settingsSchemaHandoffCurrentCatalog = "87fc68c4533913ccd0217ae3ac6eea61420b294efaa9f3bd747332ab694e6345"
 const settingsSchemaHandoffPreviousExecutableSHA256 = "3146224d654cfa753b04d82e42f2692815fb78eb6a457617d41d47a96a57a91a"
 
 type schemaHandoffPredecessor struct {
@@ -88,7 +88,7 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	if err != nil {
 		test.Fatal("resolve the complete current released SQL bundle", err)
 	}
-	currentBundle := settingsSchemaHandoffBundle(test, currentSource, 160, settingsSchemaHandoffCurrentCatalog)
+	currentBundle := settingsSchemaHandoffBundle(test, currentSource, 161, settingsSchemaHandoffCurrentCatalog)
 	entries, err := os.ReadDir(previousBundle)
 	if err != nil {
 		test.Fatal("read the copied historical bundle", err)
@@ -222,7 +222,7 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	}
 	assertCurrentRefused(nil)
 	preserved := fixture.settingsSchemaHandoffPreservedData(test, ctx, predecessor.count)
-	if applied, err := fixture.storage.ApplyPublicMigrations(ctx, current.migrations); err != nil || applied != 160-predecessor.count {
+	if applied, err := fixture.storage.ApplyPublicMigrations(ctx, current.migrations); err != nil || applied != 161-predecessor.count {
 		test.Fatal("only an explicit operator application of the complete current bundle may apply the exact missing migrations", applied, err)
 	}
 	history := fixture.releaseProtocolCatalog(test, ctx)
@@ -254,7 +254,7 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	}
 	fixture.assertFullHandoffReceipt(test, ctx, completed)
 	recovery.assertFullHandoffReceipt(test, ctx, queued)
-	test.Logf("the same exact historical binary/catalog %d served useful work and refused all three roots after the preserved-data 160 migration; its original classifier exposes only coarse unexpected, not directly observed typed SchemaMismatch", predecessor.count)
+	test.Logf("the same exact historical binary/catalog %d served useful work and refused all three roots after the preserved-data migration to the current catalog; its original classifier exposes only coarse unexpected, not directly observed typed SchemaMismatch", predecessor.count)
 	beforeDowngrade := fixture.settingsSchemaHandoffState(test, ctx)
 	if applied, err := fixture.storage.ApplyPublicMigrations(ctx, previous.migrations); applied != 0 || !errors.Is(err, store.ErrSchemaMismatch) {
 		test.Fatal("cross-schema downgrade is unsupported; the historical bundle must not reverse or repair the current database", applied, err)
@@ -311,7 +311,7 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	if fixture.settingsSchemaHandoffState(test, ctx) != restartState || fixture.releaseProtocolCatalog(test, ctx) != history || fixture.settingsSchemaHandoffLegacySettings(test, ctx) != retainedSettings {
 		test.Fatal("current three-root restart changed schema/history, settings data/hash, quota or useful document receipts")
 	}
-	test.Logf("%d-to-160 schema and protocol%d-to-7 upgrade requires a complete drain and explicit migration; historical roots refuse schema160, and same-catalog rollback is separate qualification", predecessor.count, predecessor.protocol)
+	test.Logf("%d-to-current schema and protocol%d-to-7 upgrade requires a complete drain and explicit migration; historical roots refuse the current schema, and same-catalog rollback is separate qualification", predecessor.count, predecessor.protocol)
 }
 
 func settingsSchemaHandoffBundle(test *testing.T, source string, count int, expected string) string {
@@ -356,8 +356,8 @@ func settingsSchemaHandoffBundle(test *testing.T, source string, count int, expe
 		wantLatest = "0152_settings_codex.sql"
 	} else if count == 153 {
 		wantLatest = "0153_blob_representation_quota.sql"
-	} else if count == 160 {
-		wantLatest = "0160_legacy_checkpoint_insert_accounting.sql"
+	} else if count == 161 {
+		wantLatest = "0161_anchored_sessions.sql"
 	}
 	if copied != count || latest != wantLatest || hex.EncodeToString(catalog.Sum(nil)) != expected {
 		test.Fatal("the selected SQL bundle is not the complete exact historical/current released catalog", copied, latest)

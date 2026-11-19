@@ -36,4 +36,5 @@ type ProductionStore interface {
 	GitHeadScanStore
 	GitTreeStore
 	DocReadStore
+	AnchoredSessionStore
 }
