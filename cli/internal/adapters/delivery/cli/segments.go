@@ -214,7 +214,18 @@ func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 	if withContent > 0 || result.ContentNotUploaded > 0 {
 		fmt.Fprintf(w, "Conversation: uploaded for %d sessions, not uploaded for %d\n", withContent, result.ContentNotUploaded)
 	}
-	fmt.Fprintln(w, "Only you can read these reports on the server. Nothing was written on this computer.")
+	if branches := result.Branches; branches != nil {
+		fmt.Fprintf(w, "Branch IDs: %d branches have one (%d new) · %d of %d on origin registered\n", branches.WithID, branches.Assigned, branches.Registered, branches.OnOrigin)
+		if branches.NotAssigned != "" {
+			fmt.Fprintf(w, "  IDs were not assigned in this run: %s\n", branches.NotAssigned)
+		}
+		if branches.NotRegistered != "" {
+			fmt.Fprintf(w, "  IDs were not registered in this run: %s\n", branches.NotRegistered)
+		}
+		fmt.Fprintln(w, "Only you can read these reports on the server. On this computer only branch IDs in Git's branch configuration were written.")
+	} else {
+		fmt.Fprintln(w, "Only you can read these reports on the server. Nothing was written on this computer.")
+	}
 	if result.Refused > 0 {
 		fmt.Fprintf(w, "\nRefused (%d) — these sessions are not on the server\n", result.Refused)
 		for _, session := range result.Sessions {

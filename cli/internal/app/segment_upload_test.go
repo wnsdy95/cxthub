@@ -278,3 +278,93 @@ func TestSegmentUploadKeepsAReportWhoseConversationCannotGoUp(t *testing.T) {
 		}
 	}
 }
+
+type branchLedgerRemoteFake struct {
+	repo    string
+	reports [][]domain.BranchRegistration
+	err     error
+}
+
+func (f *branchLedgerRemoteFake) RegisterBranchIDs(_ context.Context, repo string, branches []domain.BranchRegistration) ([]domain.BranchRegistrationResult, error) {
+	f.repo = repo
+	f.reports = append(f.reports, branches)
+	if f.err != nil {
+		return nil, f.err
+	}
+	results := make([]domain.BranchRegistrationResult, 0, len(branches))
+	for _, branch := range branches {
+		results = append(results, domain.BranchRegistrationResult{Name: branch.Name, LocalID: branch.LocalID, LedgerID: branch.LocalID, Outcome: "opened"})
+	}
+	return results, nil
+}
+
+func TestSegmentUploadAssignsAndRegistersBranchIDsFirst(t *testing.T) {
+	a, b := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	newID := func() (string, error) { return b, nil }
+	store := &branchIDStoreFake{branches: []domain.LocalBranch{
+		{Name: "main", ID: a, IssuedFor: "main", Remote: "main"},
+		{Name: "topic", Remote: "topic"},
+		{Name: "never-pushed", ID: strings.Repeat("c", 32), IssuedFor: "never-pushed"},
+	}}
+	ledger, remote := &branchLedgerRemoteFake{}, &segmentRemoteFake{}
+	remote.answer = func(domain.AnchoredSessionUpload) (domain.AnchoredSessionReceipt, error) {
+		if len(ledger.reports) != 1 {
+			t.Fatal("a session report went up before the branch IDs")
+		}
+		return domain.AnchoredSessionReceipt{Revision: 1, Changed: true}, nil
+	}
+	result, err := segmentUploadFixture(remote).WithBranchIDs(store, ledger, newID).PushSegments(context.Background(), "/work/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &domain.SegmentPushBranches{WithID: 3, Assigned: 1, OnOrigin: 2, Registered: 2}
+	if result.Branches == nil || *result.Branches != *want {
+		t.Fatalf("branches = %+v", result.Branches)
+	}
+	// Only branches Git shows on origin are reported; one never pushed stays here.
+	if !reflect.DeepEqual(ledger.reports[0], []domain.BranchRegistration{{Name: "main", LocalID: a}, {Name: "topic", LocalID: b}}) || ledger.repo != remote.repo {
+		t.Fatalf("report = %+v", ledger.reports)
+	}
+	if result.Stored != 2 {
+		t.Fatalf("sessions after the branch IDs: %+v", result)
+	}
+}
+
+func TestSegmentUploadGoesOnWhenBranchIDsCannotBeHandled(t *testing.T) {
+	a := strings.Repeat("a", 32)
+	newID := func() (string, error) { return strings.Repeat("b", 32), nil }
+	failure := errors.New("synthetic failure")
+	// Git refuses the write: what it already holds is still registered.
+	store := &branchIDStoreFake{branches: []domain.LocalBranch{{Name: "main", ID: a, IssuedFor: "main", Remote: "main"}, {Name: "topic", Remote: "topic"}}, storeErr: failure}
+	ledger, remote := &branchLedgerRemoteFake{}, &segmentRemoteFake{}
+	result, err := segmentUploadFixture(remote).WithBranchIDs(store, ledger, newID).PushSegments(context.Background(), "/work/app")
+	if err != nil || result.Stored != 2 || result.Branches.NotAssigned == "" || result.Branches.WithID != 1 || result.Branches.Registered != 1 ||
+		!reflect.DeepEqual(ledger.reports, [][]domain.BranchRegistration{{{Name: "main", LocalID: a}}}) {
+		t.Fatalf("a refused write: %+v %+v %v", result.Branches, ledger.reports, err)
+	}
+	// The server does not take the report (an older server, or no access):
+	// the sessions are still tried, and the reason is kept.
+	store = &branchIDStoreFake{branches: []domain.LocalBranch{{Name: "main", ID: a, IssuedFor: "main", Remote: "main"}}}
+	ledger, remote = &branchLedgerRemoteFake{err: segmentUploadStatus(404)}, &segmentRemoteFake{}
+	result, err = segmentUploadFixture(remote).WithBranchIDs(store, ledger, newID).PushSegments(context.Background(), "/work/app")
+	if err != nil || result.Stored != 2 || result.Branches.Registered != 0 || !strings.Contains(result.Branches.NotRegistered, "404") || result.Branches.OnOrigin != 1 {
+		t.Fatalf("a refused report: %+v %v", result.Branches, err)
+	}
+	// Nothing on origin: nothing is sent.
+	store = &branchIDStoreFake{branches: []domain.LocalBranch{{Name: "main", ID: a, IssuedFor: "main"}}}
+	ledger = &branchLedgerRemoteFake{}
+	result, err = segmentUploadFixture(&segmentRemoteFake{}).WithBranchIDs(store, ledger, newID).PushSegments(context.Background(), "/work/app")
+	if err != nil || len(ledger.reports) != 0 || result.Branches.OnOrigin != 0 || result.Branches.WithID != 1 {
+		t.Fatalf("nothing on origin: %+v %v", result.Branches, err)
+	}
+	// The branches cannot even be read.
+	store = &branchIDStoreFake{readErr: failure}
+	result, err = segmentUploadFixture(&segmentRemoteFake{}).WithBranchIDs(store, &branchLedgerRemoteFake{}, newID).PushSegments(context.Background(), "/work/app")
+	if err != nil || result.Branches.NotAssigned == "" || result.Branches.NotRegistered == "" || result.Stored != 2 {
+		t.Fatalf("unreadable branches: %+v %v", result.Branches, err)
+	}
+	// A run without the branch step says nothing about branches.
+	if result, err := segmentUploadFixture(&segmentRemoteFake{}).PushSegments(context.Background(), "/work/app"); err != nil || result.Branches != nil {
+		t.Fatalf("no branch step: %+v %v", result.Branches, err)
+	}
+}

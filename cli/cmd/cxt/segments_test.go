@@ -203,6 +203,7 @@ type segmentsTestServer struct {
 	chunks    map[string][]byte
 	manifests map[string]segmentsTestManifest
 	uploaded  int // chunk bodies received
+	branches  [][]domain.BranchRegistration
 	answer    func(session string) (int, string)
 	token     string
 }
@@ -270,6 +271,17 @@ func (s *segmentsTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.manifests[manifest.Hash] = manifest
 		}
 		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/branch-ids"):
+		var req struct {
+			Branches []domain.BranchRegistration `json:"branches"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.branches = append(s.branches, req.Branches)
+		results := []domain.BranchRegistrationResult{}
+		for _, branch := range req.Branches {
+			results = append(results, domain.BranchRegistrationResult{Name: branch.Name, LocalID: branch.LocalID, LedgerID: branch.LocalID, Outcome: "opened"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"branches": results})
 	case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/anchored-sessions/claude/"):
 		s.puts = append(s.puts, segmentsTestRequest{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)})
 		status, body := s.answer(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
@@ -305,11 +317,45 @@ func (s *segmentsTestServer) document(t *testing.T, hash string) (string, []map[
 	return raw, doc.Events
 }
 
+// segmentsTestConfig reads one setting of the repository's own configuration.
+func segmentsTestConfig(t *testing.T, repo, key string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "config", "--local", "--get", key)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git config %s: %v", key, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// segmentsTestPushTree is the tree an upload must leave as it was: everything
+// but Git's configuration file, where branch IDs go, and the lock taken while
+// they are assigned.
+func segmentsTestPushTree(t *testing.T, base, repo string) map[string]string {
+	t.Helper()
+	tree := segmentsTestTree(t, base)
+	for _, path := range []string{filepath.Join(repo, ".git"), filepath.Join(repo, ".git", "config"), filepath.Join(repo, ".git", "cxt"), filepath.Join(repo, ".git", "cxt", "branch-ids.lock")} {
+		delete(tree, path)
+	}
+	return tree
+}
+
 // The upload, from the entry point, against a server made for the test: one
 // report per session, its conversation stored once, nothing but names in the
-// report, and nothing written here.
-func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
+// report, and nothing written here but branch IDs in Git's own configuration.
+func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 	base, repo, sha := segmentsTestFixture(t)
+	// The branch is on origin, and a second branch never left this computer.
+	origin := filepath.Join(base, "origin.git")
+	mainTestGit(t, base, "init", "--bare", "-b", "main", origin)
+	mainTestGit(t, repo, "remote", "add", "origin", origin)
+	mainTestGit(t, repo, "push", "-q", "-u", "origin", "main")
+	mainTestGit(t, repo, "branch", "never-pushed")
+	config, err := os.ReadFile(filepath.Join(repo, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	stored := `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
 	fake := &segmentsTestServer{chunks: map[string][]byte{}, manifests: map[string]segmentsTestManifest{}, token: "synthetic-token",
 		answer: func(string) (int, string) { return http.StatusOK, stored }}
@@ -318,14 +364,35 @@ func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
 	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
 	t.Setenv("CXT_TOKEN", "synthetic-token")
 
-	before := segmentsTestTree(t, base)
+	before := segmentsTestPushTree(t, base, repo)
 	out := segmentsTestRun(t, "segments", "push", "--json")
-	if after := segmentsTestTree(t, base); !reflect.DeepEqual(before, after) {
-		t.Fatal("cxt segments push changed a file in the repository or the home directory")
+	if after := segmentsTestPushTree(t, base, repo); !reflect.DeepEqual(before, after) {
+		t.Fatal("cxt segments push changed a file other than Git's branch configuration")
 	}
 	var result domain.SegmentPushResult
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("output is not a result: %v\n%s", err, out)
+	}
+	// Every branch got an ID in Git's own configuration, and what was there stays.
+	after, err := os.ReadFile(filepath.Join(repo, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(after), strings.TrimRight(string(config), "\n")) {
+		t.Fatalf("the configuration that was there changed:\n%s", after)
+	}
+	mainID := segmentsTestConfig(t, repo, "branch.main.cxtBranchId")
+	otherID := segmentsTestConfig(t, repo, "branch.never-pushed.cxtBranchId")
+	if !domain.ValidBranchID(mainID) || !domain.ValidBranchID(otherID) || mainID == otherID ||
+		segmentsTestConfig(t, repo, "branch.main.cxtBranchIdIssuedFor") != "main" {
+		t.Fatalf("branch IDs: main=%q never-pushed=%q", mainID, otherID)
+	}
+	// Only the branch Git shows on origin is registered.
+	if want := (&domain.SegmentPushBranches{WithID: 2, Assigned: 2, OnOrigin: 1, Registered: 1}); result.Branches == nil || *result.Branches != *want {
+		t.Fatalf("branches = %+v", result.Branches)
+	}
+	if !reflect.DeepEqual(fake.branches, [][]domain.BranchRegistration{{{Name: "main", LocalID: mainID}}}) {
+		t.Fatalf("registered = %+v", fake.branches)
 	}
 	if result.Stored != 3 || result.Unchanged != 0 || result.Refused != 0 || result.ContentNotUploaded != 0 || len(result.Sessions) != 3 || len(result.Unread) != 1 {
 		t.Fatalf("result = %+v", result)
@@ -411,7 +478,8 @@ func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
 	text, err := segmentsTestRunErr(t, "segments", "push")
 	if err == nil || !strings.Contains(err.Error(), "1 of 3 session reports were refused") || len(fake.puts) != 3 || fake.uploaded != 0 ||
 		!strings.Contains(text, "Session reports: 0 stored, 2 unchanged, 1 refused (3 sessions)") || !strings.Contains(text, "  claude fork: ") ||
-		!strings.Contains(text, "Conversation: uploaded for 3 sessions, not uploaded for 0") {
+		!strings.Contains(text, "Conversation: uploaded for 3 sessions, not uploaded for 0") ||
+		!strings.Contains(text, "Branch IDs: 2 branches have one (0 new) · 1 of 1 on origin registered") {
 		t.Fatalf("err=%v reports=%d chunks=%d\n%s", err, len(fake.puts), fake.uploaded, text)
 	}
 
@@ -422,7 +490,11 @@ func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
 	if _, err := segmentsTestRunErr(t, "segments", "push"); err == nil || len(fake.puts) != 0 || !strings.Contains(err.Error(), "stopped after 0 of 3 session reports") {
 		t.Fatalf("err=%v reports=%d", err, len(fake.puts))
 	}
-	if after := segmentsTestTree(t, base); !reflect.DeepEqual(before, after) {
-		t.Fatal("a failed upload changed a file in the repository or the home directory")
+	if after := segmentsTestPushTree(t, base, repo); !reflect.DeepEqual(before, after) {
+		t.Fatal("a failed upload changed a file other than Git's branch configuration")
+	}
+	// The IDs are the same on every run.
+	if again := segmentsTestConfig(t, repo, "branch.main.cxtBranchId"); again != mainID {
+		t.Fatalf("the ID of main changed from %s to %s", mainID, again)
 	}
 }

@@ -213,6 +213,26 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Refused") || !strings.Contains(out.String(), "Without conversation (1)") {
 		t.Fatalf("nothing refused: %v\n%s", err, out.String())
 	}
+	// A run that handles branch IDs says what it wrote here and what it could not do.
+	withBranches := result
+	withBranches.Branches = &domain.SegmentPushBranches{WithID: 4, Assigned: 1, OnOrigin: 3, Registered: 0, NotRegistered: "synthetic refusal"}
+	out.Reset()
+	branchRun := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) { return withBranches, nil })
+	if err := RunSegmentsPush(context.Background(), branchRun, "/work/app", false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Branch IDs: 4 branches have one (1 new) · 0 of 3 on origin registered",
+		"  IDs were not registered in this run: synthetic refusal",
+		"On this computer only branch IDs in Git's branch configuration were written.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Nothing was written on this computer") || strings.Contains(out.String(), "not assigned") {
+		t.Fatalf("branch run output:\n%s", out.String())
+	}
 	// A run that uploads no conversation at all says nothing about it.
 	plain := domain.SegmentPushResult{Version: 1, Stored: 1, Sessions: []domain.SegmentPushSession{{Provider: domain.ProviderClaude, ID: "stored", State: domain.SegmentPushStored, Revision: 1}}}
 	out.Reset()

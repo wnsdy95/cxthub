@@ -35,7 +35,7 @@ func newSegmentReporter() (*app.SegmentReportService, error) {
 }
 
 // newSegmentUploader adds the repository's server to the same readers. It
-// builds no local store: an upload writes nothing on this computer.
+// builds no local store.
 func newSegmentUploader(cfg config) (inbound.SegmentUploader, error) {
 	reports, err := newSegmentReporter()
 	if err != nil {
@@ -55,7 +55,10 @@ func newSegmentUploader(cfg config) (inbound.SegmentUploader, error) {
 		}
 		return observed.CaptureIdentity()
 	})
-	return service.WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{
+	service.WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{
 		domain.ProviderClaude: sessionrecords.NewClaudeContent(),
-	}), nil
+	})
+	// Branch IDs live in Git's own branch configuration. This is the one
+	// thing an upload writes on this computer.
+	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID), nil
 }

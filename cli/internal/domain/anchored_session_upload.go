@@ -295,4 +295,23 @@ type SegmentPushResult struct {
 	// AgentCallsWithoutSender were recorded by a session outside this
 	// repository and are uploaded with no session.
 	AgentCallsWithoutSender int `json:"agent_calls_without_sender"`
+	// Branches is absent when this run does not handle branch IDs.
+	Branches *SegmentPushBranches `json:"branches,omitempty"`
+}
+
+// SegmentPushBranches says what a run did about branch IDs. They are handled
+// before the sessions and never stop them: a failure is said here and the
+// next run tries again.
+type SegmentPushBranches struct {
+	// WithID counts the repository's branches that have an ID after this run;
+	// Assigned of them got theirs in this run.
+	WithID   int `json:"with_id"`
+	Assigned int `json:"assigned"`
+	// OnOrigin counts those Git's records show on origin; Registered of them
+	// the server now knows.
+	OnOrigin   int `json:"on_origin"`
+	Registered int `json:"registered"`
+	// NotAssigned and NotRegistered say why a step did not happen.
+	NotAssigned   string `json:"not_assigned,omitempty"`
+	NotRegistered string `json:"not_registered,omitempty"`
 }

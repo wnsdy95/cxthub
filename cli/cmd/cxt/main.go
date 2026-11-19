@@ -87,8 +87,9 @@ func run(args []string) error {
 	}
 	if args[1] == "segments" {
 		// Reading session records needs no store or provider adapter, so this
-		// path builds neither and cannot write on this computer. Only push
-		// adds the repository's server.
+		// path builds neither. The report itself cannot write on this
+		// computer; push adds the repository's server and writes only branch
+		// IDs into Git's own branch configuration.
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err

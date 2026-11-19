@@ -301,6 +301,21 @@ expect "an appended record replaces the report" "$(cxt segments push --json 2>/d
 SEGDOC2="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['doc']")"
 expect "the grown document keeps the earlier events and adds the new one" "$(curl -sb "$JA" "$B/repos/$CLIRID/docs/$SEGDOC2" | python3 -c 'import json,sys;e=json.load(sys.stdin)["cir"]["events"];print(len(e),e[4]["blocks"][0]["text"],e[5]["blocks"][0]["text"])')" "6 one more thing done"
 expect "revision after the appended record" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']")" 2
+# Branch IDs live in Git's own branch configuration. The one of a branch Git
+# shows on origin is registered, and a teammate's ID for the same name joins it.
+SEGORIGIN="$TMP/segments-origin.git"; git init -q --bare "$SEGORIGIN"
+git remote add origin "$SEGORIGIN"; git push -q -u origin "$SEGBRANCH"; git branch e2e-never-pushed
+# The earlier uploads already gave the first branch its ID; the new branch gets one now.
+expect "every branch has an ID and the pushed one is registered" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;b=json.load(sys.stdin)["branches"];print(b["with_id"],b["assigned"],b["on_origin"],b["registered"])')" "2 1 1 1"
+SEGBRANCHID="$(git config --local --get "branch.$SEGBRANCH.cxtBranchId")"
+expect "the ID is kept by Git with the branch" "$(git config --local --get "branch.$SEGBRANCH.cxtBranchIdIssuedFor") ${#SEGBRANCHID}" "$SEGBRANCH 32"
+expect "the name on the remote has one lifetime, opened with that ID" "$(curl -sb "$JA" "$B/repos/$CLIRID/branch-lifetimes?name=$SEGBRANCH" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["ledger_id"],r[0]["opened_by"]["kind"],"closed_at" in r[0])')" "1 $SEGBRANCHID registered False"
+expect "a branch that was never pushed is not reported" "$(curl -sb "$JA" "$B/repos/$CLIRID/branch-lifetimes" | python3 -c 'import json,sys;print(sorted(l["name"] for l in json.load(sys.stdin)))')" "['$SEGBRANCH']"
+expect "the same branches again change nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;b=json.load(sys.stdin)["branches"];print(b["with_id"],b["assigned"],b["registered"])') $(git config --local --get "branch.$SEGBRANCH.cxtBranchId")" "2 0 1 $SEGBRANCHID"
+SEGOTHERID="$(python3 -c 'print("e"*32)')"
+expect "another ID for the same name joins the lifetime" "$(ccurl -sb "$JA" -X PUT "$B/repos/$CLIRID/branch-ids" -H 'Content-Type: application/json' -d "{\"branches\":[{\"name\":\"$SEGBRANCH\",\"local_id\":\"$SEGOTHERID\"}]}" | python3 -c 'import json,sys;r=json.load(sys.stdin)["branches"][0];print(r["outcome"],r["ledger_id"])')" "joined $SEGBRANCHID"
+expect "an account outside the repository cannot read the ledger" "$(code -b "$JM" "$B/repos/$CLIRID/branch-lifetimes")" 403
+expect "the ledger makes no ref" "$(curl -sb "$JA" "$B/repos/$CLIRID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
 expect "an account outside the repository cannot list reports" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions")" 403
 expect "an account outside the repository cannot read a report" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 403
 expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 401

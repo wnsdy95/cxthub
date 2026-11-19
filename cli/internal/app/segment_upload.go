@@ -21,6 +21,10 @@ type SegmentUploadService struct {
 	// contentRemote and content are set together by WithSessionContent.
 	contentRemote outbound.SessionContentRemote
 	content       map[domain.ProviderKind]outbound.SessionContentSource
+	// branchIDs, branchRemote and newBranchID are set together by WithBranchIDs.
+	branchIDs    outbound.BranchIDStore
+	branchRemote outbound.BranchLedgerRemote
+	newBranchID  func() (string, error)
 }
 
 // NewSegmentUploadService creates the service. machine is the label the
@@ -35,6 +39,59 @@ func NewSegmentUploadService(reports *SegmentReportService, remote outbound.Anch
 func (s *SegmentUploadService) WithSessionContent(remote outbound.SessionContentRemote, sources map[domain.ProviderKind]outbound.SessionContentSource) *SegmentUploadService {
 	s.contentRemote, s.content = remote, sources
 	return s
+}
+
+// WithBranchIDs also gives every branch of the repository an ID in Git's own
+// branch configuration, and registers with the server the IDs of branches
+// Git's records show on origin. This is the one thing a run writes on this
+// computer.
+func (s *SegmentUploadService) WithBranchIDs(store outbound.BranchIDStore, remote outbound.BranchLedgerRemote, newID func() (string, error)) *SegmentUploadService {
+	s.branchIDs, s.branchRemote, s.newBranchID = store, remote, newID
+	return s
+}
+
+// pushBranchIDs assigns and registers branch IDs. Neither step stops the
+// run: what did not happen is said in the result and the next run fills it.
+func (s *SegmentUploadService) pushBranchIDs(ctx context.Context, cwd, repoID string) (*domain.SegmentPushBranches, error) {
+	out := &domain.SegmentPushBranches{}
+	branches, assigned, err := EnsureBranchIDs(ctx, s.branchIDs, cwd, s.newBranchID)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return out, ctxErr
+	}
+	out.Assigned = assigned
+	if err != nil {
+		out.NotAssigned = err.Error()
+		// What Git holds is still worth registering.
+		err = s.branchIDs.WithBranchIDLock(ctx, cwd, func() error {
+			var readErr error
+			branches, readErr = s.branchIDs.LocalBranches(ctx, cwd)
+			return readErr
+		})
+		if err != nil {
+			out.NotRegistered = "the repository's branches could not be read"
+			return out, nil
+		}
+	}
+	for _, branch := range branches {
+		if domain.ValidBranchID(branch.ID) {
+			out.WithID++
+		}
+	}
+	registrations := domain.BranchRegistrations(branches)
+	out.OnOrigin = len(registrations)
+	if len(registrations) == 0 {
+		return out, nil
+	}
+	results, err := s.branchRemote.RegisterBranchIDs(ctx, repoID, registrations)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return out, ctxErr
+	}
+	if err != nil {
+		out.NotRegistered = err.Error()
+		return out, nil
+	}
+	out.Registered = len(results)
+	return out, nil
 }
 
 var _ inbound.SegmentUploader = (*SegmentUploadService)(nil)
@@ -60,6 +117,11 @@ func (s *SegmentUploadService) PushSegments(ctx context.Context, cwd string) (do
 	repo, err := s.repo(ctx, cwd)
 	if err != nil {
 		return result, err
+	}
+	if s.branchIDs != nil && s.branchRemote != nil {
+		if result.Branches, err = s.pushBranchIDs(ctx, cwd, string(repo.ID)); err != nil {
+			return result, err
+		}
 	}
 	inputs, err := s.reports.read(ctx, cwd)
 	if err != nil {

@@ -1315,9 +1315,10 @@ cxt segments push [--json]
 Computes the same report and uploads it to the repository's CXTHub server, one
 report per session, together with the conversation of each session's own
 records. It needs a connected remote and a login, and repository member access.
-It writes nothing on this computer, and it does not change capture,
-synchronization or any hook: snapshots, branches and what teammates see stay
-exactly as they were.
+It does not change capture, synchronization or any hook: snapshots, context
+branches and what teammates see stay exactly as they were. The one thing it
+writes on this computer is a branch ID in Git's own configuration of each
+branch, described below.
 
 What is uploaded for a session:
 
@@ -1366,6 +1367,33 @@ yet keep a member who knows the hash from reading it. Uploading again replaces
 the session's report as a whole; a report with the same content changes
 nothing. Reports do not advance the repository revision.
 
+Branch IDs. Before the sessions, every branch of the repository that has no ID
+gets a random one, stored by Git with the branch itself:
+
+```text
+branch.<name>.cxtBranchId            the ID (32 hexadecimal characters)
+branch.<name>.cxtBranchIdIssuedFor   the name the ID was issued for
+```
+
+- Git keeps these settings with the branch: a rename moves them, deleting the
+  branch drops them, a branch made again under the same name starts without an
+  ID, and every worktree of the repository sees the same value. The ID only
+  tells two uses of one name apart. It proves nothing about when or how the
+  branch was made, and it is not the context branch identity cxt uses
+  elsewhere.
+- `git branch -c` copies the settings. When two branches hold one ID, every
+  holder whose name is not the name the ID was issued for gets a new ID. A
+  branch that was renamed keeps the old issued-for name, so if it is copied
+  later, both the branch and its copy get a new ID.
+- The IDs of branches that Git's own records show on `origin` are then
+  registered with the server: a branch whose configured upstream is on
+  `origin`, or else one with a remote-tracking branch of `origin` under the
+  same name. A branch that was never pushed is not reported. On the server a
+  name alive on the remote has one lifetime, and a registration joins it, or
+  opens one when none is alive.
+- Neither step stops the upload. If Git refuses the write or the server does
+  not take the report, the output says so and the next run tries again.
+
 Every session is listed with what happened to it: `stored`, `unchanged` or
 `refused`. A report is refused when another account already reported the same
 session identifier, when the tool's identifier cannot be used as a key, or when
@@ -1378,8 +1406,10 @@ of agent calls recorded by a session outside this repository, which are
 uploaded with no session.
 
 `--json` prints one JSON object with `version`, `stored`, `unchanged`,
-`refused`, `content_not_uploaded`, `sessions`, `unread` and
-`agent_calls_without_sender`. Each session carries `content` (`stored`, `none`
+`refused`, `content_not_uploaded`, `sessions`, `unread`,
+`agent_calls_without_sender` and `branches` (`with_id`, `assigned`,
+`on_origin`, `registered`, and `not_assigned` or `not_registered` with the
+reason when a step did not happen). Each session carries `content` (`stored`, `none`
 or `not-uploaded`) and, for the last, `content_reason`.
 
 Every run reads all records again and rebuilds every session's document to
