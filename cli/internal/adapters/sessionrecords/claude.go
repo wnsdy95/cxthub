@@ -135,7 +135,7 @@ func (r *ClaudeRecords) ReadSessionRecords(ctx context.Context, scope domain.Ses
 		file := readClaudeFile(path, wanted)
 		id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		calls[id] = file.calls
-		session := domain.RecordedSession{Provider: domain.ProviderClaude, ID: id, Scope: domain.SessionScopeFolder, Items: file.items}
+		session := domain.RecordedSession{Provider: domain.ProviderClaude, ID: id, Scope: domain.SessionScopeFolder, Source: path, Items: file.items}
 		addClaudeSession(&batch, session, file, inScope)
 	}
 	for _, key := range order {
@@ -146,7 +146,7 @@ func (r *ClaudeRecords) ReadSessionRecords(ctx context.Context, scope domain.Ses
 		file := readClaudeFile(group.file.path, nil)
 		session := domain.RecordedSession{
 			Provider: domain.ProviderClaude, ID: group.file.agent, Sub: true, Parent: group.parent,
-			Scope: domain.SessionScopeFolder, FileCopies: group.copies, Items: file.items,
+			Scope: domain.SessionScopeFolder, FileCopies: group.copies, Source: group.file.path, Items: file.items,
 		}
 		if call := spawnCall[key]; call != "" {
 			session.SpawnItem = calls[group.parent][call]

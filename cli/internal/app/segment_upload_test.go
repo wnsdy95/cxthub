@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type segmentUploadStatus int
@@ -134,5 +135,146 @@ func TestSegmentUploadStopsBeforeUploadingWhenItCannotRead(t *testing.T) {
 	}
 	if result, err := service.PushSegments(ctx, "/work/app"); !errors.Is(err, context.Canceled) || len(remote.uploads) != 1 || result.Stored != 1 {
 		t.Fatalf("cancelled: %+v %v uploads=%d", result, err, len(remote.uploads))
+	}
+}
+
+type segmentContentSourceFake struct {
+	read    []domain.SessionRecordRanges
+	roots   []string
+	answer  func(domain.SessionRecordRanges) (domain.SessionContent, error)
+	missing map[string][]string
+}
+
+func (f *segmentContentSourceFake) ReadSessionContent(_ context.Context, root string, records domain.SessionRecordRanges) (domain.SessionContent, error) {
+	f.read = append(f.read, records)
+	f.roots = append(f.roots, root)
+	if f.answer != nil {
+		return f.answer(records)
+	}
+	// Two events for every record, so ranges and events never coincide.
+	content := domain.SessionContent{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: records.Provider, SessionOriginID: records.ID}, Missing: f.missing[records.ID]}
+	seq := 0
+	for _, ids := range records.Ranges {
+		var events []domain.Event
+		for _, id := range ids {
+			for _, half := range []string{"a", "b"} {
+				events = append(events, domain.Event{Kind: domain.EventMessage, Seq: seq, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: id + half}}})
+				seq++
+			}
+		}
+		content.Ranges = append(content.Ranges, events)
+	}
+	return content, nil
+}
+
+type segmentContentRemoteFake struct {
+	docs   []domain.CIRDocument
+	answer func(domain.CIRDocument) (domain.DocumentRef, error)
+}
+
+func (f *segmentContentRemoteFake) PutSessionContent(_ context.Context, _ string, doc domain.CIRDocument) (domain.DocumentRef, error) {
+	f.docs = append(f.docs, doc)
+	if f.answer != nil {
+		return f.answer(doc)
+	}
+	return domain.DocumentRef{Hash: domain.HashContent([]byte(doc.Envelope.SessionOriginID))}, nil
+}
+
+func TestSegmentUploadNamesTheConversationInTheReport(t *testing.T) {
+	remote, source, content := &segmentRemoteFake{}, &segmentContentSourceFake{}, &segmentContentRemoteFake{}
+	service := segmentUploadFixture(remote).WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: source})
+	result, err := service.PushSegments(context.Background(), "/work/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The document goes up before the report that names it.
+	if len(content.docs) != 2 || len(remote.uploads) != 2 || len(source.read) != 2 || source.roots[0] != "/work/app" {
+		t.Fatalf("documents=%d reports=%d reads=%d roots=%v", len(content.docs), len(remote.uploads), len(source.read), source.roots)
+	}
+	first := remote.uploads[0].Body
+	want := &domain.AnchoredContent{Doc: domain.HashContent([]byte("with-commit")), Events: 6}
+	if first.Content == nil || *first.Content != *want || len(content.docs[0].Events) != 6 {
+		t.Fatalf("content = %+v, document events = %d", first.Content, len(content.docs[0].Events))
+	}
+	// with-commit: one segment of three records that keeps its whole turn.
+	if segment := first.Segments[0]; segment.FirstEvent != 0 || segment.Events != 6 || first.Uncommitted != nil {
+		t.Fatalf("segment = %+v", segment)
+	}
+	if !reflect.DeepEqual(source.read[0].Ranges, [][]string{{"m1", "m2", "m3"}}) {
+		t.Fatalf("records read back: %v", source.read[0].Ranges)
+	}
+	// without-commit: only an uncommitted part.
+	second := remote.uploads[1].Body
+	if second.Content == nil || second.Uncommitted.FirstEvent != 0 || second.Uncommitted.Events != 2 {
+		t.Fatalf("second report = %+v %+v", second.Content, second.Uncommitted)
+	}
+	for _, session := range result.Sessions {
+		if session.State == domain.SegmentPushStored && session.Content != domain.SegmentContentStored {
+			t.Fatalf("session = %+v", session)
+		}
+	}
+	if result.ContentNotUploaded != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestSegmentUploadKeepsAReportWhoseConversationCannotGoUp(t *testing.T) {
+	failure := errors.New("synthetic read failure")
+	for name, test := range map[string]struct {
+		source  *segmentContentSourceFake
+		content *segmentContentRemoteFake
+		sources bool
+		reason  string
+	}{
+		"no reader for the tool":  {source: &segmentContentSourceFake{}, content: &segmentContentRemoteFake{}, reason: "is not read yet"},
+		"records gone since read": {source: &segmentContentSourceFake{missing: map[string][]string{"with-commit": {"m2"}}}, content: &segmentContentRemoteFake{}, sources: true, reason: "1 records changed while they were read"},
+		"the source cannot be read": {source: &segmentContentSourceFake{answer: func(domain.SessionRecordRanges) (domain.SessionContent, error) {
+			return domain.SessionContent{}, failure
+		}}, content: &segmentContentRemoteFake{}, sources: true, reason: "synthetic read failure"},
+		"the document is refused": {source: &segmentContentSourceFake{}, sources: true, reason: "synthetic status 413", content: &segmentContentRemoteFake{answer: func(domain.CIRDocument) (domain.DocumentRef, error) {
+			return domain.DocumentRef{}, segmentUploadStatus(413)
+		}}},
+		"read in other ranges": {sources: true, reason: "other ranges", content: &segmentContentRemoteFake{}, source: &segmentContentSourceFake{answer: func(records domain.SessionRecordRanges) (domain.SessionContent, error) {
+			event := domain.Event{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "one"}}}
+			return domain.SessionContent{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1}, Ranges: [][]domain.Event{{event}, {event}, {event}}}, nil
+		}}},
+	} {
+		remote := &segmentRemoteFake{}
+		sources := map[domain.ProviderKind]outbound.SessionContentSource{}
+		if test.sources {
+			sources[domain.ProviderClaude] = test.source
+		}
+		result, err := segmentUploadFixture(remote).WithSessionContent(test.content, sources).PushSegments(context.Background(), "/work/app")
+		if err != nil || len(remote.uploads) != 2 || result.Stored != 2 {
+			t.Fatalf("%s: uploads=%d result=%+v err=%v", name, len(remote.uploads), result, err)
+		}
+		first := result.Sessions[0]
+		if first.Content != domain.SegmentContentNotUploaded || !strings.Contains(first.ContentReason, test.reason) || result.ContentNotUploaded == 0 {
+			t.Fatalf("%s: session=%+v result=%+v", name, first, result)
+		}
+		// The report went up as it would have without content: no range names an event.
+		body := remote.uploads[0].Body
+		if body.Content != nil || body.Segments[0].FirstEvent != 0 || body.Segments[0].Events != 0 {
+			t.Fatalf("%s: report = %+v", name, body)
+		}
+	}
+	// A session whose records hold no conversation has none, and that is not a gap.
+	remote := &segmentRemoteFake{}
+	empty := &segmentContentSourceFake{answer: func(records domain.SessionRecordRanges) (domain.SessionContent, error) {
+		return domain.SessionContent{Ranges: make([][]domain.Event, len(records.Ranges))}, nil
+	}}
+	content := &segmentContentRemoteFake{}
+	result, err := segmentUploadFixture(remote).WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: empty}).PushSegments(context.Background(), "/work/app")
+	if err != nil || len(content.docs) != 0 || result.ContentNotUploaded != 0 || result.Sessions[0].Content != domain.SegmentContentNone {
+		t.Fatalf("no conversation: docs=%d result=%+v err=%v", len(content.docs), result, err)
+	}
+	// What would fail for every session stops the run before any report.
+	for _, failure := range []error{segmentUploadStatus(401), segmentUploadStatus(503), errors.New("connection refused")} {
+		remote := &segmentRemoteFake{}
+		refusing := &segmentContentRemoteFake{answer: func(domain.CIRDocument) (domain.DocumentRef, error) { return domain.DocumentRef{}, failure }}
+		_, err := segmentUploadFixture(remote).WithSessionContent(refusing, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: &segmentContentSourceFake{}}).PushSegments(context.Background(), "/work/app")
+		if !errors.Is(err, failure) || len(remote.uploads) != 0 || !strings.Contains(err.Error(), "stopped after 0 of 3 session reports") {
+			t.Fatalf("%v: uploads=%d err=%v", failure, len(remote.uploads), err)
+		}
 	}
 }

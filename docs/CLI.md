@@ -1313,10 +1313,11 @@ cxt segments push [--json]
 ```
 
 Computes the same report and uploads it to the repository's CXTHub server, one
-report per session. It needs a connected remote and a login, and repository
-member access. It writes nothing on this computer, and it does not change
-capture, synchronization or any hook: snapshots, branches and what teammates
-see stay exactly as they were.
+report per session, together with the conversation of each session's own
+records. It needs a connected remote and a login, and repository member access.
+It writes nothing on this computer, and it does not change capture,
+synchronization or any hook: snapshots, branches and what teammates see stay
+exactly as they were.
 
 What is uploaded for a session:
 
@@ -1333,13 +1334,37 @@ What is uploaded for a session:
 - how many of its records are copies that belong to an earlier session, and the
   agent-to-agent calls the session recorded.
 
-No conversation content is uploaded by this command. The report is a set of
-ranges over records the tool keeps.
+The conversation is uploaded as one document per session:
+
+- It holds the session's own records only, in order. A record copied from an
+  earlier session is stored once, with that session, so a forked session's
+  document holds only what the fork added.
+- The records are read back from where the tool keeps them, converted by the
+  same codec capture uses, and masked by the same two steps: the values listed
+  in `.cxtsecrets`, then the pattern scrub of the repository's `secrets.scrub`
+  tier.
+- It goes through the existing document path. The server says which chunks it
+  lacks, only those are sent, and the server verifies the whole document. A
+  session that grew sends what was appended; one that did not change sends
+  nothing. No snapshot, branch or pending context is created for it.
+- The report names the document and, for every segment and for the uncommitted
+  part, where it starts in the document and how many events it holds.
+- The document's own header names the session, and no folder or branch. What
+  the conversation itself says, including paths in commands and their output,
+  is uploaded as recorded, after masking.
+
+Only Claude Code sessions have their conversation uploaded for now. A Codex
+session is uploaded as its report alone and listed as without conversation.
+The same is done for a session whose records changed while they were read, or
+whose document the server did not take; each one says why. That is not a
+failure of the command: the next run uploads it.
 
 On the server a report belongs to the account that uploaded it, and only that
-account can read it. Uploading again replaces the session's report as a whole;
-a report with the same content changes nothing. Reports do not advance the
-repository revision.
+account can read it. The document a report names is an ordinary repository
+document: this command shows its hash to nobody else, but the server does not
+yet keep a member who knows the hash from reading it. Uploading again replaces
+the session's report as a whole; a report with the same content changes
+nothing. Reports do not advance the repository revision.
 
 Every session is listed with what happened to it: `stored`, `unchanged` or
 `refused`. A report is refused when another account already reported the same
@@ -1353,7 +1378,13 @@ of agent calls recorded by a session outside this repository, which are
 uploaded with no session.
 
 `--json` prints one JSON object with `version`, `stored`, `unchanged`,
-`refused`, `sessions`, `unread` and `agent_calls_without_sender`.
+`refused`, `content_not_uploaded`, `sessions`, `unread` and
+`agent_calls_without_sender`. Each session carries `content` (`stored`, `none`
+or `not-uploaded`) and, for the last, `content_reason`.
+
+Every run reads all records again and rebuilds every session's document to
+know its identity, which can take a while on a computer with many long
+sessions, even when the server then needs nothing sent.
 
 ## Global information
 

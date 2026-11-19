@@ -194,29 +194,126 @@ func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
 	}
 }
 
-// The upload, from the entry point, against a server made for the test: one
-// request per session, nothing but names in them, and nothing written here.
-func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
-	base, repo, sha := segmentsTestFixture(t)
-	type request struct {
-		method, path, auth string
-		body               string
+// segmentsTestServer is a server made for the test. It keeps reports, and it
+// takes documents the way the real one does: it says which chunks it lacks,
+// receives those, and then the manifest that names them.
+type segmentsTestServer struct {
+	mu        sync.Mutex
+	puts      []segmentsTestRequest
+	chunks    map[string][]byte
+	manifests map[string]segmentsTestManifest
+	uploaded  int // chunk bodies received
+	answer    func(session string) (int, string)
+	token     string
+}
+
+type segmentsTestRequest struct {
+	method, path, auth string
+	body               string
+}
+
+type segmentsTestManifest struct {
+	Hash     string          `json:"hash"`
+	Envelope json.RawMessage `json:"envelope"`
+	Chunks   []string        `json:"chunks"`
+}
+
+func (s *segmentsTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	raw, _ := io.ReadAll(r.Body)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if r.Header.Get("Authorization") != "Bearer "+s.token {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"unauthorized"}}`))
+		return
 	}
-	var mu sync.Mutex
-	var requests []request
-	answer := func(session string) (int, string) {
-		return http.StatusOK, `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		requests = append(requests, request{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)})
-		status, body := answer(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
+	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/push/negotiate"):
+		var req struct {
+			DocHaves   []string `json:"doc_haves"`
+			ChunkHaves []string `json:"chunk_haves"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		docWants, chunkWants := []string{}, []string{}
+		for _, hash := range req.DocHaves {
+			if _, ok := s.manifests[hash]; !ok {
+				docWants = append(docWants, hash)
+			}
+		}
+		for _, hash := range req.ChunkHaves {
+			if _, ok := s.chunks[hash]; !ok {
+				chunkWants = append(chunkWants, hash)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"snapshot_wants": []string{}, "doc_wants": docWants, "chunk_wants": chunkWants,
+			"chunks_supported": true, "bounded_chunks_supported": true, "chunk_formats_supported": []string{"cxt-doc-chunks-v1", "cxt-doc-chunks-v2"}, "cir_versions_supported": []string{"1", "2"}})
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/push/chunks"):
+		var req struct {
+			Chunks []struct {
+				Hash string `json:"hash"`
+				Data []byte `json:"data"`
+			} `json:"chunks"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		for _, chunk := range req.Chunks {
+			s.chunks[chunk.Hash] = chunk.Data
+			s.uploaded++
+		}
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/push/objects"):
+		var req struct {
+			ChunkedDocs []segmentsTestManifest `json:"chunked_docs"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		for _, manifest := range req.ChunkedDocs {
+			s.manifests[manifest.Hash] = manifest
+		}
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/anchored-sessions/claude/"):
+		s.puts = append(s.puts, segmentsTestRequest{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)})
+		status, body := s.answer(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
-	}))
+	default:
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"not found"}}`))
+	}
+}
+
+// document rebuilds a stored document from its manifest and chunks.
+func (s *segmentsTestServer) document(t *testing.T, hash string) (string, []map[string]any) {
+	t.Helper()
+	manifest, ok := s.manifests[hash]
+	if !ok {
+		t.Fatalf("document %s was not uploaded", hash)
+	}
+	var stream strings.Builder
+	for _, chunk := range manifest.Chunks {
+		stream.Write(s.chunks[chunk])
+	}
+	raw := `{"envelope":` + string(manifest.Envelope) + `,"events":[` + stream.String() + `]}`
+	if got := string(domain.HashContent([]byte(raw))); got != hash {
+		t.Fatalf("the uploaded chunks rebuild %s, not %s", got, hash)
+	}
+	var doc struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return raw, doc.Events
+}
+
+// The upload, from the entry point, against a server made for the test: one
+// report per session, its conversation stored once, nothing but names in the
+// report, and nothing written here.
+func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
+	base, repo, sha := segmentsTestFixture(t)
+	stored := `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
+	fake := &segmentsTestServer{chunks: map[string][]byte{}, manifests: map[string]segmentsTestManifest{}, token: "synthetic-token",
+		answer: func(string) (int, string) { return http.StatusOK, stored }}
+	server := httptest.NewServer(fake)
 	defer server.Close()
 	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
 	t.Setenv("CXT_TOKEN", "synthetic-token")
@@ -230,16 +327,15 @@ func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("output is not a result: %v\n%s", err, out)
 	}
-	if result.Stored != 3 || result.Unchanged != 0 || result.Refused != 0 || len(result.Sessions) != 3 || len(result.Unread) != 1 {
+	if result.Stored != 3 || result.Unchanged != 0 || result.Refused != 0 || result.ContentNotUploaded != 0 || len(result.Sessions) != 3 || len(result.Unread) != 1 {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(requests) != 3 {
-		t.Fatalf("requests = %+v", requests)
+	if len(fake.puts) != 3 {
+		t.Fatalf("reports = %+v", fake.puts)
 	}
 	bodies := map[string]domain.AnchoredSessionBody{}
-	for _, sent := range requests {
-		prefix := "/api/v1/repos/"
-		if sent.method != http.MethodPut || sent.auth != "Bearer synthetic-token" || !strings.HasPrefix(sent.path, prefix) || !strings.Contains(sent.path, "/anchored-sessions/claude/") {
+	for _, sent := range fake.puts {
+		if !strings.HasPrefix(sent.path, "/api/v1/repos/") {
 			t.Fatalf("request = %+v", sent)
 		}
 		// A worktree is a name on the server; no folder of this computer is sent.
@@ -271,31 +367,60 @@ func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
 		t.Fatalf("machine = %q, host = %q", original.Machine, host)
 	}
 
-	// A report the server refuses is listed and fails the command; the others are still sent.
-	mu.Lock()
-	requests = nil
-	answer = func(session string) (int, string) {
+	// Each session's conversation is one document of its own records. The four
+	// records of the original give four events, all in its one segment.
+	if original.Content == nil || original.Content.Events != 4 || original.Segments[0].FirstEvent != 0 || original.Segments[0].Events != 4 {
+		t.Fatalf("original content = %+v segment = %+v", original.Content, original.Segments[0].AnchoredRange)
+	}
+	raw, events := fake.document(t, string(original.Content.Doc))
+	if len(events) != 4 || events[0]["kind"] != "message" || events[1]["kind"] != "tool_call" || events[2]["kind"] != "tool_result" || !strings.Contains(raw, "committed") {
+		t.Fatalf("original document: %s", raw)
+	}
+	// The fork's copied records are stored once, with the original: its own
+	// document holds only what it added.
+	if fork.Content == nil || fork.Content.Events != 1 || fork.Uncommitted.FirstEvent != 0 || fork.Uncommitted.Events != 1 {
+		t.Fatalf("fork content = %+v part = %+v", fork.Content, fork.Uncommitted.AnchoredRange)
+	}
+	if raw, events := fake.document(t, string(fork.Content.Doc)); len(events) != 1 || !strings.Contains(raw, "continue elsewhere") || strings.Contains(raw, "commit it") {
+		t.Fatalf("fork document: %s", raw)
+	}
+	if helper.Content == nil || helper.Content.Events != 1 {
+		t.Fatalf("helper content = %+v", helper.Content)
+	}
+	if len(fake.manifests) != 3 {
+		t.Fatalf("documents = %d", len(fake.manifests))
+	}
+	// A document names its session, and no folder of this computer.
+	for hash, manifest := range fake.manifests {
+		if strings.Contains(string(manifest.Envelope), base) || strings.Contains(string(manifest.Envelope), `"cwd":"/`) || !strings.Contains(string(manifest.Envelope), `"session_origin_id"`) {
+			t.Fatalf("document %s envelope: %s", hash, manifest.Envelope)
+		}
+	}
+
+	// The same records again: every document is already there, so no chunk is sent.
+	fake.mu.Lock()
+	fake.puts, fake.uploaded = nil, 0
+	fake.answer = func(session string) (int, string) {
 		if session == "fork" {
 			return http.StatusConflict, `{"error":{"code":"conflict","message":"conflict"}}`
 		}
 		return http.StatusOK, `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":false}`
 	}
-	mu.Unlock()
+	fake.mu.Unlock()
+	// A report the server refuses is listed and fails the command; the others are still sent.
 	text, err := segmentsTestRunErr(t, "segments", "push")
-	if err == nil || !strings.Contains(err.Error(), "1 of 3 session reports were refused") || len(requests) != 3 ||
-		!strings.Contains(text, "Session reports: 0 stored, 2 unchanged, 1 refused (3 sessions)") || !strings.Contains(text, "  claude fork: ") {
-		t.Fatalf("err=%v requests=%d\n%s", err, len(requests), text)
+	if err == nil || !strings.Contains(err.Error(), "1 of 3 session reports were refused") || len(fake.puts) != 3 || fake.uploaded != 0 ||
+		!strings.Contains(text, "Session reports: 0 stored, 2 unchanged, 1 refused (3 sessions)") || !strings.Contains(text, "  claude fork: ") ||
+		!strings.Contains(text, "Conversation: uploaded for 3 sessions, not uploaded for 0") {
+		t.Fatalf("err=%v reports=%d chunks=%d\n%s", err, len(fake.puts), fake.uploaded, text)
 	}
 
 	// A caller the server does not accept stops the run at the first request.
-	mu.Lock()
-	requests = nil
-	answer = func(string) (int, string) {
-		return http.StatusUnauthorized, `{"error":{"code":"unauthorized","message":"unauthorized"}}`
-	}
-	mu.Unlock()
-	if _, err := segmentsTestRunErr(t, "segments", "push"); err == nil || len(requests) != 1 || !strings.Contains(err.Error(), "stopped after 0 of 3 session reports") {
-		t.Fatalf("err=%v requests=%d", err, len(requests))
+	fake.mu.Lock()
+	fake.puts, fake.token = nil, "another-token"
+	fake.mu.Unlock()
+	if _, err := segmentsTestRunErr(t, "segments", "push"); err == nil || len(fake.puts) != 0 || !strings.Contains(err.Error(), "stopped after 0 of 3 session reports") {
+		t.Fatalf("err=%v reports=%d", err, len(fake.puts))
 	}
 	if after := segmentsTestTree(t, base); !reflect.DeepEqual(before, after) {
 		t.Fatal("a failed upload changed a file in the repository or the home directory")

@@ -205,12 +205,29 @@ func RunSegmentsPush(ctx context.Context, uploader inbound.SegmentUploader, cwd 
 
 func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 	fmt.Fprintf(w, "Session reports: %d stored, %d unchanged, %d refused (%d sessions)\n", result.Stored, result.Unchanged, result.Refused, len(result.Sessions))
+	withContent := 0
+	for _, session := range result.Sessions {
+		if session.Content == domain.SegmentContentStored {
+			withContent++
+		}
+	}
+	if withContent > 0 || result.ContentNotUploaded > 0 {
+		fmt.Fprintf(w, "Conversation: uploaded for %d sessions, not uploaded for %d\n", withContent, result.ContentNotUploaded)
+	}
 	fmt.Fprintln(w, "Only you can read these reports on the server. Nothing was written on this computer.")
 	if result.Refused > 0 {
 		fmt.Fprintf(w, "\nRefused (%d) — these sessions are not on the server\n", result.Refused)
 		for _, session := range result.Sessions {
 			if session.State == domain.SegmentPushRefused {
 				fmt.Fprintf(w, "  %s %s: %s\n", session.Provider, session.ID, session.Reason)
+			}
+		}
+	}
+	if result.ContentNotUploaded > 0 {
+		fmt.Fprintf(w, "\nWithout conversation (%d) — these reports are on the server, their conversation is not\n", result.ContentNotUploaded)
+		for _, session := range result.Sessions {
+			if session.Content == domain.SegmentContentNotUploaded {
+				fmt.Fprintf(w, "  %s %s: %s\n", session.Provider, session.ID, session.ContentReason)
 			}
 		}
 	}

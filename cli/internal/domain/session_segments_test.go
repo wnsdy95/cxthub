@@ -610,3 +610,59 @@ func TestSessionRecordScopeHoldsOnlyFoldersInsideAWorktree(t *testing.T) {
 		t.Fatalf("origin = %q", scope.Origin)
 	}
 }
+
+func TestSegmentReportNamesTheRecordsBehindEveryRange(t *testing.T) {
+	shared := []RecordedItem{
+		segmentMessage("m1", "t1", 10, "/work/app"),
+		segmentCommand("m2", "t1", 19, 21, "/work/app", "[main aaaaaaa] before the fork"),
+		segmentMessage("m3", "t1", 30, "/work/app"),
+	}
+	original := append(append([]RecordedItem{}, shared...), segmentMessage("m4", "t2", 40, "/work/app"))
+	fork := append(append([]RecordedItem{}, shared...),
+		segmentMessage("f1", "t5", 200, "/work/app"),
+		segmentCommand("f2", "t5", 219, 221, "/work/app", "[main bbbbbbb] after the fork"),
+	)
+	inputs := SegmentInputs{
+		Git: GitRecords{Worktrees: []RecordedWorktree{segmentMain}, Commits: []RecordedCommit{segmentCommit("a", 20), segmentCommit("b", 220)}},
+		Sessions: []RecordedSession{
+			{Provider: ProviderClaude, ID: "fork", Source: "/home/dev/fork.jsonl", Items: fork},
+			{Provider: ProviderClaude, ID: "original", Source: "/home/dev/original.jsonl", Items: original},
+			{Provider: ProviderCodex, ID: "empty"},
+		},
+	}
+	report, records := BuildSegmentReportWithRecords(inputs)
+	if !reflect.DeepEqual(report, BuildSegmentReport(inputs)) {
+		t.Fatal("the report differs from the one built without records")
+	}
+	if len(records) != len(report.Sessions) {
+		t.Fatalf("%d entries for %d sessions", len(records), len(report.Sessions))
+	}
+	want := map[string]SessionRecordRanges{
+		// The segment that ends at the commit keeps the rest of its turn; the
+		// record after it is the uncommitted part.
+		"original": {Provider: ProviderClaude, ID: "original", Source: "/home/dev/original.jsonl", Ranges: [][]string{{"m1", "m2", "m3"}, {"m4"}}},
+		// The copied records belong to the original and are in no range of the fork.
+		"fork":  {Provider: ProviderClaude, ID: "fork", Source: "/home/dev/fork.jsonl", Ranges: [][]string{{"f1", "f2"}}},
+		"empty": {Provider: ProviderCodex, ID: "empty", Ranges: [][]string{}},
+	}
+	for index, session := range report.Sessions {
+		if records[index].ID != session.ID || !reflect.DeepEqual(records[index], want[session.ID]) {
+			t.Fatalf("entry %d for %s = %+v", index, session.ID, records[index])
+		}
+		// Every range holds exactly the records the report counts for it.
+		ranges := records[index].Ranges
+		for position, segment := range session.Segments {
+			if len(ranges[position]) != segment.Records || ranges[position][0] != segment.First || ranges[position][segment.Records-1] != segment.Last {
+				t.Fatalf("%s segment %d: %v against %+v", session.ID, position+1, ranges[position], segment.SegmentRange)
+			}
+		}
+		if part := session.Uncommitted; part != nil {
+			last := ranges[len(ranges)-1]
+			if len(ranges) != len(session.Segments)+1 || len(last) != part.Records || last[0] != part.First {
+				t.Fatalf("%s uncommitted part: %v against %+v", session.ID, last, part.SegmentRange)
+			}
+		} else if len(ranges) != len(session.Segments) {
+			t.Fatalf("%s has %d ranges for %d segments", session.ID, len(ranges), len(session.Segments))
+		}
+	}
+}

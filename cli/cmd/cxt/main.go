@@ -298,13 +298,10 @@ func buildReadContainer(cfg config) container {
 	return out
 }
 
-// buildContainer creates all adapters/services and injects dependencies.
-// The read-only composition above uses the same passive repository adapters.
-func buildContainer(cfg config) container {
-	store, remote, gitCtx := buildRepositoryAdapters(cfg)
-	remote.SetMetadataCheckpointStore(store)
-	remote.SetCatalogCacheStore(store)
-	// Masking policy loader injection (capture ← remotecfg circular prevention — DI here only).
+// injectScrubOptions gives capture the repository's masking policy. Capture
+// cannot read remotecfg itself without an import cycle, so every composition
+// that produces masked content injects the loader here.
+func injectScrubOptions() {
 	capture.LoadScrubOptions = func(repoRoot string) capture.ScrubOptions {
 		return capture.ScrubOptions{
 			Redact: remotecfg.SecretsRedact(repoRoot),
@@ -312,6 +309,15 @@ func buildContainer(cfg config) container {
 			Tier:   capture.ScrubTier(remotecfg.SecretsScrub(repoRoot)),
 		}
 	}
+}
+
+// buildContainer creates all adapters/services and injects dependencies.
+// The read-only composition above uses the same passive repository adapters.
+func buildContainer(cfg config) container {
+	store, remote, gitCtx := buildRepositoryAdapters(cfg)
+	remote.SetMetadataCheckpointStore(store)
+	remote.SetCatalogCacheStore(store)
+	injectScrubOptions()
 	// Repository identity: an origin URL reanchors the local store to its URL-derived RepoID,
 	// so clients configured with the same origin address the same repository.
 	claudeCodec := codec.NewClaudeCodec()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
@@ -10,7 +11,9 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/sessionrecords"
 	"github.com/wnsdy95/cxthub-cli/internal/app"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // newSegmentReporter wires the read-only readers: Git, the Claude Code session
@@ -41,5 +44,18 @@ func newSegmentUploader(cfg config) (inbound.SegmentUploader, error) {
 	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
 	// The label tells the uploader's own computers apart, like a device login's.
 	machine, _ := os.Hostname()
-	return app.NewSegmentUploadService(reports, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, machine), nil
+	service := app.NewSegmentUploadService(reports, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, machine)
+	// Content is masked with the repository's policy and sent in the document
+	// identity the repository captures with, both exactly as capture does.
+	injectScrubOptions()
+	content := backendclient.NewSessionContentUploader(remote, func(ctx context.Context) (domain.DocumentIdentity, error) {
+		observed, err := remotecfg.Observe(ctx, cfg.RepoRoot)
+		if err != nil {
+			return "", err
+		}
+		return observed.CaptureIdentity()
+	})
+	return service.WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{
+		domain.ProviderClaude: sessionrecords.NewClaudeContent(),
+	}), nil
 }

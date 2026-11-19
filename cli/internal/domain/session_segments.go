@@ -117,7 +117,11 @@ type RecordedSession struct {
 	// FileCopies counts identical copies of this session's record found
 	// elsewhere and read only once.
 	FileCopies int
-	Items      []RecordedItem
+	// Source is where the tool keeps this session's records, for a reader
+	// that returns to them for their content: the session file of Claude
+	// Code. It never leaves this computer.
+	Source string
+	Items  []RecordedItem
 }
 
 // RecordedAgentCall is one agent-to-agent call a tool recorded. Sender and
@@ -438,8 +442,26 @@ type segmentSpan struct {
 	closesTurn  bool
 }
 
+// SessionRecordRanges names the records behind each range of one session: its
+// segments in order, then its uncommitted part. A copied record belongs to
+// another session and is in none of them.
+type SessionRecordRanges struct {
+	Provider ProviderKind
+	ID       string
+	Source   string
+	Ranges   [][]string
+}
+
 // BuildSegmentReport applies the linking and cutting rules to the records.
 func BuildSegmentReport(in SegmentInputs) SegmentReport {
+	report, _ := BuildSegmentReportWithRecords(in)
+	return report
+}
+
+// BuildSegmentReportWithRecords returns the same report together with the
+// record identifiers behind every range, one entry per session in the order
+// of the report's sessions.
+func BuildSegmentReportWithRecords(in SegmentInputs) (SegmentReport, []SessionRecordRanges) {
 	states := make([]*segmentSessionState, len(in.Sessions))
 	for index, session := range in.Sessions {
 		states[index] = &segmentSessionState{record: session, copiedFrom: map[int]struct{}{}, links: map[string]segmentLink{}}
@@ -464,7 +486,35 @@ func BuildSegmentReport(in SegmentInputs) SegmentReport {
 	for _, state := range states {
 		state.cut()
 	}
-	return assembleSegmentReport(in, states, roots, commits)
+	report := assembleSegmentReport(in, states, roots, commits)
+	type sessionKey struct {
+		provider   ProviderKind
+		id, parent string
+	}
+	byKey := make(map[sessionKey]*segmentSessionState, len(states))
+	for _, state := range states {
+		byKey[sessionKey{state.record.Provider, state.record.ID, state.record.Parent}] = state
+	}
+	records := make([]SessionRecordRanges, len(report.Sessions))
+	for index, session := range report.Sessions {
+		state := byKey[sessionKey{session.Provider, session.ID, session.Parent}]
+		ranges := SessionRecordRanges{Provider: session.Provider, ID: session.ID, Source: state.record.Source, Ranges: [][]string{}}
+		ids := func(first, last int) []string {
+			out := make([]string, 0, last-first+1)
+			for position := first; position <= last; position++ {
+				out = append(out, state.record.Items[state.own[position]].ID)
+			}
+			return out
+		}
+		for _, span := range state.segments {
+			ranges.Ranges = append(ranges.Ranges, ids(span.first, span.last))
+		}
+		if state.rest < len(state.own) {
+			ranges.Ranges = append(ranges.Ranges, ids(state.rest, len(state.own)-1))
+		}
+		records[index] = ranges
+	}
+	return report, records
 }
 
 type recordHolderKey struct {

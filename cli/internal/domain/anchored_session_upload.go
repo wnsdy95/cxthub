@@ -20,6 +20,18 @@ type AnchoredRange struct {
 	Commands     int    `json:"commands"`
 	StartedAt    string `json:"started_at,omitempty"`
 	EndedAt      string `json:"ended_at,omitempty"`
+	// FirstEvent and Events place the range in the session's content
+	// document. Both are zero when the report names no content.
+	FirstEvent int `json:"first_event,omitempty"`
+	Events     int `json:"events,omitempty"`
+}
+
+// AnchoredContent names the document that holds the conversation of the
+// session's own records, each stored once, in the order of the ranges.
+type AnchoredContent struct {
+	Doc      ContentHash      `json:"doc"`
+	Identity DocumentIdentity `json:"identity,omitempty"`
+	Events   int              `json:"events"`
 }
 
 // AnchoredCommit is a commit a segment ends at, with the three values a
@@ -87,6 +99,28 @@ type AnchoredSessionBody struct {
 	Segments      []AnchoredSegment    `json:"segments"`
 	Uncommitted   *AnchoredUncommitted `json:"uncommitted,omitempty"`
 	AgentCalls    []AnchoredAgentCall  `json:"agent_calls,omitempty"`
+	Content       *AnchoredContent     `json:"content,omitempty"`
+}
+
+// AttachContent names the content document in the report and places every
+// range in it. first and count give, for each range in order (the segments,
+// then the uncommitted part), where it starts and how many events it holds.
+func (b *AnchoredSessionBody) AttachContent(ref DocumentRef, events int, first, count []int) bool {
+	ranges := len(b.Segments)
+	if b.Uncommitted != nil {
+		ranges++
+	}
+	if len(first) != ranges || len(count) != ranges {
+		return false
+	}
+	for index := range b.Segments {
+		b.Segments[index].FirstEvent, b.Segments[index].Events = first[index], count[index]
+	}
+	if b.Uncommitted != nil {
+		b.Uncommitted.FirstEvent, b.Uncommitted.Events = first[ranges-1], count[ranges-1]
+	}
+	b.Content = &AnchoredContent{Doc: ref.Hash, Identity: ref.Identity, Events: events}
+	return true
 }
 
 // AnchoredSessionUpload is one session's report and the key it is stored under.
@@ -221,22 +255,41 @@ const (
 	SegmentPushRefused   SegmentPushState = "refused"
 )
 
+// SegmentContentState is what happened to the conversation of one session.
+type SegmentContentState string
+
+const (
+	// SegmentContentStored: the content document is on the server and the
+	// report names it.
+	SegmentContentStored SegmentContentState = "stored"
+	// SegmentContentNone: the session's own records hold no conversation.
+	SegmentContentNone SegmentContentState = "none"
+	// SegmentContentNotUploaded: the report was uploaded without content.
+	SegmentContentNotUploaded SegmentContentState = "not-uploaded"
+)
+
 type SegmentPushSession struct {
 	Provider ProviderKind     `json:"provider"`
 	ID       string           `json:"id"`
 	State    SegmentPushState `json:"state"`
 	Revision int64            `json:"revision,omitempty"`
 	Reason   string           `json:"reason,omitempty"`
+	// Content is empty when this run uploads no content at all.
+	Content       SegmentContentState `json:"content,omitempty"`
+	ContentReason string              `json:"content_reason,omitempty"`
 }
 
 // SegmentPushResult lists every session of the report with what happened to
 // it, and what the report itself could not cover.
 type SegmentPushResult struct {
-	Version   int                  `json:"version"`
-	Stored    int                  `json:"stored"`
-	Unchanged int                  `json:"unchanged"`
-	Refused   int                  `json:"refused"`
-	Sessions  []SegmentPushSession `json:"sessions"`
+	Version   int `json:"version"`
+	Stored    int `json:"stored"`
+	Unchanged int `json:"unchanged"`
+	Refused   int `json:"refused"`
+	// ContentNotUploaded counts sessions whose report went up without their
+	// conversation; each one says why.
+	ContentNotUploaded int                  `json:"content_not_uploaded"`
+	Sessions           []SegmentPushSession `json:"sessions"`
 	// Unread records exist but were not read, so no report covers them.
 	Unread []UnreadSessionRecord `json:"unread"`
 	// AgentCallsWithoutSender were recorded by a session outside this

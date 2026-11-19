@@ -159,10 +159,10 @@ func (f segmentUploaderFunc) PushSegments(ctx context.Context, cwd string) (doma
 }
 
 func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
-	result := domain.SegmentPushResult{Version: 1, Stored: 1, Unchanged: 1, Refused: 1, AgentCallsWithoutSender: 2,
+	result := domain.SegmentPushResult{Version: 1, Stored: 1, Unchanged: 1, Refused: 1, ContentNotUploaded: 1, AgentCallsWithoutSender: 2,
 		Sessions: []domain.SegmentPushSession{
-			{Provider: domain.ProviderClaude, ID: "stored", State: domain.SegmentPushStored, Revision: 1},
-			{Provider: domain.ProviderCodex, ID: "same", State: domain.SegmentPushUnchanged, Revision: 4},
+			{Provider: domain.ProviderClaude, ID: "stored", State: domain.SegmentPushStored, Revision: 1, Content: domain.SegmentContentStored},
+			{Provider: domain.ProviderCodex, ID: "same", State: domain.SegmentPushUnchanged, Revision: 4, Content: domain.SegmentContentNotUploaded, ContentReason: "synthetic content gap"},
 			{Provider: domain.ProviderCodex, ID: "taken", State: domain.SegmentPushRefused, Reason: "synthetic refusal"},
 		},
 		Unread: []domain.UnreadSessionRecord{{Provider: domain.ProviderCodex, Source: "state_5.sqlite", Reason: "synthetic layout"}},
@@ -180,6 +180,9 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Session reports: 1 stored, 1 unchanged, 1 refused (3 sessions)",
+		"Conversation: uploaded for 1 sessions, not uploaded for 1",
+		"Without conversation (1) — these reports are on the server, their conversation is not",
+		"  codex same: synthetic content gap",
 		"Only you can read these reports on the server. Nothing was written on this computer.",
 		"Refused (1) — these sessions are not on the server",
 		"  codex taken: synthetic refusal",
@@ -204,10 +207,18 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 		t.Fatalf("json: %v\n%s", err, out.String())
 	}
 
+	// A report without its conversation is listed, and is not a failure.
 	result.Refused, result.Sessions = 0, result.Sessions[:2]
 	out.Reset()
-	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Refused") {
+	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Refused") || !strings.Contains(out.String(), "Without conversation (1)") {
 		t.Fatalf("nothing refused: %v\n%s", err, out.String())
+	}
+	// A run that uploads no conversation at all says nothing about it.
+	plain := domain.SegmentPushResult{Version: 1, Stored: 1, Sessions: []domain.SegmentPushSession{{Provider: domain.ProviderClaude, ID: "stored", State: domain.SegmentPushStored, Revision: 1}}}
+	out.Reset()
+	quiet := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) { return plain, nil })
+	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Conversation") {
+		t.Fatalf("no conversation: %v\n%s", err, out.String())
 	}
 	failure := errors.New("synthetic failure")
 	failing := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) {
