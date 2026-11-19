@@ -85,6 +85,31 @@ func run(args []string) error {
 		defer stop()
 		return delivcli.RunDiagnostics(ctx, localReplicaInspector{}, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
 	}
+	if args[1] == "segments" {
+		// Reading session records needs no store or provider adapter, so this
+		// path builds neither. The report itself cannot write on this
+		// computer; push adds the repository's server and writes only branch
+		// IDs into Git's own branch configuration.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if slices.Contains(args[2:], "push") {
+			// The same readers plus the repository's server: still no local store.
+			uploader, err := newSegmentUploader(loadConfig(), "")
+			if err != nil {
+				return err
+			}
+			return delivcli.RunSegmentsPush(ctx, uploader, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+		}
+		reporter, err := newSegmentReporter("")
+		if err != nil {
+			return err
+		}
+		return delivcli.RunSegments(ctx, reporter, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+	}
 	if args[1] == "capture" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -274,13 +299,10 @@ func buildReadContainer(cfg config) container {
 	return out
 }
 
-// buildContainer creates all adapters/services and injects dependencies.
-// The read-only composition above uses the same passive repository adapters.
-func buildContainer(cfg config) container {
-	store, remote, gitCtx := buildRepositoryAdapters(cfg)
-	remote.SetMetadataCheckpointStore(store)
-	remote.SetCatalogCacheStore(store)
-	// Masking policy loader injection (capture ← remotecfg circular prevention — DI here only).
+// injectScrubOptions gives capture the repository's masking policy. Capture
+// cannot read remotecfg itself without an import cycle, so every composition
+// that produces masked content injects the loader here.
+func injectScrubOptions() {
 	capture.LoadScrubOptions = func(repoRoot string) capture.ScrubOptions {
 		return capture.ScrubOptions{
 			Redact: remotecfg.SecretsRedact(repoRoot),
@@ -288,6 +310,15 @@ func buildContainer(cfg config) container {
 			Tier:   capture.ScrubTier(remotecfg.SecretsScrub(repoRoot)),
 		}
 	}
+}
+
+// buildContainer creates all adapters/services and injects dependencies.
+// The read-only composition above uses the same passive repository adapters.
+func buildContainer(cfg config) container {
+	store, remote, gitCtx := buildRepositoryAdapters(cfg)
+	remote.SetMetadataCheckpointStore(store)
+	remote.SetCatalogCacheStore(store)
+	injectScrubOptions()
 	// Repository identity: an origin URL reanchors the local store to its URL-derived RepoID,
 	// so clients configured with the same origin address the same repository.
 	claudeCodec := codec.NewClaudeCodec()
@@ -348,7 +379,7 @@ func buildContainer(cfg config) container {
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
 	contextHistory := app.NewContextHistoryService(store, store)
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
-	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
+	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices).WithSegmentCollector(delivcli.SpawnSegmentCollector)
 	hookHdl.WithCaptureAdmission(func(ctx context.Context, cwd string) error {
 		repo, err := gitCtx.CurrentRepo(ctx, cwd)
 		if err != nil {
@@ -430,6 +461,14 @@ func buildContainer(cfg config) container {
 	}
 	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
 	clictr.WakeFetchDiscovery = delivcli.SpawnFetchDiscovery
+	// The session report collector a hook wakes. A hook is never what it
+	// reads: it reads what the tools and Git recorded, whatever woke it.
+	if collector, files, err := newSegmentCollector(cfg); err == nil {
+		clictr.SegmentCollector = collector
+		clictr.WithSegmentCollectorLock = files.WithCollectorLock
+		clictr.SegmentCollectorState = files.LoadCollectorState
+		clictr.WakeSegmentCollector = delivcli.SpawnSegmentCollector
+	}
 	clictr.ObserveLiveSession = func(ctx context.Context, cwd string, provider domain.ProviderKind, id string) error {
 		return capture.ObserveLiveSession(ctx, cwd, provider, id, clictr.WakeFetchDiscovery)
 	}

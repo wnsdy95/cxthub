@@ -841,6 +841,416 @@ components:
             team: { type: string }
         updated_at: { type: string, format: date-time }
         origin: { $ref: '#/components/schemas/SessionOrigin' }
+    AnchoredCommit:
+      type: object
+      required: [sha, rule]
+      description: A commit a segment ends at. The author time, author and subject are what a rebase or cherry-pick keeps, so the commit's copies can be found without the uploader's repository.
+      properties:
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        rule: { type: string, enum: [printed-number, same-folder-and-time, captured-at-commit] }
+        created_at: { type: string, format: date-time }
+        authored_at: { type: string, format: date-time }
+        author_email: { type: string }
+        subject: { type: string }
+    AnchoredSegment:
+      type: object
+      required: [first, last, first_ordinal, last_ordinal, commands, closes_turn, commits]
+      description: The part of one session that ends at one or more commits, named by the coding agent's own first and last record identifiers and their positions among the session's own records.
+      properties:
+        first: { type: string }
+        last: { type: string }
+        first_ordinal: { type: integer, minimum: 0 }
+        last_ordinal: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        first_event: { type: integer, minimum: 0, description: Where the range starts in the session's content document. Absent when the report names no content. }
+        events: { type: integer, minimum: 0, description: How many events of the content document the range holds. }
+        closes_turn: { type: boolean }
+        commits: { type: array, items: { $ref: '#/components/schemas/AnchoredCommit' }, description: At least one in a report. Empty for a hidden segment. }
+        hidden: { type: boolean, description: Only in what another account reads. The segment is not open; it keeps its place so that segment numbers mean the same to everyone, and says nothing else. A report never carries it. }
+    AnchoredPlace:
+      type: object
+      required: [worktree, rule]
+      description: A worktree and branch an uncommitted part passed through. Only the worktree's name is reported, never its path.
+      properties:
+        worktree: { type: string }
+        branch: { type: string }
+        removed: { type: boolean }
+        rule: { type: string, enum: [recorded-by-tool, head-log, current-branch, folder-no-longer-a-worktree] }
+    AnchoredUncommitted:
+      type: object
+      required: [first, last, first_ordinal, last_ordinal, commands, places, unplaced]
+      properties:
+        first: { type: string }
+        last: { type: string }
+        first_ordinal: { type: integer, minimum: 0 }
+        last_ordinal: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        first_event: { type: integer, minimum: 0 }
+        events: { type: integer, minimum: 0 }
+        turns:
+          type: array
+          maxItems: 20000
+          description: Where each turn of the part begins, in order. The part is not cut at them. They let the server tell which turns had begun when a branch the part passed through was pushed.
+          items: { $ref: '#/components/schemas/AnchoredTurnMark' }
+        places: { type: array, items: { $ref: '#/components/schemas/AnchoredPlace' } }
+        unplaced: { type: boolean }
+        partial: { type: boolean, description: Only in what another account reads. The part is open up to here and goes on. A report never carries it. }
+    AnchoredTurnMark:
+      type: object
+      required: [first_ordinal]
+      properties:
+        first_ordinal: { type: integer, minimum: 0, description: Position of the turn's first record among the session's own records. }
+        first_event: { type: integer, minimum: 0, description: Where the turn begins in the content document. Absent when zero. }
+        started_at: { type: string, format: date-time }
+    AnchoredSpawn:
+      type: object
+      description: Where in the parent session a session was spawned.
+      required: [at_record, at_ordinal, rule]
+      properties:
+        at_record: { type: string }
+        at_ordinal: { type: integer, minimum: 0, description: Position of the record among the parent's own records. }
+        rule: { type: string, enum: [tool-call, start-time] }
+    AnchoredAgentCall:
+      type: object
+      required: [tool, from, to]
+      properties:
+        tool: { type: string }
+        from: { type: string }
+        to: { type: array, items: { type: string } }
+        status: { type: string }
+        at: { type: string, format: date-time }
+        record: { type: string }
+    AnchoredSessionBody:
+      type: object
+      additionalProperties: false
+      required: [rule_version, sub, scope, records, commands, copied_records, segments]
+      description: The report a CLI computes for one coding-agent session from the records the agent and Git left behind. Every record of the session is in exactly one segment or in the uncommitted part, in order, and every commit is named once.
+      properties:
+        rule_version: { type: integer, enum: [1] }
+        sub: { type: boolean }
+        parent: { type: string }
+        spawn: { $ref: '#/components/schemas/AnchoredSpawn' }
+        scope: { type: string, enum: [working-folder, origin-url, captures], description: How the session was found to belong to the repository; `captures` marks a report the server rebuilt from its earlier captures. A client cannot upload it. }
+        machine: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        records: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        copied_records: { type: integer, minimum: 0 }
+        copied_from: { type: array, items: { type: string } }
+        file_copies: { type: integer, minimum: 0 }
+        segments: { type: array, items: { $ref: '#/components/schemas/AnchoredSegment' } }
+        uncommitted: { $ref: '#/components/schemas/AnchoredUncommitted' }
+        agent_calls: { type: array, items: { $ref: '#/components/schemas/AnchoredAgentCall' } }
+        content: { $ref: '#/components/schemas/AnchoredContent' }
+    BranchRegistration:
+      type: object
+      additionalProperties: false
+      required: [name, local_id]
+      description: One branch a CLI reports as present on the remote, with the ID it keeps for it in the branch's own Git configuration.
+      properties:
+        name: { type: string, maxLength: 255 }
+        local_id: { type: string, pattern: '^[0-9a-f]{32}$' }
+    BranchRegistrationResult:
+      type: object
+      required: [name, local_id, ledger_id, outcome]
+      properties:
+        name: { type: string }
+        local_id: { type: string }
+        ledger_id: { type: string, description: The ID of the lifetime the name has after the registration. }
+        outcome:
+          type: string
+          enum: [unchanged, opened, joined, reopened, separate]
+          description: separate means the reported ID belongs to another lifetime, so the name has a lifetime with an ID of its own.
+    BranchEvidence:
+      type: object
+      required: [kind]
+      description: What a ledger change was based on. A registration names the account behind it, a hosting event names the stored ref observation.
+      properties:
+        kind: { type: string, enum: [registered, hosting-push] }
+        account: { type: string }
+        source: { type: string }
+    BranchLinkedID:
+      type: object
+      required: [id, linked_at, by]
+      properties:
+        id: { type: string, pattern: '^[0-9a-f]{32}$' }
+        linked_at: { type: string, format: date-time }
+        by: { $ref: '#/components/schemas/BranchEvidence' }
+    BranchReopening:
+      type: object
+      required: [closed_at, closed_by, reopened_at, reopened_by]
+      description: A closing that turned out not to be the end. The lifetime's ID was registered again and the lifetime continued.
+      properties:
+        closed_at: { type: string, format: date-time }
+        closed_by: { $ref: '#/components/schemas/BranchEvidence' }
+        reopened_at: { type: string, format: date-time }
+        reopened_by: { $ref: '#/components/schemas/BranchEvidence' }
+        name: { type: string, description: The name the lifetime had before, when it came back under another. }
+    BranchLifetime:
+      type: object
+      required: [repo_id, ledger_id, name, opened_at, opened_by, linked]
+      description: One lifetime of a branch name on the remote. The ledger is separate from context branch identity, and ledger_id is not a ref's branch identity.
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        ledger_id: { type: string, pattern: '^[0-9a-f]{32}$' }
+        name: { type: string }
+        opened_at: { type: string, format: date-time }
+        opened_by: { $ref: '#/components/schemas/BranchEvidence' }
+        closed_at: { type: string, format: date-time }
+        closed_by: { $ref: '#/components/schemas/BranchEvidence' }
+        linked: { type: array, items: { $ref: '#/components/schemas/BranchLinkedID' } }
+        reopenings: { type: array, items: { $ref: '#/components/schemas/BranchReopening' } }
+    RemoteBranch:
+      type: object
+      required: [name, sha]
+      description: A branch name on the remote and the commit it points at, as the server read them from the Git hosting provider.
+      properties:
+        name: { type: string, maxLength: 1024 }
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    RemotePull:
+      type: object
+      required: [number, title, state, head_ref, head_sha, base_ref, fork, commits, truncated, updated_at]
+      description: A pull request as the Git hosting provider lists it, with its commits. The server read it from the provider and no client supplied any of it.
+      properties:
+        number: { type: integer, minimum: 1 }
+        title: { type: string }
+        state: { type: string, enum: [open, closed, merged] }
+        head_ref: { type: string }
+        head_sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        base_ref: { type: string }
+        merge_sha:
+          type: string
+          pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$'
+          description: The commit the pull request became. Present only when it is merged.
+        fork: { type: boolean, description: The head lives in another repository. }
+        commits:
+          type: array
+          maxItems: 250
+          description: Commit numbers as the provider lists them. Oldest first.
+          items: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        truncated: { type: boolean, description: The provider stops its list at 250 commits and this list has that many. }
+        updated_at: { type: string, format: date-time }
+    RemoteGitCommit:
+      type: object
+      required: [sha, parents, author_name, authored_at, committed_at, subject]
+      description: A commit as the Git hosting provider lists it. The email of its author is not part of the answer.
+      properties:
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        parents:
+          type: array
+          items: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        author_name: { type: string }
+        authored_at: { type: string, format: date-time }
+        committed_at: { type: string, format: date-time }
+        subject: { type: string, maxLength: 1024, description: The first paragraph of the commit message on one line. }
+    RemoteGitCommits:
+      type: object
+      required: [commits]
+      description: A page of the commit list. Newest commit time first.
+      properties:
+        commits:
+          type: array
+          items: { $ref: '#/components/schemas/RemoteGitCommit' }
+        next: { type: string, description: Send it back as before to read the following page. Absent on the last page. }
+    RemoteGit:
+      type: object
+      required: [branches, pulls, commits]
+      description: What the server read from the Git hosting provider of the repository. A repository that was never read has empty lists and no synced_at.
+      properties:
+        default_branch: { type: string }
+        synced_at: { type: string, format: date-time, description: The start of the last read that finished without error. }
+        branches:
+          type: array
+          description: Ordered by name.
+          items: { $ref: '#/components/schemas/RemoteBranch' }
+        pulls:
+          type: array
+          description: Highest number first.
+          items: { $ref: '#/components/schemas/RemotePull' }
+        commits:
+          type: array
+          items: { $ref: '#/components/schemas/RemoteGitCommit' }
+        next: { type: string, description: Send it back as before to read the following page of commits. Absent on the last page. }
+    AnchoredContent:
+      type: object
+      required: [doc, events]
+      description: The repository document that holds the conversation of the session's own records, each stored once, in the order of the ranges. It is uploaded first through the document path; a report naming a document the repository does not hold is refused.
+      properties:
+        doc: { $ref: '#/components/schemas/ContentHash' }
+        identity: { $ref: '#/components/schemas/DocumentIdentity' }
+        events: { type: integer, minimum: 1 }
+    AnchoredSession:
+      type: object
+      required: [repo_id, provider, session_id, uploader, revision, body_hash, created_at, updated_at, body]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        provider: { type: string }
+        session_id: { type: string }
+        uploader: { type: string }
+        revision: { type: integer, minimum: 1 }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        body: { $ref: '#/components/schemas/AnchoredSessionBody' }
+    AnchoredSessionSummary:
+      type: object
+      description: A stored report without its ranges and agent calls.
+      required: [provider, session_id, sub, revision, body_hash, records, commands, segments, content, commits, uploader, updated_at]
+      properties:
+        provider: { type: string }
+        session_id: { type: string }
+        parent: { type: string }
+        sub: { type: boolean }
+        revision: { type: integer, minimum: 1 }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        records: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
+        segments: { type: integer, minimum: 0 }
+        machine: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        content: { type: boolean, description: True when the report names the document that holds the conversation. }
+        commits:
+          type: array
+          description: Every commit a segment of the session ends at, in segment order.
+          items: { $ref: '#/components/schemas/AnchoredSummaryCommit' }
+        uncommitted: { $ref: '#/components/schemas/AnchoredSummaryUncommitted' }
+        spawned_in: { $ref: '#/components/schemas/AnchoredSummarySpawn' }
+        uploader: { type: string, description: The account the session belongs to. }
+        shared: { type: boolean, description: True when the session belongs to another account. The summary then holds only what is open to the team. }
+        updated_at: { type: string, format: date-time }
+    AnchoredSummarySpawn:
+      type: object
+      description: >-
+        Where a spawned session sits in its parent as the parent is cut now. Present when the caller may read the
+        parent at the spawn point and the parent holds it.
+      required: [rule]
+      properties:
+        segment_no: { type: integer, minimum: 1 }
+        uncommitted: { type: boolean }
+        rule: { type: string, enum: [tool-call, start-time] }
+    AnchoredSummaryCommit:
+      type: object
+      required: [sha, segment_no, rule]
+      properties:
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        segment_no: { type: integer, minimum: 1 }
+        rule: { type: string, enum: [printed-number, same-folder-and-time, captured-at-commit] }
+        subject: { type: string }
+        created_at: { type: string, format: date-time }
+        authored_at: { type: string, format: date-time }
+        on_remote:
+          type: boolean
+          description: >-
+            Whether the remote holds this commit, from the server's own read of the Git hosting
+            provider. Absent while that is not known: the provider was not read yet, or the read
+            is unfinished and the commit was not found so far.
+        copies:
+          type: array
+          description: Commits on the remote with the same author time, author and subject as this one, when the remote does not hold it.
+          items: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    AnchoredSummaryUncommitted:
+      type: object
+      description: Where the part of a session after its last commit was worked on.
+      required: [commands, places, unplaced]
+      properties:
+        commands: { type: integer, minimum: 0 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        places:
+          type: array
+          items: { $ref: '#/components/schemas/AnchoredPlace' }
+        unplaced: { type: boolean }
+    AnchoredRestoreResult:
+      type: object
+      description: What one restoration request did.
+      required: [restored, unchanged, reported, unreadable, remaining]
+      properties:
+        restored: { type: integer, minimum: 0, description: Sessions rebuilt or rebuilt again. }
+        unchanged: { type: integer, minimum: 0, description: Sessions whose captures explain them as they are stored. }
+        reported: { type: integer, minimum: 0, description: Sessions a CLI reported, which are left alone. }
+        unreadable: { type: integer, minimum: 0, description: Sessions whose captures could not be read now; the next request tries again. }
+        remaining: { type: boolean, description: True when the next request has sessions to rebuild. }
+    AnchoredEventPage:
+      type: object
+      description: A page of a session's conversation as one reader may read it.
+      required: [events, offset, next]
+      properties:
+        events:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            description: An event of the conversation, as the document view pages give it.
+            required: [event_index, event_bytes, kind]
+            properties:
+              event_index: { type: integer, minimum: 0, description: The event's place in the session's conversation. }
+              event_bytes: { type: integer, minimum: 0 }
+              deferred: { type: boolean, description: Only presentation metadata is present; read the body with view=raw or by fragments. }
+              kind: { type: string }
+        offset: { type: integer, minimum: 0 }
+        next: { type: integer, minimum: -1, description: The next event to ask for, or -1 at the end of what is open to the caller from here. }
+    AnchoredNoteTarget:
+      type: object
+      additionalProperties: false
+      description: What a manual note is attached to. Exactly the fields of its kind are present.
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [commit, branch, worktree] }
+        commit: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        branch: { type: string }
+        ledger_id: { type: string, pattern: '^[0-9a-f]{32}$', description: The lifetime of the branch name the note belongs to. Absent for a name the remote never held. }
+        worktree: { type: string, description: A worktree's name, never a path. }
+        machine: { type: string }
+    AnchoredNote:
+      type: object
+      required: [repo_id, id, target, author, body, created_at, updated_at]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        id: { type: string, pattern: '^note_[0-9a-f]{32}$' }
+        target: { $ref: '#/components/schemas/AnchoredNoteTarget' }
+        author: { type: string }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorktreeReportEntry:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, description: The folder's name, never a path. }
+        branch: { type: string, description: The branch checked out in it. Absent when detached. }
+    ReportedWorktree:
+      type: object
+      required: [name, removed, first_seen_at, last_seen_at]
+      properties:
+        machine: { type: string }
+        name: { type: string }
+        branch: { type: string }
+        removed: { type: boolean, description: True when the machine's latest list no longer holds the worktree. }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+    AnchoredSessionReceipt:
+      type: object
+      required: [revision, body_hash, changed]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        changed: { type: boolean, description: False when the stored report already had the same content. }
+    AnchoredCommitSegment:
+      type: object
+      required: [provider, session_id, segment_no, rule, segment]
+      properties:
+        provider: { type: string }
+        session_id: { type: string }
+        segment_no: { type: integer, minimum: 1 }
+        rule: { type: string, enum: [printed-number, same-folder-and-time, captured-at-commit] }
+        segment: { $ref: '#/components/schemas/AnchoredSegment' }
     ContentHash:
       type: string
       description: "Content address hash. Format: sha256:<hex64>. Same content → same value."
@@ -4483,6 +4893,565 @@ paths:
         '415': { description: Content-Type must be application/json }
         '422': { description: Invalid repository or snapshot identity }
         '503': { description: Archive service unavailable }
+
+  /repos/{repoID}/anchored-sessions:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listAnchoredSessions
+      summary: List the anchored session reports the caller may read
+      description: >-
+        Member required. Returns the reports the signed-in account uploaded, and of other members' sessions
+        those with a part open to the team, listed with that part only (`shared` is true). A part opens when
+        what it explains is pushed: a segment when one of its commits, or a copy of it, is on the remote; the
+        uncommitted part up to the turns that had begun when a branch it passed through was seen pushed; a
+        spawned session when the point of its parent that spawned it is open. What was opened stays open.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: Reports, without their bodies
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredSessionSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        description: The coding agent's own session identifier.
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    get:
+      operationId: getAnchoredSession
+      summary: Read an anchored session report
+      description: >-
+        Member required. The uploader reads all of it. Another member reads what is open to the team: a
+        segment that is not open keeps its place with `hidden` set and says nothing else, the uncommitted
+        part is cut to its open beginning (`partial` when it goes on), and the machine label, worktree names,
+        agent calls, turn marks, commit author emails and the content document's hash are left out. A
+        session nothing is open of is reported as not found.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: The stored report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository or session identity }
+        '503': { description: Anchored session service unavailable }
+    put:
+      operationId: putAnchoredSession
+      summary: Store the report a CLI computed for one coding-agent session
+      description: Member required, rechecked inside the repository transaction. The report replaces the session's earlier report as a whole. The uploader is the signed-in account, never a body field, and a session belongs to the account that first reported it. Uploading the same content again changes nothing. The report does not advance the repository revision.
+      tags: [anchored-sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnchoredSessionBody' }
+      responses:
+        '200':
+          description: Report stored, or already stored with the same content
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSessionReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: The identifier is already reported by another account, or storage is unavailable }
+        '413': { description: Report exceeds the 4 MiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: Report is not well formed }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/anchored-commits/{sha}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: sha
+        in: path
+        required: true
+        description: Full commit number.
+        schema: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    get:
+      operationId: listAnchoredCommitSegments
+      summary: List the segments that end at a commit
+      description: Member required. Returns the segments of the caller's own sessions, and of other members' sessions those that are open to the team.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: Segments ending at the commit
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredCommitSegment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity or commit number }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/branch-ids:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    put:
+      operationId: registerBranchIDs
+      summary: Register the IDs a CLI keeps for branches that are on the remote
+      description: Member required, rechecked inside the repository transaction. One rule decides every change. A name alive on the remote has exactly one lifetime, and registering under that name joins it. With no lifetime alive under the name, the registering side's ID opens one, or continues the closed lifetime that holds the ID. A report is a member's claim, not proof. It never closes a lifetime, never moves a ref and does not advance the repository revision.
+      tags: [branch-ledger]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [branches]
+              properties:
+                branches:
+                  type: array
+                  maxItems: 2000
+                  items: { $ref: '#/components/schemas/BranchRegistration' }
+      responses:
+        '200':
+          description: The lifetime each name has, and what the report did
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branches]
+                properties:
+                  branches:
+                    type: array
+                    items: { $ref: '#/components/schemas/BranchRegistrationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: Report exceeds the 1 MiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: A branch name or ID is not well formed, or there are too many }
+        '503': { description: Branch ledger service unavailable }
+
+  /repos/{repoID}/branch-lifetimes:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: name
+        in: query
+        required: false
+        description: List the lifetimes of this branch name only.
+        schema: { type: string }
+    get:
+      operationId: listBranchLifetimes
+      summary: List the lifetimes of the repository's branch names
+      description: Member required. A lifetime is the time a branch name was on the remote, with the IDs joined to it. A closed lifetime stays in the list. Oldest first.
+      tags: [branch-ledger]
+      responses:
+        '200':
+          description: Branch lifetimes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BranchLifetime' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity or branch name }
+        '503': { description: Branch ledger service unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    get:
+      operationId: listAnchoredSessionCalls
+      summary: List the recorded agent calls that name one of the caller's sessions
+      description: Member required. A call sits in the report of the session that made it, so the calls a session received are gathered from the caller's other reports of the same tool. Oldest first; a call without a time last. Nothing is inferred about a party a call does not name.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: Calls the session sent or received
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredAgentCall' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity, tool or session identifier }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/events:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+      - name: offset
+        in: query
+        required: true
+        description: The event to start at, counted in the session's conversation.
+        schema: { type: integer, minimum: 0 }
+      - name: limit
+        in: query
+        required: false
+        schema: { type: integer, minimum: 1, maximum: 20, default: 20 }
+      - name: view
+        in: query
+        required: false
+        description: '"raw" answers the one event at offset in full, for a body a page deferred.'
+        schema: { type: string, enum: [all, raw], default: all }
+    get:
+      operationId: readAnchoredSessionEvents
+      summary: Read a session's conversation, as far as the caller may
+      description: Member required. The conversation is read by the session, never by the hash of the document that holds it. The uploader reads all of it; another member reads only the events that are open to the team. A page never crosses into what the caller may not read, and an offset there is not found.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: A page of events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredEventPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity, session identifier or event range }
+        '503': { description: The document is not ready to be read by range, or the service is unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/event-fragments:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+      - name: index
+        in: query
+        required: true
+        schema: { type: integer, minimum: 0 }
+      - name: offset
+        in: query
+        required: false
+        schema: { type: integer, minimum: 0, default: 0 }
+      - name: budget
+        in: query
+        required: false
+        schema: { type: integer, minimum: 1, default: 65536 }
+    get:
+      operationId: readAnchoredSessionEventFragment
+      summary: Read a piece of one large event of a session's conversation
+      description: Member required. The same rule as the pages decides whether the caller may read the event.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: A piece of the event's JSON
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocViewFragment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity, session identifier or range }
+        '503': { description: The document is not ready to be read by range, or the service is unavailable }
+
+  /repos/{repoID}/anchored-notes:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listAnchoredNotes
+      summary: List the manual notes the caller may read
+      description: >-
+        Member required. A manual note is what a person wrote about a commit, a branch or a worktree; it is
+        kept apart from captured sessions. Returns the notes the signed-in account wrote, and other members'
+        notes about something that is open to the team: a commit the remote holds, or a lifetime of a branch
+        name in the ledger. A note about a worktree, or about a branch named without a lifetime, is its
+        author's alone. Oldest first.
+      tags: [anchored-notes]
+      responses:
+        '200':
+          description: Notes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredNote' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Note service unavailable }
+    post:
+      operationId: createAnchoredNote
+      summary: Write a manual note about a commit, a branch or a worktree
+      description: Member required, rechecked inside the repository transaction. The author is the signed-in account. Known secret formats in the text are masked before it is stored, with the patterns the CLI applies to a captured session; the literal values of a repository's own secrets file never reach the server and cannot be applied. A note names a lifetime of a branch name only when the ledger holds that lifetime under that name. Writing a note does not advance the repository revision.
+      tags: [anchored-notes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target, body]
+              properties:
+                target: { $ref: '#/components/schemas/AnchoredNoteTarget' }
+                body: { type: string, description: At most 16 KiB after trimming. }
+      responses:
+        '200':
+          description: The stored note, with its text as masked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredNote' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: Request exceeds the 64 KiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: The target or the text is not well formed }
+        '503': { description: Note service unavailable }
+
+  /repos/{repoID}/anchored-notes/{noteID}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: noteID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^note_[0-9a-f]{32}$' }
+    put:
+      operationId: updateAnchoredNote
+      summary: Replace the text of the caller's own note
+      description: Member required. The author, the target and the time the note was written stay. A note another account wrote is not found.
+      tags: [anchored-notes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        '200':
+          description: The stored note
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredNote' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: Request exceeds the 64 KiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: The identifier or the text is not well formed }
+        '503': { description: Note service unavailable }
+    delete:
+      operationId: deleteAnchoredNote
+      summary: Remove the caller's own note
+      description: Member required. A note another account wrote is not found.
+      tags: [anchored-notes]
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: The identifier is not well formed }
+        '503': { description: Note service unavailable }
+
+  /repos/{repoID}/worktrees:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listReportedWorktrees
+      summary: List the caller's own worktrees
+      description: Member required. The working folders of the repository on the signed-in account's machines, as its CLIs listed them, by machine then name. Only that account reads them.
+      tags: [worktrees]
+      responses:
+        '200':
+          description: Worktrees
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReportedWorktree' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Worktree service unavailable }
+    put:
+      operationId: reportWorktrees
+      summary: Report the worktrees of one of the caller's machines
+      description: Member required, rechecked inside the repository transaction. The list replaces what the account stored for that machine. A worktree that is no longer listed keeps its name and is marked removed; other machines' lists are left as they are. Only names, branches and the machine's label are accepted, never a path. Does not advance the repository revision.
+      tags: [worktrees]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [worktrees]
+              properties:
+                machine: { type: string }
+                worktrees:
+                  type: array
+                  maxItems: 2000
+                  items: { $ref: '#/components/schemas/WorktreeReportEntry' }
+      responses:
+        '200':
+          description: The account's worktrees on every machine
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReportedWorktree' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: List exceeds the 1 MiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: A name is a path, is listed twice, or there are too many }
+        '503': { description: Worktree service unavailable }
+  /repos/{repoID}/remote-git:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: getRemoteGit
+      summary: Read the commits, branches and pull requests the server read from the Git hosting provider
+      description: Member required. Everything in the answer was read by the server from the provider of the repository origin. No client supplied any of it. The page from the top of the commit list also carries the default branch, the branches and the pull requests. With before the answer carries commits and next only. Commits are ordered by commit time with the newest first. The email of a commit author is never part of the answer.
+      tags: [remote-git]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+        - name: before
+          in: query
+          required: false
+          description: The next value of the page before. It is opaque and is sent back as it was received.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The first page with branches and pull requests, or a following page of commits
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RemoteGit'
+                  - $ref: '#/components/schemas/RemoteGitCommits'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: Invalid repository identity or limit or before }
+        '503': { description: Remote Git service unavailable }
+
+  /repos/{repoID}/anchored-sessions/restore:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    post:
+      operationId: restoreAnchoredSessions
+      summary: Rebuild sessions no CLI reported from the server's earlier captures
+      description: >-
+        Maintainer required. JSON Content-Type required; the body is not read. Each session that was captured into the
+        repository and that no CLI reported is rebuilt at the granularity of its captures: the newest capture holds the
+        conversation, an earlier capture whose whole conversation is the beginning of the newest one places a boundary,
+        and one that published commits ends a segment linked to them by `captured-at-commit`. What follows the last
+        segment is the uncommitted part, with no known place. A rebuilt report belongs to no account (`uploader` is
+        `cxt:captures`): every member reads what of it is open, and a CLI's exact report of the session replaces it. One
+        request rebuilds up to 20 sessions; repeat it while `remaining` is true. A session whose captures did not change
+        is not read again. Nothing advances the repository revision.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: What this request did
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredRestoreResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Session storage or context history unavailable }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: Invalid repository identity }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/remote-git/refresh:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    post:
+      operationId: refreshRemoteGit
+      summary: Ask the server to read the Git hosting provider again soon
+      description: Member required and rechecked inside the repository transaction. JSON Content-Type required. The body is not read. The request is recorded and the worker that reads the provider serves it. Nothing is read while the request is answered. Two reads of one repository start at least 30 seconds apart. The request does not advance the repository revision.
+      tags: [remote-git]
+      responses:
+        '202':
+          description: The request was recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requested]
+                properties:
+                  requested: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: The repository has no Git origin or storage is unavailable }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: Invalid repository identity }
+        '503': { description: Remote Git service unavailable }
 
   /repos/{repoID}/snapshots:
     parameters:
@@ -9006,6 +9975,16 @@ tags:
     description: Convenience branch retrieval.
   - name: snapshots
     description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
+  - name: anchored-sessions
+    description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. Readable only by the uploading account until a published-by-push rule exists."
+  - name: branch-ledger
+    description: One permanent record for each lifetime of a branch name on the remote, and the IDs joined to it.
+  - name: anchored-notes
+    description: What a person wrote about a commit, a branch or a worktree that no session explains. Only its author changes or removes it; who else reads it follows what it was written about.
+  - name: worktrees
+    description: The working folders of the repository on a member's machines, by name. Readable only by the member who reported them.
+  - name: remote-git
+    description: The commits, branch heads and pull requests of a repository as the server itself read them from its Git hosting provider.
   - name: docs
     description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
   - name: refs

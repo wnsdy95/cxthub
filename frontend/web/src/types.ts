@@ -778,3 +778,77 @@ export interface CollaborationInvitation {
 
 export interface MCPApplication { client_id:string; name:string; scope:string; created_at:string; expires_at:string }
 export interface AccountAuditEvent { grant_id?:string; id:string; user_id:string; client_id:string; action:string; created_at:string }
+
+// Anchored sessions: a coding-agent session cut at the commits it made, as the
+// uploader's CLI read it from the records the tools and Git left behind.
+export type AnchoredProvider = 'claude' | 'codex';
+export type AnchoredLinkRule = 'printed-number' | 'same-folder-and-time' | 'captured-at-commit';
+export type AnchoredSpawnRule = 'tool-call' | 'start-time';
+export type AnchoredPlaceRule = 'recorded-by-tool' | 'head-log' | 'current-branch' | 'folder-no-longer-a-worktree';
+/** A part of one session. `first_event` and `events` are absent when zero. */
+export interface AnchoredRange {
+  first: string; last: string; first_ordinal: number; last_ordinal: number; commands: number;
+  started_at?: string; ended_at?: string; first_event?: number; events?: number;
+}
+export interface AnchoredCommit { sha: string; rule: AnchoredLinkRule; created_at?: string; authored_at?: string; author_email?: string; subject?: string }
+/** `hidden` is set in what another member reads of a session: the segment is not open and keeps only its place. */
+export interface AnchoredSegment extends AnchoredRange { closes_turn: boolean; commits: AnchoredCommit[]; hidden?: boolean }
+export interface AnchoredPlace { worktree: string; branch?: string; removed?: boolean; rule: AnchoredPlaceRule }
+/** `partial` is set in what another member reads of a session: the part is open up to here and goes on. */
+export interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; unplaced: boolean; partial?: boolean }
+export interface AnchoredSpawn { at_record: string; at_ordinal: number; rule: AnchoredSpawnRule }
+export interface AnchoredAgentCall { tool: string; from: string; to: string[]; status?: string; at?: string; record?: string }
+/** The conversation of a session. `doc` is given to the uploader only; everyone reads the conversation through the session. */
+export interface AnchoredContent { doc?: string; identity?: string; events: number }
+export interface AnchoredSessionBody {
+  rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url' | 'captures'; machine?: string;
+  started_at?: string; ended_at?: string; records: number; commands: number; copied_records: number; copied_from?: string[]; file_copies?: number;
+  segments: AnchoredSegment[]; uncommitted?: AnchoredUncommitted; agent_calls?: AnchoredAgentCall[]; content?: AnchoredContent;
+}
+export interface AnchoredSession {
+  repo_id: string; provider: AnchoredProvider; session_id: string; uploader: string; revision: number; body_hash: string;
+  created_at: string; updated_at: string; body: AnchoredSessionBody;
+}
+export interface AnchoredSummaryCommit {
+  sha: string; segment_no: number; rule: AnchoredLinkRule; subject?: string; created_at?: string; authored_at?: string;
+  /** True when the remote holds the commit; otherwise `copies` names the remote commits that are copies of it. */
+  on_remote?: boolean; copies?: string[];
+}
+export interface AnchoredSummaryUncommitted { commands: number; started_at?: string; ended_at?: string; places: AnchoredPlace[]; unplaced: boolean }
+export interface AnchoredSummarySpawn { segment_no?: number; uncommitted?: boolean; rule: AnchoredSpawnRule }
+export interface AnchoredSessionSummary {
+  provider: AnchoredProvider; session_id: string; parent?: string; sub: boolean; revision: number; body_hash: string;
+  records: number; commands: number; segments: number; machine?: string; started_at?: string; ended_at?: string; content: boolean;
+  commits: AnchoredSummaryCommit[]; uncommitted?: AnchoredSummaryUncommitted; spawned_in?: AnchoredSummarySpawn; updated_at: string;
+  /** The account the session belongs to. `shared` is true when that is another member: the summary then holds only what is open to the team. */
+  uploader?: string; shared?: boolean;
+}
+export interface AnchoredCommitSegment { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; segment: AnchoredSegment }
+export interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }
+export interface BranchLifetime {
+  repo_id: string; ledger_id: string; name: string; opened_at: string; opened_by: BranchEvidence; closed_at?: string; closed_by?: BranchEvidence;
+  linked: { id: string; linked_at: string; by: BranchEvidence }[];
+  reopenings?: { closed_at: string; closed_by: BranchEvidence; reopened_at: string; reopened_by: BranchEvidence; name?: string }[];
+}
+/** The uploader of a session the server rebuilt from its earlier captures: no account. */
+export const ANCHORED_RESTORED_UPLOADER = 'cxt:captures';
+/** What one restoration request did; `remaining` asks for another. */
+export interface AnchoredRestoreResult { restored: number; unchanged: number; reported: number; unreadable: number; remaining: boolean }
+/** What a manual note is attached to. Exactly the fields of its kind are present. */
+export type AnchoredNoteTarget =
+  | { kind: 'commit'; commit: string }
+  | { kind: 'branch'; branch: string; ledger_id?: string }
+  | { kind: 'worktree'; worktree: string; machine?: string };
+/** What a person wrote about a commit, a branch or a worktree. Kept apart from captured sessions. */
+export interface AnchoredNote { repo_id: string; id: string; target: AnchoredNoteTarget; author: string; body: string; created_at: string; updated_at: string }
+/** A working folder of the repository on one of the caller's machines, by name. */
+export interface ReportedWorktree { machine?: string; name: string; branch?: string; removed: boolean; first_seen_at: string; last_seen_at: string }
+/** Commits, branches and pull requests as the server read them from the hosting provider. */
+export interface RemoteCommit { sha: string; parents: string[]; author_name?: string; authored_at: string; committed_at: string; subject: string }
+export interface RemoteBranch { name: string; sha: string }
+export interface RemotePull {
+  number: number; title: string; state: 'open' | 'closed' | 'merged'; head_ref: string; head_sha: string; base_ref: string;
+  merge_sha?: string; fork?: boolean; commits: string[]; truncated?: boolean; updated_at: string;
+}
+/** One page. `branches`, `pulls`, `default_branch` and `synced_at` come with the first page only. */
+export interface RemoteGitView { default_branch?: string; synced_at?: string; branches?: RemoteBranch[]; pulls?: RemotePull[]; commits: RemoteCommit[]; next?: string }

@@ -163,6 +163,13 @@ func classifyFSImport(path string) (string, error) {
 			return "record", nil
 		case "read-index-v1", "read-index-v2":
 			return "derived", nil
+		case "remote-git.json":
+			// What the server read from the Git hosting provider; it is
+			// read again after the import.
+			if len(p) != 3 {
+				break
+			}
+			return "derived", nil
 		case "objects":
 			if len(p) == 5 {
 				switch p[3] {

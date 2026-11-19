@@ -103,6 +103,21 @@ type Container struct {
 	Repack func() (converted int, saved int64, err error)
 	// Identity is an author identifier used for snapshot author attribution (env CXT_NAME/EMAIL/TEAM).
 	Identity domain.TeamIdentity
+	// Segments reads agent session records and Git for the read-only segment report.
+	Segments inbound.SegmentReporter
+	// SegmentUpload uploads that report to the repository's server, one report per session.
+	SegmentUpload inbound.SegmentUploader
+	// SegmentCollector is the same upload when a hook woke it: sessions since
+	// automatic reading began, and only what changed since its last run.
+	SegmentCollector inbound.SegmentCollector
+	// WakeSegmentCollector starts a detached collector; process lifecycle
+	// wiring, absent in embedded and test drivers.
+	WakeSegmentCollector func(string)
+	// WithSegmentCollectorLock lets one collector run per repository and
+	// keeps one request for another run.
+	WithSegmentCollectorLock func(ctx context.Context, cwd string, use func(another func() bool) error) (bool, error)
+	// SegmentCollectorState reads what the collector last did.
+	SegmentCollectorState func(ctx context.Context, cwd string) (domain.CollectorState, error)
 }
 
 // Run is the CLI entry point. Parses args(=os.Args) to execute the corresponding subcommand.
@@ -155,6 +170,17 @@ func Run(c *Container, args []string) error {
 	}
 	if cmd == "doctor" || (cmd == "branch" && parsed.first() == "operations") {
 		return RunDiagnostics(ctx, inspection, cwd, args[1:], os.Stdout)
+	}
+	if cmd == "segments" {
+		var reporter inbound.SegmentReporter
+		var uploader inbound.SegmentUploader
+		if c != nil {
+			reporter, uploader = c.Segments, c.SegmentUpload
+		}
+		if parsed.first() == "push" {
+			return RunSegmentsPush(ctx, uploader, cwd, parsed.has("--json"), os.Stdout)
+		}
+		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
 	if cmd == "branch" && parsed.first() == "recover" {
 		if err := confirmOrphanRecovery(ctx, c, cwd, parsed.last()); err != nil {
@@ -421,6 +447,22 @@ func Run(c *Container, args []string) error {
 				}
 			}
 			fmt.Printf("capture.debounce = %s\n", remotecfg.CaptureDebounce(cwd))
+			return nil
+		case "segments.auto":
+			// Whether hooks wake the session report collector (on|off). "default" returns to on.
+			if hasVal {
+				if val == "default" {
+					val = ""
+				}
+				if err := remotecfg.SetSegmentsAuto(ctx, cwd, val); err != nil {
+					return err
+				}
+			}
+			if remotecfg.SegmentsAuto(cwd) {
+				fmt.Println("segments.auto = on (default)")
+			} else {
+				fmt.Println("segments.auto = off")
+			}
 			return nil
 		case "secrets.scrub":
 			// Pattern scrub tier (off|standard|strict). Use "default" to return to standard.
@@ -1443,6 +1485,8 @@ usage: cxt <command> [flags]
   sync pause-history|resume-history
                             pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
+  segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
+  segments push [--json]    upload that report to the server, one report per session, readable only by you
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization
   branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch

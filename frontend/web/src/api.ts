@@ -11,7 +11,7 @@ import { normalizeActivityResponse } from './activity';
 import { validateContextSemantics } from './graphEvidence';
 import type { DocumentIdentity, DocFragmentPage, DocViewEvent, DocViewMode } from './types';
 import { DOCUMENT_DETAIL_BYTES, DOCUMENT_FRAGMENT_BYTES, DOCUMENT_FRAGMENT_RESPONSE_BYTES, DOCUMENT_PAGE_BYTES, readDocumentResponse, scheduleDocumentRead } from './documentReads';
-import { DOCUMENT_VISIBLE_MESSAGES, validateDocEventDetail, validateDocFragment, validateDocViewPage } from './documentPaging';
+import { DOCUMENT_VISIBLE_MESSAGES, validateAnchoredEventPage, validateDocEventDetail, validateDocFragment, validateDocViewPage, type AnchoredEventPage } from './documentPaging';
 import { validatePendingState } from './pendingState';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
@@ -102,6 +102,10 @@ export interface DocViewEventPage extends Omit<DocEventPage, 'events'> {
   events: DocViewEvent[];
 }
 
+function anchoredSessionPath(repoId: string, provider: string, sessionId: string) {
+  return `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`;
+}
+
 export const api = {
   setSessionArchived: (repo: string, snapshot: string, archived: boolean) => call<{archived: boolean}>('POST', `/repos/${encodeURIComponent(repo)}/snapshots/${encodeURIComponent(snapshot)}/archive`, {archived}),
   githubOverview: () => call<import('./github').GitHubOverview>('GET', '/github/connections'),
@@ -161,6 +165,53 @@ export const api = {
     const params = new URLSearchParams({kind, state, cursor, limit: '30'});
     return call<import('./types').GitAssociationStatusPage>('GET', `/repos/${encodeURIComponent(repo)}/git/associations?${params}`, undefined, undefined, signal);
   },
+  anchoredSessions: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSessionSummary[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions`, undefined, undefined, signal),
+  anchoredSession: (repoId: string, provider: string, sessionId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSession>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`, undefined, undefined, signal),
+  anchoredCommit: (repoId: string, sha: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
+  branchLifetimes: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').BranchLifetime[]>('GET', `/repos/${encodeURIComponent(repoId)}/branch-lifetimes`, undefined, undefined, signal),
+  /** A page of a session's conversation, read by the session: the server holds it to what the caller may read. */
+  anchoredEvents: (repoId: string, provider: string, sessionId: string, offset: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const params = new URLSearchParams({ offset: String(offset), limit: String(DOCUMENT_VISIBLE_MESSAGES) });
+      const page = await call<AnchoredEventPage>('GET', `${anchoredSessionPath(repoId, provider, sessionId)}/events?${params}`, undefined, undefined, signal, DOCUMENT_PAGE_BYTES);
+      return validateAnchoredEventPage(page, offset, DOCUMENT_VISIBLE_MESSAGES);
+    }, signal),
+  /** One event of a session's conversation in full, for a body its page deferred. */
+  anchoredEvent: (repoId: string, provider: string, sessionId: string, index: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const page = await call<AnchoredEventPage>('GET', `${anchoredSessionPath(repoId, provider, sessionId)}/events?view=raw&offset=${index}&limit=1`, undefined, undefined, signal, DOCUMENT_DETAIL_BYTES);
+      const checked = validateAnchoredEventPage(page, index, 1);
+      if (checked.events.length !== 1) throw new Error('Invalid session conversation event');
+      return checked.events[0];
+    }, signal),
+  anchoredEventFragment: (repoId: string, provider: string, sessionId: string, index: number, offset: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const params = new URLSearchParams({ index: String(index), offset: String(offset), budget: String(DOCUMENT_FRAGMENT_BYTES) });
+      const page = await call<DocFragmentPage>('GET', `${anchoredSessionPath(repoId, provider, sessionId)}/event-fragments?${params}`, undefined, undefined, signal, DOCUMENT_FRAGMENT_RESPONSE_BYTES);
+      return validateDocFragment(page, index, offset);
+    }, signal),
+  anchoredSessionCalls: (repoId: string, provider: string, sessionId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredAgentCall[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/calls`, undefined, undefined, signal),
+  anchoredNotes: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredNote[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-notes`, undefined, undefined, signal),
+  createAnchoredNote: (repoId: string, target: import('./types').AnchoredNoteTarget, body: string) =>
+    call<import('./types').AnchoredNote>('POST', `/repos/${encodeURIComponent(repoId)}/anchored-notes`, { target, body }),
+  updateAnchoredNote: (repoId: string, noteId: string, body: string) =>
+    call<import('./types').AnchoredNote>('PUT', `/repos/${encodeURIComponent(repoId)}/anchored-notes/${encodeURIComponent(noteId)}`, { body }),
+  deleteAnchoredNote: (repoId: string, noteId: string) =>
+    call<void>('DELETE', `/repos/${encodeURIComponent(repoId)}/anchored-notes/${encodeURIComponent(noteId)}`),
+  reportedWorktrees: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').ReportedWorktree[]>('GET', `/repos/${encodeURIComponent(repoId)}/worktrees`, undefined, undefined, signal),
+  remoteGit: (repoId: string, before: string, signal?: AbortSignal) =>
+    call<import('./types').RemoteGitView>('GET', `/repos/${encodeURIComponent(repoId)}/remote-git${before ? `?before=${encodeURIComponent(before)}` : ''}`, undefined, undefined, signal),
+  refreshRemoteGit: (repoId: string) =>
+    call<{ requested: boolean }>('POST', `/repos/${encodeURIComponent(repoId)}/remote-git/refresh`, {}),
+  restoreAnchoredSessions: (repoId: string) =>
+    call<import('./types').AnchoredRestoreResult>('POST', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/restore`, {}),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
   retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.

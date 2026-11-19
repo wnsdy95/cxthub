@@ -4,7 +4,7 @@ import { graphViewRows } from './graphState';
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
 import { useEffect, useMemo, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, skipToken, keepPreviousData } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import { isRetryableGraphRefreshError } from './graphRefresh';
 import { capacityReadRetry, documentReadRetry, pendingStateReadRetry } from './readRetry';
@@ -15,6 +15,7 @@ import { pendingStateRows } from './pendingState';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseSocialIdToken, firebaseVerification, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 import { useDocumentReadScope } from './documentReadScope';
+import { useDocumentEventReader } from './documentEventReader';
 import { documentBodyKey } from './documentPageCache';
 
 // ── Authentication/Query ─────────────────────────────────────────
@@ -314,9 +315,10 @@ export function useMemory(repoId: string | null, memoryHash: string | null, enab
 }
 export function useDocEvent(repoId: string, hash: string, index: number) {
   const owner = useDocumentReadScope();
+  const reader = useDocumentEventReader();
   return useQuery({
     queryKey: owner ? documentBodyKey(owner, 'event', repoId, hash, index) : ['doc-event-detail', repoId, hash, index],
-    queryFn: ({ signal }) => api.getDocEvent(repoId, hash, index, signal),
+    queryFn: ({ signal }) => (reader ? reader.event(index, signal) : api.getDocEvent(repoId, hash, index, signal)),
     enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
     gcTime: owner ? Infinity : 0,
@@ -331,9 +333,10 @@ export function useDocEvent(repoId: string, hash: string, index: number) {
 
 export function useDocEventFragment(repoId: string, hash: string, index: number, offset: number) {
   const owner = useDocumentReadScope();
+  const reader = useDocumentEventReader();
   return useQuery({
     queryKey: owner ? documentBodyKey(owner, 'fragment', repoId, hash, index, offset) : ['doc-event-fragment', repoId, hash, index, offset],
-    queryFn: ({ signal }) => api.getDocEventFragment(repoId, hash, index, offset, signal),
+    queryFn: ({ signal }) => (reader ? reader.fragment(index, offset, signal) : api.getDocEventFragment(repoId, hash, index, offset, signal)),
     enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
     gcTime: owner ? Infinity : 0,
@@ -551,6 +554,122 @@ export function useCreateInvite() {
     onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.repositoryId] }),
   });
 }
+// Anchored sessions — the caller's own reports. A report does not move the
+// repository revision, so the lists are read again on a timer and on request.
+export function useAnchoredSessions(repoId: string | null) {
+  return useQuery({
+    queryKey: ['anchored-sessions', repoId],
+    queryFn: ({ signal }) => api.anchoredSessions(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
+export function useBranchLifetimes(repoId: string | null) {
+  return useQuery({
+    queryKey: ['branch-lifetimes', repoId],
+    queryFn: ({ signal }) => api.branchLifetimes(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
+/** One report in full. `revision` is the report's revision in the list, so a report that was replaced is read again. */
+export function useAnchoredSession(repoId: string | null, provider: string | null, sessionId: string | null, revision = 0) {
+  return useQuery({
+    queryKey: ['anchored-session', repoId, provider, sessionId, revision],
+    queryFn: ({ signal }) => api.anchoredSession(repoId as string, provider as string, sessionId as string, signal),
+    enabled: Boolean(repoId && provider && sessionId),
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+/**
+ * Reads a session's conversation from one event onward, a page at a time. The
+ * document is not named by any snapshot, so it is read with the plain pager.
+ */
+/**
+ * A session's conversation from `start`, read by the session. What another
+ * member reads can have gaps where parts are not open: a page ends at a gap,
+ * and reading goes on at the next open part, among `starts`.
+ */
+export function useAnchoredEvents(repoId: string, provider: string, sessionId: string, revision: number, start: number, starts: number[], enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ['anchored-events', repoId, provider, sessionId, revision, start],
+    queryFn: ({ pageParam, signal }) => api.anchoredEvents(repoId, provider, sessionId, pageParam, signal),
+    initialPageParam: start,
+    getNextPageParam: page => (page.next !== -1 ? page.next : starts.find(next => next >= page.offset + Math.max(page.events.length, 1))),
+    enabled,
+    ...documentReadRetry,
+    staleTime: Infinity,
+  });
+}
+/** The segments that end at a commit. `revisions` names the reports linked to it as the list shows them, so a replaced report is read again. */
+export function useAnchoredCommit(repoId: string | null, sha: string | null, revisions = '') {
+  return useQuery({
+    queryKey: ['anchored-commit', repoId, sha, revisions],
+    queryFn: ({ signal }) => api.anchoredCommit(repoId as string, sha as string, signal),
+    enabled: Boolean(repoId && sha),
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+/** The recorded agent calls that name a session as sender or receiver. */
+export function useAnchoredSessionCalls(repoId: string | null, provider: string | null, sessionId: string | null, revisions = '') {
+  return useQuery({
+    queryKey: ['anchored-session-calls', repoId, provider, sessionId, revisions],
+    queryFn: ({ signal }) => api.anchoredSessionCalls(repoId as string, provider as string, sessionId as string, signal),
+    enabled: Boolean(repoId && provider && sessionId),
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+export function useReportedWorktrees(repoId: string | null) {
+  return useQuery({
+    queryKey: ['reported-worktrees', repoId],
+    queryFn: ({ signal }) => api.reportedWorktrees(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
+// Manual notes — the caller's own. A write stores the note the server
+// answered with, because the server masks the text before it keeps it.
+export function useAnchoredNotes(repoId: string | null) {
+  return useQuery({
+    queryKey: ['anchored-notes', repoId],
+    queryFn: ({ signal }) => api.anchoredNotes(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+  });
+}
+export function useSaveAnchoredNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: { repoId: string; noteId?: string; target: import('./types').AnchoredNoteTarget; body: string }) =>
+      value.noteId ? api.updateAnchoredNote(value.repoId, value.noteId, value.body) : api.createAnchoredNote(value.repoId, value.target, value.body),
+    onSuccess: (_note, value) => qc.invalidateQueries({ queryKey: ['anchored-notes', value.repoId] }),
+  });
+}
+export function useDeleteAnchoredNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: { repoId: string; noteId: string }) => api.deleteAnchoredNote(value.repoId, value.noteId),
+    onSuccess: (_result, value) => qc.invalidateQueries({ queryKey: ['anchored-notes', value.repoId] }),
+  });
+}
+/** Commits, branches and pull requests as the server read them from the hosting provider, newest commits first. */
+export function useRemoteGit(repoId: string | null) {
+  return useInfiniteQuery({
+    queryKey: ['remote-git', repoId],
+    queryFn: ({ pageParam, signal }) => api.remoteGit(repoId as string, pageParam, signal),
+    initialPageParam: '',
+    getNextPageParam: page => page.next || undefined,
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
 // Invite list/redemption — only maintainers can view (403 is disabled).
 export function useInvites(repositoryId: string | null, enabled: boolean) {
   return useQuery({
@@ -688,6 +807,45 @@ export function useLogout() {
       qc.setQueryData(['me'], null);
       qc.removeQueries({ predicate: (query) => query.queryKey[0] !== 'me' });
       qc.getMutationCache().clear();
+    },
+  });
+}
+
+/** The names of a repository's members by account, for what another member wrote or uploaded. */
+export function useAccountNames(repositoryId: string | null, enabled: boolean) {
+  const members = useQuery({
+    queryKey: ['members', repositoryId],
+    queryFn: () => api.listMembers(repositoryId as string),
+    enabled: Boolean(repositoryId) && enabled,
+    retry: false,
+  });
+  return useMemo(() => new Map((members.data ?? []).map(member => [member.user_id, member.user?.username ?? member.user_id])), [members.data]);
+}
+
+/**
+ * Rebuilds the sessions no CLI reported from the server's earlier captures,
+ * asking again while the server says some remain and the last request made
+ * progress, at most `rounds` times. A conversation the server is still
+ * preparing makes no progress; asking later reads it.
+ */
+export function useRestoreAnchoredSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ repoId, rounds = 25 }: { repoId: string; rounds?: number }) => {
+      const total: import('./types').AnchoredRestoreResult = { restored: 0, unchanged: 0, reported: 0, unreadable: 0, remaining: true };
+      for (let round = 0; round < rounds && total.remaining; round++) {
+        const result = await api.restoreAnchoredSessions(repoId);
+        total.restored += result.restored;
+        total.unreadable = result.unreadable;
+        total.unchanged = result.unchanged;
+        total.reported = result.reported;
+        total.remaining = result.remaining;
+        if (result.restored === 0) break;
+      }
+      return total;
+    },
+    onSuccess: (_result, value) => {
+      qc.invalidateQueries({ queryKey: ['anchored-sessions', value.repoId] });
     },
   });
 }

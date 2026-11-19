@@ -127,6 +127,7 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 		systemMaintenanceOwners := 0
 		gitChangeOwners := 0
 		gitIntegrationOwners := 0
+		remoteGitOwners := 0
 		memoryPreparationOwners := 0
 		prPromotionOwners := 0
 		invitationEmailOwners := 0
@@ -173,6 +174,9 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			if owner.Name == "app" && selector.Sel.Name == "NewGitIntegrationWorkers" {
 				gitIntegrationOwners++
 			}
+			if owner.Name == "app" && selector.Sel.Name == "NewRemoteGitSync" {
+				remoteGitOwners++
+			}
 			if owner.Name == "app" && selector.Sel.Name == "NewMemoryPreparationWorkers" {
 				memoryPreparationOwners++
 			}
@@ -202,7 +206,7 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 		})
 		for _, method := range []string{
 			"githubWorker.Run", "gitChangeWorker.Run", "gitIntegrationWorkers.Run", "gitIntegrationWorkers.RunReconciler",
-			"documentWorkers.Finalization.Run", "documentWorkers.Range.Run", "documentWorkers.FindFields.Run",
+			"remoteGitSync.Run", "documentWorkers.Finalization.Run", "documentWorkers.Range.Run", "documentWorkers.FindFields.Run",
 			"documentWorkers.Display.Run", "worker.Run", "projectionWorkers.Pending.Run",
 			"projectionWorkers.Graph.Run", "memoryPreparations.Run",
 			"projectionWorkers.Qualification.Run", "prPromotionWorker.Run", "notificationWorker.Run",
@@ -212,7 +216,7 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 				test.Error("API worker must be registered exactly once", method, registered[method])
 			}
 		}
-		if len(registered) != 18 {
+		if len(registered) != 19 {
 			test.Error("API registered an unexpected additional worker", registered)
 		}
 		for position, method := range registrationOrder {
@@ -223,8 +227,8 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 				test.Error("API invitation email owner moved from its original lifecycle slot", registrationOrder)
 			}
 		}
-		if !maintenanceOwner || !deferredClose || documentOwners != 1 || projectionOwners != 1 || notificationOwners != 1 || systemMaintenanceOwners != 1 || gitChangeOwners != 1 || gitIntegrationOwners != 1 || memoryPreparationOwners != 1 || prPromotionOwners != 1 || invitationEmailOwners != 1 || githubOwners != 1 {
-			test.Error("API does not own concrete worker construction and deferred worker drain", maintenanceOwner, documentOwners, projectionOwners, notificationOwners, systemMaintenanceOwners, gitChangeOwners, gitIntegrationOwners, memoryPreparationOwners, prPromotionOwners, invitationEmailOwners, githubOwners, deferredClose)
+		if !maintenanceOwner || !deferredClose || documentOwners != 1 || projectionOwners != 1 || notificationOwners != 1 || systemMaintenanceOwners != 1 || gitChangeOwners != 1 || gitIntegrationOwners != 1 || remoteGitOwners != 1 || memoryPreparationOwners != 1 || prPromotionOwners != 1 || invitationEmailOwners != 1 || githubOwners != 1 {
+			test.Error("API does not own concrete worker construction and deferred worker drain", maintenanceOwner, documentOwners, projectionOwners, notificationOwners, systemMaintenanceOwners, gitChangeOwners, gitIntegrationOwners, remoteGitOwners, memoryPreparationOwners, prPromotionOwners, invitationEmailOwners, githubOwners, deferredClose)
 		}
 		return
 	}

@@ -599,7 +599,17 @@ func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDeliver
 					}
 					identity := &domain.GitProviderObservation{InstallationID: c.Installation.ID, RepositoryID: b.ExternalID}
 					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-push", Ref: p.Ref, Before: zero(p.Before), After: zero(p.After), Forced: p.Forced, Delivery: j.ID, Provider: identity}.WithID()
-					return st.RecordGitRefObservation(tx, observation, time.Now().UTC())
+					observed := time.Now().UTC()
+					if e := st.RecordGitRefObservation(tx, observation, observed); e != nil {
+						return e
+					}
+					// The same push shows the branch name alive or gone: the
+					// ledger learns it with the observation, or not at all.
+					if e := recordBranchLedgerObservation(tx, g.metadata, observation, observed); e != nil {
+						return e
+					}
+					// What was pushed is read from the provider soon.
+					return requestRemoteGitSync(tx, g.metadata, repo.ID, observed)
 				})
 				if err != nil {
 					return err

@@ -277,6 +277,10 @@ func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
 	if err != nil {
 		test.Fatal(err)
 	}
+	remoteGitSync, err := app.NewRemoteGitSync(app.RemoteGitSyncConfig{Metadata: storage, Blobs: storage, Repositories: storage, Reader: reader})
+	if err != nil {
+		test.Fatal(err)
+	}
 	memoryPreparations, err := app.NewMemoryPreparationWorkers(app.MemoryPreparationWorkerConfig{
 		Profile: app.MemoryPreparationCompatibility, Resources: service.MemoryPreparationResources(),
 	})
@@ -296,7 +300,7 @@ func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
 		run  func(context.Context)
 	}
 	var workers []workerBinding
-	expectedWorkers := 17
+	expectedWorkers := 18
 	if withGitHub {
 		github := app.NewGitHubConnections(identity, service, storage, nil)
 		githubWorker, err := app.NewGitHubWorker(github.GitHubWorkerConfig(app.GitHubWorkerCompatibility))
@@ -310,6 +314,7 @@ func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
 		{name: "git changes", run: gitChangeWorker.Run},
 		{name: "git scans", run: gitIntegrationWorkers.Run},
 		{name: "git reconciliation", run: gitIntegrationWorkers.RunReconciler},
+		{name: "remote Git", run: remoteGitSync.Run},
 		{name: "document finalization", run: documentWorkers.Finalization.Run},
 		{name: "document range", run: documentWorkers.Range.Run},
 		{name: "document find fields", run: documentWorkers.FindFields.Run},

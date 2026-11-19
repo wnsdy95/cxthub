@@ -137,16 +137,26 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	token, bucket := "", ""
+	token, bucket, path, err := g.authorize(ctx, path)
+	if err != nil {
+		return err
+	}
+	return g.fetch(ctx, token, bucket, path, out)
+}
+
+// authorize returns the credential for a read of path, the rate-limit bucket
+// it counts against, and the path to ask the provider for.
+func (g *GitHub) authorize(ctx context.Context, path string) (token, bucket, resolved string, err error) {
 	if g.credential != nil {
-		var err error
-		token, bucket, path, err = g.credential(ctx, path)
-		if err != nil {
-			return err
-		}
-	} else if g.token != nil {
+		return g.credential(ctx, path)
+	}
+	if g.token != nil {
 		token = g.token()
 	}
+	return token, "", path, nil
+}
+
+func (g *GitHub) fetch(ctx context.Context, token, bucket, path string, out any) error {
 	if g.rateLimited(bucket, time.Now()) {
 		return outbound.ErrGitProviderRateLimited
 	}

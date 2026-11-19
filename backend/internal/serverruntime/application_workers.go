@@ -54,6 +54,16 @@ func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) 
 	if err != nil {
 		return nil, fmt.Errorf("configure Git integration workers: %w", err)
 	}
+	remoteGitReader, supportsRemoteGit := config.GitReader.(app.RemoteGitProvider)
+	if !supportsRemoteGit {
+		return nil, fmt.Errorf("%w: application worker Git reader must support remote Git reads", domain.ErrValidation)
+	}
+	remoteGitSync, err := app.NewRemoteGitSync(app.RemoteGitSyncConfig{
+		Metadata: storage, Blobs: storage, Repositories: storage, Reader: remoteGitReader,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure remote Git worker: %w", err)
+	}
 	projectionWorkers, err := app.NewProjectionWorkers(app.ProjectionWorkersConfig{
 		Profile: projectionworker.Complete, Metadata: storage, Blobs: storage,
 		PendingEnabled: len(config.PendingRepositories) != 0, GraphEnabled: len(config.GraphRepositories) != 0,
@@ -118,6 +128,7 @@ func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) 
 		{name: "git-change", run: gitChangeWorker.Run},
 		{name: "git-integration", run: gitIntegrationWorkers.Run},
 		{name: "git-reconciler", run: gitIntegrationWorkers.RunReconciler},
+		{name: "remote-git", run: remoteGitSync.Run},
 		{name: "pending-projection", run: projectionWorkers.Pending.Run},
 		{name: "graph-projection", run: projectionWorkers.Graph.Run},
 		{name: "memory-preparation", run: memoryPreparations.Run},

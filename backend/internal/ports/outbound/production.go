@@ -36,4 +36,11 @@ type ProductionStore interface {
 	GitHeadScanStore
 	GitTreeStore
 	DocReadStore
+	AnchoredSessionStore
+	BranchLedgerStore
+	AnchoredNoteStore
+	ReportedWorktreeStore
+	RemoteGitStore
+	RemotePushStore
+	AnchoredPublicationStore
 }

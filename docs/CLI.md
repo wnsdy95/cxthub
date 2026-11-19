@@ -1148,6 +1148,7 @@ Reading a key prints its effective local value. Supported keys are:
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
 | `secrets.redact` | replacement text, `default` | built-in redaction token | Exact-secret replacement text |
 | `secrets.minlen` | `0` through `64` | `4` | Minimum exact-secret length; `0` restores the default |
+| `segments.auto` | `on`, `off`, `default` | `on` | Whether hooks wake the session report collector. `off` leaves uploads to `cxt segments push`. |
 
 Examples:
 
@@ -1214,6 +1215,294 @@ cxt repack
 Repackages legacy local documents into chunked content-addressed storage and
 reports reclaimed duplicate-prefix bytes. Snapshot identity remains unchanged.
 Back up important alpha data before storage maintenance.
+
+## Session records
+
+### `cxt segments`
+
+```text
+cxt segments [--json]
+```
+
+Reads the session records Claude Code and Codex keep on this computer, and
+what Git recorded about the current repository, and shows each session cut at
+the commits it made. It is read-only: it writes nothing to the repository, Git
+configuration, `.cxt`, the server, or a tool's own records, and it needs no
+`cxt init`, remote or login. It does not depend on cxt or a hook having run
+when the work happened, so the same records give the same report every time.
+It does not change capture, synchronization or any hook.
+
+What is read:
+
+- **Git:** every worktree of the repository, the HEAD log of each one, and
+  every commit object Git still has.
+- **Claude Code:** the session files under `~/.claude/projects`, including the
+  sub-session files in each session's `subagents` folder.
+- **Codex:** the newest `state_<n>.sqlite` and `thread_history_<n>.sqlite` in
+  `~/.codex`, through the `sqlite3` program, opened read-only. Items still in a
+  write-ahead log are read. A database with nothing in its log is opened as
+  immutable, so that SQLite creates no lock file beside it. Older Codex rollout
+  files are not read.
+
+A session belongs to the repository when a working folder its records name is
+inside one of the repository's worktrees. The one fallback is a Codex thread
+whose recorded remote address is the repository's `origin`, for a thread whose
+folder is no longer a worktree.
+
+How the report is computed:
+
+- **Session to commit.** A command's output printed the commit number, and the
+  commit was created while that command ran, from two seconds before it started
+  to three seconds after it ended (`printed-number`). The one fallback applies
+  only to a commit no session printed: a worktree's HEAD log records that the
+  commit was made there, and a command of the session was running in that
+  worktree at that time (`same-folder-and-time`). Each link names its rule.
+- **Segments.** A session is cut at every command that made a commit. The last
+  commit of a turn keeps the rest of that turn; earlier commits of the same
+  turn close right after their command. A command that made several commits
+  ends one segment linked to all of them. Two sessions linked to one commit
+  each keep their own segment. A range is given by the tool's own first and
+  last record identifiers. A turn is the unit the tool recorded: Claude Code's
+  prompt identifier, or Codex's turn identifier. Without a recorded turn, a
+  segment closes at its commit.
+- **Commits made in a worktree.** The HEAD log lines counted are a commit of
+  any kind, a cherry-pick, a revert, and a merge that made a merge commit. A
+  fast-forward creates nothing. A rebase is not counted: the commits it writes
+  are copies of commits already made.
+- **Uncommitted part.** Records after a session's last commit, or all of a
+  session that made none, are not cut further. They are placed on every
+  worktree and branch they passed through: the branch the tool recorded;
+  otherwise the branch in that worktree's HEAD log at that time; otherwise, for
+  a worktree with no recorded move, the branch it is on now. Work done without
+  a branch is placed on its worktree. A folder outside every worktree is never
+  turned into a guess, and a part with no readable place is reported as such.
+- **Copied conversation.** A forked or resumed session repeats earlier records
+  under the same identifiers. Each record is counted once, for the session that
+  started first, and a commit in the copied part is linked only there. Because
+  a copy keeps its original time, a session starts at its earliest record that
+  no other session holds. A sub-session file copied into another session's
+  folder is read once, and its parent is the session its records name, not the
+  folder the file sits in.
+- **Session relations.** Which session spawned which, and at which record of
+  the parent: the record that made the recorded call, or, when the tool
+  recorded none, the parent's last record when the spawned session started.
+  Agent-to-agent calls are listed as Codex recorded them. No relation is
+  inferred.
+- **Unread records.** A record that exists but cannot be read, such as an
+  unknown format, a database whose layout changed or a missing `sqlite3`, is
+  listed under unread records and never skipped silently. A last line a tool is
+  still writing is left for the next run.
+
+A commit a HEAD log records but no session is linked to is listed with no
+session, so the gap is visible. Each commit also carries a `local` state
+(`on-a-branch`, `through-its-copy`, `not-on-a-branch`, `object-not-in-git`).
+This is only what this clone shows: a copy is a commit on a local or
+remote-tracking branch with the same author time, author and subject, and
+pull-request commit lists are not read here.
+
+`--json` prints one JSON object with `version`, `repository`, `summary`,
+`unread`, `sessions`, `commits`, `spawns` and `agent_calls`. The layout
+describes this report and is not a storage or wire format; it may change.
+
+Every run reads all records again, which can take a while on a computer with
+many long sessions.
+
+### `cxt segments push`
+
+```text
+cxt segments push [--json]
+```
+
+Computes the same report and uploads it to the repository's CXTHub server, one
+report per session, together with the conversation of each session's own
+records. It needs a connected remote and a login, and repository member access.
+It does not change capture, synchronization or any hook: snapshots, context
+branches and what teammates see stay exactly as they were. The one thing it
+writes on this computer is a branch ID in Git's own configuration of each
+branch, described below.
+
+What is uploaded for a session:
+
+- its tool, its identifier, whether another session spawned it, and for a
+  spawned session its parent and the record of the parent it was spawned at;
+- its segments: the first and last record identifier, where the range sits
+  among the session's own records, the number of commands, the times, and the
+  commits the segment ends at, each with the rule that linked it and the
+  commit's creation time, author time, author email and subject. The server
+  uses the last three to recognize a cherry-picked or rebased copy;
+- its uncommitted part and the places it passed through. A worktree is uploaded
+  as its folder name only, never as a path, together with this computer's host
+  name so that your own computers can be told apart. The part is not cut any
+  further, but where each of its turns begins is uploaded (the position of the
+  turn's first record, its place in the conversation and its time), so that
+  the server can tell which turns had begun when a branch was pushed;
+- how many of its records are copies that belong to an earlier session, and the
+  agent-to-agent calls the session recorded.
+
+Each run also sends the list of the repository's worktrees on this computer:
+for each one its folder name and the branch checked out in it, with this
+computer's host name. No path is sent. The list replaces what you stored for
+this computer; a worktree that is no longer listed keeps its name on the
+server, marked removed, so that a note you wrote about it stays readable. Two
+folders with the same name are listed once. Only you can read the list. A list
+the server refuses does not stop the reports; the next run sends it again.
+
+The conversation is uploaded as one document per session:
+
+- It holds the session's own records only, in order. A record copied from an
+  earlier session is stored once, with that session, so a forked session's
+  document holds only what the fork added.
+- The records are read back from where the tool keeps them, converted by the
+  same codec capture uses, and masked by the same two steps: the values listed
+  in `.cxtsecrets`, then the pattern scrub of the repository's `secrets.scrub`
+  tier.
+- It goes through the existing document path. The server says which chunks it
+  lacks, only those are sent, and the server verifies the whole document. A
+  session that grew sends what was appended; one that did not change sends
+  nothing. No snapshot, branch or pending context is created for it.
+- The report names the document and, for every segment and for the uncommitted
+  part, where it starts in the document and how many events it holds.
+- The document's own header names the session, and no folder or branch. What
+  the conversation itself says, including paths in commands and their output,
+  is uploaded as recorded, after masking.
+
+Only Claude Code sessions have their conversation uploaded for now. A Codex
+session is uploaded as its report alone and listed as without conversation.
+The same is done for a session whose records changed while they were read, or
+whose document the server did not take; each one says why. That is not a
+failure of the command: the next run uploads it.
+
+On the server a report belongs to the account that uploaded it. A push is what
+opens it to the other members of the repository, part by part:
+
+- a segment, when one of its commits, or a cherry-picked or rebased copy of
+  it, is on the remote;
+- the uncommitted part, up to the turns that had begun when a branch it passed
+  through was pushed. The turn in progress at the push is included whole;
+- a spawned session as a whole, when the point of its parent that spawned it
+  is open.
+
+The server decides this from its own read of the Git hosting provider, never
+from what a CLI says. The time of a push is the time the server saw the branch
+changed, which can be a few minutes after the push itself, and the first read
+of a repository says nothing about when its branches were pushed. What was
+opened stays open: a forced push that removes the commit, or cutting the
+session another way, takes nothing back.
+
+Another member reads only the open parts. Worktree names, the computer's host
+name, the agent calls, and the author email of a commit stay with the
+uploader. The conversation is read through the session; the hash of the
+document that holds it is shown to nobody else. That document is still an
+ordinary repository document, so the server does not keep a member who learned
+the hash some other way from reading it.
+
+Uploading again replaces the session's report as a whole; a report with the
+same content changes nothing. Reports do not advance the repository revision.
+
+Sessions that were only captured, before this command existed, can be rebuilt
+on the server from those captures by a maintainer (the Sessions tab offers
+it). Such a report is cut only where a capture published a commit, says
+nothing about where its last part was worked on, and belongs to no account:
+every member reads the parts of it that are pushed, and nobody reads the
+rest. The first upload of the same session from a computer that still has its
+records replaces it with the exact report.
+
+Branch IDs. Before the sessions, every branch of the repository that has no ID
+gets a random one, stored by Git with the branch itself:
+
+```text
+branch.<name>.cxtBranchId            the ID (32 hexadecimal characters)
+branch.<name>.cxtBranchIdIssuedFor   the name the ID was issued for
+```
+
+- Git keeps these settings with the branch: a rename moves them, deleting the
+  branch drops them, a branch made again under the same name starts without an
+  ID, and every worktree of the repository sees the same value. The ID only
+  tells two uses of one name apart. It proves nothing about when or how the
+  branch was made, and it is not the context branch identity cxt uses
+  elsewhere.
+- `git branch -c` copies the settings. When two branches hold one ID, every
+  holder whose name is not the name the ID was issued for gets a new ID. A
+  branch that was renamed keeps the old issued-for name, so if it is copied
+  later, both the branch and its copy get a new ID.
+- The IDs of branches that Git's own records show on `origin` are then
+  registered with the server: a branch whose configured upstream is on
+  `origin`, or else one with a remote-tracking branch of `origin` under the
+  same name. A branch that was never pushed is not reported. On the server a
+  name alive on the remote has one lifetime, and a registration joins it, or
+  opens one when none is alive.
+- Neither step stops the upload. If Git refuses the write or the server does
+  not take the report, the output says so and the next run tries again.
+
+Every session is listed with what happened to it: `stored`, `unchanged` or
+`refused`. A report is refused when another account already reported the same
+session identifier, when the tool's identifier cannot be used as a key, or when
+the server finds the report too large or not well formed. The other sessions
+are still uploaded, and the command then exits with a failure so that the gap
+is noticed. A caller the server does not accept, such as a missing login or no
+member access, stops the run at the first request. Records that could not be
+read are listed again here, because no report covers them, and so is the number
+of agent calls recorded by a session outside this repository, which are
+uploaded with no session.
+
+`--json` prints one JSON object with `version`, `stored`, `unchanged`,
+`refused`, `content_not_uploaded`, `sessions`, `unread`,
+`agent_calls_without_sender` and `branches` (`with_id`, `assigned`,
+`on_origin`, `registered`, and `not_assigned` or `not_registered` with the
+reason when a step did not happen). Each session carries `content` (`stored`, `none`
+or `not-uploaded`) and, for the last, `content_reason`.
+
+Every run reads all records again and rebuilds every session's document to
+know its identity, which can take a while on a computer with many long
+sessions, even when the server then needs nothing sent.
+
+### Automatic upload
+
+In a repository cxt is set up in and connected to a server, the same upload
+also runs without being asked. Hooks only wake it: the Git hooks `post-commit`,
+`post-checkout`, `post-merge`, `post-rewrite` and `pre-push`, and the agent
+hooks at session start, prompt, stop and session end. A hook is never what is
+read. The collector reads the records the tools and Git left, by the same
+rules, whichever hook ran, so a hook that did not run is made up for by the
+next one that does, and work in a worktree where no hook runs is read when a
+hook runs anywhere in the repository.
+
+It differs from `cxt segments push` in two ways only:
+
+- **What it uploads.** Sessions recorded since automatic reading began in this
+  repository: a session whose last own record, or recorded start when it has
+  none, is at or after the moment the collector first ran here. Earlier
+  sessions are uploaded only by `cxt segments push`.
+- **How much it sends.** It remembers what the server last stored and sends
+  only what changed: a report is uploaded again when it differs, a conversation
+  is read back and built again when the session's records or their cut changed,
+  or when the masking policy or the document identity did, and branch IDs are
+  registered again when the branches on origin or their IDs changed.
+
+One collector runs per repository at a time, detached from the hook that woke
+it. A wake that arrives while one runs is answered by one more run afterwards.
+Two runs start at least 60 seconds apart, and after a run that failed for a
+reason that holds for every session (no login, no access, a server without
+these routes, no connection) the next one waits 10 minutes. A failed run never
+fails the hook, Git or the agent.
+
+What it keeps on this computer:
+
+- beside Git's own files of the repository (`<git-dir>/cxt/`): what was last
+  sent (`collector-v1.json`, with the moment automatic reading began and how
+  the last run ended), a lock and a request marker. This is a memory of what
+  was sent, not a source of facts: deleting it only makes the next run begin
+  again from now and send more.
+- in your user cache directory (`cxthub/session-records-v1`): what the readers
+  made of session files and thread databases that have not changed since, so
+  that a run reads again only what changed. It holds identifiers, times,
+  folders, branch names and commit-number candidates, and no conversation text.
+  It can be deleted at any time.
+
+`cxt segments` and `cxt segments push` use neither: they read everything again
+and write no cache.
+
+Turn automatic upload off with `cxt config segments.auto off`.
 
 ## Global information
 

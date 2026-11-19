@@ -844,6 +844,9 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 	if len(rest) > 0 && rest[0] == "historical-sync" {
 		return runHistoricalSync(ctx, c, cwd)
 	}
+	if len(rest) > 0 && rest[0] == "segment-collect" {
+		return runSegmentCollector(ctx, c, cwd)
+	}
 	if len(rest) > 0 && rest[0] == "remote-ref-discovery" {
 		return runFetchDiscoveryWorker(ctx, c, cwd)
 	}
@@ -901,6 +904,14 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		return nil
 	}
 	repoRoot := state.Root
+	// A Git hook only wakes the session report collector. What the collector
+	// reads is what the tools and Git recorded, whichever hook ran or did not.
+	if c.WakeSegmentCollector != nil {
+		switch event {
+		case "post-commit", "post-checkout", "post-merge", "post-rewrite", "pre-push":
+			defer c.WakeSegmentCollector(cwd)
+		}
+	}
 	if c.WakeFetchDiscovery != nil && (event == "pre-push" || event == "post-merge" || event == "post-rewrite") {
 		defer c.WakeFetchDiscovery(cwd)
 	}
