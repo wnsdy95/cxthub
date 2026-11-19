@@ -67,6 +67,17 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 		if err != nil {
 			return domain.AnchoredSessionReceipt{}, err
 		}
+		// A report may only name content this repository holds. The document
+		// is uploaded first, through the path that verifies and counts it.
+		if content := body.Content; content != nil {
+			have, err := s.blobs.HasDocs(bound, repo, []domain.ContentHash{content.Doc})
+			if err != nil {
+				return domain.AnchoredSessionReceipt{}, err
+			}
+			if len(have) != 1 || have[0] != content.Doc {
+				return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: anchored session: the content document is not in this repository", domain.ErrValidation)
+			}
+		}
 		now := time.Now().UTC()
 		next := domain.AnchoredSession{RepoID: repo, Provider: provider, SessionID: sessionID, Uploader: actor,
 			Revision: 1, BodyHash: hash, CreatedAt: now, UpdatedAt: now, Body: body}

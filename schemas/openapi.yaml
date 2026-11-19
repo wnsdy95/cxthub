@@ -864,6 +864,8 @@ components:
         commands: { type: integer, minimum: 0 }
         started_at: { type: string, format: date-time }
         ended_at: { type: string, format: date-time }
+        first_event: { type: integer, minimum: 0, description: Where the range starts in the session's content document. Absent when the report names no content. }
+        events: { type: integer, minimum: 0, description: How many events of the content document the range holds. }
         closes_turn: { type: boolean }
         commits: { type: array, minItems: 1, items: { $ref: '#/components/schemas/AnchoredCommit' } }
     AnchoredPlace:
@@ -886,6 +888,8 @@ components:
         commands: { type: integer, minimum: 0 }
         started_at: { type: string, format: date-time }
         ended_at: { type: string, format: date-time }
+        first_event: { type: integer, minimum: 0 }
+        events: { type: integer, minimum: 0 }
         places: { type: array, items: { $ref: '#/components/schemas/AnchoredPlace' } }
         unplaced: { type: boolean }
     AnchoredSpawn:
@@ -926,6 +930,15 @@ components:
         segments: { type: array, items: { $ref: '#/components/schemas/AnchoredSegment' } }
         uncommitted: { $ref: '#/components/schemas/AnchoredUncommitted' }
         agent_calls: { type: array, items: { $ref: '#/components/schemas/AnchoredAgentCall' } }
+        content: { $ref: '#/components/schemas/AnchoredContent' }
+    AnchoredContent:
+      type: object
+      required: [doc, events]
+      description: The repository document that holds the conversation of the session's own records, each stored once, in the order of the ranges. It is uploaded first through the document path; a report naming a document the repository does not hold is refused.
+      properties:
+        doc: { $ref: '#/components/schemas/ContentHash' }
+        identity: { $ref: '#/components/schemas/DocumentIdentity' }
+        events: { type: integer, minimum: 1 }
     AnchoredSession:
       type: object
       required: [repo_id, provider, session_id, uploader, revision, body_hash, created_at, updated_at, body]

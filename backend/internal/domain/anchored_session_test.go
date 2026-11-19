@@ -149,3 +149,59 @@ func TestAnchoredSessionCommitLinksAndKeys(t *testing.T) {
 		t.Error("commit number lengths")
 	}
 }
+
+// anchoredTestBodyWithContent places the three ranges of the well-formed
+// report in a content document of ten events; the second range holds none.
+func anchoredTestBodyWithContent() AnchoredSessionBody {
+	body := anchoredTestBody()
+	body.Content = &AnchoredContent{Doc: HashContent([]byte("synthetic content")), Events: 10}
+	body.Segments[0].FirstEvent, body.Segments[0].Events = 0, 6
+	body.Segments[1].FirstEvent, body.Segments[1].Events = 6, 0
+	body.Uncommitted.FirstEvent, body.Uncommitted.Events = 6, 4
+	return body
+}
+
+func TestAnchoredSessionContentCoversItsDocumentExactly(t *testing.T) {
+	if err := anchoredTestBodyWithContent().Validate(); err != nil {
+		t.Fatalf("a well-formed report with content was rejected: %v", err)
+	}
+	root := anchoredTestBodyWithContent()
+	root.Content.Identity = DocumentIdentityRootV1
+	if err := root.Validate(); err != nil {
+		t.Fatalf("a root document was rejected: %v", err)
+	}
+	for name, change := range map[string]func(*AnchoredSessionBody){
+		"a document that is not a hash":       func(b *AnchoredSessionBody) { b.Content.Doc = "content" },
+		"an unknown identity":                 func(b *AnchoredSessionBody) { b.Content.Identity = "another-identity" },
+		"a document without events":           func(b *AnchoredSessionBody) { b.Content.Events = 0 },
+		"more events than a document holds":   func(b *AnchoredSessionBody) { b.Content.Events = 100_000_001 },
+		"a gap between two ranges":            func(b *AnchoredSessionBody) { b.Segments[1].FirstEvent = 7 },
+		"an overlap of two ranges":            func(b *AnchoredSessionBody) { b.Uncommitted.FirstEvent = 5 },
+		"a range that does not start at zero": func(b *AnchoredSessionBody) { b.Segments[0].FirstEvent = 1 },
+		"a negative event count":              func(b *AnchoredSessionBody) { b.Segments[1].Events = -1 },
+		"ranges shorter than the document":    func(b *AnchoredSessionBody) { b.Uncommitted.Events = 3 },
+		"ranges longer than the document":     func(b *AnchoredSessionBody) { b.Uncommitted.Events = 5 },
+		"events without content":              func(b *AnchoredSessionBody) { b.Content = nil },
+	} {
+		body := anchoredTestBodyWithContent()
+		change(&body)
+		if err := body.Validate(); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s was accepted: %v", name, err)
+		}
+	}
+	// Content is part of what the report says: another document is another report.
+	first, second := anchoredTestBodyWithContent(), anchoredTestBodyWithContent()
+	second.Content.Doc = HashContent([]byte("another document"))
+	a, errA := first.Canonical().Hash()
+	b, errB := second.Canonical().Hash()
+	plain, errC := anchoredTestBody().Canonical().Hash()
+	if errA != nil || errB != nil || errC != nil || a == b || a == plain {
+		t.Fatalf("hashes: %s %s %s (%v %v %v)", a, b, plain, errA, errB, errC)
+	}
+	// The canonical form does not share the caller's content value.
+	canonical := first.Canonical()
+	canonical.Content.Events = 99
+	if first.Content.Events != 10 {
+		t.Fatal("the canonical form shares its content with the report it was made from")
+	}
+}

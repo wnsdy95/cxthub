@@ -180,3 +180,58 @@ func TestAnchoredSessionDoesNotAdvanceTheRepositoryRevision(t *testing.T) {
 		t.Fatalf("a report moved the repository revision: %+v -> %+v", before.Revision, after.Revision)
 	}
 }
+
+// A report may only name content this repository holds: the document goes up
+// first through the path that verifies and counts it.
+func TestAnchoredSessionContentMustBeInTheRepository(t *testing.T) {
+	service, storage, repo := anchoredSessionFixture(t)
+	alice := anchoredActor("member-a")
+	doc := domain.SessionDoc{CIR: domain.CIRDocument{}}
+	doc.CIR.Envelope.CIRVersion, doc.CIR.Envelope.SourceProvider = "1", "claude"
+	for index, text := range []string{"commit it", "committed", "one more thing"} {
+		doc.CIR.Events = append(doc.CIR.Events, domain.CIREvent{Kind: domain.EventMessage, Seq: index, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: text}}})
+	}
+	raw, err := domain.CanonicalBytes(doc.CIR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Hash = domain.HashContent(raw)
+	body := anchoredTestBody("m3")
+	body.Content = &domain.AnchoredContent{Doc: doc.Hash, Events: 3}
+	body.Segments[0].Events = 2
+	body.Uncommitted.FirstEvent, body.Uncommitted.Events = 2, 1
+
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", body); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("content the repository does not hold: %v", err)
+	}
+	if _, err := service.GetAnchoredSession(alice, repo, domain.ProviderClaude, "session-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a refused report was stored: %v", err)
+	}
+	// The same document in another repository does not count.
+	other := hh(t.Name() + "/other")
+	if _, err := storage.PutRepo(systemTestContext(), domain.Repo{ID: other, DefaultBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.PutDoc(systemTestContext(), other, doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", body); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("content held by another repository: %v", err)
+	}
+	if _, err := storage.PutDoc(systemTestContext(), repo, doc); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", body)
+	if err != nil || !receipt.Changed {
+		t.Fatalf("content the repository holds: %+v %v", receipt, err)
+	}
+	stored, err := service.GetAnchoredSession(alice, repo, domain.ProviderClaude, "session-1")
+	if err != nil || stored.Body.Content == nil || stored.Body.Content.Doc != doc.Hash || stored.Body.Uncommitted.FirstEvent != 2 {
+		t.Fatalf("stored content: %+v %v", stored.Body.Content, err)
+	}
+	// A segment read through its commit carries where it sits in the content.
+	segments, err := service.AnchoredCommitSegments(alice, repo, anchoredTestSHA("a"))
+	if err != nil || len(segments) != 1 || segments[0].Segment.FirstEvent != 0 || segments[0].Segment.Events != 2 {
+		t.Fatalf("segment of the commit: %+v %v", segments, err)
+	}
+}

@@ -48,6 +48,7 @@ const (
 	anchoredAgentCallLimit = 50000
 	anchoredCopiedLimit    = 256
 	anchoredNameLimit      = 256
+	anchoredEventLimit     = 100_000_000
 )
 
 var (
@@ -65,6 +66,20 @@ type AnchoredRange struct {
 	Commands     int        `json:"commands"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	// FirstEvent and Events place the range in the session's content
+	// document. Both are zero when the report names no content.
+	FirstEvent int `json:"first_event,omitempty"`
+	Events     int `json:"events,omitempty"`
+}
+
+// AnchoredContent names the document that holds the conversation of the
+// session's own records, each stored once, in the order of the ranges. The
+// document is an ordinary repository document, so its bytes are verified,
+// counted and read the way every document is.
+type AnchoredContent struct {
+	Doc      ContentHash      `json:"doc"`
+	Identity DocumentIdentity `json:"identity,omitempty"`
+	Events   int              `json:"events"`
 }
 
 // AnchoredCommit is a commit a segment ends at. The author time, author and
@@ -136,6 +151,7 @@ type AnchoredSessionBody struct {
 	Segments      []AnchoredSegment    `json:"segments"`
 	Uncommitted   *AnchoredUncommitted `json:"uncommitted,omitempty"`
 	AgentCalls    []AnchoredAgentCall  `json:"agent_calls,omitempty"`
+	Content       *AnchoredContent     `json:"content,omitempty"`
 }
 
 // AnchoredSession is a stored report with what the server attached to it.
@@ -227,12 +243,15 @@ func anchoredInvalid(format string, args ...any) error {
 	return fmt.Errorf("%w: anchored session: %s", ErrValidation, fmt.Sprintf(format, args...))
 }
 
-func (r AnchoredRange) validate(what string, first int) error {
+func (r AnchoredRange) validate(what string, first, firstEvent int) error {
 	if !anchoredText(r.First, anchoredNameLimit, true) || !anchoredText(r.Last, anchoredNameLimit, true) {
 		return anchoredInvalid("%s needs its first and last record", what)
 	}
 	if r.FirstOrdinal != first || r.LastOrdinal < r.FirstOrdinal {
 		return anchoredInvalid("%s must start at record %d and end at or after it", what, first)
+	}
+	if r.FirstEvent != firstEvent || r.Events < 0 {
+		return anchoredInvalid("%s must start at event %d of the content", what, firstEvent)
 	}
 	if r.Commands < 0 {
 		return anchoredInvalid("%s has a negative command count", what)
@@ -276,12 +295,19 @@ func (b AnchoredSessionBody) Validate() error {
 	if len(b.Segments) > anchoredSegmentLimit {
 		return anchoredInvalid("too many segments")
 	}
-	next := 0
+	if content := b.Content; content != nil {
+		if ValidateContentHash(content.Doc) != nil || (content.Identity != DocumentIdentityLegacy && content.Identity != DocumentIdentityRootV1) ||
+			content.Events < 1 || content.Events > anchoredEventLimit {
+			return anchoredInvalid("content needs a document, a known identity and its event count")
+		}
+	}
+	next, nextEvent := 0, 0
 	seen := map[string]struct{}{}
 	for index, segment := range b.Segments {
-		if err := segment.validate(fmt.Sprintf("segment %d", index+1), next); err != nil {
+		if err := segment.validate(fmt.Sprintf("segment %d", index+1), next, nextEvent); err != nil {
 			return err
 		}
+		nextEvent += segment.Events
 		if len(segment.Commits) == 0 || len(segment.Commits) > anchoredCommitLimit {
 			return anchoredInvalid("segment %d must end at 1 to %d commits", index+1, anchoredCommitLimit)
 		}
@@ -300,9 +326,10 @@ func (b AnchoredSessionBody) Validate() error {
 		next = segment.LastOrdinal + 1
 	}
 	if part := b.Uncommitted; part != nil {
-		if err := part.validate("the uncommitted part", next); err != nil {
+		if err := part.validate("the uncommitted part", next, nextEvent); err != nil {
 			return err
 		}
+		nextEvent += part.Events
 		if len(part.Places) > anchoredPlaceLimit {
 			return anchoredInvalid("too many places")
 		}
@@ -319,6 +346,16 @@ func (b AnchoredSessionBody) Validate() error {
 	}
 	if next != b.Records {
 		return anchoredInvalid("segments and the uncommitted part cover %d records, the session has %d", next, b.Records)
+	}
+	// Without content no range claims an event; with it the ranges cover the
+	// document exactly, in order.
+	if events := 0; b.Content != nil {
+		events = b.Content.Events
+		if nextEvent != events {
+			return anchoredInvalid("the ranges cover %d events, the content has %d", nextEvent, events)
+		}
+	} else if nextEvent != 0 {
+		return anchoredInvalid("a range names events, the report names no content")
 	}
 	if len(b.AgentCalls) > anchoredAgentCallLimit {
 		return anchoredInvalid("too many agent calls")
@@ -364,6 +401,10 @@ func (b AnchoredSessionBody) Canonical() AnchoredSessionBody {
 	if b.Spawn != nil {
 		spawn := *b.Spawn
 		out.Spawn = &spawn
+	}
+	if b.Content != nil {
+		content := *b.Content
+		out.Content = &content
 	}
 	if b.Uncommitted != nil {
 		part := *b.Uncommitted
