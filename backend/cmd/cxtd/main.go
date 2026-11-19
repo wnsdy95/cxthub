@@ -325,6 +325,10 @@ func serve(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("configure Git integration workers: %w", err)
 		}
+		remoteGitSync, err := app.NewRemoteGitSync(app.RemoteGitSyncConfig{Metadata: st, Blobs: st, Repositories: st, Reader: gitReader})
+		if err != nil {
+			return fmt.Errorf("configure remote Git worker: %w", err)
+		}
 		memoryPreparationProfile := app.MemoryPreparationCompatibility
 		if _, production := st.(outbound.ProductionStore); production {
 			memoryPreparationProfile = app.MemoryPreparationComplete
@@ -368,6 +372,7 @@ func serve(ctx context.Context, args []string) error {
 		lifecycle.start(gitChangeWorker.Run)
 		lifecycle.start(gitIntegrationWorkers.Run)
 		lifecycle.start(gitIntegrationWorkers.RunReconciler)
+		lifecycle.start(remoteGitSync.Run)
 		if !runtime.BoundedDocuments() {
 			documentWorkers, err := svc.DocumentWorkersForProfile(runtime.DocumentQueryProfile)
 			if err != nil {

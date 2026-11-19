@@ -16,8 +16,8 @@ func TestMigrationCatalogMatchesOnlyReleasedBundle(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	if len(manifest) != 163 {
-		test.Fatal("released source catalog must contain all 163 SQL files", len(manifest))
+	if len(manifest) != 164 {
+		test.Fatal("released source catalog must contain all 164 SQL files", len(manifest))
 	}
 	if err := verifyMigrationCatalog(manifest); err != nil {
 		test.Fatal("complete source catalog does not match the compiled release digest", err)
@@ -39,6 +39,9 @@ func TestMigrationCatalogMatchesOnlyReleasedBundle(test *testing.T) {
 	}
 	if err := verifyMigrationCatalog(manifest[:162]); !errors.Is(err, ErrSchemaMismatch) {
 		test.Fatal("pre-notes release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:163]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-remote-git release bundle was accepted for the current image", err)
 	}
 	for _, mutation := range []string{"altered", "incomplete", "extra", "renamed"} {
 		test.Run(mutation, func(test *testing.T) {

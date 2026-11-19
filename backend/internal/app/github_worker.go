@@ -605,7 +605,11 @@ func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDeliver
 					}
 					// The same push shows the branch name alive or gone: the
 					// ledger learns it with the observation, or not at all.
-					return recordBranchLedgerObservation(tx, g.metadata, observation, observed)
+					if e := recordBranchLedgerObservation(tx, g.metadata, observation, observed); e != nil {
+						return e
+					}
+					// What was pushed is read from the provider soon.
+					return requestRemoteGitSync(tx, g.metadata, repo.ID, observed)
 				})
 				if err != nil {
 					return err

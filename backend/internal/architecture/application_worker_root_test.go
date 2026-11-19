@@ -178,7 +178,7 @@ func TestWave48ApplicationWorkerRootUsesDirectCompleteOwners(test *testing.T) {
 	}
 	counts := wave48Calls(function.Body)
 	for _, name := range []string{"NewProjectionWorkers", "NewNotificationWorker", "NewMaintenanceWorkers", "NewGitChangeWorker", "NewGitIntegrationWorkers",
-		"NewMemoryPreparationResources", "NewMemoryPreparationWorkers", "NewPRPromotionWorker", "NewInvitationEmailWorker", "gitengine.NewEngine"} {
+		"NewRemoteGitSync", "NewMemoryPreparationResources", "NewMemoryPreparationWorkers", "NewPRPromotionWorker", "NewInvitationEmailWorker", "gitengine.NewEngine"} {
 		if counts[name] != 1 {
 			test.Error("full root must construct exactly one direct existing owner/resource", name, counts[name])
 		}
@@ -208,8 +208,8 @@ func TestWave48ApplicationWorkerRootUsesDirectCompleteOwners(test *testing.T) {
 		}
 		return true
 	})
-	if bindings != 13 {
-		test.Error("full assembly must retain twelve existing bindings and optional GitHub", bindings)
+	if bindings != 14 {
+		test.Error("full assembly must retain thirteen existing bindings and optional GitHub", bindings)
 	}
 }
 
@@ -382,7 +382,7 @@ func TestWave48APIKeepsExistingWorkersInsideExactExternalGuard(test *testing.T) 
 	}
 	constructors := map[string]bool{
 		"ProjectionWorkersForProfile": true, "NewNotificationWorker": true, "NewMaintenanceWorkers": true, "NewGitChangeWorker": true,
-		"NewGitIntegrationWorkers": true, "NewMemoryPreparationWorkers": true, "NewPRPromotionWorker": true,
+		"NewGitIntegrationWorkers": true, "NewRemoteGitSync": true, "NewMemoryPreparationWorkers": true, "NewPRPromotionWorker": true,
 		"NewInvitationEmailWorker": true, "NewGitHubWorker": true, "DocumentWorkersForProfile": true, "NewDisplayMaintenanceWorker": true,
 	}
 	registrations := 0
@@ -418,7 +418,7 @@ func TestWave48APIKeepsExistingWorkersInsideExactExternalGuard(test *testing.T) 
 		}
 		return true
 	})
-	if registrations != 18 {
-		test.Error("API must keep its existing eighteen registrations directly in serve", registrations)
+	if registrations != 19 {
+		test.Error("API must keep its existing nineteen registrations directly in serve", registrations)
 	}
 }

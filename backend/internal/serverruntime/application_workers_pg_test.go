@@ -175,8 +175,8 @@ func wave48PGAssertFullRoot(test *testing.T, worker *WorkerRuntime) {
 
 func wave48PGAssertBindings(test *testing.T, bindings []workerBinding) {
 	test.Helper()
-	if len(bindings) != 12 {
-		test.Fatal("full worker root must add twelve owners to the retained five document owners", len(bindings))
+	if len(bindings) != 13 {
+		test.Fatal("full worker root must add thirteen owners to the retained five document owners", len(bindings))
 	}
 	seen := make(map[string]bool, len(bindings))
 	for _, binding := range bindings {
@@ -304,7 +304,7 @@ func TestWave48PGFullRootOptionalGitHubUsesOneExplicitOwner(test *testing.T) {
 	}
 	test.Cleanup(func() { _ = worker.Close() })
 	bindings := worker.bindings()
-	if len(bindings) != 18 || worker.Store != worker.infrastructure.Store {
+	if len(bindings) != 19 || worker.Store != worker.infrastructure.Store {
 		test.Fatal("optional full root lost one-store ownership or the existing worker set", len(bindings))
 	}
 	github := 0
@@ -866,8 +866,8 @@ func TestWave48PGFullRootDurableProcessingAcrossRestart(test *testing.T) {
 	firstMarker := "wave48 original full worker publication \ud55c🙂"
 	first := fixture.enqueue(test, firstMarker)
 	initial := fixture.start(test, ctx, outbound.ProcessWorker, fixture.budget)
-	if event := initial.expect(test, ctx, "opened"); event.Bindings != 17 {
-		test.Fatal("public full worker root did not construct all seventeen actual default owners", event)
+	if event := initial.expect(test, ctx, "opened"); event.Bindings != 18 {
+		test.Fatal("public full worker root did not construct all eighteen actual default owners", event)
 	}
 	initial.send(test, "run")
 	initial.expect(test, ctx, "run-requested")

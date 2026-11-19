@@ -1003,6 +1003,77 @@ components:
         closed_by: { $ref: '#/components/schemas/BranchEvidence' }
         linked: { type: array, items: { $ref: '#/components/schemas/BranchLinkedID' } }
         reopenings: { type: array, items: { $ref: '#/components/schemas/BranchReopening' } }
+    RemoteBranch:
+      type: object
+      required: [name, sha]
+      description: A branch name on the remote and the commit it points at, as the server read them from the Git hosting provider.
+      properties:
+        name: { type: string, maxLength: 1024 }
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    RemotePull:
+      type: object
+      required: [number, title, state, head_ref, head_sha, base_ref, fork, commits, truncated, updated_at]
+      description: A pull request as the Git hosting provider lists it, with its commits. The server read it from the provider and no client supplied any of it.
+      properties:
+        number: { type: integer, minimum: 1 }
+        title: { type: string }
+        state: { type: string, enum: [open, closed, merged] }
+        head_ref: { type: string }
+        head_sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        base_ref: { type: string }
+        merge_sha:
+          type: string
+          pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$'
+          description: The commit the pull request became. Present only when it is merged.
+        fork: { type: boolean, description: The head lives in another repository. }
+        commits:
+          type: array
+          maxItems: 250
+          description: Commit numbers as the provider lists them. Oldest first.
+          items: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        truncated: { type: boolean, description: The provider stops its list at 250 commits and this list has that many. }
+        updated_at: { type: string, format: date-time }
+    RemoteGitCommit:
+      type: object
+      required: [sha, parents, author_name, authored_at, committed_at, subject]
+      description: A commit as the Git hosting provider lists it. The email of its author is not part of the answer.
+      properties:
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        parents:
+          type: array
+          items: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        author_name: { type: string }
+        authored_at: { type: string, format: date-time }
+        committed_at: { type: string, format: date-time }
+        subject: { type: string, maxLength: 1024, description: The first paragraph of the commit message on one line. }
+    RemoteGitCommits:
+      type: object
+      required: [commits]
+      description: A page of the commit list. Newest commit time first.
+      properties:
+        commits:
+          type: array
+          items: { $ref: '#/components/schemas/RemoteGitCommit' }
+        next: { type: string, description: Send it back as before to read the following page. Absent on the last page. }
+    RemoteGit:
+      type: object
+      required: [branches, pulls, commits]
+      description: What the server read from the Git hosting provider of the repository. A repository that was never read has empty lists and no synced_at.
+      properties:
+        default_branch: { type: string }
+        synced_at: { type: string, format: date-time, description: The start of the last read that finished without error. }
+        branches:
+          type: array
+          description: Ordered by name.
+          items: { $ref: '#/components/schemas/RemoteBranch' }
+        pulls:
+          type: array
+          description: Highest number first.
+          items: { $ref: '#/components/schemas/RemotePull' }
+        commits:
+          type: array
+          items: { $ref: '#/components/schemas/RemoteGitCommit' }
+        next: { type: string, description: Send it back as before to read the following page of commits. Absent on the last page. }
     AnchoredContent:
       type: object
       required: [doc, events]
@@ -5150,6 +5221,64 @@ paths:
         '415': { description: Content-Type must be application/json }
         '422': { description: A name is a path, is listed twice, or there are too many }
         '503': { description: Worktree service unavailable }
+  /repos/{repoID}/remote-git:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: getRemoteGit
+      summary: Read the commits, branches and pull requests the server read from the Git hosting provider
+      description: Member required. Everything in the answer was read by the server from the provider of the repository origin. No client supplied any of it. The page from the top of the commit list also carries the default branch, the branches and the pull requests. With before the answer carries commits and next only. Commits are ordered by commit time with the newest first. The email of a commit author is never part of the answer.
+      tags: [remote-git]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+        - name: before
+          in: query
+          required: false
+          description: The next value of the page before. It is opaque and is sent back as it was received.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The first page with branches and pull requests, or a following page of commits
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RemoteGit'
+                  - $ref: '#/components/schemas/RemoteGitCommits'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: Invalid repository identity or limit or before }
+        '503': { description: Remote Git service unavailable }
+
+  /repos/{repoID}/remote-git/refresh:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    post:
+      operationId: refreshRemoteGit
+      summary: Ask the server to read the Git hosting provider again soon
+      description: Member required and rechecked inside the repository transaction. JSON Content-Type required. The body is not read. The request is recorded and the worker that reads the provider serves it. Nothing is read while the request is answered. Two reads of one repository start at least 30 seconds apart. The request does not advance the repository revision.
+      tags: [remote-git]
+      responses:
+        '202':
+          description: The request was recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requested]
+                properties:
+                  requested: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: The repository has no Git origin or storage is unavailable }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: Invalid repository identity }
+        '503': { description: Remote Git service unavailable }
 
   /repos/{repoID}/snapshots:
     parameters:
@@ -9681,6 +9810,8 @@ tags:
     description: What a person wrote about a commit, a branch or a worktree that no session explains. Readable only by its author until a published-by-push rule exists.
   - name: worktrees
     description: The working folders of the repository on a member's machines, by name. Readable only by the member who reported them.
+  - name: remote-git
+    description: The commits, branch heads and pull requests of a repository as the server itself read them from its Git hosting provider.
   - name: docs
     description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
   - name: refs

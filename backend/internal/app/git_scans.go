@@ -56,7 +56,11 @@ func (g *GitScans) ObservePush(ctx context.Context, origin, ref, before, after s
 			if err := g.store.RecordGitRefObservation(tx, o, observed); err != nil {
 				return err
 			}
-			return recordBranchLedgerObservation(tx, g.core.meta, o, observed)
+			if err := recordBranchLedgerObservation(tx, g.core.meta, o, observed); err != nil {
+				return err
+			}
+			// What was pushed is read from the provider soon.
+			return requestRemoteGitSync(tx, g.core.meta, r.ID, observed)
 		})
 		if err != nil {
 			return n, err

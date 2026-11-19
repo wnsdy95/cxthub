@@ -40,4 +40,5 @@ type ProductionStore interface {
 	BranchLedgerStore
 	AnchoredNoteStore
 	ReportedWorktreeStore
+	RemoteGitStore
 }

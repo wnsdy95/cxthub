@@ -330,6 +330,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/repos/{repoID}/anchored-notes/{noteID}", s.guard(domain.RoleMember, s.deleteAnchoredNote))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/worktrees", s.guard(domain.RoleMember, s.listWorktrees))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/worktrees", s.guard(domain.RoleMember, s.putWorktrees))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/remote-git", s.guard(domain.RoleMember, s.getRemoteGit))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/remote-git/refresh", s.guard(domain.RoleMember, s.refreshRemoteGit))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending-view", s.guard(domain.RoleViewer, compressedGraphRead(s.pendingView)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/graph-state", s.guard(domain.RoleViewer, compressedGraphRead(s.graphState)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/revision", s.guard(domain.RoleViewer, s.repositoryRevision))
