@@ -2,15 +2,16 @@
 // branches and the pull requests; in the middle the commit graph as the
 // server read it from the hosting provider, with the commits only a report
 // names; on the right what the selected one holds: the segments of the
-// caller's own sessions, and the notes written where no session explains it.
+// caller's own sessions and of teammates' sessions as far as they are pushed,
+// and the notes written where no session explains it.
 // A session opens as its whole conversation with a divider where each
 // segment begins.
-import { useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import type { AnchoredSelection } from '../route';
 import type { AnchoredNote, AnchoredNoteTarget, AnchoredSessionSummary, RemotePull, Repo } from '../types';
 import {
-  useAnchoredCommit, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit, useReportedWorktrees,
-  useSaveAnchoredNote,
+  useAccountNames, useAnchoredCommit, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
+  useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
@@ -23,12 +24,16 @@ import { AppLink } from './AppLink';
 import { AnchoredSessionView } from './AnchoredSessionView';
 
 export type AnchoredHref = (selection?: AnchoredSelection) => string;
+/** Members' names by account, for the sessions and notes of other members. */
+const AccountNames = createContext<Map<string, string>>(new Map());
 const COMMIT_STEP = 100;
 const LANE = 14;
 const ROW = 46;
 const LANE_COLORS = ['#16181d', '#2e7d5b', '#8250df', '#b4452c', '#0969da', '#bf8700'];
 
-export function AnchoredView({ repo, selection, href }: { repo: Repo; selection?: AnchoredSelection; href: AnchoredHref }) {
+export function AnchoredView({ repo, repositoryId = null, selection, href }: {
+  repo: Repo; repositoryId?: string | null; selection?: AnchoredSelection; href: AnchoredHref;
+}) {
   const t = useT();
   const sessionsQ = useAnchoredSessions(repo.id);
   const lifetimesQ = useBranchLifetimes(repo.id);
@@ -42,6 +47,10 @@ export function AnchoredView({ repo, selection, href }: { repo: Repo; selection?
   }, [remoteQ.data]);
   const index = useMemo(() => buildAnchoredIndex(sessionsQ.data ?? [], lifetimesQ.data ?? [], { worktrees: worktreesQ.data, remote }),
     [sessionsQ.data, lifetimesQ.data, worktreesQ.data, remote]);
+  // Names are read only when another member's session or note is shown.
+  const me = useMe().data;
+  const others = (sessionsQ.data ?? []).some(summary => summary.shared) || (notesQ.data ?? []).some(note => note.author !== me?.id);
+  const names = useAccountNames(repositoryId, others);
   // Commits that share the segment under the pointer are marked together.
   const [highlighted, setHighlighted] = useState<string[]>([]);
 
@@ -63,6 +72,7 @@ export function AnchoredView({ repo, selection, href }: { repo: Repo; selection?
     void sessionsQ.refetch(); void lifetimesQ.refetch(); void worktreesQ.refetch(); void notesQ.refetch(); void remoteQ.refetch();
   };
   return (
+    <AccountNames.Provider value={names}>
     <div className="anchor">
       <nav className="anchor-nav" aria-label={t('anchored.navAria')}>
         <AppLink className={`anchor-nav-item${shown.kind === 'all' ? ' on' : ''}`} href={href({ kind: 'all' })} aria-current={shown.kind === 'all' ? 'page' : undefined}>
@@ -142,7 +152,7 @@ export function AnchoredView({ repo, selection, href }: { repo: Repo; selection?
         )}
         {shown.kind === 'session' ? (
           <AnchoredSessionView key={anchoredKey(shown.provider, shown.id)} repo={repo} provider={shown.provider} sessionId={shown.id}
-            segment={shown.segment} rest={shown.rest} index={index} href={href} />
+            segment={shown.segment} rest={shown.rest} index={index} href={href} names={names} />
         ) : (
           <div className="anchor-split">
             <AnchoredCommits index={index} selected={shown.kind === 'commit' ? shown.sha : ''} highlighted={highlighted} marked={marked} href={href}
@@ -158,6 +168,7 @@ export function AnchoredView({ repo, selection, href }: { repo: Repo; selection?
         )}
       </div>
     </div>
+    </AccountNames.Provider>
   );
 }
 
@@ -253,6 +264,7 @@ function SessionCard({ summary, selection, index, href, children }: {
   summary: AnchoredSessionSummary; selection: AnchoredSelection; index: AnchoredIndex; href: AnchoredHref; children?: ReactNode;
 }) {
   const t = useT();
+  const names = useContext(AccountNames);
   const spawned = index.children.get(anchoredKey(summary.provider, summary.session_id))?.length ?? 0;
   return (
     <>
@@ -261,6 +273,7 @@ function SessionCard({ summary, selection, index, href, children }: {
         <AppLink href={href(selection)} title={summary.session_id}>
           <code>{anchoredShortId(summary.session_id)}</code>
         </AppLink>
+        {summary.shared && summary.uploader && <span className="ref-badge joined">{names.get(summary.uploader) ?? summary.uploader}</span>}
         {summary.sub && <span className="ref-badge">{t('anchored.subSession')}</span>}
         {summary.uncommitted?.unplaced && <span className="ref-badge pending">{t('anchored.unplaced')}</span>}
         {!summary.content && <span className="ref-badge archived">{t('anchored.noContentBadge')}</span>}
@@ -292,6 +305,7 @@ function SessionLinks({ sessions, index, href }: { sessions: AnchoredSessionSumm
 function Notes({ repo, notes, target, canAdd }: { repo: Repo; notes: AnchoredNote[]; target: AnchoredNoteTarget; canAdd: boolean }) {
   const t = useT();
   const me = useMe().data;
+  const names = useContext(AccountNames);
   const save = useSaveAnchoredNote();
   const remove = useDeleteAnchoredNote();
   const [editing, setEditing] = useState<string | null>(null);
@@ -319,16 +333,19 @@ function Notes({ repo, notes, target, canAdd }: { repo: Repo; notes: AnchoredNot
         <article key={note.id} className="anchor-note" data-note={note.id}>
           <header className="anchor-card-head">
             <span className="ref-badge joined">{t('anchored.manualNote')}</span>
-            <em>{note.author === me?.id ? t('anchored.you') : note.author}</em>
+            <em>{note.author === me?.id ? t('anchored.you') : names.get(note.author) ?? note.author}</em>
             <time dateTime={note.updated_at}>{when(note.updated_at)}</time>
           </header>
           {editing === note.id ? form(note.id) : (
             <>
               <p className="anchor-note-body">{note.body}</p>
-              <div className="anchor-note-actions">
-                <button className="ghost mini" onClick={() => open(note.id, note.body)}>{t('common.edit')}</button>
-                <button className="ghost mini" disabled={remove.isPending} onClick={() => remove.mutate({ repoId: repo.id, noteId: note.id })}>{t('common.delete')}</button>
-              </div>
+              {/* Only its author changes or removes a note. */}
+              {note.author === me?.id && (
+                <div className="anchor-note-actions">
+                  <button className="ghost mini" onClick={() => open(note.id, note.body)}>{t('common.edit')}</button>
+                  <button className="ghost mini" disabled={remove.isPending} onClick={() => remove.mutate({ repoId: repo.id, noteId: note.id })}>{t('common.delete')}</button>
+                </div>
+              )}
             </>
           )}
         </article>

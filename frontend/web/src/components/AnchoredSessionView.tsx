@@ -4,12 +4,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AnchoredSelection } from '../route';
 import type { AnchoredProvider, Repo } from '../types';
+import { api } from '../api';
 import { useAnchoredEvents, useAnchoredSession, useAnchoredSessionCalls } from '../hooks';
 import {
-  ANCHORED_PROVIDERS, anchoredKey, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredShortId, anchoredShortSha, anchoredStream,
-  type AnchoredIndex, type AnchoredPart, type AnchoredPartner,
+  ANCHORED_PROVIDERS, anchoredKey, anchoredOpenStarts, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredShortId, anchoredShortSha,
+  anchoredStart, anchoredStream, type AnchoredIndex, type AnchoredPart, type AnchoredPartner,
 } from '../anchoredSessions';
 import { DocumentReadScope } from '../documentReadScope';
+import { DocumentEventReaderContext, type DocumentEventReader } from '../documentEventReader';
 import { when } from '../snapshotFormat';
 import { useT } from '../i18n';
 import { AppLink } from './AppLink';
@@ -17,17 +19,22 @@ import { EventStream } from './EventStream';
 
 type Href = (selection?: AnchoredSelection) => string;
 
-export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, index, href }: {
+export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, index, href, names = new Map() }: {
   repo: Repo; provider: AnchoredProvider; sessionId: string; segment?: number; rest?: boolean; index: AnchoredIndex; href: Href;
+  /** Members' names by account, for another member's session. */
+  names?: Map<string, string>;
 }) {
   const t = useT();
-  const sessionQ = useAnchoredSession(repo.id, provider, sessionId, index.sessions.get(anchoredKey(provider, sessionId))?.revision);
+  const listed = index.sessions.get(anchoredKey(provider, sessionId));
+  const sessionQ = useAnchoredSession(repo.id, provider, sessionId, listed?.revision);
   const body = sessionQ.data?.body;
   const parts = useMemo(() => (body ? anchoredParts(body) : []), [body]);
+  // Another member's session is read as far as it is open; its agent calls stay with its uploader.
+  const shared = Boolean(listed?.shared);
   // The calls a session received sit in other sessions' reports; the server gathers both directions.
   // Until that answer arrives, the calls this session made are shown from its own report.
   const reports = useMemo(() => [...index.sessions.values()].reduce((sum, summary) => sum + summary.revision, index.sessions.size), [index.sessions]);
-  const callsQ = useAnchoredSessionCalls(repo.id, provider, sessionId, String(reports));
+  const callsQ = useAnchoredSessionCalls(repo.id, shared ? null : provider, shared ? null : sessionId, String(reports));
   const partners = useMemo(() => anchoredPartners(sessionId, callsQ.data ?? body?.agent_calls ?? []), [sessionId, callsQ.data, body]);
   if (sessionQ.isLoading) return <div className="skel" role="status" aria-label={t('anchored.loading')} style={{ height: 120 }} />;
   if (sessionQ.error || !body) {
@@ -53,6 +60,9 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
           <span className="anchor-provider" style={{ color: ANCHORED_PROVIDERS[provider]?.ink }}>{ANCHORED_PROVIDERS[provider]?.name ?? provider}</span>{' '}
           <code>{sessionId}</code>
         </p>
+        {shared && listed?.uploader && (
+          <p className="anchor-card-meta anchor-shared">{t('anchored.sharedBy', { name: names.get(listed.uploader) ?? listed.uploader })}</p>
+        )}
         <p className="anchor-card-meta">
           {body.machine && <><em>{body.machine}</em> · </>}
           {body.started_at && <time dateTime={body.started_at}>{when(body.started_at)}</time>}
@@ -83,9 +93,19 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
           {parts.map((part, position) => {
             const spawned = children.filter(child => (part.kind === 'segment' ? child.spawned_in?.segment_no === part.no : child.spawned_in?.uncommitted));
             return (
-              <li key={part.kind + part.no} className={position === first ? 'on' : undefined}>
-                <AppLink href={href(session(part))}>{part.kind === 'segment' ? t('anchored.segmentNo', { no: part.no }) : t('anchored.afterLastCommit')}</AppLink>
-                <span className="anchor-card-meta"> · {t('anchored.commandCount', { count: part.range.commands })}</span>
+              <li key={part.kind + part.no} className={position === first ? 'on' : part.hidden ? 'hidden' : undefined}>
+                {part.hidden ? (
+                  <>
+                    <span>{t('anchored.segmentNo', { no: part.no })}</span>
+                    <span className="ref-badge pending">{t('anchored.notOpen')}</span>
+                  </>
+                ) : (
+                  <>
+                    <AppLink href={href(session(part))}>{part.kind === 'segment' ? t('anchored.segmentNo', { no: part.no }) : t('anchored.afterLastCommit')}</AppLink>
+                    {!part.partial && <span className="anchor-card-meta"> · {t('anchored.commandCount', { count: part.range.commands })}</span>}
+                    {part.partial && <span className="ref-badge pending">{t('anchored.partlyOpen')}</span>}
+                  </>
+                )}
                 {part.commits.map(commit => (
                   <AppLink key={commit.sha} className="anchor-part-commit" href={href({ kind: 'commit', sha: commit.sha })}>
                     <code>{anchoredShortSha(commit.sha)}</code> {commit.subject}
@@ -134,8 +154,9 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
             <AppLink href={href(session())}>{t('anchored.fromStart')}</AppLink>
           </p>
         )}
-        {body.content ? (
-          <AnchoredEvents key={first} repoId={repo.id} hash={body.content.doc} total={body.content.events} parts={parts} first={first} />
+        {body.content && anchoredStart(parts, first) !== undefined ? (
+          <AnchoredEvents key={first} repoId={repo.id} provider={provider} sessionId={sessionId} revision={listed?.revision ?? 0}
+            total={body.content.events} parts={parts} first={first} />
         ) : (
           <p className="empty-box">{t('anchored.noContent')}</p>
         )}
@@ -147,18 +168,29 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
 function PartDivider({ part }: { part: AnchoredPart }) {
   const t = useT();
   return (
-    <div className="session-divider anchor-divider" role="separator" data-part={part.kind === 'segment' ? part.no : 'rest'}>
+    <div className={part.hidden ? 'session-divider anchor-divider hidden' : 'session-divider anchor-divider'} role="separator" data-part={part.kind === 'segment' ? part.no : 'rest'}>
       {part.kind === 'segment' ? t('anchored.segmentNo', { no: part.no }) : t('anchored.afterLastCommit')}
       {part.commits.map(commit => <code key={commit.sha}>{anchoredShortSha(commit.sha)}</code>)}
+      {part.hidden && <span> · {t('anchored.notOpenYet')}</span>}
     </div>
   );
 }
 
-function AnchoredEvents({ repoId, hash, total, parts, first }: { repoId: string; hash: string; total: number; parts: AnchoredPart[]; first: number }) {
+function AnchoredEvents({ repoId, provider, sessionId, revision, total, parts, first }: {
+  repoId: string; provider: AnchoredProvider; sessionId: string; revision: number; total: number; parts: AnchoredPart[]; first: number;
+}) {
   const t = useT();
-  const start = parts[first]?.firstEvent ?? 0;
-  const query = useAnchoredEvents(repoId, hash, start, start < total);
-  const events = useMemo(() => query.data?.pages.flatMap(page => page.events) ?? [], [query.data]);
+  const start = anchoredStart(parts, first) ?? total;
+  const starts = useMemo(() => anchoredOpenStarts(parts), [parts]);
+  const query = useAnchoredEvents(repoId, provider, sessionId, revision, start, starts, start < total);
+  const runs = useMemo(() => query.data?.pages ?? [], [query.data]);
+  // The conversation is read by the session, never by its document's hash; this key stands for it in the cache.
+  const hash = `anchored:${provider}/${sessionId}@${revision}`;
+  const reader = useMemo<DocumentEventReader>(() => ({
+    key: hash,
+    event: (position, signal) => api.anchoredEvent(repoId, provider, sessionId, position, signal),
+    fragment: (position, offset, signal) => api.anchoredEventFragment(repoId, provider, sessionId, position, offset, signal),
+  }), [hash, repoId, provider, sessionId]);
   const more = useRef<HTMLButtonElement>(null);
   const { hasNextPage, isFetching, fetchNextPage } = query;
   // The next page is read when the end of what is shown scrolls into view.
@@ -170,22 +202,24 @@ function AnchoredEvents({ repoId, hash, total, parts, first }: { repoId: string;
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetching, fetchNextPage, events.length]);
+  }, [hasNextPage, isFetching, fetchNextPage, runs.length]);
   return (
+    <DocumentEventReaderContext.Provider value={reader}>
     <DocumentReadScope.Provider value={['anchored-events', repoId, hash, start]}>
-      {anchoredStream(events, parts, first).map(item => item.kind === 'divider'
+      {anchoredStream(runs, parts, first).map(item => item.kind === 'divider'
         ? <PartDivider key={`divider:${item.part.kind}:${item.part.no}`} part={item.part} />
         : <EventStream key={`events:${item.part.kind}:${item.part.no}`} events={item.events} repoId={repoId} hash={hash} />)}
       {isFetching && <p role="status">{t('context.loadingEvents')}</p>}
       {query.error && (
         <p role="alert" className="err">
-          {query.error.message} <button onClick={() => void (events.length ? fetchNextPage() : query.refetch())}>{t('context.retryRead')}</button>
+          {query.error.message} <button onClick={() => void (runs.length ? fetchNextPage() : query.refetch())}>{t('context.retryRead')}</button>
         </p>
       )}
       {hasNextPage && !isFetching && !query.error && (
         <button ref={more} className="ghost" onClick={() => void fetchNextPage()}>{t('anchored.loadMore')}</button>
       )}
     </DocumentReadScope.Provider>
+    </DocumentEventReaderContext.Provider>
   );
 }
 

@@ -320,7 +320,7 @@ export function Dashboard() {
                   {!atLeast(role, 'member') ? (
                     <AccessDenied message={t('dashboard.sessionsAccessDenied')} />
                   ) : activeRepo ? (
-                    <AnchoredView key={activeRepo.id} repo={activeRepo} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
+                    <AnchoredView key={activeRepo.id} repo={activeRepo} repositoryId={selected?.id ?? null} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
                   ) : (
                     <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}

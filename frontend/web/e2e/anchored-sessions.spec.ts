@@ -74,11 +74,11 @@ function fixture(role: string, reads: string[], withRemote = false) {
     if (resource === 'anchored-sessions/claude/parent-session') return { body: session };
     if (resource === `anchored-commits/${sha('b')}`) return { body: [{ provider: 'claude', session_id: 'parent-session', segment_no: 2, rule: 'same-folder-and-time', segment: segments[1] }] };
     if (resource === `anchored-commits/${sha('c')}`) return { body: [{ provider: 'claude', session_id: 'parent-session', segment_no: 2, rule: 'same-folder-and-time', segment: segments[1] }] };
-    // A session's content is named by no snapshot, so only the plain pager may be asked for it.
-    if (resource === `docs/${doc}/events` && !searchParams.has('projection') && searchParams.get('view') === 'all') {
+    // A session's conversation is read by the session, never by its document's hash.
+    if (resource === 'anchored-sessions/claude/parent-session/events' && !searchParams.has('view') && searchParams.get('limit') === '20') {
       const offset = Number(searchParams.get('offset'));
       const end = Math.min(45, offset + 20);
-      return { body: { hash: doc, envelope: { cir_version: '2', source_provider: 'claude' }, total: 45, offset, next: end === 45 ? -1 : end, inherited: 0,
+      return { body: { offset, next: end === 45 ? -1 : end,
         events: Array.from({ length: end - offset }, (_, index) => ({ kind: 'message', role: index % 2 ? 'assistant' : 'user', seq: offset + index, event_index: offset + index,
           blocks: [{ type: 'text', text: `conversation ${offset + index}` }] })) } };
     }

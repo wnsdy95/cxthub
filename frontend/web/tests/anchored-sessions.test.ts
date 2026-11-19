@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredSegmentCommits, anchoredStream, buildAnchoredIndex,
+  anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredOpenStarts, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredSegmentCommits, anchoredStart,
+  anchoredStream, buildAnchoredIndex,
   type AnchoredRemote,
 } from '../src/anchoredSessions';
 import type { AnchoredNote, AnchoredSessionBody, AnchoredSessionSummary, BranchLifetime, RemoteCommit } from '../src/types';
@@ -102,7 +103,7 @@ test('parts default the range fields the wire leaves out when they are zero', ()
 test('the conversation gets a divider where each part begins, also for a part with no event', () => {
   const parts = anchoredParts(body);
   const events = (from: number, count: number) => Array.from({ length: count }, (_, offset) => from + offset);
-  const shape = (loaded: number[], first: number) => anchoredStream(loaded, parts, first)
+  const shape = (loaded: number[], first: number) => anchoredStream(loaded.length ? [{ offset: loaded[0], events: loaded }] : [], parts, first)
     .map(item => (item.kind === 'divider' ? `|${item.part.kind}${item.part.no}` : item.events.join(',')));
 
   assert.deepEqual(shape([], 0), ['|segment1'], 'before anything is read only the first part is announced');
@@ -111,6 +112,50 @@ test('the conversation gets a divider where each part begins, also for a part wi
   assert.deepEqual(shape(events(0, 10), 0), ['|segment1', '0,1,2,3,4,5', '|segment2', '|uncommitted0', '6,7,8,9']);
   assert.deepEqual(shape(events(6, 2), 1), ['|segment2', '|uncommitted0', '6,7'], 'opened at the second segment');
   assert.deepEqual(shape(events(6, 4), 2), ['|uncommitted0', '6,7,8,9'], 'opened at the part after the last commit');
+});
+
+// Another member reads the first segment and the beginning of the uncommitted part; the second segment is not open.
+const shared: AnchoredSessionBody = {
+  ...body,
+  segments: [
+    body.segments[0],
+    { first: '', last: '', first_ordinal: 0, last_ordinal: 0, commands: 0, closes_turn: false, commits: [], hidden: true },
+    { first: 'm7', last: 'm8', first_ordinal: 6, last_ordinal: 7, commands: 1, first_event: 6, events: 2, closes_turn: false, commits: [{ sha: sha('c'), rule: 'printed-number' }] },
+  ],
+  uncommitted: { first_ordinal: 8, last_ordinal: 8, commands: 0, first_event: 12, events: 1, unplaced: false, partial: true, first: '', last: '',
+    places: [{ worktree: '', branch: 'main', rule: 'recorded-by-tool' }] },
+  content: { events: 16 },
+};
+
+test('a part that is not open keeps its place and holds no events', () => {
+  const parts = anchoredParts(shared);
+  assert.deepEqual(parts.map(part => [part.kind, part.no, part.hidden, part.partial]),
+    [['segment', 1, false, false], ['segment', 2, true, false], ['segment', 3, false, false], ['uncommitted', 0, false, true]]);
+  assert.equal(anchoredStart(parts, 0), 0);
+  assert.equal(anchoredStart(parts, 1), 6, 'a link to a part that is not open starts at the next open one');
+  assert.equal(anchoredStart(parts.slice(1, 2), 0), undefined);
+  assert.deepEqual(anchoredOpenStarts(parts), [0, 6, 12]);
+});
+
+test('reading goes on past a part that is not open', () => {
+  const parts = anchoredParts(shared);
+  const run = (offset: number, count: number) => ({ offset, events: Array.from({ length: count }, (_, position) => offset + position) });
+  const shape = (runs: { offset: number; events: number[] }[], first: number) => anchoredStream(runs, parts, first)
+    .map(item => (item.kind === 'divider' ? `|${item.part.kind}${item.part.no}` : item.events.join(',')));
+  assert.deepEqual(shape([run(0, 6)], 0), ['|segment1', '0,1,2,3,4,5', '|segment2', '|segment3'], 'the closed part is announced once what is before it is read');
+  assert.deepEqual(shape([run(0, 6), run(6, 2)], 0), ['|segment1', '0,1,2,3,4,5', '|segment2', '|segment3', '6,7']);
+  assert.deepEqual(shape([run(0, 6), run(6, 2), run(12, 1)], 0), ['|segment1', '0,1,2,3,4,5', '|segment2', '|segment3', '6,7', '|uncommitted0', '12']);
+  assert.deepEqual(shape([], 1), ['|segment2', '|segment3'], 'opened at the closed part');
+});
+
+test('another member\'s places name no worktree and make no worktree row', () => {
+  const index = buildAnchoredIndex([{
+    provider: 'claude', session_id: 'theirs', sub: false, revision: 1, body_hash: '', records: 2, commands: 1, segments: 0, content: true, commits: [],
+    uncommitted: { commands: 1, places: [{ worktree: '', branch: 'main', rule: 'recorded-by-tool' }], unplaced: false }, updated_at: at(1),
+    uploader: 'u_other', shared: true,
+  }], []);
+  assert.deepEqual(index.worktrees, []);
+  assert.deepEqual(index.branches.find(branch => branch.name === 'main')?.current.sessions, [anchoredKey('claude', 'theirs')]);
 });
 
 test('agent calls are grouped by the other party they name', () => {

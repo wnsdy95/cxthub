@@ -77,10 +77,11 @@ function render(selection?: AnchoredSelection, withRemote = false, sessions = su
   client.setQueryData(['branch-lifetimes', repo.id], lifetimes);
   client.setQueryData(['anchored-commit', repo.id, sha('b'), 'claude:parent-session@2'], commitSegments);
   client.setQueryData(['anchored-session', repo.id, 'claude', 'parent-session', 2], session);
-  client.setQueryData(['anchored-events', repo.id, doc, 0], { pageParams: [0], pages: [{ hash: doc, offset: 0, total: 4, inherited: 0, next: -1, events: [
+  // The conversation is read by the session, never by its document's hash.
+  client.setQueryData(['anchored-events', repo.id, 'claude', 'parent-session', 2, 0], { pageParams: [0], pages: [{ offset: 0, next: -1, events: [
     message(0, 'user', 'Write the parser.'), message(1, 'assistant', 'Committed the parser.'), message(2, 'assistant', 'Fixed the parser.'), message(3, 'user', 'What is left?'),
   ] }] });
-  client.setQueryData(['anchored-events', repo.id, doc, 2], { pageParams: [2], pages: [{ hash: doc, offset: 2, total: 4, inherited: 0, next: 3, events: [message(2, 'assistant', 'Fixed the parser.')] }] });
+  client.setQueryData(['anchored-events', repo.id, 'claude', 'parent-session', 2, 2], { pageParams: [2], pages: [{ offset: 2, next: 3, events: [message(2, 'assistant', 'Fixed the parser.')] }] });
   return renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client },
     createElement(AnchoredView, { repo, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
 }
@@ -96,7 +97,7 @@ assert.match(overview, /Add the parser<\/span>.*?1 segment</s);
 assert.match(overview, /href="\/alice\/app\?tab=sessions&amp;session=claude%3Aparent-session"/);
 assert.match(overview, /<summary>1 sub-session<\/summary>/, 'a spawned session sits under its parent');
 assert.match(overview, /location unknown/, 'an uncommitted part with no place is marked, not guessed');
-assert.match(overview, /Only your own sessions are shown/);
+assert.match(overview, /Your sessions are shown in full; a teammate&#x27;s, as far as it is pushed\./);
 
 // A commit: the segment that ends at it, the other commit of the same segment, the session spawned in it.
 const commit = render({ kind: 'commit', sha: sha('b') });
@@ -174,6 +175,52 @@ assert.match(featureBranch.slice(featureBranch.indexOf('<h6>Earlier use')), /No 
 // A worktree: the branch checked out in it; one no session worked in has no context and takes a note.
 assert.match(render({ kind: 'worktree', name: 'app', machine: 'laptop' }, true), /Checked out now: <a class="ref-badge branch"[^>]*>feature<\/a>/);
 assert.match(render({ kind: 'worktree', name: 'scratch', machine: 'laptop' }, true), /removed worktree.*?No context.*?Write a note/s);
+
+// A teammate's session: listed with its uploader, read as far as it is pushed. The second segment is not open; the part
+// after the last commit is open up to the last push. Its places name no worktree, and its notes are read but not changed.
+const theirs: AnchoredSessionSummary = { provider: 'claude', session_id: 'their-session', sub: false, revision: 1, body_hash: `sha256:${'0'.repeat(64)}`,
+  records: 3, commands: 1, segments: 1, content: true, updated_at: at(55), uploader: 'bob-id', shared: true,
+  commits: [{ sha: sha('a'), segment_no: 1, rule: 'printed-number', subject: 'Add the parser', on_remote: true }],
+  uncommitted: { commands: 0, unplaced: false, places: [{ worktree: '', branch: 'feature', rule: 'recorded-by-tool' }] } };
+const theirSession: AnchoredSession = { ...session, session_id: 'their-session', uploader: 'bob-id', revision: 1, body: {
+  rule_version: 1, sub: false, scope: 'working-folder', records: 3, commands: 1, copied_records: 0,
+  segments: [session.body.segments[0], { first: '', last: '', first_ordinal: 0, last_ordinal: 0, commands: 0, closes_turn: false, commits: [], hidden: true }],
+  uncommitted: { first: '', last: '', first_ordinal: 4, last_ordinal: 4, commands: 0, first_event: 3, events: 1, unplaced: false, partial: true,
+    places: [{ worktree: '', branch: 'feature', rule: 'recorded-by-tool' }] },
+  content: { events: 4 },
+} };
+function renderShared(selection?: AnchoredSelection): string {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(['me'], { id: 'alice-id', username: 'alice' });
+  client.setQueryData(['members', repository.id], [{ role: 'member', user_id: 'bob-id', user: { id: 'bob-id', username: 'bob' } }]);
+  client.setQueryData(['anchored-sessions', repo.id], [theirs]);
+  client.setQueryData(['branch-lifetimes', repo.id], lifetimes);
+  client.setQueryData(['anchored-notes', repo.id], [{ ...notes[0], author: 'bob-id' }]);
+  client.setQueryData(['remote-git', repo.id], { pageParams: [''], pages: [remotePage] });
+  client.setQueryData(['reported-worktrees', repo.id], []);
+  client.setQueryData(['anchored-session', repo.id, 'claude', 'their-session', 1], theirSession);
+  client.setQueryData(['anchored-events', repo.id, 'claude', 'their-session', 1, 0], { pageParams: [0, 3], pages: [
+    { offset: 0, next: -1, events: [message(0, 'user', 'Write the parser.'), message(1, 'assistant', 'Committed the parser.')] },
+    { offset: 3, next: -1, events: [message(3, 'user', 'What is left?')] },
+  ] });
+  return renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client },
+    createElement(AnchoredView, { repo, repositoryId: repository.id, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
+}
+const sharedList = renderShared();
+assert.match(sharedList, /their-se<\/code><\/a><span class="ref-badge joined">bob<\/span>/, 'a teammate\'s session names its uploader');
+assert.doesNotMatch(sharedList, /worktree=&amp;|<span class="anchor-nav-name"><\/span>/, 'a teammate\'s places make no worktree');
+const sharedOpened = renderShared({ kind: 'session', provider: 'claude', id: 'their-session' });
+assert.match(sharedOpened, /Session of bob\. You see the parts that are pushed\./);
+assert.match(sharedOpened, /<span>Segment 2<\/span><span class="ref-badge pending">not pushed yet<\/span>/);
+assert.match(sharedOpened, /shown up to the last push/);
+assert.match(sharedOpened, /Write the parser\..*?Committed the parser\..*?class="session-divider anchor-divider hidden"[^>]*data-part="2">Segment 2<span> · not pushed yet, so not shown<\/span>.*?data-part="rest">After the last commit<\/div>.*?What is left\?/s,
+  'reading goes on past the part that is not open');
+assert.doesNotMatch(sharedOpened, /Fixed the parser\./);
+assert.doesNotMatch(sharedOpened, /Calls between agents/);
+const sharedNote = renderShared({ kind: 'commit', sha: sha('d') });
+assert.match(sharedNote, /data-note="note_a{32}".*?manual note<\/span><em>bob<\/em>.*?Applied by hand\./s);
+assert.doesNotMatch(sharedNote, /class="ghost mini"[^>]*>(Edit|Delete)<\/button>/, 'only its author changes or removes a note');
+assert.match(quiet, /class="ghost mini"[^>]*>Edit<\/button>/, 'the author does');
 
 assert.match(translate('ko', 'anchored.noContext'), /\uB9E5\uB77D \uC5C6\uC74C/);
 assert.match(translate('ko', 'anchored.unplaced'), /\uC704\uCE58 \uBBF8\uC0C1/);

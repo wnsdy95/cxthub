@@ -39,3 +39,19 @@ export function validateDocFragment(page: DocFragmentPage, index: number, offset
   }
   return page;
 }
+
+/** A page of a session's conversation as one reader may read it. `next` is -1 at the end of what is open from here. */
+export interface AnchoredEventPage { events: DocViewEventPage['events']; offset: number; next: number }
+
+export function validateAnchoredEventPage(page: AnchoredEventPage, requested: number, limit: number): AnchoredEventPage {
+  if (!Array.isArray(page.events) || page.events.length > limit || !Number.isSafeInteger(page.offset) || !Number.isSafeInteger(page.next) ||
+      page.offset !== requested || (page.next !== -1 && (page.events.length === 0 || page.next !== page.offset + page.events.length))) {
+    throw new Error('Invalid session conversation page');
+  }
+  const events = page.events.map((event, index) => {
+    const absolute = page.offset + index;
+    if (event.event_index !== undefined && event.event_index !== absolute) throw new Error('Invalid session conversation event index');
+    return { ...event, event_index: absolute };
+  });
+  return { ...page, events };
+}

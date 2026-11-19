@@ -791,12 +791,15 @@ export interface AnchoredRange {
   started_at?: string; ended_at?: string; first_event?: number; events?: number;
 }
 export interface AnchoredCommit { sha: string; rule: AnchoredLinkRule; created_at?: string; authored_at?: string; author_email?: string; subject?: string }
-export interface AnchoredSegment extends AnchoredRange { closes_turn: boolean; commits: AnchoredCommit[] }
+/** `hidden` is set in what another member reads of a session: the segment is not open and keeps only its place. */
+export interface AnchoredSegment extends AnchoredRange { closes_turn: boolean; commits: AnchoredCommit[]; hidden?: boolean }
 export interface AnchoredPlace { worktree: string; branch?: string; removed?: boolean; rule: AnchoredPlaceRule }
-export interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; unplaced: boolean }
+/** `partial` is set in what another member reads of a session: the part is open up to here and goes on. */
+export interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; unplaced: boolean; partial?: boolean }
 export interface AnchoredSpawn { at_record: string; at_ordinal: number; rule: AnchoredSpawnRule }
 export interface AnchoredAgentCall { tool: string; from: string; to: string[]; status?: string; at?: string; record?: string }
-export interface AnchoredContent { doc: string; identity?: string; events: number }
+/** The conversation of a session. `doc` is given to the uploader only; everyone reads the conversation through the session. */
+export interface AnchoredContent { doc?: string; identity?: string; events: number }
 export interface AnchoredSessionBody {
   rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url'; machine?: string;
   started_at?: string; ended_at?: string; records: number; commands: number; copied_records: number; copied_from?: string[]; file_copies?: number;
@@ -817,6 +820,8 @@ export interface AnchoredSessionSummary {
   provider: AnchoredProvider; session_id: string; parent?: string; sub: boolean; revision: number; body_hash: string;
   records: number; commands: number; segments: number; machine?: string; started_at?: string; ended_at?: string; content: boolean;
   commits: AnchoredSummaryCommit[]; uncommitted?: AnchoredSummaryUncommitted; spawned_in?: AnchoredSummarySpawn; updated_at: string;
+  /** The account the session belongs to. `shared` is true when that is another member: the summary then holds only what is open to the team. */
+  uploader?: string; shared?: boolean;
 }
 export interface AnchoredCommitSegment { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; segment: AnchoredSegment }
 export interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }

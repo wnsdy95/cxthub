@@ -15,6 +15,7 @@ import { pendingStateRows } from './pendingState';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseSocialIdToken, firebaseVerification, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 import { useDocumentReadScope } from './documentReadScope';
+import { useDocumentEventReader } from './documentEventReader';
 import { documentBodyKey } from './documentPageCache';
 
 // ── Authentication/Query ─────────────────────────────────────────
@@ -314,9 +315,10 @@ export function useMemory(repoId: string | null, memoryHash: string | null, enab
 }
 export function useDocEvent(repoId: string, hash: string, index: number) {
   const owner = useDocumentReadScope();
+  const reader = useDocumentEventReader();
   return useQuery({
     queryKey: owner ? documentBodyKey(owner, 'event', repoId, hash, index) : ['doc-event-detail', repoId, hash, index],
-    queryFn: ({ signal }) => api.getDocEvent(repoId, hash, index, signal),
+    queryFn: ({ signal }) => (reader ? reader.event(index, signal) : api.getDocEvent(repoId, hash, index, signal)),
     enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
     gcTime: owner ? Infinity : 0,
@@ -331,9 +333,10 @@ export function useDocEvent(repoId: string, hash: string, index: number) {
 
 export function useDocEventFragment(repoId: string, hash: string, index: number, offset: number) {
   const owner = useDocumentReadScope();
+  const reader = useDocumentEventReader();
   return useQuery({
     queryKey: owner ? documentBodyKey(owner, 'fragment', repoId, hash, index, offset) : ['doc-event-fragment', repoId, hash, index, offset],
-    queryFn: ({ signal }) => api.getDocEventFragment(repoId, hash, index, offset, signal),
+    queryFn: ({ signal }) => (reader ? reader.fragment(index, offset, signal) : api.getDocEventFragment(repoId, hash, index, offset, signal)),
     enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
     gcTime: owner ? Infinity : 0,
@@ -585,12 +588,17 @@ export function useAnchoredSession(repoId: string | null, provider: string | nul
  * Reads a session's conversation from one event onward, a page at a time. The
  * document is not named by any snapshot, so it is read with the plain pager.
  */
-export function useAnchoredEvents(repoId: string, hash: string, start: number, enabled: boolean) {
+/**
+ * A session's conversation from `start`, read by the session. What another
+ * member reads can have gaps where parts are not open: a page ends at a gap,
+ * and reading goes on at the next open part, among `starts`.
+ */
+export function useAnchoredEvents(repoId: string, provider: string, sessionId: string, revision: number, start: number, starts: number[], enabled: boolean) {
   return useInfiniteQuery({
-    queryKey: ['anchored-events', repoId, hash, start],
-    queryFn: ({ pageParam, signal }) => api.getDocViewEvents(repoId, hash, undefined, pageParam, 'all', signal),
+    queryKey: ['anchored-events', repoId, provider, sessionId, revision, start],
+    queryFn: ({ pageParam, signal }) => api.anchoredEvents(repoId, provider, sessionId, pageParam, signal),
     initialPageParam: start,
-    getNextPageParam: page => (page.next === -1 ? undefined : page.next),
+    getNextPageParam: page => (page.next !== -1 ? page.next : starts.find(next => next >= page.offset + Math.max(page.events.length, 1))),
     enabled,
     ...documentReadRetry,
     staleTime: Infinity,
@@ -801,4 +809,15 @@ export function useLogout() {
       qc.getMutationCache().clear();
     },
   });
+}
+
+/** The names of a repository's members by account, for what another member wrote or uploaded. */
+export function useAccountNames(repositoryId: string | null, enabled: boolean) {
+  const members = useQuery({
+    queryKey: ['members', repositoryId],
+    queryFn: () => api.listMembers(repositoryId as string),
+    enabled: Boolean(repositoryId) && enabled,
+    retry: false,
+  });
+  return useMemo(() => new Map((members.data ?? []).map(member => [member.user_id, member.user?.username ?? member.user_id])), [members.data]);
 }

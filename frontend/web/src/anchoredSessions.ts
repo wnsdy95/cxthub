@@ -179,16 +179,17 @@ export function buildAnchoredIndex(
     const key = anchoredKey(summary.provider, summary.session_id);
     if (part.unplaced) unplaced.push(key);
     for (const place of part.places) {
-      const machine = summary.machine ?? '';
-      const worktreeKey = `${machine}\n${place.worktree}`;
-      let row = worktreeRows.get(worktreeKey);
-      if (!row) worktreeRows.set(worktreeKey, row = { key: worktreeKey, name: place.worktree, machine, removed: false, sessions: [], branches: [] });
-      if (!reported.has(worktreeKey)) row.removed ||= Boolean(place.removed);
-      pushUnique(row.sessions, key);
-      if (place.branch) {
-        pushUnique(row.branches, place.branch);
-        pushUnique(branchUse(branchRow(place.branch), part.ended_at ?? part.started_at).sessions, key);
+      // Another member's worktrees are theirs alone: their places name only the branch.
+      if (place.worktree && !summary.shared) {
+        const machine = summary.machine ?? '';
+        const worktreeKey = `${machine}\n${place.worktree}`;
+        let row = worktreeRows.get(worktreeKey);
+        if (!row) worktreeRows.set(worktreeKey, row = { key: worktreeKey, name: place.worktree, machine, removed: false, sessions: [], branches: [] });
+        if (!reported.has(worktreeKey)) row.removed ||= Boolean(place.removed);
+        pushUnique(row.sessions, key);
+        if (place.branch) pushUnique(row.branches, place.branch);
       }
+      if (place.branch) pushUnique(branchUse(branchRow(place.branch), part.ended_at ?? part.started_at).sessions, key);
     }
   }
   const worktrees = [...worktreeRows.values()].sort((a, b) => a.name.localeCompare(b.name) || a.machine.localeCompare(b.machine));
@@ -237,16 +238,20 @@ export interface AnchoredPart {
   commits: AnchoredCommit[];
   places: AnchoredPlace[];
   unplaced: boolean;
+  /** Another member's session: the part is not open, and only its place is known. */
+  hidden: boolean;
+  /** Another member's session: the part is open up to here and goes on. */
+  partial: boolean;
 }
 export function anchoredParts(body: AnchoredSessionBody): AnchoredPart[] {
   const parts: AnchoredPart[] = body.segments.map((segment, index) => ({
     kind: 'segment', no: index + 1, range: segment, firstEvent: segment.first_event ?? 0, events: segment.events ?? 0,
-    commits: segment.commits, places: [], unplaced: false,
+    commits: segment.commits, places: [], unplaced: false, hidden: Boolean(segment.hidden), partial: false,
   }));
   if (body.uncommitted) {
     const part = body.uncommitted;
     parts.push({ kind: 'uncommitted', no: 0, range: part, firstEvent: part.first_event ?? 0, events: part.events ?? 0,
-      commits: [], places: part.places, unplaced: part.unplaced });
+      commits: [], places: part.places, unplaced: part.unplaced, hidden: false, partial: Boolean(part.partial) });
   }
   return parts;
 }
@@ -256,22 +261,46 @@ export function anchoredPartIndex(parts: AnchoredPart[], segment?: number, rest?
     : rest ? parts.findIndex(part => part.kind === 'uncommitted') : -1;
   return found < 0 ? 0 : found;
 }
+/** Where reading the conversation starts for the parts from `first` on: the first open part's first event, or undefined when none is open. */
+export function anchoredStart(parts: AnchoredPart[], first: number): number | undefined {
+  return parts.slice(first).find(part => !part.hidden)?.firstEvent;
+}
+/** The first events of the open parts that hold events: where reading goes on after a part that is not open. */
+export function anchoredOpenStarts(parts: AnchoredPart[]): number[] {
+  return parts.filter(part => !part.hidden && part.events > 0).map(part => part.firstEvent).sort((a, b) => a - b);
+}
 
 export type AnchoredStreamItem<Event> = { kind: 'divider'; part: AnchoredPart } | { kind: 'events'; part: AnchoredPart; events: Event[] };
+/** Events read in one request, from `offset` on, in order. */
+export interface AnchoredEventRun<Event> { offset: number; events: Event[] }
 /**
  * Lays out the events read so far with a divider where each part begins.
- * `events` holds the document's events from the first shown part onward, in
- * order and without gaps. A part is announced once reading has reached it, so
- * a part with no event of its own still gets its divider.
+ * `runs` hold the conversation's events from the first shown part onward, in
+ * order: each run starts where the one before ended, or at a later open part
+ * when the parts between are not open. A part is announced once reading has
+ * reached it, so a part with no event of its own still gets its divider, and
+ * so does a part that is not open, which holds none.
  */
-export function anchoredStream<Event>(events: Event[], parts: AnchoredPart[], first: number): AnchoredStreamItem<Event>[] {
-  const start = parts[first]?.firstEvent ?? 0;
+export function anchoredStream<Event>(runs: AnchoredEventRun<Event>[], parts: AnchoredPart[], first: number): AnchoredStreamItem<Event>[] {
+  const start = anchoredStart(parts, first) ?? Infinity;
+  const read = new Map<number, Event>();
+  for (const run of runs) run.events.forEach((event, position) => read.set(run.offset + position, event));
+  const last = runs.at(-1);
+  const reached = last ? last.offset + last.events.length : start;
   const items: AnchoredStreamItem<Event>[] = [];
+  let cursor = start;
   for (const part of parts.slice(first)) {
-    if (part.firstEvent - start > events.length) break;
+    if (part.hidden) {
+      if (cursor > reached) break;
+      items.push({ kind: 'divider', part });
+      continue;
+    }
+    if (part.firstEvent > reached) break;
     items.push({ kind: 'divider', part });
-    const own = events.slice(part.firstEvent - start, part.firstEvent - start + part.events);
+    const own: Event[] = [];
+    for (let index = part.firstEvent; index < part.firstEvent + part.events && read.has(index); index++) own.push(read.get(index) as Event);
     if (own.length) items.push({ kind: 'events', part, events: own });
+    cursor = part.firstEvent + part.events;
   }
   return items;
 }
