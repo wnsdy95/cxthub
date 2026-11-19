@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AnchoredSelection } from '../route';
 import type { AnchoredProvider, Repo } from '../types';
-import { useAnchoredEvents, useAnchoredSession } from '../hooks';
+import { useAnchoredEvents, useAnchoredSession, useAnchoredSessionCalls } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredKey, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredShortId, anchoredShortSha, anchoredStream,
   type AnchoredIndex, type AnchoredPart, type AnchoredPartner,
@@ -24,7 +24,11 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
   const sessionQ = useAnchoredSession(repo.id, provider, sessionId, index.sessions.get(anchoredKey(provider, sessionId))?.revision);
   const body = sessionQ.data?.body;
   const parts = useMemo(() => (body ? anchoredParts(body) : []), [body]);
-  const partners = useMemo(() => anchoredPartners(sessionId, body?.agent_calls ?? []), [sessionId, body]);
+  // The calls a session received sit in other sessions' reports; the server gathers both directions.
+  // Until that answer arrives, the calls this session made are shown from its own report.
+  const reports = useMemo(() => [...index.sessions.values()].reduce((sum, summary) => sum + summary.revision, index.sessions.size), [index.sessions]);
+  const callsQ = useAnchoredSessionCalls(repo.id, provider, sessionId, String(reports));
+  const partners = useMemo(() => anchoredPartners(sessionId, callsQ.data ?? body?.agent_calls ?? []), [sessionId, callsQ.data, body]);
   if (sessionQ.isLoading) return <div className="skel" role="status" aria-label={t('anchored.loading')} style={{ height: 120 }} />;
   if (sessionQ.error || !body) {
     return (

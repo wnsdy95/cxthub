@@ -606,6 +606,62 @@ export function useAnchoredCommit(repoId: string | null, sha: string | null, rev
     placeholderData: keepPreviousData,
   });
 }
+/** The recorded agent calls that name a session as sender or receiver. */
+export function useAnchoredSessionCalls(repoId: string | null, provider: string | null, sessionId: string | null, revisions = '') {
+  return useQuery({
+    queryKey: ['anchored-session-calls', repoId, provider, sessionId, revisions],
+    queryFn: ({ signal }) => api.anchoredSessionCalls(repoId as string, provider as string, sessionId as string, signal),
+    enabled: Boolean(repoId && provider && sessionId),
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+export function useReportedWorktrees(repoId: string | null) {
+  return useQuery({
+    queryKey: ['reported-worktrees', repoId],
+    queryFn: ({ signal }) => api.reportedWorktrees(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
+// Manual notes — the caller's own. A write stores the note the server
+// answered with, because the server masks the text before it keeps it.
+export function useAnchoredNotes(repoId: string | null) {
+  return useQuery({
+    queryKey: ['anchored-notes', repoId],
+    queryFn: ({ signal }) => api.anchoredNotes(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+  });
+}
+export function useSaveAnchoredNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: { repoId: string; noteId?: string; target: import('./types').AnchoredNoteTarget; body: string }) =>
+      value.noteId ? api.updateAnchoredNote(value.repoId, value.noteId, value.body) : api.createAnchoredNote(value.repoId, value.target, value.body),
+    onSuccess: (_note, value) => qc.invalidateQueries({ queryKey: ['anchored-notes', value.repoId] }),
+  });
+}
+export function useDeleteAnchoredNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: { repoId: string; noteId: string }) => api.deleteAnchoredNote(value.repoId, value.noteId),
+    onSuccess: (_result, value) => qc.invalidateQueries({ queryKey: ['anchored-notes', value.repoId] }),
+  });
+}
+/** Commits, branches and pull requests as the server read them from the hosting provider, newest commits first. */
+export function useRemoteGit(repoId: string | null) {
+  return useInfiniteQuery({
+    queryKey: ['remote-git', repoId],
+    queryFn: ({ pageParam, signal }) => api.remoteGit(repoId as string, pageParam, signal),
+    initialPageParam: '',
+    getNextPageParam: page => page.next || undefined,
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
 // Invite list/redemption — only maintainers can view (403 is disabled).
 export function useInvites(repositoryId: string | null, enabled: boolean) {
   return useQuery({

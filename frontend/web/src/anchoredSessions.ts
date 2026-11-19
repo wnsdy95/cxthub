@@ -2,9 +2,10 @@
 // reports into the lists the screen shows. Nothing here guesses: a list holds
 // only what a report or the branch ledger states.
 import type {
-  AnchoredAgentCall, AnchoredCommit, AnchoredLinkRule, AnchoredPlace, AnchoredProvider, AnchoredRange,
-  AnchoredSessionBody, AnchoredSessionSummary, BranchLifetime,
+  AnchoredAgentCall, AnchoredCommit, AnchoredLinkRule, AnchoredNote, AnchoredNoteTarget, AnchoredPlace, AnchoredProvider, AnchoredRange,
+  AnchoredSessionBody, AnchoredSessionSummary, BranchLifetime, RemoteBranch, RemoteCommit, RemotePull, ReportedWorktree,
 } from './types';
+import { commitsNotOn, type GitNode } from './anchoredGraph';
 
 export const ANCHORED_PROVIDERS: Record<AnchoredProvider, { name: string; ink: string }> = {
   claude: { name: 'Claude', ink: '#D97757' },
@@ -22,23 +23,55 @@ export function anchoredShortSha(sha: string): string {
   return sha.slice(0, 10);
 }
 
-export interface AnchoredCommitLink { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule }
-export interface AnchoredCommitRow { sha: string; subject: string; at: string; links: AnchoredCommitLink[] }
-export interface AnchoredWorktreeRow { key: string; name: string; machine: string; removed: boolean; sessions: string[]; branches: string[] }
+/** A segment that ends at a commit. `copyOf` is the commit the session made, when this row is a copy of it on the remote. */
+export interface AnchoredCommitLink { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; copyOf?: string }
+export interface AnchoredCommitRow extends GitNode {
+  subject: string;
+  links: AnchoredCommitLink[];
+  /** The remote holds this commit. False for a commit only a report names. */
+  remote: boolean;
+  author: string;
+  /** Remote branches whose newest commit this is. */
+  heads: string[];
+  /** Pull requests that list this commit, and the one merged as it. */
+  pulls: number[];
+  merged?: number;
+}
+export interface AnchoredWorktreeRow {
+  key: string; name: string; machine: string; removed: boolean; sessions: string[]; branches: string[];
+  /** The branch checked out in it, as the machine's own list last said. */
+  current?: string;
+}
 /** One use of a branch name: the name as it is now, or an earlier lifetime the ledger closed. */
 export interface AnchoredBranchUse { lifetime?: BranchLifetime; sessions: string[] }
-export interface AnchoredBranchRow { name: string; current: AnchoredBranchUse; earlier: AnchoredBranchUse[] }
+export interface AnchoredBranchRow {
+  name: string; current: AnchoredBranchUse; earlier: AnchoredBranchUse[];
+  /** The branch's newest commit on the remote, and the pull requests opened from it. */
+  head?: string;
+  pulls: RemotePull[];
+}
+/** What the server read from the hosting provider: the newest commits, every branch and pull request. */
+export interface AnchoredRemote {
+  /** False until the server has read the remote once: nothing can then be said about what the remote lacks. */
+  read: boolean;
+  defaultBranch: string; branches: RemoteBranch[]; pulls: RemotePull[]; commits: RemoteCommit[];
+}
 export interface AnchoredIndex {
   sessions: Map<string, AnchoredSessionSummary>;
   /** Sessions whose parent is not among the reports, newest first. */
   roots: AnchoredSessionSummary[];
   /** Spawned sessions by their parent's key, oldest first. */
   children: Map<string, AnchoredSessionSummary[]>;
-  /** Every commit a segment ends at, newest first. */
+  /** Every commit the remote lists or a segment ends at, newest first. */
   commits: AnchoredCommitRow[];
   commitBySha: Map<string, AnchoredCommitRow>;
   worktrees: AnchoredWorktreeRow[];
   branches: AnchoredBranchRow[];
+  /** Pull requests: open ones first, then the highest number first. */
+  pulls: RemotePull[];
+  defaultBranch: string;
+  /** The server has read the remote, so a commit it does not list is known to be missing there. */
+  remoteRead: boolean;
   /** Sessions whose uncommitted part could not be placed. */
   unplaced: string[];
 }
@@ -72,7 +105,11 @@ function branchUse(row: AnchoredBranchRow, at?: string): AnchoredBranchUse {
   }) ?? row.current;
 }
 
-export function buildAnchoredIndex(summaries: AnchoredSessionSummary[], lifetimes: BranchLifetime[] = []): AnchoredIndex {
+export function buildAnchoredIndex(
+  summaries: AnchoredSessionSummary[], lifetimes: BranchLifetime[] = [],
+  extra: { worktrees?: ReportedWorktree[]; remote?: AnchoredRemote } = {},
+): AnchoredIndex {
+  const remote = extra.remote;
   const sessions = new Map(summaries.map(summary => [anchoredKey(summary.provider, summary.session_id), summary]));
   const children = new Map<string, AnchoredSessionSummary[]>();
   const roots: AnchoredSessionSummary[] = [];
@@ -85,23 +122,41 @@ export function buildAnchoredIndex(summaries: AnchoredSessionSummary[], lifetime
   for (const list of children.values()) list.sort((a, b) => oldestFirst(a.started_at, b.started_at) || a.session_id.localeCompare(b.session_id));
 
   const commitBySha = new Map<string, AnchoredCommitRow>();
+  for (const commit of remote?.commits ?? []) {
+    commitBySha.set(commit.sha, { sha: commit.sha, parents: commit.parents, at: commit.committed_at, subject: commit.subject, links: [], remote: true,
+      author: commit.author_name ?? '', heads: [], pulls: [] });
+  }
   for (const summary of summaries) {
     for (const commit of summary.commits) {
-      const row = commitBySha.get(commit.sha) ?? { sha: commit.sha, subject: '', at: '', links: [] };
+      const link = { provider: summary.provider, session_id: summary.session_id, segment_no: commit.segment_no, rule: commit.rule };
+      // A commit that was rebased or cherry-picked is shown at its copies on the remote.
+      const copies = commit.on_remote ? [] : (commit.copies ?? []).filter(copy => commitBySha.get(copy)?.remote);
+      for (const copy of copies) commitBySha.get(copy)!.links.push({ ...link, copyOf: commit.sha });
+      if (copies.length > 0) continue;
+      const row = commitBySha.get(commit.sha) ?? { sha: commit.sha, parents: [], at: '', subject: '', links: [], remote: false, author: '', heads: [], pulls: [] };
       row.subject ||= commit.subject ?? '';
       row.at ||= commit.created_at ?? commit.authored_at ?? '';
-      row.links.push({ provider: summary.provider, session_id: summary.session_id, segment_no: commit.segment_no, rule: commit.rule });
+      row.links.push(link);
       commitBySha.set(commit.sha, row);
     }
+  }
+  for (const branch of remote?.branches ?? []) commitBySha.get(branch.sha)?.heads.push(branch.name);
+  const pulls = [...(remote?.pulls ?? [])].sort((a, b) => Number(b.state === 'open') - Number(a.state === 'open') || b.number - a.number);
+  for (const pull of pulls) {
+    for (const sha of pull.commits) commitBySha.get(sha)?.pulls.push(pull.number);
+    const merged = pull.merge_sha ? commitBySha.get(pull.merge_sha) : undefined;
+    if (merged) merged.merged = pull.number;
   }
   const commits = [...commitBySha.values()].sort((a, b) => newestFirst(a.at, b.at) || a.sha.localeCompare(b.sha));
 
   const branchRows = new Map<string, AnchoredBranchRow>();
   const branchRow = (name: string) => {
     let row = branchRows.get(name);
-    if (!row) branchRows.set(name, row = { name, current: { sessions: [] }, earlier: [] });
+    if (!row) branchRows.set(name, row = { name, current: { sessions: [] }, earlier: [], pulls: [] });
     return row;
   };
+  for (const branch of remote?.branches ?? []) branchRow(branch.name).head = branch.sha;
+  for (const pull of pulls) if (!pull.fork) branchRows.get(pull.head_ref)?.pulls.push(pull);
   for (const lifetime of [...lifetimes].sort((a, b) => newestFirst(a.opened_at, b.opened_at))) {
     const row = branchRow(lifetime.name);
     if (lifetime.closed_at) row.earlier.push({ lifetime, sessions: [] });
@@ -109,6 +164,14 @@ export function buildAnchoredIndex(summaries: AnchoredSessionSummary[], lifetime
   }
 
   const worktreeRows = new Map<string, AnchoredWorktreeRow>();
+  // The machine's own list says which worktrees exist, also one no session worked in.
+  const reported = new Set<string>();
+  for (const worktree of extra.worktrees ?? []) {
+    const machine = worktree.machine ?? '';
+    const key = `${machine}\n${worktree.name}`;
+    reported.add(key);
+    worktreeRows.set(key, { key, name: worktree.name, machine, removed: worktree.removed, sessions: [], branches: [], ...(worktree.branch ? { current: worktree.branch } : {}) });
+  }
   const unplaced: string[] = [];
   for (const summary of summaries) {
     const part = summary.uncommitted;
@@ -120,7 +183,7 @@ export function buildAnchoredIndex(summaries: AnchoredSessionSummary[], lifetime
       const worktreeKey = `${machine}\n${place.worktree}`;
       let row = worktreeRows.get(worktreeKey);
       if (!row) worktreeRows.set(worktreeKey, row = { key: worktreeKey, name: place.worktree, machine, removed: false, sessions: [], branches: [] });
-      row.removed ||= Boolean(place.removed);
+      if (!reported.has(worktreeKey)) row.removed ||= Boolean(place.removed);
       pushUnique(row.sessions, key);
       if (place.branch) {
         pushUnique(row.branches, place.branch);
@@ -130,7 +193,32 @@ export function buildAnchoredIndex(summaries: AnchoredSessionSummary[], lifetime
   }
   const worktrees = [...worktreeRows.values()].sort((a, b) => a.name.localeCompare(b.name) || a.machine.localeCompare(b.machine));
   const branches = [...branchRows.values()].sort((a, b) => a.name.localeCompare(b.name));
-  return { sessions, roots, children, commits, commitBySha, worktrees, branches, unplaced };
+  return { sessions, roots, children, commits, commitBySha, worktrees, branches, pulls, defaultBranch: remote?.defaultBranch ?? '', remoteRead: Boolean(remote?.read), unplaced };
+}
+
+/**
+ * The commits of a branch: the commit list of its pull request when it has
+ * one, otherwise the commits its base branch does not have yet. Newest first.
+ * `complete` is false when the list may be longer than what is known.
+ */
+export function anchoredBranchCommits(index: AnchoredIndex, name: string): { shas: string[]; complete: boolean; pull?: RemotePull } {
+  const branch = index.branches.find(row => row.name === name);
+  const pull = branch?.pulls.find(candidate => candidate.state === 'open') ?? branch?.pulls[0];
+  if (pull) return { shas: [...pull.commits].reverse(), complete: !pull.truncated, pull };
+  const base = index.branches.find(row => row.name === index.defaultBranch)?.head;
+  if (!branch?.head || !base || name === index.defaultBranch) return { shas: [], complete: true };
+  return commitsNotOn(index.commitBySha, branch.head, base);
+}
+
+function sameTarget(a: AnchoredNoteTarget, b: AnchoredNoteTarget): boolean {
+  if (a.kind === 'commit' && b.kind === 'commit') return a.commit === b.commit;
+  if (a.kind === 'branch' && b.kind === 'branch') return a.branch === b.branch && (a.ledger_id ?? '') === (b.ledger_id ?? '');
+  if (a.kind === 'worktree' && b.kind === 'worktree') return a.worktree === b.worktree && (a.machine ?? '') === (b.machine ?? '');
+  return false;
+}
+/** The notes written about one target, oldest first as the server lists them. */
+export function anchoredNotesFor(notes: AnchoredNote[], target: AnchoredNoteTarget): AnchoredNote[] {
+  return notes.filter(note => sameTarget(note.target, target));
 }
 
 /** The other commits that share a segment with this one: one command can make several commits. */

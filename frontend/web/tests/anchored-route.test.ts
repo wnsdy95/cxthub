@@ -9,6 +9,7 @@ const selections: [AnchoredSelection | undefined, string][] = [
   [{ kind: 'commit', sha }, `/alice/cxthub?tab=sessions&commit=${sha}`],
   [{ kind: 'branch', name: 'feature/login page' }, '/alice/cxthub?tab=sessions&branch=feature%2Flogin+page'],
   [{ kind: 'worktree', name: 'app' }, '/alice/cxthub?tab=sessions&worktree=app'],
+  [{ kind: 'pull', number: 571 }, '/alice/cxthub?tab=sessions&pull=571'],
   [{ kind: 'worktree', name: 'app', machine: 'work laptop' }, '/alice/cxthub?tab=sessions&worktree=app&machine=work+laptop'],
   [{ kind: 'session', provider: 'claude', id: '0f4b3c2a-1d5e' }, '/alice/cxthub?tab=sessions&session=claude%3A0f4b3c2a-1d5e'],
   [{ kind: 'session', provider: 'codex', id: 'thread_1', segment: 3 }, '/alice/cxthub?tab=sessions&session=codex%3Athread_1&segment=3'],
@@ -26,7 +27,7 @@ assert.deepEqual(parseRoute('/w/repository-1', `?tab=sessions&commit=${sha}`), {
 // A value that is not well formed selects nothing; it never reaches a request.
 for (const search of [
   '?tab=sessions&commit=abc', `?tab=sessions&commit=${sha.toUpperCase()}`, '?tab=sessions&session=claude', '?tab=sessions&session=other:abc',
-  '?tab=sessions&session=claude:a/b', `?tab=sessions&session=claude:${'x'.repeat(129)}`, '?tab=sessions&branch=', '?tab=sessions&worktree=a%0Ab', '?tab=sessions&show=everything',
+  '?tab=sessions&session=claude:a/b', `?tab=sessions&session=claude:${'x'.repeat(129)}`, '?tab=sessions&branch=', '?tab=sessions&worktree=a%0Ab', '?tab=sessions&show=everything', '?tab=sessions&pull=0', '?tab=sessions&pull=1e3',
 ]) {
   assert.deepEqual(parseRoute('/alice/cxthub', search), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions' }, search);
 }

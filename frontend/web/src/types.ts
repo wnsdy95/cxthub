@@ -806,7 +806,11 @@ export interface AnchoredSession {
   repo_id: string; provider: AnchoredProvider; session_id: string; uploader: string; revision: number; body_hash: string;
   created_at: string; updated_at: string; body: AnchoredSessionBody;
 }
-export interface AnchoredSummaryCommit { sha: string; segment_no: number; rule: AnchoredLinkRule; subject?: string; created_at?: string; authored_at?: string }
+export interface AnchoredSummaryCommit {
+  sha: string; segment_no: number; rule: AnchoredLinkRule; subject?: string; created_at?: string; authored_at?: string;
+  /** True when the remote holds the commit; otherwise `copies` names the remote commits that are copies of it. */
+  on_remote?: boolean; copies?: string[];
+}
 export interface AnchoredSummaryUncommitted { commands: number; started_at?: string; ended_at?: string; places: AnchoredPlace[]; unplaced: boolean }
 export interface AnchoredSummarySpawn { segment_no?: number; uncommitted?: boolean; rule: AnchoredSpawnRule }
 export interface AnchoredSessionSummary {
@@ -821,3 +825,21 @@ export interface BranchLifetime {
   linked: { id: string; linked_at: string; by: BranchEvidence }[];
   reopenings?: { closed_at: string; closed_by: BranchEvidence; reopened_at: string; reopened_by: BranchEvidence; name?: string }[];
 }
+/** What a manual note is attached to. Exactly the fields of its kind are present. */
+export type AnchoredNoteTarget =
+  | { kind: 'commit'; commit: string }
+  | { kind: 'branch'; branch: string; ledger_id?: string }
+  | { kind: 'worktree'; worktree: string; machine?: string };
+/** What a person wrote about a commit, a branch or a worktree. Kept apart from captured sessions. */
+export interface AnchoredNote { repo_id: string; id: string; target: AnchoredNoteTarget; author: string; body: string; created_at: string; updated_at: string }
+/** A working folder of the repository on one of the caller's machines, by name. */
+export interface ReportedWorktree { machine?: string; name: string; branch?: string; removed: boolean; first_seen_at: string; last_seen_at: string }
+/** Commits, branches and pull requests as the server read them from the hosting provider. */
+export interface RemoteCommit { sha: string; parents: string[]; author_name?: string; authored_at: string; committed_at: string; subject: string }
+export interface RemoteBranch { name: string; sha: string }
+export interface RemotePull {
+  number: number; title: string; state: 'open' | 'closed' | 'merged'; head_ref: string; head_sha: string; base_ref: string;
+  merge_sha?: string; fork?: boolean; commits: string[]; truncated?: boolean; updated_at: string;
+}
+/** One page. `branches`, `pulls`, `default_branch` and `synced_at` come with the first page only. */
+export interface RemoteGitView { default_branch?: string; synced_at?: string; branches?: RemoteBranch[]; pulls?: RemotePull[]; commits: RemoteCommit[]; next?: string }

@@ -13,6 +13,7 @@ export type AnchoredSelection =
  | { kind: 'commit'; sha: string }
  | { kind: 'branch'; name: string }
  | { kind: 'worktree'; name: string; machine?: string }
+ | { kind: 'pull'; number: number }
  | { kind: 'session'; provider: 'claude' | 'codex'; id: string; segment?: number; rest?: true };
 const SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const COMMIT_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -48,6 +49,7 @@ export function anchoredPath(repository: RepositoryAddress, selection?: Anchored
   params.set('worktree', selection.name);
   if (selection.machine) params.set('machine', selection.machine);
  }
+ if (selection?.kind === 'pull') params.set('pull', String(selection.number));
  if (selection?.kind === 'session') {
   params.set('session', `${selection.provider}:${selection.id}`);
   if (selection.segment) params.set('segment', String(selection.segment));
@@ -69,6 +71,8 @@ export function parseAnchoredSelection(query: URLSearchParams): AnchoredSelectio
  }
  const commit = query.get('commit');
  if (commit !== null) return COMMIT_SHA.test(commit) ? { kind: 'commit', sha: commit } : undefined;
+ const pull = query.get('pull');
+ if (pull !== null) return /^[1-9][0-9]{0,8}$/.test(pull) ? { kind: 'pull', number: Number(pull) } : undefined;
  const branch = query.get('branch');
  if (branch !== null) return PLACE_NAME.test(branch) ? { kind: 'branch', name: branch } : undefined;
  const worktree = query.get('worktree');

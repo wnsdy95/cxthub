@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  anchoredKey, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredSegmentCommits, anchoredStream, buildAnchoredIndex,
+  anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredSegmentCommits, anchoredStream, buildAnchoredIndex,
+  type AnchoredRemote,
 } from '../src/anchoredSessions';
-import type { AnchoredSessionBody, AnchoredSessionSummary, BranchLifetime } from '../src/types';
+import type { AnchoredNote, AnchoredSessionBody, AnchoredSessionSummary, BranchLifetime, RemoteCommit } from '../src/types';
 
 const sha = (letter: string) => letter.repeat(40);
 const at = (minute: number) => `2031-01-02T03:${String(minute).padStart(2, '0')}:00Z`;
@@ -124,4 +125,89 @@ test('agent calls are grouped by the other party they name', () => {
     ['worker-a', 1, 1, ['spawn_agent', 'send_input']],
     ['worker-b', 2, 0, ['spawn_agent', 'send_input']],
   ], 'a call between two other agents belongs to neither list');
+});
+
+// main: a - b - m (merge commit of pull request 7: f1, f2); topic: b - t1 (no pull request); f3 was made locally and never pushed.
+const remoteCommit = (letter: string, minute: number, ...parents: string[]): RemoteCommit =>
+  ({ sha: sha(letter), parents: parents.map(sha), author_name: 'Dev', authored_at: at(minute), committed_at: at(minute), subject: `commit ${letter}` });
+const remote: AnchoredRemote = {
+  read: true, defaultBranch: 'main',
+  branches: [{ name: 'main', sha: sha('e') }, { name: 'topic', sha: sha('9') }, { name: 'feature', sha: sha('2') }],
+  pulls: [
+    { number: 7, title: 'Add the feature', state: 'merged', head_ref: 'feature', head_sha: sha('2'), base_ref: 'main', merge_sha: sha('e'), commits: [sha('1'), sha('2')], updated_at: at(30) },
+    { number: 9, title: 'From a fork', state: 'open', head_ref: 'feature', head_sha: sha('8'), base_ref: 'main', fork: true, commits: [sha('8')], updated_at: at(40) },
+  ],
+  commits: [remoteCommit('a', 1), remoteCommit('b', 2, 'a'), remoteCommit('1', 3, 'b'), remoteCommit('2', 4, '1'), remoteCommit('e', 5, 'b', '2'), remoteCommit('9', 6, 'b')],
+};
+
+test('the commit list holds what the remote lists and what only a report names', () => {
+  const index = buildAnchoredIndex([
+    summary('one', { segments: 3, commits: [
+      { sha: sha('1'), segment_no: 1, rule: 'printed-number', on_remote: true },
+      // Rebased before it was pushed: the remote holds a copy under another number.
+      { sha: sha('c'), segment_no: 2, rule: 'printed-number', copies: [sha('2')] },
+      // Never pushed.
+      { sha: sha('3'), segment_no: 3, rule: 'printed-number', subject: 'local work', created_at: at(50) },
+    ] }),
+  ], [], { remote });
+  assert.deepEqual(index.commits.map(commit => commit.sha[0]), ['3', '9', 'e', '2', '1', 'b', 'a']);
+  const row = (letter: string) => index.commitBySha.get(sha(letter))!;
+  assert.equal(index.commitBySha.has(sha('c')), false, 'a commit shown at its copy is not listed a second time');
+  assert.deepEqual(row('2').links, [{ provider: 'claude', session_id: 'one', segment_no: 2, rule: 'printed-number', copyOf: sha('c') }]);
+  assert.deepEqual([row('3').remote, row('3').parents, row('3').subject], [false, [], 'local work']);
+  assert.deepEqual([row('1').remote, row('1').links.length, row('b').links.length], [true, 1, 0], 'a remote commit no segment ends at has no link');
+  assert.deepEqual([row('e').heads, row('e').merged, row('2').heads, row('2').pulls, row('9').heads], [['main'], 7, ['feature'], [7], ['topic']]);
+  assert.deepEqual(index.pulls.map(pull => pull.number), [9, 7], 'open pull requests first');
+  assert.equal(index.defaultBranch, 'main');
+  assert.equal(index.remoteRead, true);
+  assert.equal(buildAnchoredIndex([], [], { remote: { ...remote, read: false } }).remoteRead, false, 'before the first read nothing is known to be missing');
+  assert.equal(buildAnchoredIndex([]).remoteRead, false);
+});
+
+test('a branch shows its pull request\'s commits, or the commits its base does not have', () => {
+  const index = buildAnchoredIndex([], [], { remote });
+  const feature = anchoredBranchCommits(index, 'feature');
+  assert.deepEqual([feature.shas, feature.complete, feature.pull?.number], [[sha('2'), sha('1')], true, 7], 'a pull request from a fork is not the branch\'s own');
+  assert.deepEqual(anchoredBranchCommits(index, 'topic'), { shas: [sha('9')], complete: true });
+  assert.deepEqual(anchoredBranchCommits(index, 'main'), { shas: [], complete: true }, 'the base branch has nothing of its own');
+  assert.deepEqual(anchoredBranchCommits(index, 'never-pushed'), { shas: [], complete: true });
+  assert.deepEqual(index.branches.map(branch => [branch.name, branch.head?.[0], branch.pulls.map(pull => pull.number)]), [['feature', '2', [7]], ['main', 'e', []], ['topic', '9', []]]);
+  const truncated = buildAnchoredIndex([], [], { remote: { ...remote, pulls: [{ ...remote.pulls[0], truncated: true }] } });
+  assert.equal(anchoredBranchCommits(truncated, 'feature').complete, false);
+});
+
+test('a machine\'s own list says which worktrees exist, also one no session worked in', () => {
+  const index = buildAnchoredIndex([
+    summary('worked', { machine: 'laptop', uncommitted: { commands: 1, unplaced: false, places: [
+      { worktree: 'app', branch: 'main', rule: 'recorded-by-tool' },
+      // The session saw the folder gone, but the machine lists it again: the list is newer.
+      { worktree: 'app-back', removed: true, rule: 'folder-no-longer-a-worktree' },
+      { worktree: 'unlisted', removed: true, rule: 'folder-no-longer-a-worktree' },
+    ] } }),
+  ], [], { worktrees: [
+    { machine: 'laptop', name: 'app', branch: 'feature', removed: false, first_seen_at: at(1), last_seen_at: at(9) },
+    { machine: 'laptop', name: 'app-back', removed: false, first_seen_at: at(1), last_seen_at: at(9) },
+    { machine: 'laptop', name: 'app-gone', branch: 'old', removed: true, first_seen_at: at(1), last_seen_at: at(2) },
+    { name: 'no-label', removed: false, first_seen_at: at(1), last_seen_at: at(9) },
+  ] });
+  assert.deepEqual(index.worktrees.map(row => [row.name, row.machine, row.removed, row.current ?? '', row.sessions.length]), [
+    ['app', 'laptop', false, 'feature', 1], ['app-back', 'laptop', false, '', 1], ['app-gone', 'laptop', true, 'old', 0], ['no-label', '', false, '', 0], ['unlisted', 'laptop', true, '', 1],
+  ]);
+});
+
+test('notes are found by exactly the target they were written about', () => {
+  const note = (id: string, target: AnchoredNote['target']): AnchoredNote =>
+    ({ repo_id: 'repo', id, target, author: 'member', body: id, created_at: at(1), updated_at: at(1) });
+  const notes = [
+    note('commit', { kind: 'commit', commit: sha('a') }), note('other-commit', { kind: 'commit', commit: sha('b') }),
+    note('branch-now', { kind: 'branch', branch: 'feature' }), note('branch-earlier', { kind: 'branch', branch: 'feature', ledger_id: 'a'.repeat(32) }),
+    note('worktree', { kind: 'worktree', worktree: 'app', machine: 'laptop' }), note('worktree-elsewhere', { kind: 'worktree', worktree: 'app' }),
+  ];
+  const found = (target: AnchoredNote['target']) => anchoredNotesFor(notes, target).map(entry => entry.id);
+  assert.deepEqual(found({ kind: 'commit', commit: sha('a') }), ['commit']);
+  assert.deepEqual(found({ kind: 'branch', branch: 'feature' }), ['branch-now']);
+  assert.deepEqual(found({ kind: 'branch', branch: 'feature', ledger_id: 'a'.repeat(32) }), ['branch-earlier'], 'a note about an earlier use stays with that use');
+  assert.deepEqual(found({ kind: 'worktree', worktree: 'app', machine: 'laptop' }), ['worktree']);
+  assert.deepEqual(found({ kind: 'worktree', worktree: 'app' }), ['worktree-elsewhere']);
+  assert.deepEqual(found({ kind: 'commit', commit: sha('f') }), []);
 });

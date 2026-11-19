@@ -169,6 +169,22 @@ export const api = {
     call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
   branchLifetimes: (repoId: string, signal?: AbortSignal) =>
     call<import('./types').BranchLifetime[]>('GET', `/repos/${encodeURIComponent(repoId)}/branch-lifetimes`, undefined, undefined, signal),
+  anchoredSessionCalls: (repoId: string, provider: string, sessionId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredAgentCall[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/calls`, undefined, undefined, signal),
+  anchoredNotes: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredNote[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-notes`, undefined, undefined, signal),
+  createAnchoredNote: (repoId: string, target: import('./types').AnchoredNoteTarget, body: string) =>
+    call<import('./types').AnchoredNote>('POST', `/repos/${encodeURIComponent(repoId)}/anchored-notes`, { target, body }),
+  updateAnchoredNote: (repoId: string, noteId: string, body: string) =>
+    call<import('./types').AnchoredNote>('PUT', `/repos/${encodeURIComponent(repoId)}/anchored-notes/${encodeURIComponent(noteId)}`, { body }),
+  deleteAnchoredNote: (repoId: string, noteId: string) =>
+    call<void>('DELETE', `/repos/${encodeURIComponent(repoId)}/anchored-notes/${encodeURIComponent(noteId)}`),
+  reportedWorktrees: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').ReportedWorktree[]>('GET', `/repos/${encodeURIComponent(repoId)}/worktrees`, undefined, undefined, signal),
+  remoteGit: (repoId: string, before: string, signal?: AbortSignal) =>
+    call<import('./types').RemoteGitView>('GET', `/repos/${encodeURIComponent(repoId)}/remote-git${before ? `?before=${encodeURIComponent(before)}` : ''}`, undefined, undefined, signal),
+  refreshRemoteGit: (repoId: string) =>
+    call<{ requested: boolean }>('POST', `/repos/${encodeURIComponent(repoId)}/remote-git/refresh`, {}),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
   retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.

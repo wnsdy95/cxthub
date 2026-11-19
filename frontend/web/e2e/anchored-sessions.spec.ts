@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { capturePageErrors, installApiFixture } from './api-fixture';
 
 const origin = 'http://127.0.0.1:4174';
@@ -36,7 +36,23 @@ const lifetimes = [
   { repo_id: 'repo', ledger_id: 'b'.repeat(32), name: 'feature', opened_at: at(30), opened_by: { kind: 'registered', account: 'member' }, linked: [] },
 ];
 
-function fixture(role: string, reads: string[]) {
+// What the server read from the provider: main z - a - e (merge of pull request 7: b, c), and d on a branch no session worked on.
+const remoteCommit = (letter: string, minute: number, subject: string, ...parents: string[]) =>
+  ({ sha: sha(letter), parents: parents.map(sha), author_name: 'Dev', authored_at: at(minute), committed_at: at(minute), subject });
+const remotePages: Record<string, unknown> = {
+  '': { default_branch: 'main', synced_at: at(58), next: 'older',
+    branches: [{ name: 'main', sha: sha('e') }, { name: 'feature', sha: sha('c') }, { name: 'quiet', sha: sha('d') }],
+    pulls: [{ number: 7, title: 'Fix the parser', state: 'merged', head_ref: 'feature', head_sha: sha('c'), base_ref: 'main', merge_sha: sha('e'), commits: [sha('b'), sha('c')], updated_at: at(57) }],
+    commits: [remoteCommit('a', 10, 'Add the parser', '0'), remoteCommit('b', 20, 'Fix the parser', 'a'), remoteCommit('c', 21, 'Fix the parser tests', 'b'),
+      remoteCommit('d', 30, 'Quiet change', 'a'), remoteCommit('e', 40, 'Merge pull request', 'a', 'c')] },
+  older: { commits: [remoteCommit('0', 1, 'Start the project')] },
+};
+const reportedWorktrees = [
+  { machine: 'laptop', name: 'app', branch: 'feature', removed: false, first_seen_at: at(0), last_seen_at: at(55) },
+  { machine: 'laptop', name: 'scratch', removed: true, first_seen_at: at(0), last_seen_at: at(5) },
+];
+
+function fixture(role: string, reads: string[], withRemote = false) {
   return ({ method, pathname, searchParams }: { method: string; pathname: string; searchParams: URLSearchParams }) => {
     if (method !== 'GET') return undefined;
     if (pathname === '/api/v1/me') return { body: { id: 'member', username: 'alice', locale: 'en' } };
@@ -48,7 +64,11 @@ function fixture(role: string, reads: string[]) {
     if (!resource) return undefined;
     if (['refs', 'snapshots', 'pending', 'unsync', 'history', 'reflog'].includes(resource)) return { body: [] };
     if (resource.startsWith('settings/') || resource === 'secrets') return { body: null };
-    if (resource === 'anchored-sessions' || resource === 'branch-lifetimes' || resource.startsWith('anchored-')) reads.push(resource);
+    if (['branch-lifetimes', 'worktrees', 'remote-git'].includes(resource) || resource.startsWith('anchored-')) reads.push(resource);
+    if (resource === 'worktrees') return { body: withRemote ? reportedWorktrees : [] };
+    if (resource === 'anchored-notes') return { body: [] };
+    if (resource === 'remote-git') return { body: withRemote ? remotePages[searchParams.get('before') ?? ''] : { commits: [] } };
+    if (resource === 'anchored-sessions/claude/parent-session/calls') return { body: [] };
     if (resource === 'anchored-sessions') return { body: summaries };
     if (resource === 'branch-lifetimes') return { body: lifetimes };
     if (resource === 'anchored-sessions/claude/parent-session') return { body: session };
@@ -143,6 +163,118 @@ test('the sessions tab is not offered to a viewer and reads nothing for one', as
   await expect(page.getByRole('alert')).toContainText('The Sessions tab requires member access.');
   await expect(page.getByRole('button', { name: 'Sessions', exact: true })).toHaveCount(0);
   expect(reads).toEqual([]);
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+/** Keeps notes the way the server does: a write answers the stored note, with its text masked. */
+async function stubNotes(page: Page) {
+  const state = { notes: [] as Record<string, unknown>[], fail: false, writes: [] as string[] };
+  await page.route('**/api/v1/repos/repo/anchored-notes**', async route => {
+    const request = route.request();
+    const id = new URL(request.url()).pathname.split('/').at(-1)!;
+    if (request.method() === 'GET') return route.fulfill({ json: state.notes });
+    state.writes.push(`${request.method()} ${id}`);
+    if (state.fail) return route.fulfill({ status: 422, json: { error: { code: 'validation', message: 'note text is empty' } } });
+    if (request.method() === 'DELETE') {
+      state.notes = state.notes.filter(note => note.id !== id);
+      return route.fulfill({ status: 204, body: '' });
+    }
+    const sent = request.postDataJSON() as { target?: unknown; body: string };
+    const body = sent.body.trim().replace(/ghp_[A-Za-z0-9]{36,}/g, '\u00abredacted:github-token\u00bb');
+    if (request.method() === 'POST') {
+      const note = { repo_id: 'repo', id: `note_${String(state.notes.length + 1).repeat(32).slice(0, 32)}`, target: sent.target, author: 'member', body, created_at: at(31), updated_at: at(31) };
+      state.notes = [...state.notes, note];
+      return route.fulfill({ json: note });
+    }
+    state.notes = state.notes.map(note => (note.id === id ? { ...note, body, updated_at: at(33) } : note));
+    return route.fulfill({ json: state.notes.find(note => note.id === id) });
+  });
+  return state;
+}
+
+test('the graph holds commits no session made, and a note can be written where nothing explains them', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, fixture('member', [], true));
+  const notes = await stubNotes(page);
+  const url = (search: string) => new URL(`/alice/app${search}`, origin).href;
+  const subjects = page.locator('.anchor-commit .anchor-commit-subject');
+  const detail = page.getByRole('region', { name: 'Selected item' });
+
+  await page.goto('/alice/app?tab=sessions');
+  await expect(subjects).toHaveText([/Merge pull request$/, /Quiet change$/, /Fix the parser tests$/, 'Fix the parser', 'Add the parser']);
+  await expect(page.locator(`[data-commit="${sha('e')}"]`)).toContainText('main');
+  await expect(page.locator(`[data-commit="${sha('e')}"]`)).toContainText('#7');
+  await expect(page.locator(`[data-commit="${sha('d')}"]`)).toContainText('No context');
+  await expect(page.locator(`[data-commit="${sha('b')}"]`)).toContainText('1 segment');
+  await expect(page.locator('.anchor-commit svg.anchor-lanes')).toHaveCount(5);
+  // Older commits are read on request.
+  await page.getByRole('button', { name: 'Show older commits' }).click();
+  await expect(subjects).toHaveCount(6);
+  await expect(subjects.last()).toHaveText('Start the project');
+  await expect(page.getByRole('button', { name: 'Show older commits' })).toHaveCount(0);
+
+  // A commit no session made says so, and takes a note. The stored note is what the server kept: masked.
+  await page.locator(`[data-commit="${sha('d')}"]`).click();
+  await expect(detail).toContainText('No context');
+  await detail.getByRole('button', { name: 'Write a note' }).click();
+  const text = detail.getByRole('textbox', { name: 'Note text' });
+  await expect(detail.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  notes.fail = true;
+  await text.fill('Applied by hand with ghp_' + 'a1B2'.repeat(9));
+  await detail.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(detail.getByRole('alert')).toHaveText('note text is empty');
+  await expect(text).toHaveValue(/^Applied by hand/);
+  notes.fail = false;
+  await detail.getByRole('button', { name: 'Save', exact: true }).click();
+  const note = detail.locator('.anchor-note');
+  await expect(note).toContainText('manual note');
+  await expect(note.locator('.anchor-note-body')).toHaveText('Applied by hand with \u00abredacted:github-token\u00bb');
+  await expect(text).toHaveCount(0);
+  // Rewriting keeps the note; cancelling changes nothing.
+  await note.getByRole('button', { name: 'Edit', exact: true }).click();
+  await detail.getByRole('textbox', { name: 'Note text' }).fill('Discarded');
+  await detail.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(note.locator('.anchor-note-body')).toHaveText(/^Applied by hand/);
+  await note.getByRole('button', { name: 'Edit', exact: true }).click();
+  await detail.getByRole('textbox', { name: 'Note text' }).fill('Applied by hand; see the ticket.');
+  await detail.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(note.locator('.anchor-note-body')).toHaveText('Applied by hand; see the ticket.');
+  await page.reload();
+  await expect(detail.locator('.anchor-note-body')).toHaveText('Applied by hand; see the ticket.');
+  await detail.locator('.anchor-note').getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(detail.locator('.anchor-note')).toHaveCount(0);
+  expect(notes.writes.map(write => write.split(' ')[0])).toEqual(['POST', 'POST', 'PUT', 'DELETE']);
+  // A commit a segment ends at takes no new note.
+  await page.locator(`[data-commit="${sha('b')}"]`).click();
+  await expect(detail.locator('.anchor-card')).toHaveCount(1);
+  await expect(detail.getByRole('button', { name: 'Write a note' })).toHaveCount(0);
+
+  // The merge commit leads through its pull request to the segments of the commits it merged.
+  await page.locator(`[data-commit="${sha('e')}"]`).click();
+  await expect(detail).toContainText('Merged pull request');
+  await expect(detail.locator('.anchor-refs li')).toHaveCount(2);
+  await detail.getByRole('link', { name: '#7', exact: true }).first().click();
+  await expect(page).toHaveURL(url('?tab=sessions&pull=7'));
+  await expect(detail).toContainText('Pull request #7');
+  await expect(page.locator('.anchor-commit.in .anchor-commit-subject')).toHaveText([/Fix the parser tests$/, 'Fix the parser']);
+  await detail.locator('.anchor-refs').getByRole('link', { name: /Segment 2/ }).first().click();
+  await expect(page).toHaveURL(url('?tab=sessions&session=claude%3Aparent-session&segment=2'));
+  await page.goBack();
+
+  // A branch nothing explains, and a worktree no session worked in.
+  const nav = page.getByRole('navigation', { name: 'Worktrees and branches' });
+  await nav.getByRole('link', { name: /^quiet/ }).click();
+  await expect(detail).toContainText('Commits not on main yet');
+  await expect(detail.locator('.anchor-refs')).toContainText('Quiet change');
+  await expect(detail.getByRole('button', { name: 'Write a note' })).toBeVisible();
+  await nav.getByRole('link', { name: /^scratch/ }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&worktree=scratch&machine=laptop'));
+  await expect(detail).toContainText('removed worktree');
+  await expect(detail).toContainText('No context');
+  await nav.getByRole('link', { name: /^app/ }).click();
+  await expect(detail).toContainText('Checked out now:');
+
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

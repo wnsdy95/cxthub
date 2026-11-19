@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { I18nProvider, translate } from '../src/i18n/index.tsx';
 import { AnchoredView } from '../src/components/AnchoredView.tsx';
 import { anchoredPath, type AnchoredSelection } from '../src/route';
-import type { AnchoredCommitSegment, AnchoredSession, AnchoredSessionSummary, BranchLifetime, Repo } from '../src/types';
+import type { AnchoredCommitSegment, AnchoredNote, AnchoredSession, AnchoredSessionSummary, BranchLifetime, RemoteCommit, RemoteGitView, Repo, ReportedWorktree } from '../src/types';
 
 const repo = { id: `sha256:${'9'.repeat(64)}`, remote_url: 'https://example.test/alice/app', default_branch: 'main' } as Repo;
 const repository = { id: 'repository-1', owner_username: 'alice', slug: 'app' };
@@ -47,9 +47,33 @@ const session: AnchoredSession = {
 const commitSegments: AnchoredCommitSegment[] = [{ provider: 'claude', session_id: 'parent-session', segment_no: 2, rule: 'same-folder-and-time', segment: session.body.segments[1] }];
 const message = (index: number, role: string, text: string) => ({ kind: 'message', role, blocks: [{ type: 'text', text }], event_index: index });
 
-function render(selection?: AnchoredSelection): string {
+// What the server read from the provider: main a - e (merge of pull request 7: b, c), and d on a branch no session worked on.
+const remoteCommit = (letter: string, minute: number, subject: string, ...parents: string[]): RemoteCommit =>
+  ({ sha: sha(letter), parents: parents.map(sha), author_name: 'Dev', authored_at: at(minute), committed_at: at(minute), subject });
+const remotePage: RemoteGitView = {
+  default_branch: 'main', synced_at: at(58),
+  branches: [{ name: 'main', sha: sha('e') }, { name: 'feature', sha: sha('c') }, { name: 'quiet', sha: sha('d') }],
+  pulls: [{ number: 7, title: 'Fix the parser', state: 'merged', head_ref: 'feature', head_sha: sha('c'), base_ref: 'main', merge_sha: sha('e'), commits: [sha('b'), sha('c')], updated_at: at(57) }],
+  commits: [remoteCommit('a', 10, 'Add the parser'), remoteCommit('b', 20, 'Fix the parser', 'a'), remoteCommit('c', 21, 'Fix the parser tests', 'b'),
+    remoteCommit('d', 30, 'Quiet change', 'a'), remoteCommit('e', 40, 'Merge pull request', 'a', 'c')],
+};
+const worktrees: ReportedWorktree[] = [
+  { machine: 'laptop', name: 'app', branch: 'feature', removed: false, first_seen_at: at(0), last_seen_at: at(55) },
+  { machine: 'laptop', name: 'scratch', removed: true, first_seen_at: at(0), last_seen_at: at(5) },
+];
+const notes: AnchoredNote[] = [
+  { repo_id: repo.id, id: `note_${'a'.repeat(32)}`, target: { kind: 'commit', commit: sha('d') }, author: 'alice-id', body: 'Applied by hand.\nSee the ticket.', created_at: at(31), updated_at: at(32) },
+];
+
+function render(selection?: AnchoredSelection, withRemote = false, sessions = summaries): string {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(['anchored-sessions', repo.id], summaries);
+  if (withRemote) {
+    client.setQueryData(['remote-git', repo.id], { pageParams: [''], pages: [remotePage] });
+    client.setQueryData(['reported-worktrees', repo.id], worktrees);
+    client.setQueryData(['anchored-notes', repo.id], notes);
+    client.setQueryData(['me'], { id: 'alice-id', username: 'alice' });
+  }
+  client.setQueryData(['anchored-sessions', repo.id], sessions);
   client.setQueryData(['branch-lifetimes', repo.id], lifetimes);
   client.setQueryData(['anchored-commit', repo.id, sha('b'), 'claude:parent-session@2'], commitSegments);
   client.setQueryData(['anchored-session', repo.id, 'claude', 'parent-session', 2], session);
@@ -103,6 +127,53 @@ assert.match(second, /Show from the beginning/);
 assert.equal(count(second, /role="separator"/g), 2, 'reading has reached the part after the second segment');
 assert.doesNotMatch(second, /Write the parser\./);
 assert.match(second, /Load more/, 'more of the conversation is read on request');
+
+// With what the server read from the provider: the graph also holds commits no session made.
+const graph = render(undefined, true);
+assert.deepEqual([...graph.matchAll(/data-commit="([0-9a-f])[0-9a-f]{39}" data-lane="(\d)"/g)].map(match => match[1] + match[2]), ['e0', 'd2', 'c1', 'b1', 'a0'],
+  'the default branch keeps the first lane; the merged line and the unmerged branch get their own');
+assert.equal(count(graph, /<svg class="anchor-lanes"/g), 5);
+assert.match(graph, /data-commit="e{40}".*?<span class="ref-badge branch">main<\/span><span class="ref-badge">#7<\/span>Merge pull request<\/span>.*?No context/s);
+assert.match(graph, /data-commit="d{40}".*?Quiet change<\/span>.*?No context/s);
+assert.match(graph, /data-commit="b{40}".*?1 segment/s);
+assert.doesNotMatch(graph, /not on the remote/, 'every commit of the reports is on the remote here');
+assert.doesNotMatch(overview, /not on the remote/, 'before the remote was read no commit is called missing');
+// A commit of a report that the remote does not list is marked, once the remote was read.
+const unpushed = render(undefined, true, [{ ...summaries[0], segments: 3, commits: [...summaries[0].commits, { sha: sha('f'), segment_no: 3, rule: 'printed-number', subject: 'Local only', created_at: at(45) }] }]);
+assert.match(unpushed, /data-commit="f{40}".*?Local only<\/span>.*?1 segment.*?not on the remote/s);
+assert.equal(count(unpushed, /not on the remote/g), 1);
+assert.match(graph, /Pull requests<\/h5>.*?href="\/alice\/app\?tab=sessions&amp;pull=7".*?<code>#7<\/code>.*?Fix the parser.*?merged/s);
+assert.match(graph, /worktree=scratch&amp;machine=laptop"[^>]*>.*?removed worktree/s, 'a worktree no session worked in is listed from the machine\'s own list');
+assert.match(graph, /Remote read at/);
+
+// A commit no session made: no context, the note written about it, and the form to write one.
+const quiet = render({ kind: 'commit', sha: sha('d') }, true);
+assert.match(quiet, /No context<\/p>/);
+assert.match(quiet, /data-note="note_a{32}".*?manual note<\/span><em>you<\/em>.*?Applied by hand\.\nSee the ticket\./s);
+assert.match(quiet, />Write a note<\/button>/);
+assert.match(quiet, /href="\/alice\/app\?tab=sessions&amp;branch=quiet"/);
+// A commit a segment ends at takes no new note.
+assert.doesNotMatch(render({ kind: 'commit', sha: sha('b') }, true), /Write a note/);
+// The merge commit leads through its pull request to the segments of the commits it merged.
+const mergeCommit = render({ kind: 'commit', sha: sha('e') }, true);
+assert.match(mergeCommit, /Merged pull request .*?pull=7.*?commit=c{40}.*?parent-s · Segment 2.*?commit=b{40}.*?parent-s · Segment 2/s);
+const pull = render({ kind: 'pull', number: 7 }, true);
+assert.match(pull, /Pull request #7 <span class="ref-badge">merged<\/span>/);
+assert.match(pull, /branch=feature"[^>]*>feature<\/a> → .*?branch=main.*?merged as .*?commit=e{40}/s);
+assert.match(pull, /class="anchor-commit in"[^>]*data-commit="c{40}"/, 'the commits of the selected pull request are marked in the graph');
+assert.match(render({ kind: 'pull', number: 99 }, true), /Pull request #99 has not been read yet\./);
+// A branch: its pull request's commits when it has one, otherwise what its base does not have yet.
+assert.match(render({ kind: 'branch', name: 'feature' }, true), /Commits of pull request #7<\/h6>.*?commit=c{40}.*?commit=b{40}/s);
+const quietBranch = render({ kind: 'branch', name: 'quiet' }, true);
+assert.match(quietBranch, /Commits not on main yet<\/h6>.*?commit=d{40}.*?Quiet change.*?No context/s);
+assert.match(quietBranch, />Write a note<\/button>/);
+// The name as it is now is explained by sessions and takes no new note; its earlier use, which nothing explains, does.
+const featureBranch = render({ kind: 'branch', name: 'feature' }, true);
+assert.doesNotMatch(featureBranch.slice(featureBranch.indexOf('<h6>Current'), featureBranch.indexOf('<h6>Earlier use')), /Write a note|No context/);
+assert.match(featureBranch.slice(featureBranch.indexOf('<h6>Earlier use')), /No context.*?Write a note/s);
+// A worktree: the branch checked out in it; one no session worked in has no context and takes a note.
+assert.match(render({ kind: 'worktree', name: 'app', machine: 'laptop' }, true), /Checked out now: <a class="ref-badge branch"[^>]*>feature<\/a>/);
+assert.match(render({ kind: 'worktree', name: 'scratch', machine: 'laptop' }, true), /removed worktree.*?No context.*?Write a note/s);
 
 assert.match(translate('ko', 'anchored.noContext'), /\uB9E5\uB77D \uC5C6\uC74C/);
 assert.match(translate('ko', 'anchored.unplaced'), /\uC704\uCE58 \uBBF8\uC0C1/);
