@@ -94,7 +94,8 @@ func TestAnchoredSessionBelongsToItsUploader(t *testing.T) {
 	}
 
 	listed, err := service.ListAnchoredSessions(alice, repo)
-	if err != nil || len(listed) != 1 || listed[0].SessionID != "session-1" || listed[0].Records != 3 || listed[0].Segments != 1 || listed[0].Revision != 2 {
+	if err != nil || len(listed) != 1 || listed[0].SessionID != "session-1" || listed[0].Records != 3 || listed[0].Segments != 1 || listed[0].Revision != 2 ||
+		len(listed[0].Commits) != 1 || listed[0].Commits[0].SHA != anchoredTestSHA("a") || listed[0].Commits[0].SegmentNo != 1 {
 		t.Fatalf("own list: %+v %v", listed, err)
 	}
 	segments, err := service.AnchoredCommitSegments(alice, repo, anchoredTestSHA("a"))
@@ -106,6 +107,51 @@ func TestAnchoredSessionBelongsToItsUploader(t *testing.T) {
 	}
 	if stored, err := storage.GetAnchoredSession(context.Background(), repo, domain.ProviderClaude, "session-1"); err != nil || stored.BodyHash != replaced.BodyHash {
 		t.Fatalf("store holds %+v %v", stored, err)
+	}
+}
+
+func TestAnchoredSessionListPlacesSpawnedSessionsInTheirParent(t *testing.T) {
+	service, _, repo := anchoredSessionFixture(t)
+	alice, bob := anchoredActor("member-a"), anchoredActor("member-b")
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "parent", anchoredTestBody("m3")); err != nil {
+		t.Fatal(err)
+	}
+	child := func(parent string, ordinal int) domain.AnchoredSessionBody {
+		return domain.AnchoredSessionBody{RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Sub: true, Parent: parent,
+			Spawn: &domain.AnchoredSpawn{AtRecord: "m", AtOrdinal: ordinal, Rule: domain.AnchoredSpawnToolCall}, Segments: []domain.AnchoredSegment{}}
+	}
+	for id, body := range map[string]domain.AnchoredSessionBody{
+		"in-segment": child("parent", 1), "after-last-commit": child("parent", 2), "beyond": child("parent", 9), "parent-not-reported": child("elsewhere", 0),
+	} {
+		if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, id, body); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+	// Another member's session under the same parent identifier is not placed
+	// in a report that member cannot read.
+	if _, err := service.PutAnchoredSession(bob, repo, domain.ProviderClaude, "others-child", child("parent", 1)); err != nil {
+		t.Fatal(err)
+	}
+	placed := map[string]*domain.AnchoredSummarySpawn{}
+	listed, err := service.ListAnchoredSessions(alice, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range listed {
+		placed[summary.SessionID] = summary.SpawnedIn
+	}
+	if got := placed["in-segment"]; got == nil || *got != (domain.AnchoredSummarySpawn{SegmentNo: 1, Rule: domain.AnchoredSpawnToolCall}) {
+		t.Errorf("in-segment placed at %+v", got)
+	}
+	if got := placed["after-last-commit"]; got == nil || *got != (domain.AnchoredSummarySpawn{Uncommitted: true, Rule: domain.AnchoredSpawnToolCall}) {
+		t.Errorf("after-last-commit placed at %+v", got)
+	}
+	if placed["beyond"] != nil || placed["parent-not-reported"] != nil || placed["parent"] != nil {
+		t.Errorf("placed without a point: %+v", placed)
+	}
+	theirs, err := service.ListAnchoredSessions(bob, repo)
+	if err != nil || len(theirs) != 1 || theirs[0].SpawnedIn != nil {
+		t.Fatalf("another member's list: %+v %v", theirs, err)
 	}
 }
 

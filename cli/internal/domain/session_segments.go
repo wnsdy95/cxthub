@@ -301,6 +301,8 @@ type SessionSpawn struct {
 	Child         string       `json:"child"`
 	ParentInScope bool         `json:"parent_in_scope"`
 	AtRecord      string       `json:"at_record,omitempty"`
+	// AtOrdinal is the position of AtRecord among the parent's own records.
+	AtOrdinal *int `json:"at_ordinal,omitempty"`
 	// ParentSegment is the 1-based segment of the parent holding the point.
 	ParentSegment     int            `json:"parent_segment,omitempty"`
 	ParentUncommitted bool           `json:"parent_uncommitted,omitempty"`
@@ -1100,6 +1102,8 @@ func assembleSessionSpawns(states []*segmentSessionState) []SessionSpawn {
 			}
 			if position >= 0 {
 				spawn.AtRecord, spawn.Rule = parent.record.Items[parent.own[position]].ID, rule
+				ordinal := position
+				spawn.AtOrdinal = &ordinal
 				spawn.ParentUncommitted = position >= parent.rest
 				for index, span := range parent.segments {
 					if position >= span.first && position <= span.last {

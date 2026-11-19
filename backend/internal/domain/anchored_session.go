@@ -117,10 +117,14 @@ type AnchoredUncommitted struct {
 	Unplaced bool            `json:"unplaced"`
 }
 
-// AnchoredSpawn says where in the parent session this session was spawned.
+// AnchoredSpawn says where in the parent session this session was spawned:
+// the parent's record and its position among the parent's own records. The
+// position, not a segment number, is reported, so the parent's segment can be
+// found again whenever the parent is cut differently.
 type AnchoredSpawn struct {
-	AtRecord string `json:"at_record"`
-	Rule     string `json:"rule"`
+	AtRecord  string `json:"at_record"`
+	AtOrdinal int    `json:"at_ordinal"`
+	Rule      string `json:"rule"`
 }
 
 // AnchoredAgentCall is one agent-to-agent call the session's tool recorded.
@@ -167,17 +171,55 @@ type AnchoredSession struct {
 	Body      AnchoredSessionBody `json:"body"`
 }
 
-// AnchoredSessionSummary lists a stored report without its body.
+// AnchoredSessionSummary lists a stored report without its ranges: what a
+// list of sessions, commits, worktrees and branches is drawn from. The ranges
+// and the agent calls stay in the report itself.
 type AnchoredSessionSummary struct {
-	Provider  ProviderKind `json:"provider"`
-	SessionID string       `json:"session_id"`
-	Parent    string       `json:"parent,omitempty"`
-	Sub       bool         `json:"sub"`
-	Revision  int64        `json:"revision"`
-	BodyHash  ContentHash  `json:"body_hash"`
-	Records   int          `json:"records"`
-	Segments  int          `json:"segments"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	Provider    ProviderKind                `json:"provider"`
+	SessionID   string                      `json:"session_id"`
+	Parent      string                      `json:"parent,omitempty"`
+	Sub         bool                        `json:"sub"`
+	Revision    int64                       `json:"revision"`
+	BodyHash    ContentHash                 `json:"body_hash"`
+	Records     int                         `json:"records"`
+	Commands    int                         `json:"commands"`
+	Segments    int                         `json:"segments"`
+	Machine     string                      `json:"machine,omitempty"`
+	StartedAt   *time.Time                  `json:"started_at,omitempty"`
+	EndedAt     *time.Time                  `json:"ended_at,omitempty"`
+	Content     bool                        `json:"content"`
+	Commits     []AnchoredSummaryCommit     `json:"commits"`
+	Uncommitted *AnchoredSummaryUncommitted `json:"uncommitted,omitempty"`
+	SpawnedIn   *AnchoredSummarySpawn       `json:"spawned_in,omitempty"`
+	UpdatedAt   time.Time                   `json:"updated_at"`
+}
+
+// AnchoredSummarySpawn places a spawned session in its parent as the parent is
+// cut now: in one of its segments, or in the part after its last commit.
+type AnchoredSummarySpawn struct {
+	SegmentNo   int    `json:"segment_no,omitempty"`
+	Uncommitted bool   `json:"uncommitted,omitempty"`
+	Rule        string `json:"rule"`
+}
+
+// AnchoredSummaryCommit is a commit one of the session's segments ends at.
+type AnchoredSummaryCommit struct {
+	SHA        string     `json:"sha"`
+	SegmentNo  int        `json:"segment_no"`
+	Rule       string     `json:"rule"`
+	Subject    string     `json:"subject,omitempty"`
+	CreatedAt  *time.Time `json:"created_at,omitempty"`
+	AuthoredAt *time.Time `json:"authored_at,omitempty"`
+}
+
+// AnchoredSummaryUncommitted is where the part after the last commit was
+// worked on.
+type AnchoredSummaryUncommitted struct {
+	Commands  int             `json:"commands"`
+	StartedAt *time.Time      `json:"started_at,omitempty"`
+	EndedAt   *time.Time      `json:"ended_at,omitempty"`
+	Places    []AnchoredPlace `json:"places"`
+	Unplaced  bool            `json:"unplaced"`
 }
 
 // AnchoredCommitSegment is one session's segment that ends at a commit.
@@ -275,7 +317,7 @@ func (b AnchoredSessionBody) Validate() error {
 	if b.Parent != "" && !anchoredSessionID.MatchString(b.Parent) {
 		return anchoredInvalid("parent is not a session identifier")
 	}
-	if b.Spawn != nil && (b.Parent == "" || !anchoredText(b.Spawn.AtRecord, anchoredNameLimit, true) || !anchoredOneOf(b.Spawn.Rule, AnchoredSpawnToolCall, AnchoredSpawnStartTime)) {
+	if b.Spawn != nil && (b.Parent == "" || !anchoredText(b.Spawn.AtRecord, anchoredNameLimit, true) || b.Spawn.AtOrdinal < 0 || !anchoredOneOf(b.Spawn.Rule, AnchoredSpawnToolCall, AnchoredSpawnStartTime)) {
 		return anchoredInvalid("spawn point needs a parent, a record and a known rule")
 	}
 	if !anchoredText(b.Machine, anchoredNameLimit, false) {
@@ -441,8 +483,35 @@ func (b AnchoredSessionBody) CommitLinks(provider ProviderKind, sessionID string
 	return links
 }
 
-// Summary lists a stored report without its body.
+// Summary lists a stored report without its ranges.
 func (s AnchoredSession) Summary() AnchoredSessionSummary {
-	return AnchoredSessionSummary{Provider: s.Provider, SessionID: s.SessionID, Parent: s.Body.Parent, Sub: s.Body.Sub, Revision: s.Revision,
-		BodyHash: s.BodyHash, Records: s.Body.Records, Segments: len(s.Body.Segments), UpdatedAt: s.UpdatedAt}
+	body := s.Body
+	summary := AnchoredSessionSummary{Provider: s.Provider, SessionID: s.SessionID, Parent: body.Parent, Sub: body.Sub, Revision: s.Revision,
+		BodyHash: s.BodyHash, Records: body.Records, Commands: body.Commands, Segments: len(body.Segments), Machine: body.Machine,
+		StartedAt: body.StartedAt, EndedAt: body.EndedAt, Content: body.Content != nil, Commits: []AnchoredSummaryCommit{}, UpdatedAt: s.UpdatedAt}
+	for index, segment := range body.Segments {
+		for _, commit := range segment.Commits {
+			summary.Commits = append(summary.Commits, AnchoredSummaryCommit{SHA: commit.SHA, SegmentNo: index + 1, Rule: commit.Rule,
+				Subject: commit.Subject, CreatedAt: commit.CreatedAt, AuthoredAt: commit.AuthoredAt})
+		}
+	}
+	if part := body.Uncommitted; part != nil {
+		summary.Uncommitted = &AnchoredSummaryUncommitted{Commands: part.Commands, StartedAt: part.StartedAt, EndedAt: part.EndedAt,
+			Places: append([]AnchoredPlace{}, part.Places...), Unplaced: part.Unplaced}
+	}
+	return summary
+}
+
+// SpawnedIn places a spawn point in this session as it is cut now. It answers
+// false when the point is in none of the session's ranges.
+func (b AnchoredSessionBody) SpawnedIn(spawn AnchoredSpawn) (AnchoredSummarySpawn, bool) {
+	for index, segment := range b.Segments {
+		if spawn.AtOrdinal >= segment.FirstOrdinal && spawn.AtOrdinal <= segment.LastOrdinal {
+			return AnchoredSummarySpawn{SegmentNo: index + 1, Rule: spawn.Rule}, true
+		}
+	}
+	if part := b.Uncommitted; part != nil && spawn.AtOrdinal >= part.FirstOrdinal && spawn.AtOrdinal <= part.LastOrdinal {
+		return AnchoredSummarySpawn{Uncommitted: true, Rule: spawn.Rule}, true
+	}
+	return AnchoredSummarySpawn{}, false
 }

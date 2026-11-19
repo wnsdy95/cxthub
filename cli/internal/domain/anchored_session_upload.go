@@ -66,9 +66,13 @@ type AnchoredUncommitted struct {
 	Unplaced bool            `json:"unplaced"`
 }
 
+// AnchoredSpawn says where in the parent a session was spawned: the parent's
+// record and its position among the parent's own records. The position lets
+// the server find the parent's segment whenever the parent is cut again.
 type AnchoredSpawn struct {
-	AtRecord string         `json:"at_record"`
-	Rule     SpawnPointRule `json:"rule"`
+	AtRecord  string         `json:"at_record"`
+	AtOrdinal int            `json:"at_ordinal"`
+	Rule      SpawnPointRule `json:"rule"`
 }
 
 type AnchoredAgentCall struct {
@@ -192,8 +196,8 @@ func BuildAnchoredUploadPlan(report SegmentReport, commits []RecordedCommit, mac
 			CopiedRecords: session.CopiedRecords, CopiedFrom: append([]string(nil), session.CopiedFrom...), FileCopies: session.FileCopies,
 			Segments: make([]AnchoredSegment, 0, len(session.Segments)), AgentCalls: calls[key{session.Provider, session.ID}],
 		}
-		if spawn, ok := spawns[key{session.Provider, session.ID}]; ok && spawn.AtRecord != "" && spawn.Rule != "" {
-			body.Spawn = &AnchoredSpawn{AtRecord: spawn.AtRecord, Rule: spawn.Rule}
+		if spawn, ok := spawns[key{session.Provider, session.ID}]; ok && spawn.AtRecord != "" && spawn.AtOrdinal != nil && spawn.Rule != "" {
+			body.Spawn = &AnchoredSpawn{AtRecord: spawn.AtRecord, AtOrdinal: *spawn.AtOrdinal, Rule: spawn.Rule}
 		}
 		next := 0
 		span := func(r SegmentRange) AnchoredRange {

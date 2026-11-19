@@ -894,9 +894,11 @@ components:
         unplaced: { type: boolean }
     AnchoredSpawn:
       type: object
-      required: [at_record, rule]
+      description: Where in the parent session a session was spawned.
+      required: [at_record, at_ordinal, rule]
       properties:
         at_record: { type: string }
+        at_ordinal: { type: integer, minimum: 0, description: Position of the record among the parent's own records. }
         rule: { type: string, enum: [tool-call, start-time] }
     AnchoredAgentCall:
       type: object
@@ -1012,7 +1014,8 @@ components:
         body: { $ref: '#/components/schemas/AnchoredSessionBody' }
     AnchoredSessionSummary:
       type: object
-      required: [provider, session_id, sub, revision, body_hash, records, segments, updated_at]
+      description: A stored report without its ranges and agent calls.
+      required: [provider, session_id, sub, revision, body_hash, records, commands, segments, content, commits, updated_at]
       properties:
         provider: { type: string }
         session_id: { type: string }
@@ -1021,8 +1024,51 @@ components:
         revision: { type: integer, minimum: 1 }
         body_hash: { $ref: '#/components/schemas/ContentHash' }
         records: { type: integer, minimum: 0 }
+        commands: { type: integer, minimum: 0 }
         segments: { type: integer, minimum: 0 }
+        machine: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        content: { type: boolean, description: True when the report names the document that holds the conversation. }
+        commits:
+          type: array
+          description: Every commit a segment of the session ends at, in segment order.
+          items: { $ref: '#/components/schemas/AnchoredSummaryCommit' }
+        uncommitted: { $ref: '#/components/schemas/AnchoredSummaryUncommitted' }
+        spawned_in: { $ref: '#/components/schemas/AnchoredSummarySpawn' }
         updated_at: { type: string, format: date-time }
+    AnchoredSummarySpawn:
+      type: object
+      description: >-
+        Where a spawned session sits in its parent as the parent is cut now. Present when the parent is among the
+        caller's own reports and holds the spawn point.
+      required: [rule]
+      properties:
+        segment_no: { type: integer, minimum: 1 }
+        uncommitted: { type: boolean }
+        rule: { type: string, enum: [tool-call, start-time] }
+    AnchoredSummaryCommit:
+      type: object
+      required: [sha, segment_no, rule]
+      properties:
+        sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        segment_no: { type: integer, minimum: 1 }
+        rule: { type: string, enum: [printed-number, same-folder-and-time] }
+        subject: { type: string }
+        created_at: { type: string, format: date-time }
+        authored_at: { type: string, format: date-time }
+    AnchoredSummaryUncommitted:
+      type: object
+      description: Where the part of a session after its last commit was worked on.
+      required: [commands, places, unplaced]
+      properties:
+        commands: { type: integer, minimum: 0 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        places:
+          type: array
+          items: { $ref: '#/components/schemas/AnchoredPlace' }
+        unplaced: { type: boolean }
     AnchoredSessionReceipt:
       type: object
       required: [revision, body_hash, changed]

@@ -32,7 +32,7 @@ func anchoredUploadReport() (SegmentReport, []RecordedCommit) {
 				Segments: []SessionSegment{}, Uncommitted: &UncommittedPart{SegmentRange: SegmentRange{First: "m1", Last: "m1", Records: 1}, Unplaced: true}},
 		},
 		Spawns: []SessionSpawn{
-			{Provider: ProviderCodex, Parent: "parent", Child: "child", ParentInScope: true, AtRecord: "t1/i2", ParentSegment: 1, Rule: SpawnPointToolCall},
+			{Provider: ProviderCodex, Parent: "parent", Child: "child", ParentInScope: true, AtRecord: "t1/i2", AtOrdinal: segmentOrdinal(1), ParentSegment: 1, Rule: SpawnPointToolCall},
 			{Provider: ProviderClaude, Parent: "not-read", Child: "orphan"},
 		},
 		AgentCalls: []SessionAgentCall{
@@ -93,7 +93,7 @@ func TestAnchoredUploadPlanCarriesTheReportWithoutAddingToIt(t *testing.T) {
 	}
 
 	child := plan.Uploads[1].Body
-	if !child.Sub || child.Parent != "parent" || child.Spawn == nil || *child.Spawn != (AnchoredSpawn{AtRecord: "t1/i2", Rule: SpawnPointToolCall}) ||
+	if !child.Sub || child.Parent != "parent" || child.Spawn == nil || *child.Spawn != (AnchoredSpawn{AtRecord: "t1/i2", AtOrdinal: 1, Rule: SpawnPointToolCall}) ||
 		child.Scope != SessionScopeOriginURL || child.Records != 0 || child.Uncommitted != nil || len(child.Segments) != 0 {
 		t.Fatalf("child: %+v", child)
 	}

@@ -56,6 +56,9 @@ func TestAnchoredSessionBodyValidates(t *testing.T) {
 		"a spawn point with an unknown rule": func(b *AnchoredSessionBody) {
 			b.Parent, b.Spawn = "parent", &AnchoredSpawn{AtRecord: "p1", Rule: "guessed"}
 		},
+		"a spawn point before the first record": func(b *AnchoredSessionBody) {
+			b.Parent, b.Spawn = "parent", &AnchoredSpawn{AtRecord: "p1", AtOrdinal: -1, Rule: AnchoredSpawnToolCall}
+		},
 		"a negative count":                     func(b *AnchoredSessionBody) { b.CopiedRecords = -1 },
 		"a copied-from entry that is no id":    func(b *AnchoredSessionBody) { b.CopiedFrom = []string{"a b"} },
 		"a gap between segments":               func(b *AnchoredSessionBody) { b.Segments[1].FirstOrdinal = 3 },
@@ -147,6 +150,60 @@ func TestAnchoredSessionCommitLinksAndKeys(t *testing.T) {
 	}
 	if !ValidAnchoredCommitSHA(strings.Repeat("a", 64)) || ValidAnchoredCommitSHA(strings.Repeat("a", 41)) {
 		t.Error("commit number lengths")
+	}
+}
+
+func TestAnchoredSessionSummaryListsCommitsAndPlacesWithoutRanges(t *testing.T) {
+	updated := *anchoredTestTime(59)
+	body := anchoredTestBodyWithContent()
+	hash, err := body.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := AnchoredSession{Provider: ProviderClaude, SessionID: "session-1", Revision: 3, BodyHash: hash, UpdatedAt: updated, Body: body}
+	want := AnchoredSessionSummary{Provider: ProviderClaude, SessionID: "session-1", Revision: 3, BodyHash: hash, Records: 6, Commands: 3, Segments: 2,
+		Machine: "workstation", StartedAt: anchoredTestTime(0), EndedAt: anchoredTestTime(50), Content: true, UpdatedAt: updated,
+		Commits: []AnchoredSummaryCommit{
+			{SHA: anchoredTestSHA("a"), SegmentNo: 1, Rule: AnchoredLinkPrintedNumber, Subject: "first", CreatedAt: anchoredTestTime(9), AuthoredAt: anchoredTestTime(9)},
+			{SHA: anchoredTestSHA("b"), SegmentNo: 2, Rule: AnchoredLinkFolderAndTime},
+			{SHA: anchoredTestSHA("c"), SegmentNo: 2, Rule: AnchoredLinkFolderAndTime},
+		},
+		Uncommitted: &AnchoredSummaryUncommitted{Commands: 1,
+			Places: []AnchoredPlace{{Worktree: "app", Branch: "main", Rule: AnchoredPlaceRecorded}, {Worktree: "app-detached", Rule: AnchoredPlaceHeadLog}}},
+	}
+	if got := session.Summary(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("summary = %+v", got)
+	}
+	// A session that committed nothing and has no content still lists as
+	// arrays, so a reader never meets null.
+	bare := AnchoredSession{Provider: ProviderCodex, SessionID: "session-2", Body: AnchoredSessionBody{RuleVersion: AnchoredSessionRuleVersion, Scope: AnchoredScopeFolder}}
+	encoded, err := json.Marshal(bare.Summary())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(encoded); !strings.Contains(text, `"commits":[]`) || !strings.Contains(text, `"content":false`) || strings.Contains(text, "uncommitted") {
+		t.Fatalf("bare summary = %s", text)
+	}
+	// The summary never carries an author's address or an agent call.
+	if text, _ := json.Marshal(session.Summary()); strings.Contains(string(text), "example.test") || strings.Contains(string(text), "sendInput") {
+		t.Fatalf("summary leaks report details: %s", text)
+	}
+}
+
+func TestAnchoredSpawnPointIsPlacedInTheParentAsItIsCutNow(t *testing.T) {
+	parent := anchoredTestBody()
+	for ordinal, want := range map[int]AnchoredSummarySpawn{
+		0: {SegmentNo: 1, Rule: AnchoredSpawnToolCall},
+		3: {SegmentNo: 2, Rule: AnchoredSpawnToolCall},
+		5: {Uncommitted: true, Rule: AnchoredSpawnToolCall},
+	} {
+		got, found := parent.SpawnedIn(AnchoredSpawn{AtRecord: "p", AtOrdinal: ordinal, Rule: AnchoredSpawnToolCall})
+		if !found || got != want {
+			t.Errorf("record %d placed at %+v (%v), want %+v", ordinal, got, found, want)
+		}
+	}
+	if _, found := parent.SpawnedIn(AnchoredSpawn{AtRecord: "p", AtOrdinal: 6, Rule: AnchoredSpawnToolCall}); found {
+		t.Error("a record the parent no longer holds was placed")
 	}
 }
 

@@ -144,9 +144,27 @@ func (s *Service) ListAnchoredSessions(ctx context.Context, repo domain.ContentH
 		if err != nil {
 			return nil, err
 		}
+		// A spawned session is placed in its parent as the parent is cut now,
+		// when the parent is among the caller's own reports.
+		type key struct {
+			provider domain.ProviderKind
+			id       string
+		}
+		byKey := make(map[key]domain.AnchoredSessionBody, len(sessions))
+		for _, session := range sessions {
+			byKey[key{session.Provider, session.SessionID}] = session.Body
+		}
 		summaries := make([]domain.AnchoredSessionSummary, 0, len(sessions))
 		for _, session := range sessions {
-			summaries = append(summaries, session.Summary())
+			summary := session.Summary()
+			if spawn := session.Body.Spawn; spawn != nil {
+				if parent, ok := byKey[key{session.Provider, session.Body.Parent}]; ok {
+					if place, found := parent.SpawnedIn(*spawn); found {
+						summary.SpawnedIn = &place
+					}
+				}
+			}
+			summaries = append(summaries, summary)
 		}
 		return summaries, nil
 	})

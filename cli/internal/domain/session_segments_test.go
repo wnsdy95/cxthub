@@ -488,8 +488,8 @@ func TestSegmentSpawnPoints(t *testing.T) {
 	})
 	want := []SessionSpawn{
 		{Provider: ProviderClaude, Parent: "not-read", Child: "orphan"},
-		{Provider: ProviderClaude, Parent: "parent", Child: "by-call", ParentInScope: true, AtRecord: "p1", ParentSegment: 1, Rule: SpawnPointToolCall},
-		{Provider: ProviderClaude, Parent: "parent", Child: "by-time", ParentInScope: true, AtRecord: "p3", ParentUncommitted: true, Rule: SpawnPointStartTime},
+		{Provider: ProviderClaude, Parent: "parent", Child: "by-call", ParentInScope: true, AtRecord: "p1", AtOrdinal: segmentOrdinal(0), ParentSegment: 1, Rule: SpawnPointToolCall},
+		{Provider: ProviderClaude, Parent: "parent", Child: "by-time", ParentInScope: true, AtRecord: "p3", AtOrdinal: segmentOrdinal(2), ParentUncommitted: true, Rule: SpawnPointStartTime},
 	}
 	if !reflect.DeepEqual(report.Spawns, want) {
 		t.Fatalf("spawns = %+v", report.Spawns)
@@ -666,3 +666,5 @@ func TestSegmentReportNamesTheRecordsBehindEveryRange(t *testing.T) {
 		}
 	}
 }
+
+func segmentOrdinal(position int) *int { return &position }
