@@ -103,6 +103,8 @@ type Container struct {
 	Repack func() (converted int, saved int64, err error)
 	// Identity is an author identifier used for snapshot author attribution (env CXT_NAME/EMAIL/TEAM).
 	Identity domain.TeamIdentity
+	// Segments reads agent session records and Git for the read-only segment report.
+	Segments inbound.SegmentReporter
 }
 
 // Run is the CLI entry point. Parses args(=os.Args) to execute the corresponding subcommand.
@@ -155,6 +157,13 @@ func Run(c *Container, args []string) error {
 	}
 	if cmd == "doctor" || (cmd == "branch" && parsed.first() == "operations") {
 		return RunDiagnostics(ctx, inspection, cwd, args[1:], os.Stdout)
+	}
+	if cmd == "segments" {
+		var reporter inbound.SegmentReporter
+		if c != nil {
+			reporter = c.Segments
+		}
+		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
 	if cmd == "branch" && parsed.first() == "recover" {
 		if err := confirmOrphanRecovery(ctx, c, cwd, parsed.last()); err != nil {
@@ -1443,6 +1452,7 @@ usage: cxt <command> [flags]
   sync pause-history|resume-history
                             pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
+  segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization
   branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch

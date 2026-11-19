@@ -98,6 +98,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", minArgs: 1, maxArgs: 2, flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
 	"sync":      {usage: "cxt sync status [--json] | cxt sync pause-history | cxt sync resume-history", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
+	"segments":  {usage: "cxt segments [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"status":    {usage: "cxt status [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"diff":      {usage: "cxt diff [--staged] [--json]", flags: commandFlags(nil, []string{"--staged", "--json"})},
 	"reflog":    {usage: "cxt reflog"},

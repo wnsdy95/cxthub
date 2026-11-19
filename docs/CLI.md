@@ -1215,6 +1215,97 @@ Repackages legacy local documents into chunked content-addressed storage and
 reports reclaimed duplicate-prefix bytes. Snapshot identity remains unchanged.
 Back up important alpha data before storage maintenance.
 
+## Session records
+
+### `cxt segments`
+
+```text
+cxt segments [--json]
+```
+
+Reads the session records Claude Code and Codex keep on this computer, and
+what Git recorded about the current repository, and shows each session cut at
+the commits it made. It is read-only: it writes nothing to the repository, Git
+configuration, `.cxt`, the server, or a tool's own records, and it needs no
+`cxt init`, remote or login. It does not depend on cxt or a hook having run
+when the work happened, so the same records give the same report every time.
+It does not change capture, synchronization or any hook.
+
+What is read:
+
+- **Git:** every worktree of the repository, the HEAD log of each one, and
+  every commit object Git still has.
+- **Claude Code:** the session files under `~/.claude/projects`, including the
+  sub-session files in each session's `subagents` folder.
+- **Codex:** the newest `state_<n>.sqlite` and `thread_history_<n>.sqlite` in
+  `~/.codex`, through the `sqlite3` program, opened read-only. Items still in a
+  write-ahead log are read. A database with nothing in its log is opened as
+  immutable, so that SQLite creates no lock file beside it. Older Codex rollout
+  files are not read.
+
+A session belongs to the repository when a working folder its records name is
+inside one of the repository's worktrees. The one fallback is a Codex thread
+whose recorded remote address is the repository's `origin`, for a thread whose
+folder is no longer a worktree.
+
+How the report is computed:
+
+- **Session to commit.** A command's output printed the commit number, and the
+  commit was created while that command ran, from two seconds before it started
+  to three seconds after it ended (`printed-number`). The one fallback applies
+  only to a commit no session printed: a worktree's HEAD log records that the
+  commit was made there, and a command of the session was running in that
+  worktree at that time (`same-folder-and-time`). Each link names its rule.
+- **Segments.** A session is cut at every command that made a commit. The last
+  commit of a turn keeps the rest of that turn; earlier commits of the same
+  turn close right after their command. A command that made several commits
+  ends one segment linked to all of them. Two sessions linked to one commit
+  each keep their own segment. A range is given by the tool's own first and
+  last record identifiers. A turn is the unit the tool recorded: Claude Code's
+  prompt identifier, or Codex's turn identifier. Without a recorded turn, a
+  segment closes at its commit.
+- **Commits made in a worktree.** The HEAD log lines counted are a commit of
+  any kind, a cherry-pick, a revert, and a merge that made a merge commit. A
+  fast-forward creates nothing. A rebase is not counted: the commits it writes
+  are copies of commits already made.
+- **Uncommitted part.** Records after a session's last commit, or all of a
+  session that made none, are not cut further. They are placed on every
+  worktree and branch they passed through: the branch the tool recorded;
+  otherwise the branch in that worktree's HEAD log at that time; otherwise, for
+  a worktree with no recorded move, the branch it is on now. Work done without
+  a branch is placed on its worktree. A folder outside every worktree is never
+  turned into a guess, and a part with no readable place is reported as such.
+- **Copied conversation.** A forked or resumed session repeats earlier records
+  under the same identifiers. Each record is counted once, for the session that
+  started first, and a commit in the copied part is linked only there. Because
+  a copy keeps its original time, a session starts at its earliest record that
+  no other session holds. A sub-session file copied into another session's
+  folder is read once, and its parent is the session its records name, not the
+  folder the file sits in.
+- **Session relations.** Which session spawned which, and at which record of
+  the parent: the record that made the recorded call, or, when the tool
+  recorded none, the parent's last record when the spawned session started.
+  Agent-to-agent calls are listed as Codex recorded them. No relation is
+  inferred.
+- **Unread records.** A record that exists but cannot be read, such as an
+  unknown format, a database whose layout changed or a missing `sqlite3`, is
+  listed under unread records and never skipped silently. A last line a tool is
+  still writing is left for the next run.
+
+A commit a HEAD log records but no session is linked to is listed with no
+session, so the gap is visible. Each commit also carries a `local` state
+(`on-a-branch`, `through-its-copy`, `not-on-a-branch`, `object-not-in-git`).
+This is only what this clone shows: a copy is a commit on a local or
+remote-tracking branch with the same author time, author and subject, and
+pull-request commit lists are not read here.
+
+`--json` prints one JSON object with `version`, `repository`, `summary`,
+`unread`, `sessions`, `commits`, `spawns` and `agent_calls`. The layout
+describes this report and is not a storage or wire format; it may change.
+
+Every run reads all records again, which can take a while on a computer with
+many long sessions.
+
 ## Global information
 
 ```text

@@ -85,6 +85,21 @@ func run(args []string) error {
 		defer stop()
 		return delivcli.RunDiagnostics(ctx, localReplicaInspector{}, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
 	}
+	if args[1] == "segments" {
+		// Reading session records needs no store, remote or provider adapter,
+		// so this path builds none of them and cannot write.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		reporter, err := newSegmentReporter()
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return delivcli.RunSegments(ctx, reporter, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+	}
 	if args[1] == "capture" {
 		cwd, err := os.Getwd()
 		if err != nil {
