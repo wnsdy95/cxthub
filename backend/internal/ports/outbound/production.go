@@ -37,4 +37,5 @@ type ProductionStore interface {
 	GitTreeStore
 	DocReadStore
 	AnchoredSessionStore
+	BranchLedgerStore
 }

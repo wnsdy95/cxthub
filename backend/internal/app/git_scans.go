@@ -52,7 +52,11 @@ func (g *GitScans) ObservePush(ctx context.Context, origin, ref, before, after s
 			if current.GitRemoteURL != r.GitRemoteURL {
 				return domain.ErrConflict
 			}
-			return g.store.RecordGitRefObservation(tx, o, time.Now().UTC())
+			observed := time.Now().UTC()
+			if err := g.store.RecordGitRefObservation(tx, o, observed); err != nil {
+				return err
+			}
+			return recordBranchLedgerObservation(tx, g.core.meta, o, observed)
 		})
 		if err != nil {
 			return n, err

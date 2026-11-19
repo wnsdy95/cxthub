@@ -931,6 +931,64 @@ components:
         uncommitted: { $ref: '#/components/schemas/AnchoredUncommitted' }
         agent_calls: { type: array, items: { $ref: '#/components/schemas/AnchoredAgentCall' } }
         content: { $ref: '#/components/schemas/AnchoredContent' }
+    BranchRegistration:
+      type: object
+      additionalProperties: false
+      required: [name, local_id]
+      description: One branch a CLI reports as present on the remote, with the ID it keeps for it in the branch's own Git configuration.
+      properties:
+        name: { type: string, maxLength: 255 }
+        local_id: { type: string, pattern: '^[0-9a-f]{32}$' }
+    BranchRegistrationResult:
+      type: object
+      required: [name, local_id, ledger_id, outcome]
+      properties:
+        name: { type: string }
+        local_id: { type: string }
+        ledger_id: { type: string, description: The ID of the lifetime the name has after the registration. }
+        outcome:
+          type: string
+          enum: [unchanged, opened, joined, reopened, separate]
+          description: separate means the reported ID belongs to another lifetime, so the name has a lifetime with an ID of its own.
+    BranchEvidence:
+      type: object
+      required: [kind]
+      description: What a ledger change was based on. A registration names the account behind it, a hosting event names the stored ref observation.
+      properties:
+        kind: { type: string, enum: [registered, hosting-push] }
+        account: { type: string }
+        source: { type: string }
+    BranchLinkedID:
+      type: object
+      required: [id, linked_at, by]
+      properties:
+        id: { type: string, pattern: '^[0-9a-f]{32}$' }
+        linked_at: { type: string, format: date-time }
+        by: { $ref: '#/components/schemas/BranchEvidence' }
+    BranchReopening:
+      type: object
+      required: [closed_at, closed_by, reopened_at, reopened_by]
+      description: A closing that turned out not to be the end. The lifetime's ID was registered again and the lifetime continued.
+      properties:
+        closed_at: { type: string, format: date-time }
+        closed_by: { $ref: '#/components/schemas/BranchEvidence' }
+        reopened_at: { type: string, format: date-time }
+        reopened_by: { $ref: '#/components/schemas/BranchEvidence' }
+        name: { type: string, description: The name the lifetime had before, when it came back under another. }
+    BranchLifetime:
+      type: object
+      required: [repo_id, ledger_id, name, opened_at, opened_by, linked]
+      description: One lifetime of a branch name on the remote. The ledger is separate from context branch identity, and ledger_id is not a ref's branch identity.
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        ledger_id: { type: string, pattern: '^[0-9a-f]{32}$' }
+        name: { type: string }
+        opened_at: { type: string, format: date-time }
+        opened_by: { $ref: '#/components/schemas/BranchEvidence' }
+        closed_at: { type: string, format: date-time }
+        closed_by: { $ref: '#/components/schemas/BranchEvidence' }
+        linked: { type: array, items: { $ref: '#/components/schemas/BranchLinkedID' } }
+        reopenings: { type: array, items: { $ref: '#/components/schemas/BranchReopening' } }
     AnchoredContent:
       type: object
       required: [doc, events]
@@ -4728,6 +4786,78 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { description: Invalid repository identity or commit number }
         '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/branch-ids:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    put:
+      operationId: registerBranchIDs
+      summary: Register the IDs a CLI keeps for branches that are on the remote
+      description: Member required, rechecked inside the repository transaction. One rule decides every change. A name alive on the remote has exactly one lifetime, and registering under that name joins it. With no lifetime alive under the name, the registering side's ID opens one, or continues the closed lifetime that holds the ID. A report is a member's claim, not proof. It never closes a lifetime, never moves a ref and does not advance the repository revision.
+      tags: [branch-ledger]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [branches]
+              properties:
+                branches:
+                  type: array
+                  maxItems: 2000
+                  items: { $ref: '#/components/schemas/BranchRegistration' }
+      responses:
+        '200':
+          description: The lifetime each name has, and what the report did
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branches]
+                properties:
+                  branches:
+                    type: array
+                    items: { $ref: '#/components/schemas/BranchRegistrationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: Report exceeds the 1 MiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: A branch name or ID is not well formed, or there are too many }
+        '503': { description: Branch ledger service unavailable }
+
+  /repos/{repoID}/branch-lifetimes:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: name
+        in: query
+        required: false
+        description: List the lifetimes of this branch name only.
+        schema: { type: string }
+    get:
+      operationId: listBranchLifetimes
+      summary: List the lifetimes of the repository's branch names
+      description: Member required. A lifetime is the time a branch name was on the remote, with the IDs joined to it. A closed lifetime stays in the list. Oldest first.
+      tags: [branch-ledger]
+      responses:
+        '200':
+          description: Branch lifetimes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BranchLifetime' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity or branch name }
+        '503': { description: Branch ledger service unavailable }
 
   /repos/{repoID}/snapshots:
     parameters:
@@ -9253,6 +9383,8 @@ tags:
     description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
   - name: anchored-sessions
     description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. Readable only by the uploading account until a published-by-push rule exists."
+  - name: branch-ledger
+    description: One permanent record for each lifetime of a branch name on the remote, and the IDs joined to it.
   - name: docs
     description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
   - name: refs
