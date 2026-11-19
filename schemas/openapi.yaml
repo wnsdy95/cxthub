@@ -890,8 +890,20 @@ components:
         ended_at: { type: string, format: date-time }
         first_event: { type: integer, minimum: 0 }
         events: { type: integer, minimum: 0 }
+        turns:
+          type: array
+          maxItems: 20000
+          description: Where each turn of the part begins, in order. The part is not cut at them. They let the server tell which turns had begun when a branch the part passed through was pushed.
+          items: { $ref: '#/components/schemas/AnchoredTurnMark' }
         places: { type: array, items: { $ref: '#/components/schemas/AnchoredPlace' } }
         unplaced: { type: boolean }
+    AnchoredTurnMark:
+      type: object
+      required: [first_ordinal]
+      properties:
+        first_ordinal: { type: integer, minimum: 0, description: Position of the turn's first record among the session's own records. }
+        first_event: { type: integer, minimum: 0, description: Where the turn begins in the content document. Absent when zero. }
+        started_at: { type: string, format: date-time }
     AnchoredSpawn:
       type: object
       description: Where in the parent session a session was spawned.

@@ -668,3 +668,45 @@ func TestSegmentReportNamesTheRecordsBehindEveryRange(t *testing.T) {
 }
 
 func segmentOrdinal(position int) *int { return &position }
+
+func TestUncommittedPartMarksWhereEachTurnBegins(t *testing.T) {
+	inputs := SegmentInputs{
+		Git: GitRecords{Worktrees: []RecordedWorktree{segmentMain}, Commits: []RecordedCommit{segmentCommit("a", 20)}},
+		Sessions: []RecordedSession{{Provider: ProviderClaude, ID: "turns", Items: []RecordedItem{
+			segmentMessage("m1", "t1", 10, "/work/app"),
+			segmentCommand("m2", "t1", 19, 21, "/work/app", "[main aaaaaaa] change a"),
+			// The commit's turn goes on; these stay with the segment.
+			segmentMessage("m3", "t1", 22, "/work/app"),
+			segmentMessage("m4", "t2", 30, "/work/app"),
+			segmentMessage("m5", "t2", 31, "/work/app"),
+			// A record the tool gave no turn is a turn of its own, each time.
+			segmentMessage("m6", "", 40, "/work/app"),
+			segmentMessage("m7", "", 41, "/work/app"),
+			segmentMessage("m8", "t3", 50, "/work/app"),
+		}}},
+	}
+	report, records := BuildSegmentReportWithRecords(inputs)
+	part := segmentSession(t, report, "turns").Uncommitted
+	if part == nil || part.First != "m4" || part.Records != 5 {
+		t.Fatalf("uncommitted part = %+v", part)
+	}
+	want := []TurnMark{
+		{First: "m4", Ordinal: 3, StartedAt: segmentTime(segmentAt(30))},
+		{First: "m6", Ordinal: 5, StartedAt: segmentTime(segmentAt(40))},
+		{First: "m7", Ordinal: 6, StartedAt: segmentTime(segmentAt(41))},
+		{First: "m8", Ordinal: 7, StartedAt: segmentTime(segmentAt(50))},
+	}
+	if !reflect.DeepEqual(part.Turns, want) {
+		t.Fatalf("turns = %+v", part.Turns)
+	}
+	// The records behind the part are listed turn by turn, after the segments.
+	if got := records[0].Ranges; !reflect.DeepEqual(got, [][]string{{"m1", "m2", "m3"}, {"m4", "m5"}, {"m6"}, {"m7"}, {"m8"}}) {
+		t.Fatalf("record ranges = %v", got)
+	}
+	// A session that is all uncommitted begins its first turn at its first record.
+	alone := BuildSegmentReport(SegmentInputs{Git: GitRecords{Worktrees: []RecordedWorktree{segmentMain}},
+		Sessions: []RecordedSession{{Provider: ProviderCodex, ID: "alone", Items: []RecordedItem{segmentMessage("a1", "t1", 10, "/work/app")}}}})
+	if turns := segmentSession(t, alone, "alone").Uncommitted.Turns; len(turns) != 1 || turns[0].Ordinal != 0 || turns[0].First != "a1" {
+		t.Fatalf("a single turn = %+v", turns)
+	}
+}

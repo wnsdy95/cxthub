@@ -62,6 +62,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"AnchoredSegment", reflect.TypeOf(domain.AnchoredSegment{})},
 		{"AnchoredPlace", reflect.TypeOf(domain.AnchoredPlace{})},
 		{"AnchoredUncommitted", reflect.TypeOf(domain.AnchoredUncommitted{})},
+		{"AnchoredTurnMark", reflect.TypeOf(domain.AnchoredTurnMark{})},
 		{"AnchoredSpawn", reflect.TypeOf(domain.AnchoredSpawn{})},
 		{"AnchoredAgentCall", reflect.TypeOf(domain.AnchoredAgentCall{})},
 		{"AnchoredSessionBody", reflect.TypeOf(domain.AnchoredSessionBody{})},

@@ -207,6 +207,60 @@ func TestAnchoredSpawnPointIsPlacedInTheParentAsItIsCutNow(t *testing.T) {
 	}
 }
 
+func TestAnchoredTurnMarksGoForwardThroughTheUncommittedPart(t *testing.T) {
+	// The uncommitted part of the well-formed report holds records 4 and 5
+	// and, with content, events 6 to 9.
+	marks := func(turns ...AnchoredTurnMark) AnchoredSessionBody {
+		body := anchoredTestBodyWithContent()
+		body.Uncommitted.Turns = turns
+		return body
+	}
+	for name, body := range map[string]AnchoredSessionBody{
+		"no marks":                   marks(),
+		"one turn":                   marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6, StartedAt: anchoredTestTime(40)}),
+		"two turns":                  marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6}, AnchoredTurnMark{FirstOrdinal: 5, FirstEvent: 8}),
+		"a turn that holds no event": marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6}, AnchoredTurnMark{FirstOrdinal: 5, FirstEvent: 6}),
+		"a last turn at the end":     marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6}, AnchoredTurnMark{FirstOrdinal: 5, FirstEvent: 10}),
+	} {
+		if err := body.Validate(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, body := range map[string]AnchoredSessionBody{
+		"a first turn after the first record": marks(AnchoredTurnMark{FirstOrdinal: 5, FirstEvent: 6}),
+		"a first turn after the first event":  marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 7}),
+		"a turn at the same record again":     marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6}, AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 7}),
+		"a turn beyond the part":              marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6}, AnchoredTurnMark{FirstOrdinal: 6, FirstEvent: 7}),
+		"events going back":                   marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 8}, AnchoredTurnMark{FirstOrdinal: 5, FirstEvent: 7}),
+		"an event beyond the part":            marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6}, AnchoredTurnMark{FirstOrdinal: 5, FirstEvent: 11}),
+	} {
+		if err := body.Validate(); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s was accepted: %v", name, err)
+		}
+	}
+	// Without content no turn names an event.
+	plain := anchoredTestBody()
+	plain.Uncommitted.Turns = []AnchoredTurnMark{{FirstOrdinal: 4}, {FirstOrdinal: 5}}
+	if err := plain.Validate(); err != nil {
+		t.Errorf("turns without content: %v", err)
+	}
+	plain.Uncommitted.Turns[1].FirstEvent = 1
+	if err := plain.Validate(); !errors.Is(err, ErrValidation) {
+		t.Errorf("a turn naming an event without content was accepted: %v", err)
+	}
+	// The marks are part of what is stored and hashed, with their times in UTC.
+	local := time.FixedZone("local", 9*3600)
+	at := anchoredTestTime(40).In(local)
+	zoned := marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6, StartedAt: &at})
+	same := marks(AnchoredTurnMark{FirstOrdinal: 4, FirstEvent: 6, StartedAt: anchoredTestTime(40)})
+	a, _ := zoned.Hash()
+	b, _ := same.Hash()
+	c, _ := marks().Hash()
+	if a != b || a == c || zoned.Canonical().Uncommitted.Turns[0].StartedAt.Location() != time.UTC {
+		t.Errorf("hashes: zoned %s, utc %s, without marks %s", a, b, c)
+	}
+}
+
 // anchoredTestBodyWithContent places the three ranges of the well-formed
 // report in a content document of ten events; the second range holds none.
 func anchoredTestBodyWithContent() AnchoredSessionBody {

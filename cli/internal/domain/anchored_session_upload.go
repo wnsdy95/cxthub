@@ -62,8 +62,20 @@ type AnchoredPlace struct {
 
 type AnchoredUncommitted struct {
 	AnchoredRange
-	Places   []AnchoredPlace `json:"places"`
-	Unplaced bool            `json:"unplaced"`
+	// Turns says where each turn of the part begins among the session's own
+	// records and in its content document.
+	Turns    []AnchoredTurnMark `json:"turns,omitempty"`
+	Places   []AnchoredPlace    `json:"places"`
+	Unplaced bool               `json:"unplaced"`
+}
+
+// AnchoredTurnMark is where one turn of the uncommitted part begins. The
+// server uses the marks to tell which turns had begun when a branch was
+// pushed.
+type AnchoredTurnMark struct {
+	FirstOrdinal int    `json:"first_ordinal"`
+	FirstEvent   int    `json:"first_event,omitempty"`
+	StartedAt    string `json:"started_at,omitempty"`
 }
 
 // AnchoredSpawn says where in the parent a session was spawned: the parent's
@@ -108,20 +120,28 @@ type AnchoredSessionBody struct {
 
 // AttachContent names the content document in the report and places every
 // range in it. first and count give, for each range in order (the segments,
-// then the uncommitted part), where it starts and how many events it holds.
+// then the uncommitted part turn by turn), where it starts and how many
+// events it holds.
 func (b *AnchoredSessionBody) AttachContent(ref DocumentRef, events int, first, count []int) bool {
-	ranges := len(b.Segments)
+	segments, turns := len(b.Segments), 0
 	if b.Uncommitted != nil {
-		ranges++
+		turns = len(b.Uncommitted.Turns)
+		if turns == 0 {
+			return false
+		}
 	}
-	if len(first) != ranges || len(count) != ranges {
+	if len(first) != segments+turns || len(count) != segments+turns {
 		return false
 	}
 	for index := range b.Segments {
 		b.Segments[index].FirstEvent, b.Segments[index].Events = first[index], count[index]
 	}
 	if b.Uncommitted != nil {
-		b.Uncommitted.FirstEvent, b.Uncommitted.Events = first[ranges-1], count[ranges-1]
+		b.Uncommitted.FirstEvent, b.Uncommitted.Events = first[segments], 0
+		for turn := range b.Uncommitted.Turns {
+			b.Uncommitted.Turns[turn].FirstEvent = first[segments+turn]
+			b.Uncommitted.Events += count[segments+turn]
+		}
 	}
 	b.Content = &AnchoredContent{Doc: ref.Hash, Identity: ref.Identity, Events: events}
 	return true
@@ -219,6 +239,9 @@ func BuildAnchoredUploadPlan(report SegmentReport, commits []RecordedCommit, mac
 		}
 		if part := session.Uncommitted; part != nil {
 			out := AnchoredUncommitted{AnchoredRange: span(part.SegmentRange), Places: make([]AnchoredPlace, 0, len(part.Places)), Unplaced: part.Unplaced}
+			for _, turn := range part.Turns {
+				out.Turns = append(out.Turns, AnchoredTurnMark{FirstOrdinal: turn.Ordinal, StartedAt: turn.StartedAt})
+			}
 			seen := map[AnchoredPlace]struct{}{}
 			for _, place := range part.Places {
 				named := AnchoredPlace{Worktree: filepath.Base(place.Worktree), Branch: place.Branch, Removed: place.Removed, Rule: place.Rule}

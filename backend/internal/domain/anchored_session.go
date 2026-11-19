@@ -49,6 +49,7 @@ const (
 	anchoredCopiedLimit    = 256
 	anchoredNameLimit      = 256
 	anchoredEventLimit     = 100_000_000
+	anchoredTurnLimit      = 20000
 )
 
 var (
@@ -113,8 +114,21 @@ type AnchoredPlace struct {
 // AnchoredUncommitted is the part of a session after its last commit.
 type AnchoredUncommitted struct {
 	AnchoredRange
-	Places   []AnchoredPlace `json:"places"`
-	Unplaced bool            `json:"unplaced"`
+	// Turns says where each turn of the part begins, in order. The part is
+	// not cut at them: they let the server tell which turns had begun when a
+	// branch the part passed through was pushed. A report may leave them out.
+	Turns    []AnchoredTurnMark `json:"turns,omitempty"`
+	Places   []AnchoredPlace    `json:"places"`
+	Unplaced bool               `json:"unplaced"`
+}
+
+// AnchoredTurnMark is where one turn begins: the position of its first record
+// among the session's own records, where that is in the content document, and
+// the record's time.
+type AnchoredTurnMark struct {
+	FirstOrdinal int        `json:"first_ordinal"`
+	FirstEvent   int        `json:"first_event,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
 }
 
 // AnchoredSpawn says where in the parent session this session was spawned:
@@ -378,6 +392,21 @@ func (b AnchoredSessionBody) Validate() error {
 		if part.Unplaced != (len(part.Places) == 0) {
 			return anchoredInvalid("the uncommitted part is unplaced exactly when it has no place")
 		}
+		if len(part.Turns) > anchoredTurnLimit {
+			return anchoredInvalid("too many turns")
+		}
+		// Turns begin at the part's first record and go forward through its
+		// records and, with content, through its events.
+		for index, turn := range part.Turns {
+			ordinal, event := part.FirstOrdinal, part.FirstEvent
+			if index > 0 {
+				ordinal, event = part.Turns[index-1].FirstOrdinal+1, part.Turns[index-1].FirstEvent
+			}
+			if (index == 0 && (turn.FirstOrdinal != ordinal || turn.FirstEvent != event)) || turn.FirstOrdinal < ordinal || turn.FirstOrdinal > part.LastOrdinal ||
+				turn.FirstEvent < event || turn.FirstEvent > part.FirstEvent+part.Events {
+				return anchoredInvalid("turn %d of the uncommitted part is out of place", index+1)
+			}
+		}
 		for _, place := range part.Places {
 			if !anchoredText(place.Worktree, anchoredNameLimit, true) || strings.ContainsAny(place.Worktree, `/\`) || !anchoredText(place.Branch, anchoredNameLimit, false) ||
 				!anchoredOneOf(place.Rule, AnchoredPlaceRecorded, AnchoredPlaceHeadLog, AnchoredPlaceCurrentBranch, AnchoredPlaceRemovedFolder) {
@@ -452,6 +481,11 @@ func (b AnchoredSessionBody) Canonical() AnchoredSessionBody {
 		part := *b.Uncommitted
 		part.StartedAt, part.EndedAt = utc(part.StartedAt), utc(part.EndedAt)
 		part.Places = append([]AnchoredPlace{}, part.Places...)
+		part.Turns = nil
+		for _, turn := range b.Uncommitted.Turns {
+			turn.StartedAt = utc(turn.StartedAt)
+			part.Turns = append(part.Turns, turn)
+		}
 		out.Uncommitted = &part
 	}
 	out.AgentCalls = nil

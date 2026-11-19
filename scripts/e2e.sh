@@ -301,6 +301,7 @@ expect "an appended record replaces the report" "$(cxt segments push --json 2>/d
 SEGDOC2="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['doc']")"
 expect "the grown document keeps the earlier events and adds the new one" "$(curl -sb "$JA" "$B/repos/$CLIRID/docs/$SEGDOC2" | python3 -c 'import json,sys;e=json.load(sys.stdin)["cir"]["events"];print(len(e),e[4]["blocks"][0]["text"],e[5]["blocks"][0]["text"])')" "6 one more thing done"
 expect "revision after the appended record" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']")" 2
+expect "the uncommitted part says where each of its turns begins" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c 'import json,sys;u=json.load(sys.stdin)["body"]["uncommitted"];t=u["turns"];print(len(t),t[0]["first_ordinal"]==u["first_ordinal"],t[0].get("first_event",0)==u.get("first_event",0),[m["first_ordinal"] for m in t]==sorted(m["first_ordinal"] for m in t))')" "1 True True True"
 # Branch IDs live in Git's own branch configuration. The one of a branch Git
 # shows on origin is registered, and a teammate's ID for the same name joins it.
 SEGORIGIN="$TMP/segments-origin.git"; git init -q --bare "$SEGORIGIN"

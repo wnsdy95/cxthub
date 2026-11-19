@@ -122,3 +122,33 @@ func TestAnchoredUploadBodyNeverCarriesAPath(t *testing.T) {
 		}
 	}
 }
+
+func TestAnchoredUploadPlacesEveryTurnOfTheUncommittedPartInTheContent(t *testing.T) {
+	report := SegmentReport{Sessions: []SegmentedSession{{Provider: ProviderClaude, ID: "turns", Scope: SessionScopeFolder, Records: 8,
+		Segments: []SessionSegment{{SegmentRange: SegmentRange{First: "m1", Last: "m3", Records: 3}, Commits: []SegmentCommitLink{{SHA: strings.Repeat("a", 40), Rule: SegmentLinkPrintedNumber}}}},
+		Uncommitted: &UncommittedPart{SegmentRange: SegmentRange{First: "m4", Last: "m8", Records: 5}, Unplaced: true, Turns: []TurnMark{
+			{First: "m4", Ordinal: 3, StartedAt: "2031-01-02T03:04:30.000Z"}, {First: "m6", Ordinal: 5}, {First: "m8", Ordinal: 7, StartedAt: "2031-01-02T03:04:50.000Z"},
+		}},
+	}}}
+	body := BuildAnchoredUploadPlan(report, nil, "laptop").Uploads[0].Body
+	want := []AnchoredTurnMark{{FirstOrdinal: 3, StartedAt: "2031-01-02T03:04:30.000Z"}, {FirstOrdinal: 5}, {FirstOrdinal: 7, StartedAt: "2031-01-02T03:04:50.000Z"}}
+	if !reflect.DeepEqual(body.Uncommitted.Turns, want) || body.Uncommitted.FirstOrdinal != 3 || body.Uncommitted.LastOrdinal != 7 {
+		t.Fatalf("uncommitted part = %+v", body.Uncommitted)
+	}
+	ref := DocumentRef{Hash: HashContent([]byte("synthetic content")), Identity: DocumentIdentityLegacy}
+	// One range for the segment and one for each turn; a turn may hold no event.
+	if !body.AttachContent(ref, 9, []int{0, 4, 7, 7}, []int{4, 3, 0, 2}) {
+		t.Fatal("content with one range per turn was not attached")
+	}
+	if body.Segments[0].FirstEvent != 0 || body.Segments[0].Events != 4 || body.Uncommitted.FirstEvent != 4 || body.Uncommitted.Events != 5 ||
+		body.Uncommitted.Turns[0].FirstEvent != 4 || body.Uncommitted.Turns[1].FirstEvent != 7 || body.Uncommitted.Turns[2].FirstEvent != 7 || body.Content.Events != 9 {
+		t.Fatalf("placed content: %+v %+v", body.Segments[0].AnchoredRange, body.Uncommitted)
+	}
+	// Content read in other ranges than the report has is not attached.
+	for name, counts := range map[string][]int{"one range for the whole part": {4, 5}, "one range too many": {4, 3, 0, 1, 1}} {
+		other := BuildAnchoredUploadPlan(report, nil, "laptop").Uploads[0].Body
+		if other.AttachContent(ref, 9, make([]int, len(counts)), counts) {
+			t.Errorf("%s was attached", name)
+		}
+	}
+}

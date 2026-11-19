@@ -245,9 +245,21 @@ type SessionPlace struct {
 // session that made none. It is not cut further.
 type UncommittedPart struct {
 	SegmentRange
+	// Turns says where each turn of the part begins, in order. The part is
+	// not cut at them; they let a reader say which turns had begun by a
+	// given time.
+	Turns  []TurnMark     `json:"turns"`
 	Places []SessionPlace `json:"places"`
 	// Unplaced is true when no place could be read. None is guessed.
 	Unplaced bool `json:"unplaced"`
+}
+
+// TurnMark is where one turn begins: the turn's first record, that record's
+// position among the session's own records, and its time.
+type TurnMark struct {
+	First     string `json:"first"`
+	Ordinal   int    `json:"ordinal"`
+	StartedAt string `json:"started_at,omitempty"`
 }
 
 // SegmentedSession is one session with its segments.
@@ -445,8 +457,8 @@ type segmentSpan struct {
 }
 
 // SessionRecordRanges names the records behind each range of one session: its
-// segments in order, then its uncommitted part. A copied record belongs to
-// another session and is in none of them.
+// segments in order, then its uncommitted part turn by turn. A copied record
+// belongs to another session and is in none of them.
 type SessionRecordRanges struct {
 	Provider ProviderKind
 	ID       string
@@ -511,8 +523,15 @@ func BuildSegmentReportWithRecords(in SegmentInputs) (SegmentReport, []SessionRe
 		for _, span := range state.segments {
 			ranges.Ranges = append(ranges.Ranges, ids(span.first, span.last))
 		}
-		if state.rest < len(state.own) {
-			ranges.Ranges = append(ranges.Ranges, ids(state.rest, len(state.own)-1))
+		// The uncommitted part is listed turn by turn, so that the place of
+		// every turn in the conversation is known.
+		starts := state.turnStarts(state.rest, len(state.own)-1)
+		for index, first := range starts {
+			last := len(state.own) - 1
+			if index+1 < len(starts) {
+				last = starts[index+1] - 1
+			}
+			ranges.Ranges = append(ranges.Ranges, ids(first, last))
 		}
 		records[index] = ranges
 	}
@@ -795,6 +814,20 @@ func (s *segmentSessionState) span(first, last int) SegmentRange {
 	return out
 }
 
+// turnStarts lists the positions, among the session's own records from first
+// to last, where a turn begins. Records the tool gave the same turn are one
+// turn; a record without a turn is a turn of its own.
+func (s *segmentSessionState) turnStarts(first, last int) []int {
+	var starts []int
+	for position := first; position <= last; position++ {
+		turn := s.record.Items[s.own[position]].Turn
+		if position == first || turn == "" || turn != s.record.Items[s.own[position-1]].Turn {
+			starts = append(starts, position)
+		}
+	}
+	return starts
+}
+
 // places reads where an uncommitted part was worked on. A tool-recorded branch
 // is used as is. Otherwise the worktree's HEAD log gives the branch at that
 // time, and a worktree with no recorded move gives the branch it is on now. A
@@ -912,7 +945,11 @@ func assembleSegmentReport(in SegmentInputs, states []*segmentSessionState, root
 			}
 		}
 		if state.rest < len(state.own) {
-			part := &UncommittedPart{SegmentRange: state.span(state.rest, len(state.own)-1)}
+			part := &UncommittedPart{SegmentRange: state.span(state.rest, len(state.own)-1), Turns: []TurnMark{}}
+			for _, position := range state.turnStarts(state.rest, len(state.own)-1) {
+				item := state.record.Items[state.own[position]]
+				part.Turns = append(part.Turns, TurnMark{First: item.ID, Ordinal: position, StartedAt: segmentTime(item.AtMs)})
+			}
 			part.Places = state.places(state.rest, len(state.own)-1, in.Git.Worktrees, roots)
 			if part.Places == nil {
 				part.Places, part.Unplaced = []SessionPlace{}, true

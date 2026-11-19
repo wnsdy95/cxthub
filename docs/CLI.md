@@ -1332,7 +1332,10 @@ What is uploaded for a session:
   uses the last three to recognize a cherry-picked or rebased copy;
 - its uncommitted part and the places it passed through. A worktree is uploaded
   as its folder name only, never as a path, together with this computer's host
-  name so that your own computers can be told apart;
+  name so that your own computers can be told apart. The part is not cut any
+  further, but where each of its turns begins is uploaded (the position of the
+  turn's first record, its place in the conversation and its time), so that
+  the server can tell which turns had begun when a branch was pushed;
 - how many of its records are copies that belong to an earlier session, and the
   agent-to-agent calls the session recorded.
 
