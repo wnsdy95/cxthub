@@ -84,6 +84,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"AnchoredSummaryUncommitted", reflect.TypeOf(domain.AnchoredSummaryUncommitted{})},
 		{"AnchoredSummarySpawn", reflect.TypeOf(domain.AnchoredSummarySpawn{})},
 		{"AnchoredEventPage", reflect.TypeOf(domain.AnchoredEventPage{})},
+		{"AnchoredRestoreResult", reflect.TypeOf(domain.AnchoredRestoreResult{})},
 		{"AnchoredNoteTarget", reflect.TypeOf(domain.AnchoredNoteTarget{})},
 		{"AnchoredNote", reflect.TypeOf(domain.AnchoredNote{})},
 		{"WorktreeReportEntry", reflect.TypeOf(domain.WorktreeReportEntry{})},

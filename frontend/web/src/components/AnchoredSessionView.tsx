@@ -3,7 +3,7 @@
 // and the whole conversation with a divider where each part begins.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AnchoredSelection } from '../route';
-import type { AnchoredProvider, Repo } from '../types';
+import { ANCHORED_RESTORED_UPLOADER, type AnchoredProvider, type Repo } from '../types';
 import { api } from '../api';
 import { useAnchoredEvents, useAnchoredSession, useAnchoredSessionCalls } from '../hooks';
 import {
@@ -61,7 +61,9 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
           <code>{sessionId}</code>
         </p>
         {shared && listed?.uploader && (
-          <p className="anchor-card-meta anchor-shared">{t('anchored.sharedBy', { name: names.get(listed.uploader) ?? listed.uploader })}</p>
+          <p className="anchor-card-meta anchor-shared">
+            {listed.uploader === ANCHORED_RESTORED_UPLOADER ? t('anchored.restoredSession') : t('anchored.sharedBy', { name: names.get(listed.uploader) ?? listed.uploader })}
+          </p>
         )}
         <p className="anchor-card-meta">
           {body.machine && <><em>{body.machine}</em> · </>}

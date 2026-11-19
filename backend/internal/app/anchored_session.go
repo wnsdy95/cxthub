@@ -52,6 +52,9 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 	if err := body.Validate(); err != nil {
 		return domain.AnchoredSessionReceipt{}, err
 	}
+	if body.Scope == domain.AnchoredScopeCaptures {
+		return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: a report rebuilt from captures is made by the server", domain.ErrValidation)
+	}
 	body = body.Canonical()
 	hash, err := body.Hash()
 	if err != nil {
@@ -86,6 +89,19 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 		case errors.Is(err, domain.ErrNotFound):
 		case err != nil:
 			return domain.AnchoredSessionReceipt{}, err
+		case existing.Uploader == domain.AnchoredRestoredUploader:
+			// The exact report replaces the one rebuilt from captures. That
+			// one counted records as the events of a capture, so what was
+			// open of it says nothing about this one; the rule opens this
+			// one's pushed parts again below.
+			publications, err := s.anchoredPublicationStore()
+			if err != nil {
+				return domain.AnchoredSessionReceipt{}, err
+			}
+			if err := publications.ClearAnchoredPublication(bound, repo, provider, sessionID); err != nil {
+				return domain.AnchoredSessionReceipt{}, err
+			}
+			next.Revision, next.CreatedAt = existing.Revision+1, existing.CreatedAt
 		case existing.Uploader != actor:
 			return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: this identifier is already reported by another account", domain.ErrConflict)
 		case existing.BodyHash == hash:

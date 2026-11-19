@@ -12,6 +12,7 @@ import (
 func TestPGAnchoredSessionPersistence(t *testing.T) {
 	st, ctx, repo := sessionArchivePG(t)
 	checkAnchoredSessionPersistence(t, ctx, st, repo)
+	checkRestoredAnchoredSessionPersistence(t, ctx, st, repo)
 }
 
 // Removing a report removes its index entries with it, and the checks the

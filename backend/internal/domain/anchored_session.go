@@ -342,8 +342,14 @@ func (b AnchoredSessionBody) Validate() error {
 	if b.RuleVersion != AnchoredSessionRuleVersion {
 		return anchoredInvalid("rule version %d is not supported", b.RuleVersion)
 	}
-	if !anchoredOneOf(b.Scope, AnchoredScopeFolder, AnchoredScopeOriginURL) {
+	if !anchoredOneOf(b.Scope, AnchoredScopeFolder, AnchoredScopeOriginURL, AnchoredScopeCaptures) {
 		return anchoredInvalid("unknown scope")
+	}
+	// A report rebuilt from captures links commits by its own rule, and only
+	// such a report does.
+	restored := b.Scope == AnchoredScopeCaptures
+	if restored && (b.Spawn != nil || b.Parent != "" || b.Machine != "" || len(b.AgentCalls) > 0) {
+		return anchoredInvalid("a report rebuilt from captures knows no spawn point, machine or agent call")
 	}
 	if b.Parent != "" && !anchoredSessionID.MatchString(b.Parent) {
 		return anchoredInvalid("parent is not a session identifier")
@@ -388,7 +394,11 @@ func (b AnchoredSessionBody) Validate() error {
 			return anchoredInvalid("segment %d must end at 1 to %d commits", index+1, anchoredCommitLimit)
 		}
 		for _, commit := range segment.Commits {
-			if !ValidAnchoredCommitSHA(commit.SHA) || !anchoredOneOf(commit.Rule, AnchoredLinkPrintedNumber, AnchoredLinkFolderAndTime) {
+			known := anchoredOneOf(commit.Rule, AnchoredLinkPrintedNumber, AnchoredLinkFolderAndTime)
+			if restored {
+				known = commit.Rule == AnchoredLinkCapturedAtCommit
+			}
+			if !ValidAnchoredCommitSHA(commit.SHA) || !known {
 				return anchoredInvalid("segment %d names a commit without a full number or a known rule", index+1)
 			}
 			if _, dup := seen[commit.SHA]; dup {

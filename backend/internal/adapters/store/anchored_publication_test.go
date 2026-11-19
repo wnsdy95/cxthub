@@ -50,6 +50,18 @@ func checkAnchoredPublicationPersistence(t *testing.T, ctx context.Context, stor
 	if listed, err := storage.ListAnchoredPublications(ctx, repo); err != nil || !reflect.DeepEqual(listed, []domain.AnchoredPublication{second, first}) {
 		t.Fatalf("by tool then identifier:\n got %+v\nwant %+v\n%v", listed, []domain.AnchoredPublication{second, first}, err)
 	}
+	// What was open of a session can be cleared, and clearing twice does nothing.
+	for range 2 {
+		if err := storage.ClearAnchoredPublication(ctx, repo, domain.ProviderCodex, "session-2"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if listed, err := storage.ListAnchoredPublications(ctx, repo); err != nil || !reflect.DeepEqual(listed, []domain.AnchoredPublication{second}) {
+		t.Fatalf("after clearing one session: %+v %v", listed, err)
+	}
+	if err := storage.PutAnchoredPublication(ctx, repo, first); err != nil {
+		t.Fatal(err)
+	}
 	for name, refused := range map[string]domain.AnchoredPublication{
 		"no range":           {Provider: domain.ProviderClaude, SessionID: "session-1"},
 		"an unknown tool":    {Provider: "other", SessionID: "session-1", Ranges: first.Ranges},

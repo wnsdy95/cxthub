@@ -25,3 +25,10 @@ CREATE TABLE remote_git_pushes (
     seen_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (repo_id, branch, seen_at)
 );
+
+-- A session no CLI reported is rebuilt from the captures the server kept
+-- before session reports; a capture that published a commit links it by its
+-- own rule.
+ALTER TABLE anchored_session_commits
+    DROP CONSTRAINT anchored_session_commits_rule_check,
+    ADD CONSTRAINT anchored_session_commits_rule_check CHECK (rule IN ('printed-number', 'same-folder-and-time', 'captured-at-commit'));

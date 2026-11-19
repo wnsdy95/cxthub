@@ -1399,6 +1399,14 @@ the hash some other way from reading it.
 Uploading again replaces the session's report as a whole; a report with the
 same content changes nothing. Reports do not advance the repository revision.
 
+Sessions that were only captured, before this command existed, can be rebuilt
+on the server from those captures by a maintainer (the Sessions tab offers
+it). Such a report is cut only where a capture published a commit, says
+nothing about where its last part was worked on, and belongs to no account:
+every member reads the parts of it that are pushed, and nobody reads the
+rest. The first upload of the same session from a computer that still has its
+records replaces it with the exact report.
+
 Branch IDs. Before the sessions, every branch of the repository that has no ID
 gets a random one, stored by Git with the branch itself:
 

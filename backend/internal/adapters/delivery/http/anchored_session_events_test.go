@@ -22,6 +22,10 @@ type anchoredEventsHTTPBackend struct {
 	extra     int
 }
 
+func (backend *anchoredEventsHTTPBackend) RestoreAnchoredSessions(context.Context, domain.ContentHash) (domain.AnchoredRestoreResult, error) {
+	return domain.AnchoredRestoreResult{}, nil
+}
+
 func (backend *anchoredEventsHTTPBackend) AnchoredSessionContentAccess(context.Context, domain.ContentHash, domain.ProviderKind, string) (domain.AnchoredContentAccess, error) {
 	return backend.access, backend.accessErr
 }

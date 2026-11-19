@@ -15,4 +15,8 @@ type AnchoredPublicationStore interface {
 	PutAnchoredPublication(context.Context, domain.ContentHash, domain.AnchoredPublication) error
 	// ListAnchoredPublications lists every session of the repository that has an open range, by tool then identifier.
 	ListAnchoredPublications(context.Context, domain.ContentHash) ([]domain.AnchoredPublication, error)
+	// ClearAnchoredPublication removes what is open of a session whose report
+	// is replaced by one that counts its records another way. Clearing a
+	// session nothing is open of does nothing.
+	ClearAnchoredPublication(context.Context, domain.ContentHash, domain.ProviderKind, string) error
 }

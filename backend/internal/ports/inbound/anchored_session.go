@@ -20,4 +20,7 @@ type AnchoredSessions interface {
 	// AnchoredSessionContentAccess says what the caller may read of a
 	// session's conversation.
 	AnchoredSessionContentAccess(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredContentAccess, error)
+	// RestoreAnchoredSessions rebuilds, from the server's earlier captures, a
+	// batch of the sessions no CLI reported.
+	RestoreAnchoredSessions(ctx context.Context, repo domain.ContentHash) (domain.AnchoredRestoreResult, error)
 }

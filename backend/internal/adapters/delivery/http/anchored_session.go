@@ -68,6 +68,22 @@ func (s *Server) listAnchoredSessions(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, sessions, err)
 }
 
+// restoreAnchoredSessions rebuilds a batch of sessions from the server's
+// earlier captures. It takes no body; a maintainer repeats it while the
+// answer says sessions remain.
+func (s *Server) restoreAnchoredSessions(w http.ResponseWriter, r *http.Request) {
+	if !isJSONBody(r) {
+		s.writeError(w, http.StatusUnsupportedMediaType, "bad_request", "Content-Type must be application/json")
+		return
+	}
+	service, ok := s.anchoredSessions(w)
+	if !ok {
+		return
+	}
+	result, err := service.RestoreAnchoredSessions(r.Context(), s.repoID(r))
+	s.respond(w, result, err)
+}
+
 func (s *Server) anchoredCommitSegments(w http.ResponseWriter, r *http.Request) {
 	service, ok := s.anchoredSessions(w)
 	if !ok {

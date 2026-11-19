@@ -210,6 +210,8 @@ export const api = {
     call<import('./types').RemoteGitView>('GET', `/repos/${encodeURIComponent(repoId)}/remote-git${before ? `?before=${encodeURIComponent(before)}` : ''}`, undefined, undefined, signal),
   refreshRemoteGit: (repoId: string) =>
     call<{ requested: boolean }>('POST', `/repos/${encodeURIComponent(repoId)}/remote-git/refresh`, {}),
+  restoreAnchoredSessions: (repoId: string) =>
+    call<import('./types').AnchoredRestoreResult>('POST', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/restore`, {}),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
   retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.

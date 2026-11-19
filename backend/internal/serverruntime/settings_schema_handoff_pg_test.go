@@ -30,7 +30,7 @@ import (
 )
 
 const settingsSchemaHandoffPreviousCatalog = "5ccf1e9041446edf410205a978616aad20acbd3e07dac491fe80185d3a561994"
-const settingsSchemaHandoffCurrentCatalog = "ef0590e20106abb00ec95c083e60dda8e06d963c108d563de12a0b5bd1801528"
+const settingsSchemaHandoffCurrentCatalog = "833f0ba3b2009b17450dc4ded47fc3f3200f84226dd36ee32fd465e60fdc952a"
 const settingsSchemaHandoffPreviousExecutableSHA256 = "3146224d654cfa753b04d82e42f2692815fb78eb6a457617d41d47a96a57a91a"
 
 type schemaHandoffPredecessor struct {
