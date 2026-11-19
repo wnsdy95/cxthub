@@ -38,4 +38,6 @@ type ProductionStore interface {
 	DocReadStore
 	AnchoredSessionStore
 	BranchLedgerStore
+	AnchoredNoteStore
+	ReportedWorktreeStore
 }

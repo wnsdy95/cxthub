@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const releasedMigrationCatalogSHA256 = "9b6a0077fa21a5acd72649bd97dc54589052b78f2aba755f1587925fdba47eed"
+const releasedMigrationCatalogSHA256 = "8d7af15b12494f1c8bed9cd6ab778900585385d6f08a2a028a785d7e956cc894"
 
 var ErrSchemaMismatch = errors.New("database schema is incompatible")
 

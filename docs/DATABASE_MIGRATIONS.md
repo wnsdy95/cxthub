@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 162-file SQL bundle, from
-`0001_init.sql` through `0162_branch_ledger.sql`. Its catalog
+This source release requires the complete 163-file SQL bundle, from
+`0001_init.sql` through `0163_anchored_notes.sql`. Its catalog
 digest is
-`9b6a0077fa21a5acd72649bd97dc54589052b78f2aba755f1587925fdba47eed`, matching
+`8d7af15b12494f1c8bed9cd6ab778900585385d6f08a2a028a785d7e956cc894`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current
@@ -73,7 +73,7 @@ even if that catalog was valid for an earlier release.
 There is no automatic destructive schema downgrade. Do not remove Codex
 settings, edit migration receipts, rewrite historical SQL, or point an old
 binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with the actual database catalog (162 after this release's upgrade),
+compatible with the actual database catalog (163 after this release's upgrade),
 or a separately verified pre-upgrade backup recovery that explicitly accounts
 for writes after the backup. Local fixture tests are not evidence that a
 production backup or recovery has been tested.
@@ -91,7 +91,7 @@ leave the previous constraint intact.
 The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
 That bundle belongs only to the corresponding historical artifacts, not the
-current 162-file release. Current verify-only startup still checks the public
+current 163-file release. Current verify-only startup still checks the public
 table and its validated, local, exact kind constraint. A receipt without the
 expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
 is not a compatible schema. Verification does not repair these conditions.

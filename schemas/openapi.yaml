@@ -1069,6 +1069,46 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AnchoredPlace' }
         unplaced: { type: boolean }
+    AnchoredNoteTarget:
+      type: object
+      additionalProperties: false
+      description: What a manual note is attached to. Exactly the fields of its kind are present.
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [commit, branch, worktree] }
+        commit: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+        branch: { type: string }
+        ledger_id: { type: string, pattern: '^[0-9a-f]{32}$', description: The lifetime of the branch name the note belongs to. Absent for a name the remote never held. }
+        worktree: { type: string, description: A worktree's name, never a path. }
+        machine: { type: string }
+    AnchoredNote:
+      type: object
+      required: [repo_id, id, target, author, body, created_at, updated_at]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        id: { type: string, pattern: '^note_[0-9a-f]{32}$' }
+        target: { $ref: '#/components/schemas/AnchoredNoteTarget' }
+        author: { type: string }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorktreeReportEntry:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, description: The folder's name, never a path. }
+        branch: { type: string, description: The branch checked out in it. Absent when detached. }
+    ReportedWorktree:
+      type: object
+      required: [name, removed, first_seen_at, last_seen_at]
+      properties:
+        machine: { type: string }
+        name: { type: string }
+        branch: { type: string }
+        removed: { type: boolean, description: True when the machine's latest list no longer holds the worktree. }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
     AnchoredSessionReceipt:
       type: object
       required: [revision, body_hash, changed]
@@ -4904,6 +4944,200 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { description: Invalid repository identity or branch name }
         '503': { description: Branch ledger service unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    get:
+      operationId: listAnchoredSessionCalls
+      summary: List the recorded agent calls that name one of the caller's sessions
+      description: Member required. A call sits in the report of the session that made it, so the calls a session received are gathered from the caller's other reports of the same tool. Oldest first; a call without a time last. Nothing is inferred about a party a call does not name.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: Calls the session sent or received
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredAgentCall' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity, tool or session identifier }
+        '503': { description: Anchored session service unavailable }
+
+  /repos/{repoID}/anchored-notes:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listAnchoredNotes
+      summary: List the caller's own manual notes
+      description: Member required. A manual note is what a person wrote about a commit, a branch or a worktree; it is kept apart from captured sessions. Only notes the signed-in account wrote are returned, oldest first.
+      tags: [anchored-notes]
+      responses:
+        '200':
+          description: Notes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredNote' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Note service unavailable }
+    post:
+      operationId: createAnchoredNote
+      summary: Write a manual note about a commit, a branch or a worktree
+      description: Member required, rechecked inside the repository transaction. The author is the signed-in account. Known secret formats in the text are masked before it is stored, with the patterns the CLI applies to a captured session; the literal values of a repository's own secrets file never reach the server and cannot be applied. A note names a lifetime of a branch name only when the ledger holds that lifetime under that name. Writing a note does not advance the repository revision.
+      tags: [anchored-notes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target, body]
+              properties:
+                target: { $ref: '#/components/schemas/AnchoredNoteTarget' }
+                body: { type: string, description: At most 16 KiB after trimming. }
+      responses:
+        '200':
+          description: The stored note, with its text as masked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredNote' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: Request exceeds the 64 KiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: The target or the text is not well formed }
+        '503': { description: Note service unavailable }
+
+  /repos/{repoID}/anchored-notes/{noteID}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: noteID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^note_[0-9a-f]{32}$' }
+    put:
+      operationId: updateAnchoredNote
+      summary: Replace the text of the caller's own note
+      description: Member required. The author, the target and the time the note was written stay. A note another account wrote is not found.
+      tags: [anchored-notes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        '200':
+          description: The stored note
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredNote' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: Request exceeds the 64 KiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: The identifier or the text is not well formed }
+        '503': { description: Note service unavailable }
+    delete:
+      operationId: deleteAnchoredNote
+      summary: Remove the caller's own note
+      description: Member required. A note another account wrote is not found.
+      tags: [anchored-notes]
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: The identifier is not well formed }
+        '503': { description: Note service unavailable }
+
+  /repos/{repoID}/worktrees:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listReportedWorktrees
+      summary: List the caller's own worktrees
+      description: Member required. The working folders of the repository on the signed-in account's machines, as its CLIs listed them, by machine then name. Only that account reads them.
+      tags: [worktrees]
+      responses:
+        '200':
+          description: Worktrees
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReportedWorktree' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Worktree service unavailable }
+    put:
+      operationId: reportWorktrees
+      summary: Report the worktrees of one of the caller's machines
+      description: Member required, rechecked inside the repository transaction. The list replaces what the account stored for that machine. A worktree that is no longer listed keeps its name and is marked removed; other machines' lists are left as they are. Only names, branches and the machine's label are accepted, never a path. Does not advance the repository revision.
+      tags: [worktrees]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [worktrees]
+              properties:
+                machine: { type: string }
+                worktrees:
+                  type: array
+                  maxItems: 2000
+                  items: { $ref: '#/components/schemas/WorktreeReportEntry' }
+      responses:
+        '200':
+          description: The account's worktrees on every machine
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReportedWorktree' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: List exceeds the 1 MiB transport limit }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: A name is a path, is listed twice, or there are too many }
+        '503': { description: Worktree service unavailable }
 
   /repos/{repoID}/snapshots:
     parameters:
@@ -9431,6 +9665,10 @@ tags:
     description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. Readable only by the uploading account until a published-by-push rule exists."
   - name: branch-ledger
     description: One permanent record for each lifetime of a branch name on the remote, and the IDs joined to it.
+  - name: anchored-notes
+    description: What a person wrote about a commit, a branch or a worktree that no session explains. Readable only by its author until a published-by-push rule exists.
+  - name: worktrees
+    description: The working folders of the repository on a member's machines, by name. Readable only by the member who reported them.
   - name: docs
     description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
   - name: refs

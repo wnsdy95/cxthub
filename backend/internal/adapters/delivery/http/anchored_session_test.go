@@ -44,6 +44,10 @@ func (backend *anchoredSessionHTTPBackend) GetAnchoredSession(ctx context.Contex
 	return domain.AnchoredSession{Provider: provider, SessionID: session, Uploader: backend.actor}, backend.err
 }
 
+func (backend *anchoredSessionHTTPBackend) AnchoredSessionCalls(context.Context, domain.ContentHash, domain.ProviderKind, string) ([]domain.AnchoredAgentCall, error) {
+	return nil, backend.err
+}
+
 func (backend *anchoredSessionHTTPBackend) ListAnchoredSessions(ctx context.Context, _ domain.ContentHash) ([]domain.AnchoredSessionSummary, error) {
 	backend.seen(ctx)
 	return []domain.AnchoredSessionSummary{}, backend.err
