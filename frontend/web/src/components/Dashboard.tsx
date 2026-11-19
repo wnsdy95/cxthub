@@ -4,6 +4,7 @@ import type { Repository } from '../types';
 import { useUiStore } from '../store';
 import {
   repositoryPath,
+  anchoredPath,
   repositoryCreationPath,
   repoPath,
   invitePath,
@@ -32,6 +33,7 @@ import { useT } from '../i18n';
 import { Breadcrumb } from './Breadcrumb';
 import { ContextView } from './ContextView';
 import { OnHoldView } from './OnHoldView';
+import { AnchoredView } from './AnchoredView';
 import { RepositorySettings } from './Settings';
 import { RoleCapabilities } from './RoleCapabilities';
 import { LockIcon } from './Breadcrumb';
@@ -106,11 +108,12 @@ export function Dashboard() {
 
   // Tabs are query parameters, independent of repository names.
   const routedTab = resolvedRepositoryTab(route, repos);
-  const tab: 'context' | 'connections' | 'members' | 'onhold' | 'settings' =
-    routedTab === 'members' || routedTab === 'connections' || routedTab === 'onhold' || routedTab === 'settings'
+  const tab: 'context' | 'connections' | 'members' | 'onhold' | 'sessions' | 'settings' =
+    routedTab === 'members' || routedTab === 'connections' || routedTab === 'onhold' || routedTab === 'sessions' || routedTab === 'settings'
       ? routedTab
       : 'context';
-  function goTab(next: 'context' | 'connections' | 'members' | 'onhold' | 'settings') {
+  const anchoredSelection = route?.kind === 'repository' || route?.kind === 'repositoryId' ? route.anchored : undefined;
+  function goTab(next: 'context' | 'connections' | 'members' | 'onhold' | 'sessions' | 'settings') {
     if (!selected) return;
     if (next === 'settings' && !atLeast(role, 'owner')) {
       setAccessNotice(t('dashboard.repositoryAccessDenied'));
@@ -187,6 +190,11 @@ export function Dashboard() {
                   <button className={`tab${tab === 'onhold' ? ' on' : ''}`} onClick={() => goTab('onhold')}>
                     On Hold
                   </button>
+                  {atLeast(role, 'member') && (
+                    <button className={`tab${tab === 'sessions' ? ' on' : ''}`} onClick={() => goTab('sessions')}>
+                      {t('dashboard.sessions')}
+                    </button>
+                  )}
                   <button className={`tab${tab === 'connections' ? ' on' : ''}`} onClick={() => goTab('connections')}>
                     {t('dashboard.connected')} <span className="count-badge">{repos.length}</span>
                   </button>
@@ -297,6 +305,22 @@ export function Dashboard() {
                   </div>
                   {activeRepo ? (
                     <OnHoldView repo={activeRepo} role={role} />
+                  ) : (
+                    <div className="empty-box">{t('dashboard.noRepo')}</div>
+                  )}
+                </section>
+              ) : tab === 'sessions' ? (
+                <section className="panel">
+                  <div className="panel-head">
+                    <h4>
+                      {t('dashboard.sessions')}{' '}
+                      {activeRepo && <code className="repo-tag">{sanitizeRemoteUrl(activeRepo.remote_url) || short(activeRepo.id)}</code>}
+                    </h4>
+                  </div>
+                  {!atLeast(role, 'member') ? (
+                    <AccessDenied message={t('dashboard.sessionsAccessDenied')} />
+                  ) : activeRepo ? (
+                    <AnchoredView key={activeRepo.id} repo={activeRepo} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
                   ) : (
                     <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}

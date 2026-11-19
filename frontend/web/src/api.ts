@@ -161,6 +161,14 @@ export const api = {
     const params = new URLSearchParams({kind, state, cursor, limit: '30'});
     return call<import('./types').GitAssociationStatusPage>('GET', `/repos/${encodeURIComponent(repo)}/git/associations?${params}`, undefined, undefined, signal);
   },
+  anchoredSessions: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSessionSummary[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions`, undefined, undefined, signal),
+  anchoredSession: (repoId: string, provider: string, sessionId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSession>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`, undefined, undefined, signal),
+  anchoredCommit: (repoId: string, sha: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
+  branchLifetimes: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').BranchLifetime[]>('GET', `/repos/${encodeURIComponent(repoId)}/branch-lifetimes`, undefined, undefined, signal),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
   retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.

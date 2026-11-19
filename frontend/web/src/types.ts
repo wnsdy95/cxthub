@@ -778,3 +778,46 @@ export interface CollaborationInvitation {
 
 export interface MCPApplication { client_id:string; name:string; scope:string; created_at:string; expires_at:string }
 export interface AccountAuditEvent { grant_id?:string; id:string; user_id:string; client_id:string; action:string; created_at:string }
+
+// Anchored sessions: a coding-agent session cut at the commits it made, as the
+// uploader's CLI read it from the records the tools and Git left behind.
+export type AnchoredProvider = 'claude' | 'codex';
+export type AnchoredLinkRule = 'printed-number' | 'same-folder-and-time';
+export type AnchoredSpawnRule = 'tool-call' | 'start-time';
+export type AnchoredPlaceRule = 'recorded-by-tool' | 'head-log' | 'current-branch' | 'folder-no-longer-a-worktree';
+/** A part of one session. `first_event` and `events` are absent when zero. */
+export interface AnchoredRange {
+  first: string; last: string; first_ordinal: number; last_ordinal: number; commands: number;
+  started_at?: string; ended_at?: string; first_event?: number; events?: number;
+}
+export interface AnchoredCommit { sha: string; rule: AnchoredLinkRule; created_at?: string; authored_at?: string; author_email?: string; subject?: string }
+export interface AnchoredSegment extends AnchoredRange { closes_turn: boolean; commits: AnchoredCommit[] }
+export interface AnchoredPlace { worktree: string; branch?: string; removed?: boolean; rule: AnchoredPlaceRule }
+export interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; unplaced: boolean }
+export interface AnchoredSpawn { at_record: string; at_ordinal: number; rule: AnchoredSpawnRule }
+export interface AnchoredAgentCall { tool: string; from: string; to: string[]; status?: string; at?: string; record?: string }
+export interface AnchoredContent { doc: string; identity?: string; events: number }
+export interface AnchoredSessionBody {
+  rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url'; machine?: string;
+  started_at?: string; ended_at?: string; records: number; commands: number; copied_records: number; copied_from?: string[]; file_copies?: number;
+  segments: AnchoredSegment[]; uncommitted?: AnchoredUncommitted; agent_calls?: AnchoredAgentCall[]; content?: AnchoredContent;
+}
+export interface AnchoredSession {
+  repo_id: string; provider: AnchoredProvider; session_id: string; uploader: string; revision: number; body_hash: string;
+  created_at: string; updated_at: string; body: AnchoredSessionBody;
+}
+export interface AnchoredSummaryCommit { sha: string; segment_no: number; rule: AnchoredLinkRule; subject?: string; created_at?: string; authored_at?: string }
+export interface AnchoredSummaryUncommitted { commands: number; started_at?: string; ended_at?: string; places: AnchoredPlace[]; unplaced: boolean }
+export interface AnchoredSummarySpawn { segment_no?: number; uncommitted?: boolean; rule: AnchoredSpawnRule }
+export interface AnchoredSessionSummary {
+  provider: AnchoredProvider; session_id: string; parent?: string; sub: boolean; revision: number; body_hash: string;
+  records: number; commands: number; segments: number; machine?: string; started_at?: string; ended_at?: string; content: boolean;
+  commits: AnchoredSummaryCommit[]; uncommitted?: AnchoredSummaryUncommitted; spawned_in?: AnchoredSummarySpawn; updated_at: string;
+}
+export interface AnchoredCommitSegment { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; segment: AnchoredSegment }
+export interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }
+export interface BranchLifetime {
+  repo_id: string; ledger_id: string; name: string; opened_at: string; opened_by: BranchEvidence; closed_at?: string; closed_by?: BranchEvidence;
+  linked: { id: string; linked_at: string; by: BranchEvidence }[];
+  reopenings?: { closed_at: string; closed_by: BranchEvidence; reopened_at: string; reopened_by: BranchEvidence; name?: string }[];
+}

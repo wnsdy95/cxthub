@@ -4,7 +4,7 @@ import { graphViewRows } from './graphState';
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
 import { useEffect, useMemo, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, skipToken, keepPreviousData } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import { isRetryableGraphRefreshError } from './graphRefresh';
 import { capacityReadRetry, documentReadRetry, pendingStateReadRetry } from './readRetry';
@@ -549,6 +549,61 @@ export function useCreateInvite() {
     mutationFn: (v: { repositoryId: string; role?: string; email?: string; expiresInDays?: number }) =>
       api.createInvite(v.repositoryId, v.email ?? '', v.role ?? 'member', v.expiresInDays ?? 0),
     onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.repositoryId] }),
+  });
+}
+// Anchored sessions — the caller's own reports. A report does not move the
+// repository revision, so the lists are read again on a timer and on request.
+export function useAnchoredSessions(repoId: string | null) {
+  return useQuery({
+    queryKey: ['anchored-sessions', repoId],
+    queryFn: ({ signal }) => api.anchoredSessions(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
+export function useBranchLifetimes(repoId: string | null) {
+  return useQuery({
+    queryKey: ['branch-lifetimes', repoId],
+    queryFn: ({ signal }) => api.branchLifetimes(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: 60_000,
+  });
+}
+/** One report in full. `revision` is the report's revision in the list, so a report that was replaced is read again. */
+export function useAnchoredSession(repoId: string | null, provider: string | null, sessionId: string | null, revision = 0) {
+  return useQuery({
+    queryKey: ['anchored-session', repoId, provider, sessionId, revision],
+    queryFn: ({ signal }) => api.anchoredSession(repoId as string, provider as string, sessionId as string, signal),
+    enabled: Boolean(repoId && provider && sessionId),
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+/**
+ * Reads a session's conversation from one event onward, a page at a time. The
+ * document is not named by any snapshot, so it is read with the plain pager.
+ */
+export function useAnchoredEvents(repoId: string, hash: string, start: number, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ['anchored-events', repoId, hash, start],
+    queryFn: ({ pageParam, signal }) => api.getDocViewEvents(repoId, hash, undefined, pageParam, 'all', signal),
+    initialPageParam: start,
+    getNextPageParam: page => (page.next === -1 ? undefined : page.next),
+    enabled,
+    ...documentReadRetry,
+    staleTime: Infinity,
+  });
+}
+/** The segments that end at a commit. `revisions` names the reports linked to it as the list shows them, so a replaced report is read again. */
+export function useAnchoredCommit(repoId: string | null, sha: string | null, revisions = '') {
+  return useQuery({
+    queryKey: ['anchored-commit', repoId, sha, revisions],
+    queryFn: ({ signal }) => api.anchoredCommit(repoId as string, sha as string, signal),
+    enabled: Boolean(repoId && sha),
+    retry: false,
+    placeholderData: keepPreviousData,
   });
 }
 // Invite list/redemption — only maintainers can view (403 is disabled).

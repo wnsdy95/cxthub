@@ -1350,3 +1350,54 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .credential-assurances code { overflow-wrap: anywhere; }
 .credential-assurances p { margin: .4rem 0; }
 .credential-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+
+/* Sessions tab — worktrees and branches | commits | the selected item. */
+.anchor { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+.anchor-nav { position: sticky; top: 68px; max-height: calc(100vh - 84px); overflow-y: auto; font-size: 0.82rem; }
+.anchor-nav ul, .anchor-commit-list, .anchor-cards, .anchor-sub, .anchor-parts ol, .anchor-partners, .anchor-call-list { list-style: none; margin: 0; padding: 0; }
+.anchor-nav .label { display: block; margin: 14px 0 6px; }
+.anchor-nav-item { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 8px; border-radius: 5px; color: var(--text); text-decoration: none; }
+.anchor-nav-item:hover { background: var(--hover); }
+.anchor-nav-item.on { background: var(--hover); color: var(--ink); font-weight: 600; }
+.anchor-nav-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.anchor-nav-item em, .anchor-card-head em, .anchor-card-meta em, .anchor-detail-title em, .anchor-call-list em { font-style: normal; color: var(--faint); font-size: 0.74rem; }
+.anchor-nav-empty { margin: 0 0 8px; padding: 0 8px; color: var(--faint); }
+.anchor-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 0.78rem; }
+.anchor-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.anchor-commit { display: block; padding: 6px 8px; border-left: 2px solid transparent; border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none; }
+.anchor-commit:hover { background: var(--hover); }
+.anchor-commit.on { border-left-color: var(--ink); background: var(--hover); }
+.anchor-commit.hl { border-left-color: #d29922; background: rgba(210, 153, 34, 0.1); }
+.anchor-commit-subject { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.86rem; }
+.anchor-commit-meta { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 0.72rem; }
+.anchor-detail-title { margin: 0 0 6px; font-size: 0.92rem; }
+.anchor-card { margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.anchor-card:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.anchor-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.84rem; }
+.anchor-card-head time { margin-left: auto; color: var(--faint); font-size: 0.72rem; }
+.anchor-card-meta { margin: 4px 0 0; color: var(--muted); font-size: 0.76rem; }
+.anchor-card-meta a { margin-right: 6px; }
+.anchor-card-head a, .anchor-card-meta a, .anchor-crumb a, .anchor-parts a { color: var(--ink); }
+.anchor-card details { margin-top: 6px; }
+.anchor-card summary { color: var(--muted); font-size: 0.76rem; cursor: pointer; }
+.anchor-divider code { color: var(--muted); }
+.anchor-provider { font-size: 0.78rem; font-weight: 600; }
+.anchor-sub { margin: 6px 0 0; padding-left: 10px; border-left: 2px solid var(--line); }
+.anchor-sub li { padding: 4px 0; }
+.anchor-use h6 { margin: 12px 0 6px; font-size: 0.8rem; }
+.anchor-session-head { margin-bottom: 12px; }
+.anchor-crumb { margin: 0; font-size: 0.86rem; }
+.anchor-parts ol li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; border-left: 2px solid transparent; font-size: 0.82rem; }
+.anchor-parts ol li.on { border-left-color: var(--ink); background: var(--hover); }
+.anchor-part-commit { color: var(--text); text-decoration: none; }
+.anchor-part-commit:hover { text-decoration: underline; }
+.anchor-part-place, .anchor-part-spawned { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.76rem; }
+.anchor-calls { margin: 12px 0; }
+.anchor-partners { display: flex; flex-wrap: wrap; gap: 6px; }
+.anchor-call-list li { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 0.78rem; }
+.anchor-conversation { margin-top: 14px; padding: 8px 0; }
+.anchor-divider { margin: 10px 0; }
+@media (max-width: 1000px) {
+  .anchor, .anchor-split { grid-template-columns: minmax(0, 1fr); }
+  .anchor-nav { position: static; max-height: none; }
+}

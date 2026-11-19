@@ -129,6 +129,8 @@ export function PublicBrowse({
           <section className="panel">
             {tab === 'settings' ? (
               <AccessDenied message={t('dashboard.repositoryAccessDenied')} />
+            ) : tab === 'sessions' ? (
+              <AccessDenied message={t('dashboard.sessionsAccessDenied')} />
             ) : activeRepo ? (
               <ContextView key={activeRepo.id} repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />
             ) : (
