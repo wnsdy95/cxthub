@@ -86,18 +86,27 @@ func run(args []string) error {
 		return delivcli.RunDiagnostics(ctx, localReplicaInspector{}, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
 	}
 	if args[1] == "segments" {
-		// Reading session records needs no store, remote or provider adapter,
-		// so this path builds none of them and cannot write.
+		// Reading session records needs no store or provider adapter, so this
+		// path builds neither and cannot write on this computer. Only push
+		// adds the repository's server.
 		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		reporter, err := newSegmentReporter()
 		if err != nil {
 			return err
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
+		if slices.Contains(args[2:], "push") {
+			// The same readers plus the repository's server: still no local store.
+			uploader, err := newSegmentUploader(loadConfig())
+			if err != nil {
+				return err
+			}
+			return delivcli.RunSegmentsPush(ctx, uploader, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+		}
+		reporter, err := newSegmentReporter()
+		if err != nil {
+			return err
+		}
 		return delivcli.RunSegments(ctx, reporter, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
 	}
 	if args[1] == "capture" {

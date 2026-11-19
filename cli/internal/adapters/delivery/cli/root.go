@@ -105,6 +105,8 @@ type Container struct {
 	Identity domain.TeamIdentity
 	// Segments reads agent session records and Git for the read-only segment report.
 	Segments inbound.SegmentReporter
+	// SegmentUpload uploads that report to the repository's server, one report per session.
+	SegmentUpload inbound.SegmentUploader
 }
 
 // Run is the CLI entry point. Parses args(=os.Args) to execute the corresponding subcommand.
@@ -160,8 +162,12 @@ func Run(c *Container, args []string) error {
 	}
 	if cmd == "segments" {
 		var reporter inbound.SegmentReporter
+		var uploader inbound.SegmentUploader
 		if c != nil {
-			reporter = c.Segments
+			reporter, uploader = c.Segments, c.SegmentUpload
+		}
+		if parsed.first() == "push" {
+			return RunSegmentsPush(ctx, uploader, cwd, parsed.has("--json"), os.Stdout)
 		}
 		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
@@ -1453,6 +1459,7 @@ usage: cxt <command> [flags]
                             pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
   segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
+  segments push [--json]    upload that report to the server, one report per session, readable only by you
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization
   branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch

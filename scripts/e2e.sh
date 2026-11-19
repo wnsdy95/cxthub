@@ -257,6 +257,42 @@ rm .cxtsecrets
 cxt secrets pull >/dev/null 2>&1
 expect "--remember after -p omission" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
 expect "secrets round trip does not upgrade an existing repository" "$(curl -fsSb "$JA" "$B/repos/$CLIRID" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["id"], r.get("context_protocol", 0))')" "$CLIRID 0"
+
+echo "── F2. Session reports: the server accepts what the CLI computes, and only the uploader reads it"
+# A synthetic Claude Code session whose command printed the number of a real
+# commit while that commit was created. No hook runs: only records are read.
+SEGREV_BEFORE="$(curl -fsSb "$JA" "$B/repos/$CLIRID/view" | jget "['revision']")"
+GIT_AUTHOR_DATE=2031-01-02T03:00:05Z GIT_COMMITTER_DATE=2031-01-02T03:00:05Z git commit -q --allow-empty -m "e2e segment commit"
+SEGSHA="$(git rev-parse HEAD)"
+SEGBRANCH="$(git symbolic-ref --short HEAD)"
+mkdir -p "$HOME/.claude/projects/-e2e-segments"
+python3 - "$PWD" "$SEGSHA" "$SEGBRANCH" >"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl" <<'PYSEG'
+import json, sys
+cwd, sha, branch = sys.argv[1:4]
+def line(kind, uuid, at, content, prompt=None):
+    entry = {"type": kind, "uuid": uuid, "sessionId": "e2e-segments", "timestamp": "2031-01-02T03:00:%sZ" % at,
+             "cwd": cwd, "gitBranch": branch, "message": {"content": content}}
+    if prompt:
+        entry["promptId"] = prompt
+    print(json.dumps(entry))
+line("user", "m1", "00.000", "commit it", "p1")
+line("assistant", "m2", "01.000", [{"type": "tool_use", "id": "call-1", "name": "Bash"}])
+line("user", "m3", "06.000", [{"type": "tool_result", "tool_use_id": "call-1", "content": "[%s %s] e2e segment commit" % (branch, sha[:7])}], "p1")
+line("assistant", "m4", "07.000", [{"type": "text", "text": "committed"}])
+line("user", "m5", "40.000", "one more thing", "p2")
+PYSEG
+cxt segments push --json >"$TMP/segments-push.json" 2>"$TMP/segments-push.err"
+expect "segments push succeeds" "$?" 0
+expect "one session report stored" "$(python3 -c "import json;r=json.load(open('$TMP/segments-push.json'));print(r['stored'],r['unchanged'],r['refused'],len(r['sessions']))")" "1 0 0 1"
+expect "uploader lists its report" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["provider"],r[0]["session_id"],r[0]["segments"],r[0]["records"],r[0]["revision"])')" "1 claude e2e-segments 1 5 1"
+expect "commit leads to the session's segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r[0]["segment"];print(len(r),r[0]["session_id"],r[0]["segment_no"],r[0]["rule"],s["first"],s["last"],s["closes_turn"],s["commits"][0]["subject"])')" "1 e2e-segments 1 printed-number m1 m4 True e2e segment commit"
+expect "stored report names the worktree and never its path" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c "import json,sys;r=json.load(sys.stdin);u=r['body']['uncommitted'];print(u['first'],u['places'][0]['worktree'],u['places'][0]['rule'],'$TMP' in json.dumps(r))")" "m5 repo recorded-by-tool False"
+expect "the same report again changes nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"],r["unchanged"],r["refused"])')" "0 1 0"
+expect "revision of the unchanged report" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']")" 1
+expect "an account outside the repository cannot list reports" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions")" 403
+expect "an account outside the repository cannot read a report" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 403
+expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 401
+expect "reports do not advance the repository revision" "$(curl -fsSb "$JA" "$B/repos/$CLIRID/view" | jget "['revision']")" "$SEGREV_BEFORE"
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"

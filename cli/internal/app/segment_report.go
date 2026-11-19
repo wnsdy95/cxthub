@@ -25,23 +25,32 @@ var _ inbound.SegmentReporter = (*SegmentReportService)(nil)
 
 // SegmentReport reports the repository holding cwd.
 func (s *SegmentReportService) SegmentReport(ctx context.Context, cwd string) (domain.SegmentReport, error) {
-	git, unread, err := s.git.ReadGitRecords(ctx, cwd)
+	inputs, err := s.read(ctx, cwd)
 	if err != nil {
 		return domain.SegmentReport{}, err
+	}
+	return domain.BuildSegmentReport(inputs), nil
+}
+
+// read collects what Git and every tool recorded for the repository holding cwd.
+func (s *SegmentReportService) read(ctx context.Context, cwd string) (domain.SegmentInputs, error) {
+	git, unread, err := s.git.ReadGitRecords(ctx, cwd)
+	if err != nil {
+		return domain.SegmentInputs{}, err
 	}
 	inputs := domain.SegmentInputs{Git: git, Unread: unread}
 	scope := git.ScopeOf()
 	for _, source := range s.sources {
 		batch, err := source.ReadSessionRecords(ctx, scope)
 		if err != nil {
-			return domain.SegmentReport{}, err
+			return domain.SegmentInputs{}, err
 		}
 		inputs.Sessions = append(inputs.Sessions, batch.Sessions...)
 		inputs.Calls = append(inputs.Calls, batch.Calls...)
 		inputs.Unread = append(inputs.Unread, batch.Unread...)
 	}
 	if err := ctx.Err(); err != nil {
-		return domain.SegmentReport{}, err
+		return domain.SegmentInputs{}, err
 	}
-	return domain.BuildSegmentReport(inputs), nil
+	return inputs, nil
 }

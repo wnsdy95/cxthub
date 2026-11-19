@@ -1306,6 +1306,55 @@ describes this report and is not a storage or wire format; it may change.
 Every run reads all records again, which can take a while on a computer with
 many long sessions.
 
+### `cxt segments push`
+
+```text
+cxt segments push [--json]
+```
+
+Computes the same report and uploads it to the repository's CXTHub server, one
+report per session. It needs a connected remote and a login, and repository
+member access. It writes nothing on this computer, and it does not change
+capture, synchronization or any hook: snapshots, branches and what teammates
+see stay exactly as they were.
+
+What is uploaded for a session:
+
+- its tool, its identifier, whether another session spawned it, and for a
+  spawned session its parent and the record of the parent it was spawned at;
+- its segments: the first and last record identifier, where the range sits
+  among the session's own records, the number of commands, the times, and the
+  commits the segment ends at, each with the rule that linked it and the
+  commit's creation time, author time, author email and subject. The server
+  uses the last three to recognize a cherry-picked or rebased copy;
+- its uncommitted part and the places it passed through. A worktree is uploaded
+  as its folder name only, never as a path, together with this computer's host
+  name so that your own computers can be told apart;
+- how many of its records are copies that belong to an earlier session, and the
+  agent-to-agent calls the session recorded.
+
+No conversation content is uploaded by this command. The report is a set of
+ranges over records the tool keeps.
+
+On the server a report belongs to the account that uploaded it, and only that
+account can read it. Uploading again replaces the session's report as a whole;
+a report with the same content changes nothing. Reports do not advance the
+repository revision.
+
+Every session is listed with what happened to it: `stored`, `unchanged` or
+`refused`. A report is refused when another account already reported the same
+session identifier, when the tool's identifier cannot be used as a key, or when
+the server finds the report too large or not well formed. The other sessions
+are still uploaded, and the command then exits with a failure so that the gap
+is noticed. A caller the server does not accept, such as a missing login or no
+member access, stops the run at the first request. Records that could not be
+read are listed again here, because no report covers them, and so is the number
+of agent calls recorded by a session outside this repository, which are
+uploaded with no session.
+
+`--json` prints one JSON object with `version`, `stored`, `unchanged`,
+`refused`, `sessions`, `unread` and `agent_calls_without_sender`.
+
 ## Global information
 
 ```text

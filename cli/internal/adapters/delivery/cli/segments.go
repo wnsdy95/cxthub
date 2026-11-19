@@ -178,3 +178,53 @@ func writeSegmentReport(w io.Writer, report domain.SegmentReport) {
 		fmt.Fprintln(w)
 	}
 }
+
+// RunSegmentsPush computes the same report and uploads one report per session
+// to the repository's server. Every session is listed with what happened to
+// it; a refused report makes the command fail after the others were stored.
+func RunSegmentsPush(ctx context.Context, uploader inbound.SegmentUploader, cwd string, asJSON bool, w io.Writer) error {
+	if uploader == nil {
+		return fmt.Errorf("session report upload unavailable")
+	}
+	result, err := uploader.PushSegments(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			return err
+		}
+	} else {
+		writeSegmentPushResult(w, result)
+	}
+	if result.Refused > 0 {
+		return fmt.Errorf("%d of %d session reports were refused", result.Refused, len(result.Sessions))
+	}
+	return nil
+}
+
+func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
+	fmt.Fprintf(w, "Session reports: %d stored, %d unchanged, %d refused (%d sessions)\n", result.Stored, result.Unchanged, result.Refused, len(result.Sessions))
+	fmt.Fprintln(w, "Only you can read these reports on the server. Nothing was written on this computer.")
+	if result.Refused > 0 {
+		fmt.Fprintf(w, "\nRefused (%d) — these sessions are not on the server\n", result.Refused)
+		for _, session := range result.Sessions {
+			if session.State == domain.SegmentPushRefused {
+				fmt.Fprintf(w, "  %s %s: %s\n", session.Provider, session.ID, session.Reason)
+			}
+		}
+	}
+	if len(result.Unread) > 0 {
+		fmt.Fprintf(w, "\nUnread session records (%d) — these exist but were not read, so no report covers them\n", len(result.Unread))
+		for _, unread := range result.Unread {
+			tool := ""
+			if unread.Provider != "" {
+				tool = "[" + string(unread.Provider) + "] "
+			}
+			fmt.Fprintf(w, "  %s%s: %s\n", tool, unread.Source, unread.Reason)
+		}
+	}
+	if result.AgentCallsWithoutSender > 0 {
+		fmt.Fprintf(w, "\n%d agent calls were recorded by a session outside this repository and were not uploaded\n", result.AgentCallsWithoutSender)
+	}
+}

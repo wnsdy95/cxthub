@@ -3,12 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
@@ -39,6 +43,17 @@ func segmentsTestTree(t *testing.T, root string) map[string]string {
 
 func segmentsTestRun(t *testing.T, args ...string) string {
 	t.Helper()
+	out, err := segmentsTestRunErr(t, args...)
+	if err != nil {
+		t.Fatalf("cxt %v: %v", args, err)
+	}
+	return out
+}
+
+// segmentsTestRunErr runs the command from the entry point and returns what
+// it printed together with its error.
+func segmentsTestRunErr(t *testing.T, args ...string) (string, error) {
+	t.Helper()
 	out, err := os.CreateTemp(t.TempDir(), "stdout")
 	if err != nil {
 		t.Fatal(err)
@@ -47,9 +62,6 @@ func segmentsTestRun(t *testing.T, args ...string) string {
 	os.Stdout = out
 	runErr := run(append([]string{"cxt"}, args...))
 	os.Stdout = previous
-	if runErr != nil {
-		t.Fatalf("cxt %v: %v", args, runErr)
-	}
 	if err := out.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -57,17 +69,20 @@ func segmentsTestRun(t *testing.T, args ...string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(raw)
+	return string(raw), runErr
 }
 
-// The whole command, from the entry point: a real repository, and synthetic
-// session files in a home directory made for the test.
-func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
+// segmentsTestFixture makes a real repository with one commit, and synthetic
+// session files in a home directory made for the test. It leaves the process
+// in the repository.
+func segmentsTestFixture(t *testing.T) (base, repo, sha string) {
+	t.Helper()
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	home, repo, hooks := filepath.Join(base, "home"), filepath.Join(base, "app"), filepath.Join(base, "hooks")
+	home, hooks := filepath.Join(base, "home"), filepath.Join(base, "hooks")
+	repo = filepath.Join(base, "app")
 	for _, dir := range []string{home, repo, hooks} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -91,7 +106,7 @@ func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sha := strings.TrimSpace(string(head))
+	sha = strings.TrimSpace(string(head))
 
 	record := func(kind, uuid, session, prompt, at string, content any) string {
 		line := map[string]any{"type": kind, "uuid": uuid, "sessionId": session, "timestamp": "2031-01-02T03:00:" + at + "Z", "cwd": repo, "gitBranch": "main", "message": map[string]any{"content": content}}
@@ -129,6 +144,12 @@ func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
 	}
 
 	t.Chdir(repo)
+	return base, repo, sha
+}
+
+// The whole command, from the entry point.
+func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
+	base, repo, sha := segmentsTestFixture(t)
 	before := segmentsTestTree(t, base)
 	first := segmentsTestRun(t, "segments", "--json")
 	second := segmentsTestRun(t, "segments", "--json")
@@ -170,5 +191,113 @@ func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
 	}
 	if !strings.Contains(text, "linked by printed-number") || !strings.Contains(text, "Unread session records (1)") {
 		t.Fatalf("text output:\n%s", text)
+	}
+}
+
+// The upload, from the entry point, against a server made for the test: one
+// request per session, nothing but names in them, and nothing written here.
+func TestSegmentsPushUploadsEachSessionAndWritesNothing(t *testing.T) {
+	base, repo, sha := segmentsTestFixture(t)
+	type request struct {
+		method, path, auth string
+		body               string
+	}
+	var mu sync.Mutex
+	var requests []request
+	answer := func(session string) (int, string) {
+		return http.StatusOK, `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, request{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)})
+		status, body := answer(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
+	t.Setenv("CXT_TOKEN", "synthetic-token")
+
+	before := segmentsTestTree(t, base)
+	out := segmentsTestRun(t, "segments", "push", "--json")
+	if after := segmentsTestTree(t, base); !reflect.DeepEqual(before, after) {
+		t.Fatal("cxt segments push changed a file in the repository or the home directory")
+	}
+	var result domain.SegmentPushResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("output is not a result: %v\n%s", err, out)
+	}
+	if result.Stored != 3 || result.Unchanged != 0 || result.Refused != 0 || len(result.Sessions) != 3 || len(result.Unread) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %+v", requests)
+	}
+	bodies := map[string]domain.AnchoredSessionBody{}
+	for _, sent := range requests {
+		prefix := "/api/v1/repos/"
+		if sent.method != http.MethodPut || sent.auth != "Bearer synthetic-token" || !strings.HasPrefix(sent.path, prefix) || !strings.Contains(sent.path, "/anchored-sessions/claude/") {
+			t.Fatalf("request = %+v", sent)
+		}
+		// A worktree is a name on the server; no folder of this computer is sent.
+		if strings.Contains(sent.body, base) || strings.Contains(sent.body, filepath.Dir(repo)) {
+			t.Fatalf("a path was uploaded: %s", sent.body)
+		}
+		var body domain.AnchoredSessionBody
+		if err := json.Unmarshal([]byte(sent.body), &body); err != nil {
+			t.Fatalf("body is not a report: %v\n%s", err, sent.body)
+		}
+		bodies[sent.path[strings.LastIndex(sent.path, "/")+1:]] = body
+	}
+	original, fork, helper := bodies["original"], bodies["fork"], bodies["helper"]
+	if original.RuleVersion != domain.AnchoredSessionRuleVersion || original.Records != 4 || len(original.Segments) != 1 || original.Uncommitted != nil {
+		t.Fatalf("original = %+v", original)
+	}
+	if commit := original.Segments[0].Commits[0]; commit.SHA != sha || commit.Rule != domain.SegmentLinkPrintedNumber || commit.Subject != "first" ||
+		commit.AuthorEmail != "cxt@example.test" || commit.AuthoredAt != "2031-01-02T03:00:05Z" || commit.CreatedAt != "2031-01-02T03:00:05Z" {
+		t.Fatalf("commit = %+v", commit)
+	}
+	if fork.CopiedRecords != 4 || !reflect.DeepEqual(fork.CopiedFrom, []string{"original"}) || fork.Records != 1 || fork.Uncommitted == nil ||
+		!reflect.DeepEqual(fork.Uncommitted.Places, []domain.AnchoredPlace{{Worktree: "app", Branch: "main", Rule: domain.SessionPlaceRecorded}}) {
+		t.Fatalf("fork = %+v", fork)
+	}
+	if !helper.Sub || helper.Parent != "original" || helper.Spawn == nil || helper.FileCopies != 1 {
+		t.Fatalf("helper = %+v", helper)
+	}
+	if host, _ := os.Hostname(); original.Machine != host {
+		t.Fatalf("machine = %q, host = %q", original.Machine, host)
+	}
+
+	// A report the server refuses is listed and fails the command; the others are still sent.
+	mu.Lock()
+	requests = nil
+	answer = func(session string) (int, string) {
+		if session == "fork" {
+			return http.StatusConflict, `{"error":{"code":"conflict","message":"conflict"}}`
+		}
+		return http.StatusOK, `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":false}`
+	}
+	mu.Unlock()
+	text, err := segmentsTestRunErr(t, "segments", "push")
+	if err == nil || !strings.Contains(err.Error(), "1 of 3 session reports were refused") || len(requests) != 3 ||
+		!strings.Contains(text, "Session reports: 0 stored, 2 unchanged, 1 refused (3 sessions)") || !strings.Contains(text, "  claude fork: ") {
+		t.Fatalf("err=%v requests=%d\n%s", err, len(requests), text)
+	}
+
+	// A caller the server does not accept stops the run at the first request.
+	mu.Lock()
+	requests = nil
+	answer = func(string) (int, string) {
+		return http.StatusUnauthorized, `{"error":{"code":"unauthorized","message":"unauthorized"}}`
+	}
+	mu.Unlock()
+	if _, err := segmentsTestRunErr(t, "segments", "push"); err == nil || len(requests) != 1 || !strings.Contains(err.Error(), "stopped after 0 of 3 session reports") {
+		t.Fatalf("err=%v requests=%d", err, len(requests))
+	}
+	if after := segmentsTestTree(t, base); !reflect.DeepEqual(before, after) {
+		t.Fatal("a failed upload changed a file in the repository or the home directory")
 	}
 }

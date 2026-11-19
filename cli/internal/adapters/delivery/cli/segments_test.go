@@ -127,7 +127,12 @@ func TestSegmentsCommandContract(t *testing.T) {
 	if !ReadOnlyInvocation([]string{"cxt", "segments", "--json"}) {
 		t.Fatal("segments must be classified as a read-only command")
 	}
-	for _, args := range [][]string{{"cxt", "segments", "extra"}, {"cxt", "segments", "--all"}, {"cxt", "segments", "--json", "--json"}} {
+	// Uploading is not reading, even though it writes nothing on this computer.
+	if ReadOnlyInvocation([]string{"cxt", "segments", "push"}) || ReadOnlyInvocation([]string{"cxt", "segments", "push", "--json"}) {
+		t.Fatal("segments push must not be classified as a read-only command")
+	}
+	for _, args := range [][]string{{"cxt", "segments", "extra"}, {"cxt", "segments", "--all"}, {"cxt", "segments", "--json", "--json"},
+		{"cxt", "segments", "push", "extra"}, {"cxt", "segments", "pull"}, {"cxt", "segments", "push", "--force"}} {
 		if err := Run(nil, args); err == nil {
 			t.Fatalf("%v must be rejected before dispatch", args)
 		}
@@ -136,5 +141,82 @@ func TestSegmentsCommandContract(t *testing.T) {
 	// command that could write.
 	if err := Run(&Container{}, []string{"cxt", "segments"}); err == nil || !strings.Contains(err.Error(), "session record reader unavailable") {
 		t.Fatalf("unwired command: %v", err)
+	}
+	// A wired reader alone never uploads.
+	reader := segmentReporterFunc(func(context.Context, string) (domain.SegmentReport, error) {
+		t.Fatal("push must not fall back to the read-only report")
+		return domain.SegmentReport{}, nil
+	})
+	if err := Run(&Container{Segments: reader}, []string{"cxt", "segments", "push"}); err == nil || !strings.Contains(err.Error(), "session report upload unavailable") {
+		t.Fatalf("unwired upload: %v", err)
+	}
+}
+
+type segmentUploaderFunc func(context.Context, string) (domain.SegmentPushResult, error)
+
+func (f segmentUploaderFunc) PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error) {
+	return f(ctx, cwd)
+}
+
+func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
+	result := domain.SegmentPushResult{Version: 1, Stored: 1, Unchanged: 1, Refused: 1, AgentCallsWithoutSender: 2,
+		Sessions: []domain.SegmentPushSession{
+			{Provider: domain.ProviderClaude, ID: "stored", State: domain.SegmentPushStored, Revision: 1},
+			{Provider: domain.ProviderCodex, ID: "same", State: domain.SegmentPushUnchanged, Revision: 4},
+			{Provider: domain.ProviderCodex, ID: "taken", State: domain.SegmentPushRefused, Reason: "synthetic refusal"},
+		},
+		Unread: []domain.UnreadSessionRecord{{Provider: domain.ProviderCodex, Source: "state_5.sqlite", Reason: "synthetic layout"}},
+	}
+	var cwd string
+	uploader := segmentUploaderFunc(func(_ context.Context, dir string) (domain.SegmentPushResult, error) {
+		cwd = dir
+		return result, nil
+	})
+	var out bytes.Buffer
+	err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out)
+	// The other reports were stored, and the command still fails so the gap is noticed.
+	if err == nil || !strings.Contains(err.Error(), "1 of 3 session reports were refused") || cwd != "/work/app" {
+		t.Fatalf("err=%v cwd=%q", err, cwd)
+	}
+	for _, want := range []string{
+		"Session reports: 1 stored, 1 unchanged, 1 refused (3 sessions)",
+		"Only you can read these reports on the server. Nothing was written on this computer.",
+		"Refused (1) — these sessions are not on the server",
+		"  codex taken: synthetic refusal",
+		"Unread session records (1) — these exist but were not read, so no report covers them",
+		"  [codex] state_5.sqlite: synthetic layout",
+		"2 agent calls were recorded by a session outside this repository and were not uploaded",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "stored:") || strings.Contains(out.String(), "claude stored") {
+		t.Fatalf("a stored session is listed as a gap:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", true, &out); err == nil {
+		t.Fatal("a refused report must fail the JSON form too")
+	}
+	var decoded domain.SegmentPushResult
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil || !reflect.DeepEqual(decoded, result) {
+		t.Fatalf("json: %v\n%s", err, out.String())
+	}
+
+	result.Refused, result.Sessions = 0, result.Sessions[:2]
+	out.Reset()
+	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Refused") {
+		t.Fatalf("nothing refused: %v\n%s", err, out.String())
+	}
+	failure := errors.New("synthetic failure")
+	failing := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) {
+		return domain.SegmentPushResult{}, failure
+	})
+	if err := RunSegmentsPush(context.Background(), failing, "/work/app", false, &out); !errors.Is(err, failure) {
+		t.Fatalf("upload error: %v", err)
+	}
+	if err := RunSegmentsPush(context.Background(), nil, "/work/app", false, &out); err == nil {
+		t.Fatal("a missing uploader must be an error")
 	}
 }

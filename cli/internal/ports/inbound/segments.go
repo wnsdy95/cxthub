@@ -11,3 +11,9 @@ import (
 type SegmentReporter interface {
 	SegmentReport(ctx context.Context, cwd string) (domain.SegmentReport, error)
 }
+
+// SegmentUploader computes the same report and uploads one report per session
+// to the repository's server. It writes nothing on this computer.
+type SegmentUploader interface {
+	PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
+}
