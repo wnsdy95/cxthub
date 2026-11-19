@@ -43,13 +43,23 @@ type Handler struct {
 	preparer inbound.PrepareAgentContext
 	admit    func(context.Context, string) error
 	observe  func(string, domain.ProviderKind, string)
-	stdin    io.Reader // for testing. nil means os.Stdin (no read from terminal)
-	stdout   io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
+	// wakeCollector starts the detached session report collector. An agent
+	// hook only wakes it; the collector reads what the tools recorded.
+	wakeCollector func(string)
+	stdin         io.Reader // for testing. nil means os.Stdin (no read from terminal)
+	stdout        io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
 }
 
 // NewHandler creates a Handler and injects CaptureCoordinator.
 func NewHandler(coord *capture.CaptureCoordinator) *Handler {
 	return &Handler{coord: coord}
+}
+
+// WithSegmentCollector makes every handled agent hook wake the session report
+// collector after its own work.
+func (h *Handler) WithSegmentCollector(wake func(string)) *Handler {
+	h.wakeCollector = wake
+	return h
 }
 
 // hookPayload contains the known keys from provider hook stdin JSON.
@@ -127,6 +137,9 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 	}
 	if !state.GitRepository || !state.Initialized {
 		return nil
+	}
+	if h.wakeCollector != nil {
+		defer h.wakeCollector(cwd)
 	}
 	if path == "" && p.SessionID != "" {
 		// Correct discovery can replace an older poisoned pointer. This stays

@@ -107,6 +107,17 @@ type Container struct {
 	Segments inbound.SegmentReporter
 	// SegmentUpload uploads that report to the repository's server, one report per session.
 	SegmentUpload inbound.SegmentUploader
+	// SegmentCollector is the same upload when a hook woke it: sessions since
+	// automatic reading began, and only what changed since its last run.
+	SegmentCollector inbound.SegmentCollector
+	// WakeSegmentCollector starts a detached collector; process lifecycle
+	// wiring, absent in embedded and test drivers.
+	WakeSegmentCollector func(string)
+	// WithSegmentCollectorLock lets one collector run per repository and
+	// keeps one request for another run.
+	WithSegmentCollectorLock func(ctx context.Context, cwd string, use func(another func() bool) error) (bool, error)
+	// SegmentCollectorState reads what the collector last did.
+	SegmentCollectorState func(ctx context.Context, cwd string) (domain.CollectorState, error)
 }
 
 // Run is the CLI entry point. Parses args(=os.Args) to execute the corresponding subcommand.
@@ -436,6 +447,22 @@ func Run(c *Container, args []string) error {
 				}
 			}
 			fmt.Printf("capture.debounce = %s\n", remotecfg.CaptureDebounce(cwd))
+			return nil
+		case "segments.auto":
+			// Whether hooks wake the session report collector (on|off). "default" returns to on.
+			if hasVal {
+				if val == "default" {
+					val = ""
+				}
+				if err := remotecfg.SetSegmentsAuto(ctx, cwd, val); err != nil {
+					return err
+				}
+			}
+			if remotecfg.SegmentsAuto(cwd) {
+				fmt.Println("segments.auto = on (default)")
+			} else {
+				fmt.Println("segments.auto = off")
+			}
 			return nil
 		case "secrets.scrub":
 			// Pattern scrub tier (off|standard|strict). Use "default" to return to standard.

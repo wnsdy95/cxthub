@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
@@ -17,27 +19,30 @@ import (
 )
 
 // newSegmentReporter wires the read-only readers: Git, the Claude Code session
-// files, and the Codex thread databases beside its sessions directory.
-func newSegmentReporter() (*app.SegmentReportService, error) {
-	claude, err := providerfs.ClaudeProjectsDir()
+// files, and the Codex thread databases beside its sessions directory. With a
+// cache directory the readers keep what they made of unchanged sources there;
+// without one they write nothing anywhere.
+func newSegmentReporter(cache string) (*app.SegmentReportService, error) {
+	projects, err := providerfs.ClaudeProjectsDir()
 	if err != nil {
 		return nil, err
 	}
-	codex, err := providerfs.CodexSessionsDir()
+	sessions, err := providerfs.CodexSessionsDir()
 	if err != nil {
 		return nil, err
 	}
-	return app.NewSegmentReportService(
-		gitctx.NewSessionGitRecords(),
-		sessionrecords.NewClaudeRecords(claude),
-		sessionrecords.NewCodexRecords(filepath.Dir(codex), gitctx.NormalizeRemoteURL),
-	), nil
+	claude := sessionrecords.NewClaudeRecords(projects)
+	codex := sessionrecords.NewCodexRecords(filepath.Dir(sessions), gitctx.NormalizeRemoteURL)
+	if cache != "" {
+		claude, codex = claude.WithCache(cache), codex.WithCache(cache)
+	}
+	return app.NewSegmentReportService(gitctx.NewSessionGitRecords(), claude, codex), nil
 }
 
 // newSegmentUploader adds the repository's server to the same readers. It
 // builds no local store.
-func newSegmentUploader(cfg config) (inbound.SegmentUploader, error) {
-	reports, err := newSegmentReporter()
+func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, error) {
+	reports, err := newSegmentReporter(cache)
 	if err != nil {
 		return nil, err
 	}
@@ -61,4 +66,32 @@ func newSegmentUploader(cfg config) (inbound.SegmentUploader, error) {
 	// Branch IDs live in Git's own branch configuration. This is the one
 	// thing an upload writes on this computer.
 	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID), nil
+}
+
+// newSegmentCollector is the same upload for the detached collector a hook
+// wakes. It adds the memory of what was sent, kept beside Git's own files.
+func newSegmentCollector(cfg config) (inbound.SegmentCollector, *gitctx.CollectorFiles, error) {
+	// A run nobody waits for reads again only what changed. The cache is the
+	// user's own, outside every repository and every tool's records.
+	cache := ""
+	if dir, err := os.UserCacheDir(); err == nil {
+		cache = filepath.Join(dir, "cxthub", "session-records-v1")
+	}
+	service, err := newSegmentUploader(cfg, cache)
+	if err != nil {
+		return nil, nil, err
+	}
+	files := gitctx.NewCollectorFiles()
+	// Content is rebuilt when the masking policy or the document identity changes.
+	epoch := func(ctx context.Context, _ string) string {
+		policy, _ := capture.ScrubPolicyFingerprint(cfg.RepoRoot)
+		identity := ""
+		if observed, err := remotecfg.Observe(ctx, cfg.RepoRoot); err == nil {
+			if captured, err := observed.CaptureIdentity(); err == nil {
+				identity = string(captured)
+			}
+		}
+		return policy + "\n" + identity
+	}
+	return service.WithCollectorState(files, time.Now, epoch), files, nil
 }

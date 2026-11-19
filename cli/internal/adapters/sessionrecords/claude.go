@@ -32,10 +32,62 @@ import (
 //
 // Every project folder is read, because a session belongs to a repository by
 // the working folders its records name, not by the folder its file sits in.
-type ClaudeRecords struct{ projects string }
+type ClaudeRecords struct {
+	projects string
+	// cache is the directory of the read cache; empty reads every file anew.
+	cache string
+}
 
 // NewClaudeRecords reads the session files under the given projects directory.
 func NewClaudeRecords(projects string) *ClaudeRecords { return &ClaudeRecords{projects: projects} }
+
+// WithCache keeps what was made of each session file under dir and reads
+// again only a file whose size or modification time changed. Without it
+// nothing is written anywhere.
+func (r *ClaudeRecords) WithCache(dir string) *ClaudeRecords {
+	r.cache = dir
+	return r
+}
+
+// read returns a session file's records, from the cache when the file is as
+// it was when it was last read.
+func (r *ClaudeRecords) read(path string, wanted map[string]struct{}) claudeFile {
+	if r.cache == "" {
+		return readClaudeFile(path, wanted, false)
+	}
+	before, ok := stampOf(path)
+	if !ok {
+		return readClaudeFile(path, wanted, false)
+	}
+	entry := cacheFile(r.cache, "claude", path)
+	var cached claudeFileCache
+	if !loadCache(entry, &cached) || cached.Version != recordCacheVersion || cached.Stamp != before {
+		file := readClaudeFile(path, nil, true)
+		if file.openErr != nil || file.readErr != nil {
+			return wantedCalls(file, wanted)
+		}
+		cached = claudeFileCache{Version: recordCacheVersion, Stamp: before, Session: file.session, Items: file.items, Calls: file.calls,
+			BadLines: file.badLines, FirstBadLine: file.firstBadLine, BadEntries: file.badEntries}
+		// A file that changed while it was read is kept for this run only.
+		if after, ok := stampOf(path); ok && after == before {
+			storeCache(entry, cached)
+		}
+	}
+	return wantedCalls(claudeFile{path: path, session: cached.Session, items: cached.Items, calls: cached.Calls,
+		badLines: cached.BadLines, firstBadLine: cached.FirstBadLine, badEntries: cached.BadEntries}, wanted)
+}
+
+// wantedCalls narrows a file read with every tool call to the wanted ones.
+func wantedCalls(file claudeFile, wanted map[string]struct{}) claudeFile {
+	calls := map[string]string{}
+	for id := range wanted {
+		if record, ok := file.calls[id]; ok {
+			calls[id] = record
+		}
+	}
+	file.calls = calls
+	return file
+}
 
 type claudeEntry struct {
 	Type      string          `json:"type"`
@@ -132,7 +184,7 @@ func (r *ClaudeRecords) ReadSessionRecords(ctx context.Context, scope domain.Ses
 		if err := ctx.Err(); err != nil {
 			return domain.SessionRecordBatch{}, err
 		}
-		file := readClaudeFile(path, wanted)
+		file := r.read(path, wanted)
 		id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		calls[id] = file.calls
 		session := domain.RecordedSession{Provider: domain.ProviderClaude, ID: id, Scope: domain.SessionScopeFolder, Source: path, Items: file.items}
@@ -143,7 +195,7 @@ func (r *ClaudeRecords) ReadSessionRecords(ctx context.Context, scope domain.Ses
 			return domain.SessionRecordBatch{}, err
 		}
 		group := groups[key]
-		file := readClaudeFile(group.file.path, nil)
+		file := r.read(group.file.path, nil)
 		session := domain.RecordedSession{
 			Provider: domain.ProviderClaude, ID: group.file.agent, Sub: true, Parent: group.parent,
 			Scope: domain.SessionScopeFolder, FileCopies: group.copies, Source: group.file.path, Items: file.items,
@@ -295,7 +347,9 @@ type claudePending struct {
 // readClaudeFile reads one session file. Only user and assistant records are
 // conversation; other record types repeat tool calls and results and would
 // count them twice.
-func readClaudeFile(path string, wanted map[string]struct{}) claudeFile {
+//
+// calls records the tool calls in wanted, or every tool call when all is set.
+func readClaudeFile(path string, wanted map[string]struct{}, all bool) claudeFile {
 	out := claudeFile{path: path, calls: map[string]string{}}
 	file, err := providerfs.OpenRegularFile(path)
 	if err != nil {
@@ -360,7 +414,7 @@ func readClaudeFile(path string, wanted map[string]struct{}) claudeFile {
 				if block.Name == "Bash" && block.ID != "" {
 					pending[block.ID] = claudePending{startedMs: item.AtMs, folder: entry.Cwd}
 				}
-				if _, want := wanted[block.ID]; want {
+				if _, want := wanted[block.ID]; (want || all) && block.ID != "" {
 					out.calls[block.ID] = entry.UUID
 				}
 			case "tool_result":

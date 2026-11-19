@@ -98,13 +98,13 @@ func run(args []string) error {
 		defer stop()
 		if slices.Contains(args[2:], "push") {
 			// The same readers plus the repository's server: still no local store.
-			uploader, err := newSegmentUploader(loadConfig())
+			uploader, err := newSegmentUploader(loadConfig(), "")
 			if err != nil {
 				return err
 			}
 			return delivcli.RunSegmentsPush(ctx, uploader, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
 		}
-		reporter, err := newSegmentReporter()
+		reporter, err := newSegmentReporter("")
 		if err != nil {
 			return err
 		}
@@ -379,7 +379,7 @@ func buildContainer(cfg config) container {
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
 	contextHistory := app.NewContextHistoryService(store, store)
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
-	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
+	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices).WithSegmentCollector(delivcli.SpawnSegmentCollector)
 	hookHdl.WithCaptureAdmission(func(ctx context.Context, cwd string) error {
 		repo, err := gitCtx.CurrentRepo(ctx, cwd)
 		if err != nil {
@@ -461,6 +461,14 @@ func buildContainer(cfg config) container {
 	}
 	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
 	clictr.WakeFetchDiscovery = delivcli.SpawnFetchDiscovery
+	// The session report collector a hook wakes. A hook is never what it
+	// reads: it reads what the tools and Git recorded, whatever woke it.
+	if collector, files, err := newSegmentCollector(cfg); err == nil {
+		clictr.SegmentCollector = collector
+		clictr.WithSegmentCollectorLock = files.WithCollectorLock
+		clictr.SegmentCollectorState = files.LoadCollectorState
+		clictr.WakeSegmentCollector = delivcli.SpawnSegmentCollector
+	}
 	clictr.ObserveLiveSession = func(ctx context.Context, cwd string, provider domain.ProviderKind, id string) error {
 		return capture.ObserveLiveSession(ctx, cwd, provider, id, clictr.WakeFetchDiscovery)
 	}

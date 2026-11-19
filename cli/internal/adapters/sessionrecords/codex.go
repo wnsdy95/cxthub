@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -37,6 +38,8 @@ type CodexRecords struct {
 	home      string
 	rows      SQLiteRows
 	normalize func(string) string
+	// cache is the directory of the read cache; empty reads the databases anew.
+	cache string
 }
 
 // NewCodexRecords reads the databases under the Codex home directory with the
@@ -45,6 +48,31 @@ type CodexRecords struct {
 // is in.
 func NewCodexRecords(home string, normalize func(string) string) *CodexRecords {
 	return &CodexRecords{home: home, rows: sqliteProgramRows, normalize: normalize}
+}
+
+// WithCache keeps what the databases gave for a repository under dir and
+// reads them again only when one of the database files, or its write-ahead
+// log, changed in size or modification time. Without it nothing is written
+// anywhere.
+func (r *CodexRecords) WithCache(dir string) *CodexRecords {
+	r.cache = dir
+	return r
+}
+
+// databaseStamps is what the database files and their write-ahead logs look
+// like now. A log that does not exist is part of the answer.
+func databaseStamps(paths ...string) []sourceStamp {
+	var stamps []sourceStamp
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		for _, file := range []string{path, path + "-wal"} {
+			stamp, _ := stampOf(file)
+			stamps = append(stamps, stamp)
+		}
+	}
+	return stamps
 }
 
 // sqliteProgramRows opens the database read-only and reads content that is
@@ -156,6 +184,33 @@ const codexItemBatch = 100
 // commands is inside a worktree. The one fallback is the remote address the
 // tool recorded for the thread, for a thread whose folder is no longer one.
 func (r *CodexRecords) ReadSessionRecords(ctx context.Context, scope domain.SessionRecordScope) (domain.SessionRecordBatch, error) {
+	if r.cache == "" {
+		return r.readSessionRecords(ctx, scope)
+	}
+	state := latestVersionedFile(r.home, "state_", ".sqlite")
+	history := latestVersionedFile(r.home, "thread_history_", ".sqlite")
+	if state == "" {
+		return r.readSessionRecords(ctx, scope)
+	}
+	before := databaseStamps(state, history)
+	entry := cacheFile(r.cache, "codex", r.home+"\x00"+strings.Join(scope.Folders, "\x00")+"\x00"+scope.Origin)
+	var cached codexBatchCache
+	if loadCache(entry, &cached) && cached.Version == recordCacheVersion && reflect.DeepEqual(cached.Stamps, before) && reflect.DeepEqual(cached.Scope, scope) {
+		return cached.Batch, nil
+	}
+	batch, err := r.readSessionRecords(ctx, scope)
+	if err != nil {
+		return batch, err
+	}
+	// What could not be read is read again next time, and so is a database
+	// that changed while it was read.
+	if len(batch.Unread) == 0 && reflect.DeepEqual(databaseStamps(state, history), before) {
+		storeCache(entry, codexBatchCache{Version: recordCacheVersion, Stamps: before, Scope: scope, Batch: batch})
+	}
+	return batch, nil
+}
+
+func (r *CodexRecords) readSessionRecords(ctx context.Context, scope domain.SessionRecordScope) (domain.SessionRecordBatch, error) {
 	var batch domain.SessionRecordBatch
 	unread := func(source, reason string) {
 		batch.Unread = append(batch.Unread, domain.UnreadSessionRecord{Provider: domain.ProviderCodex, Source: source, Reason: reason})

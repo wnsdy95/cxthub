@@ -1148,6 +1148,7 @@ Reading a key prints its effective local value. Supported keys are:
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
 | `secrets.redact` | replacement text, `default` | built-in redaction token | Exact-secret replacement text |
 | `secrets.minlen` | `0` through `64` | `4` | Minimum exact-secret length; `0` restores the default |
+| `segments.auto` | `on`, `off`, `default` | `on` | Whether hooks wake the session report collector. `off` leaves uploads to `cxt segments push`. |
 
 Examples:
 
@@ -1415,6 +1416,54 @@ or `not-uploaded`) and, for the last, `content_reason`.
 Every run reads all records again and rebuilds every session's document to
 know its identity, which can take a while on a computer with many long
 sessions, even when the server then needs nothing sent.
+
+### Automatic upload
+
+In a repository cxt is set up in and connected to a server, the same upload
+also runs without being asked. Hooks only wake it: the Git hooks `post-commit`,
+`post-checkout`, `post-merge`, `post-rewrite` and `pre-push`, and the agent
+hooks at session start, prompt, stop and session end. A hook is never what is
+read. The collector reads the records the tools and Git left, by the same
+rules, whichever hook ran, so a hook that did not run is made up for by the
+next one that does, and work in a worktree where no hook runs is read when a
+hook runs anywhere in the repository.
+
+It differs from `cxt segments push` in two ways only:
+
+- **What it uploads.** Sessions recorded since automatic reading began in this
+  repository: a session whose last own record, or recorded start when it has
+  none, is at or after the moment the collector first ran here. Earlier
+  sessions are uploaded only by `cxt segments push`.
+- **How much it sends.** It remembers what the server last stored and sends
+  only what changed: a report is uploaded again when it differs, a conversation
+  is read back and built again when the session's records or their cut changed,
+  or when the masking policy or the document identity did, and branch IDs are
+  registered again when the branches on origin or their IDs changed.
+
+One collector runs per repository at a time, detached from the hook that woke
+it. A wake that arrives while one runs is answered by one more run afterwards.
+Two runs start at least 60 seconds apart, and after a run that failed for a
+reason that holds for every session (no login, no access, a server without
+these routes, no connection) the next one waits 10 minutes. A failed run never
+fails the hook, Git or the agent.
+
+What it keeps on this computer:
+
+- beside Git's own files of the repository (`<git-dir>/cxt/`): what was last
+  sent (`collector-v1.json`, with the moment automatic reading began and how
+  the last run ended), a lock and a request marker. This is a memory of what
+  was sent, not a source of facts: deleting it only makes the next run begin
+  again from now and send more.
+- in your user cache directory (`cxthub/session-records-v1`): what the readers
+  made of session files and thread databases that have not changed since, so
+  that a run reads again only what changed. It holds identifiers, times,
+  folders, branch names and commit-number candidates, and no conversation text.
+  It can be deleted at any time.
+
+`cxt segments` and `cxt segments push` use neither: they read everything again
+and write no cache.
+
+Turn automatic upload off with `cxt config segments.auto off`.
 
 ## Global information
 

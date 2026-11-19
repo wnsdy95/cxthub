@@ -282,10 +282,15 @@ type SegmentPushSession struct {
 // SegmentPushResult lists every session of the report with what happened to
 // it, and what the report itself could not cover.
 type SegmentPushResult struct {
-	Version   int `json:"version"`
-	Stored    int `json:"stored"`
-	Unchanged int `json:"unchanged"`
-	Refused   int `json:"refused"`
+	Version int `json:"version"`
+	// Automatic is true for a run nobody asked for. Such a run leaves out
+	// BeforeAutomatic sessions: all their records lie before automatic
+	// reading began in this repository.
+	Automatic       bool `json:"automatic,omitempty"`
+	BeforeAutomatic int  `json:"before_automatic,omitempty"`
+	Stored          int  `json:"stored"`
+	Unchanged       int  `json:"unchanged"`
+	Refused         int  `json:"refused"`
 	// ContentNotUploaded counts sessions whose report went up without their
 	// conversation; each one says why.
 	ContentNotUploaded int                  `json:"content_not_uploaded"`

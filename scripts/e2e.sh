@@ -316,6 +316,30 @@ SEGOTHERID="$(python3 -c 'print("e"*32)')"
 expect "another ID for the same name joins the lifetime" "$(ccurl -sb "$JA" -X PUT "$B/repos/$CLIRID/branch-ids" -H 'Content-Type: application/json' -d "{\"branches\":[{\"name\":\"$SEGBRANCH\",\"local_id\":\"$SEGOTHERID\"}]}" | python3 -c 'import json,sys;r=json.load(sys.stdin)["branches"][0];print(r["outcome"],r["ledger_id"])')" "joined $SEGBRANCHID"
 expect "an account outside the repository cannot read the ledger" "$(code -b "$JM" "$B/repos/$CLIRID/branch-lifetimes")" 403
 expect "the ledger makes no ref" "$(curl -sb "$JA" "$B/repos/$CLIRID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
+# The collector a hook wakes reads the same records and sends only what changed.
+# Runs are spaced; the test moves the last run back instead of waiting.
+SEGSTATE="$(git rev-parse --absolute-git-dir)/cxt/collector-v1.json"
+segcollect() {
+  [ -f "$SEGSTATE" ] && python3 - "$SEGSTATE" <<'PYWIND'
+import json, sys
+state = json.load(open(sys.argv[1]))
+state["last_run"]["at"] = "2026-01-01T00:00:00Z"
+json.dump(state, open(sys.argv[1], "w"))
+PYWIND
+  cxt git-hook segment-collect >/dev/null 2>&1
+}
+segappend() { printf '%s\n' '{"type":"user","uuid":"'"$1"'","sessionId":"e2e-segments","timestamp":"2031-01-02T03:01:'"$2"'.000Z","cwd":"'"$PWD"'","gitBranch":"'"$SEGBRANCH"'","promptId":"'"$1"'","message":{"content":"more"}}' >>"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"; }
+segrevision() { curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']"; }
+segcollect
+expect "the collector remembers what the server holds and how its run ended" "$(python3 -c "import json;s=json.load(open('$SEGSTATE'));r=s['last_run'];print(s['version'],len(s['sessions']),r['stored'],r['unchanged'],r.get('error','-'),bool(s['enabled_at']))")" "1 1 0 1 - True"
+expect "a run with nothing new leaves the report as it is" "$(segcollect; segrevision)" 2
+segappend m7 10
+expect "the collector sends a session that went on" "$(segcollect; segrevision)" 3
+cxt config segments.auto off >/dev/null 2>&1
+segappend m8 20
+expect "turned off, the collector sends nothing" "$(segcollect; segrevision)" 3
+cxt config segments.auto on >/dev/null 2>&1
+expect "turned on again, it makes up for what it missed" "$(segcollect; segrevision)" 4
 expect "an account outside the repository cannot list reports" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions")" 403
 expect "an account outside the repository cannot read a report" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 403
 expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 401

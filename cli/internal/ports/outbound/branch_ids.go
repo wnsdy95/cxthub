@@ -21,3 +21,11 @@ type BranchIDStore interface {
 type BranchLedgerRemote interface {
 	RegisterBranchIDs(ctx context.Context, repoID string, branches []domain.BranchRegistration) ([]domain.BranchRegistrationResult, error)
 }
+
+// CollectorStateStore keeps what the automatic collector last sent for the
+// repository holding cwd. It is a memory, never a source of facts: a lost
+// state only makes the next run send more.
+type CollectorStateStore interface {
+	LoadCollectorState(ctx context.Context, cwd string) (domain.CollectorState, error)
+	SaveCollectorState(ctx context.Context, cwd string, state domain.CollectorState) error
+}

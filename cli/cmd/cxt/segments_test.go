@@ -203,6 +203,7 @@ type segmentsTestServer struct {
 	chunks    map[string][]byte
 	manifests map[string]segmentsTestManifest
 	uploaded  int // chunk bodies received
+	requests  int // every request of any kind
 	branches  [][]domain.BranchRegistration
 	answer    func(session string) (int, string)
 	token     string
@@ -223,6 +224,7 @@ func (s *segmentsTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.requests++
 	w.Header().Set("Content-Type", "application/json")
 	if r.Header.Get("Authorization") != "Bearer "+s.token {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -337,6 +339,12 @@ func segmentsTestPushTree(t *testing.T, base, repo string) map[string]string {
 	tree := segmentsTestTree(t, base)
 	for _, path := range []string{filepath.Join(repo, ".git"), filepath.Join(repo, ".git", "config"), filepath.Join(repo, ".git", "cxt"), filepath.Join(repo, ".git", "cxt", "branch-ids.lock")} {
 		delete(tree, path)
+	}
+	// The collector a hook wakes keeps its memory and its lock in the same place.
+	for path := range tree {
+		if strings.HasPrefix(path, filepath.Join(repo, ".git", "cxt")+string(filepath.Separator)) {
+			delete(tree, path)
+		}
 	}
 	return tree
 }
@@ -497,4 +505,149 @@ func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 	if again := segmentsTestConfig(t, repo, "branch.main.cxtBranchId"); again != mainID {
 		t.Fatalf("the ID of main changed from %s to %s", mainID, again)
 	}
+}
+
+// The collector a hook wakes, from the entry point: the same reports as on
+// request for sessions recorded since it began, and after that only what changed.
+func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
+	base, repo, _ := segmentsTestFixture(t)
+	stored := `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
+	fake := &segmentsTestServer{chunks: map[string][]byte{}, manifests: map[string]segmentsTestManifest{}, token: "synthetic-token",
+		answer: func(string) (int, string) { return http.StatusOK, stored }}
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
+	t.Setenv("CXT_TOKEN", "synthetic-token")
+	statePath := filepath.Join(repo, ".git", "cxt", "collector-v1.json")
+	// A run starts at once only when the last one is a while ago; the test
+	// moves the last run back instead of waiting.
+	collect := func() {
+		t.Helper()
+		if raw, err := os.ReadFile(statePath); err == nil {
+			var state domain.CollectorState
+			if err := json.Unmarshal(raw, &state); err != nil || state.LastRun == nil {
+				t.Fatalf("collector state: %v\n%s", err, raw)
+			}
+			state.LastRun.At = "2026-01-01T00:00:00Z"
+			moved, _ := json.Marshal(state)
+			if err := os.WriteFile(statePath, moved, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fake.mu.Lock()
+		fake.puts, fake.requests, fake.uploaded = nil, 0, 0
+		fake.mu.Unlock()
+		if _, err := segmentsTestRunErr(t, "git-hook", "segment-collect"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Beside Git's own directory the collector writes one more place: the
+	// user's cache of what it made of unchanged sources.
+	cacheDir := filepath.Join(base, "home", ".cache", "cxthub", "session-records-v1")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "home", ".cache"))
+	tree := func() map[string]string {
+		t.Helper()
+		all := segmentsTestPushTree(t, base, repo)
+		for path := range all {
+			if path == filepath.Join(base, "home", ".cache") || strings.HasPrefix(path, filepath.Join(base, "home", ".cache")+string(filepath.Separator)) {
+				delete(all, path)
+			}
+		}
+		return all
+	}
+	before := tree()
+
+	// The fixture's sessions are recorded after automatic reading begins (now),
+	// so the first run sends all three, each with its conversation.
+	collect()
+	if len(fake.puts) != 3 || len(fake.manifests) != 3 {
+		t.Fatalf("first run: reports=%d documents=%d", len(fake.puts), len(fake.manifests))
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state domain.CollectorState
+	if err := json.Unmarshal(raw, &state); err != nil || state.Version != domain.CollectorStateVersion || state.EnabledAt == "" || len(state.Sessions) != 3 ||
+		state.LastRun == nil || state.LastRun.Stored != 3 || state.LastRun.Error != "" {
+		t.Fatalf("state after the first run: %v\n%s", err, raw)
+	}
+	for key, session := range state.Sessions {
+		if session.Sent == "" || session.Content == nil {
+			t.Fatalf("%s is not remembered: %+v", key, session)
+		}
+	}
+	// The memory holds what was sent, and no folder of this computer.
+	if strings.Contains(string(raw), base) {
+		t.Fatalf("the state names a path: %s", raw)
+	}
+
+	// Nothing changed: the server is not asked anything.
+	collect()
+	if fake.requests != 0 {
+		t.Fatalf("second run made %d requests", fake.requests)
+	}
+
+	// One session went on: its document grows by what was appended and its
+	// report is replaced. Nothing else is sent.
+	appended := `{"type":"user","uuid":"f2","sessionId":"fork","timestamp":"2031-01-02T03:00:50.000Z","cwd":"` + repo + `","gitBranch":"main","promptId":"p3","message":{"content":"and one more"}}` + "\n"
+	forkFile := filepath.Join(base, "home", ".claude", "projects", "-synthetic", "fork.jsonl")
+	file, err := os.OpenFile(forkFile, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(appended); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	before = tree()
+	collect()
+	if len(fake.puts) != 1 || !strings.HasSuffix(fake.puts[0].path, "/anchored-sessions/claude/fork") || fake.uploaded == 0 {
+		t.Fatalf("after one session went on: reports=%+v chunks=%d", fake.puts, fake.uploaded)
+	}
+	var body domain.AnchoredSessionBody
+	if err := json.Unmarshal([]byte(fake.puts[0].body), &body); err != nil || body.Records != 2 || body.Content == nil || body.Content.Events != 2 {
+		t.Fatalf("the grown report: %v %+v", err, body)
+	}
+	if after := tree(); !reflect.DeepEqual(before, after) {
+		t.Fatal("the collector changed a file outside Git's own directory and its cache")
+	}
+	// The cache is this user's alone and holds no conversation.
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("read cache: %v %v", entries, err)
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("cache entry %s: %v %v", entry.Name(), info, err)
+		}
+		content := string(mustRead(t, filepath.Join(cacheDir, entry.Name())))
+		for _, text := range []string{"commit it", "continue elsewhere", "and one more", "sub task"} {
+			if strings.Contains(content, text) {
+				t.Fatalf("cache entry %s holds conversation text %q", entry.Name(), text)
+			}
+		}
+	}
+	// A caller the server does not accept: the run ends quietly and the state says why.
+	fake.mu.Lock()
+	fake.token = "another-token"
+	fake.mu.Unlock()
+	if err := os.WriteFile(forkFile, []byte(strings.Replace(string(mustRead(t, forkFile)), "and one more", "and one more", 1)+strings.Replace(appended, `"f2"`, `"f3"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	collect()
+	raw = mustRead(t, statePath)
+	if err := json.Unmarshal(raw, &state); err != nil || state.LastRun == nil || !strings.Contains(state.LastRun.Error, "401") {
+		t.Fatalf("state after a refused caller: %v\n%s", err, raw)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

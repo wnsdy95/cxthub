@@ -5,7 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strings"
+	"syscall"
+	"time"
+
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
@@ -255,4 +262,98 @@ func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 	if result.AgentCallsWithoutSender > 0 {
 		fmt.Fprintf(w, "\n%d agent calls were recorded by a session outside this repository and were not uploaded\n", result.AgentCallsWithoutSender)
 	}
+}
+
+// segmentCollectorInterval is the least time between the starts of two
+// automatic runs in one repository. After a run that failed for a reason that
+// holds for every session, the next one waits segmentCollectorBackoff.
+var (
+	segmentCollectorInterval = 60 * time.Second
+	segmentCollectorBackoff  = 10 * time.Minute
+)
+
+// SpawnSegmentCollector starts a detached collector for the repository
+// holding cwd and returns at once. Hooks call it after their own work: a hook
+// is only what wakes the collector, never what it reads.
+func SpawnSegmentCollector(cwd string) {
+	root := cxtRepoRoot(context.Background(), cwd)
+	if !remotecfg.SegmentsAuto(root) {
+		return
+	}
+	if _, ok := remotecfg.Origin(root); !ok && os.Getenv("CXT_REMOTE") == "" {
+		return
+	}
+	// A collector already running takes the request; no new process is needed.
+	if gitctx.NewCollectorFiles().RequestRunIfBusy(context.Background(), cwd) {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "git-hook", "segment-collect")
+	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if cmd.Start() == nil {
+		_ = cmd.Process.Release()
+	}
+}
+
+// segmentCollectorWait is how long a collector waits before it may start a
+// run, given how the last one ended.
+func segmentCollectorWait(state domain.CollectorState, now time.Time) time.Duration {
+	if state.LastRun == nil {
+		return 0
+	}
+	last, err := time.Parse(time.RFC3339Nano, state.LastRun.At)
+	if err != nil || last.After(now) {
+		return 0
+	}
+	interval := segmentCollectorInterval
+	if state.LastRun.Error != "" {
+		interval = segmentCollectorBackoff
+	}
+	if wait := interval - now.Sub(last); wait > 0 {
+		return wait
+	}
+	return 0
+}
+
+// runSegmentCollector is the detached collector. One runs per repository; a
+// collector woken while another runs leaves a request, and the running one
+// answers it with one more run. It never fails its caller: how a run ended is
+// kept in the collector's state.
+func runSegmentCollector(ctx context.Context, c *Container, cwd string) error {
+	if c == nil || c.SegmentCollector == nil || c.WithSegmentCollectorLock == nil {
+		return nil
+	}
+	root := cxtRepoRoot(ctx, cwd)
+	if !remotecfg.SegmentsAuto(root) {
+		return nil
+	}
+	if _, ok := remotecfg.Origin(root); !ok && os.Getenv("CXT_REMOTE") == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	_, _ = c.WithSegmentCollectorLock(ctx, cwd, func(another func() bool) error {
+		for {
+			if c.SegmentCollectorState != nil {
+				if state, err := c.SegmentCollectorState(ctx, cwd); err == nil {
+					if wait := segmentCollectorWait(state, time.Now()); wait > 0 {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case <-time.After(wait):
+						}
+					}
+				}
+			}
+			_, _ = c.SegmentCollector.CollectSegments(ctx, cwd)
+			if ctx.Err() != nil || !another() {
+				return nil
+			}
+		}
+	})
+	return nil
 }

@@ -395,7 +395,7 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 		}
 	case "config":
 		valid = false
-		for _, key := range []string{"checkout.mode", "load.mode", "boundary.enforce", "capture.debounce", "capture.identity", "secrets.scrub", "secrets.redact", "secrets.minlen"} {
+		for _, key := range []string{"checkout.mode", "load.mode", "boundary.enforce", "capture.debounce", "capture.identity", "secrets.scrub", "secrets.redact", "secrets.minlen", "segments.auto"} {
 			if sub == key {
 				valid = true
 			}

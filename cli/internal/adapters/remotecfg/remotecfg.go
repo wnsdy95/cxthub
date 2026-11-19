@@ -64,6 +64,9 @@ type fileConfig struct {
 	// CaptureDebounceSec is the debounce window (seconds) for hook Stop capture (capture path).
 	// 0 (default) = 60 seconds. Negative values not allowed.
 	CaptureDebounceSec int `json:"capture_debounce_sec,omitempty"`
+	// SegmentsAuto is "off" when session reports are uploaded only on request.
+	// Absent (default) = hooks wake the collector.
+	SegmentsAuto string `json:"segments_auto,omitempty"`
 }
 
 func configPath(repoRoot string) string {
@@ -210,6 +213,25 @@ func SetCaptureDebounce(ctx context.Context, repoRoot string, sec int) error {
 		return fmt.Errorf("capture.debounce must be 0 or more seconds: %d", sec)
 	}
 	return setField(ctx, repoRoot, "capture_debounce_sec", sec)
+}
+
+// SegmentsAuto reports whether hooks wake the session report collector
+// (default true). A repository whose settings cannot be read keeps the default.
+func SegmentsAuto(repoRoot string) bool {
+	fc, err := loadFile(repoRoot)
+	return err != nil || fc.SegmentsAuto != "off"
+}
+
+// SetSegmentsAuto turns automatic session report upload on or off ("" = default on).
+func SetSegmentsAuto(ctx context.Context, repoRoot, value string) error {
+	switch value {
+	case "", "on":
+		value = ""
+	case "off":
+	default:
+		return fmt.Errorf("segments.auto must be on|off: %q", value)
+	}
+	return setField(ctx, repoRoot, "segments_auto", value)
 }
 
 // BoundaryEnforce returns the transition execution policy (default kill).

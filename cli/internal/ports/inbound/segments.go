@@ -17,3 +17,11 @@ type SegmentReporter interface {
 type SegmentUploader interface {
 	PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
 }
+
+// SegmentCollector is the upload nobody has to ask for. It reads the same
+// records by the same rules whatever woke it, leaves out sessions from before
+// automatic reading began in the repository, and sends only what changed
+// since its last run.
+type SegmentCollector interface {
+	CollectSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
+}
