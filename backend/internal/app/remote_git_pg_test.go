@@ -5,19 +5,37 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
+
+// remoteGitPG is the PostgreSQL fixture with a repository of its own origin.
+// A push is delivered to every repository of an origin, so a repository that
+// shared the fixture's usual origin would see the deliveries, and the
+// refusals, of the repositories other tests left in the database.
+func remoteGitPG(t *testing.T) (*Service, *store.PostgresStore, domain.ContentHash) {
+	t.Helper()
+	service, storage, _ := collaborationPG(t)
+	unique := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
+	repo := hh(unique)
+	origin := "https://github.com/example/" + strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(unique)) + ".git"
+	if _, err := storage.PutRepo(systemTestContext(), domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: origin}); err != nil {
+		t.Fatal(err)
+	}
+	return service, storage, repo
+}
 
 // A pass stores what it reads through repository transactions. The pool of
 // this fixture holds two connections, so a store call that left its
 // transaction would show.
 func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
-	service, storage, repo := collaborationPG(t)
+	service, storage, repo := remoteGitPG(t)
 	ctx := systemTestContext()
 	stored, err := storage.GetRepo(ctx, repo)
 	if err != nil {
