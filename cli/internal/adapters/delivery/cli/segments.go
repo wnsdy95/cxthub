@@ -221,6 +221,13 @@ func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 	if withContent > 0 || result.ContentNotUploaded > 0 {
 		fmt.Fprintf(w, "Conversation: uploaded for %d sessions, not uploaded for %d\n", withContent, result.ContentNotUploaded)
 	}
+	if worktrees := result.Worktrees; worktrees != nil {
+		if worktrees.Reported {
+			fmt.Fprintf(w, "Worktrees: %d listed by name, with the branch checked out in each\n", worktrees.Listed)
+		} else {
+			fmt.Fprintf(w, "Worktrees: the list of %d was not sent in this run: %s\n", worktrees.Listed, worktrees.NotReported)
+		}
+	}
 	if branches := result.Branches; branches != nil {
 		fmt.Fprintf(w, "Branch IDs: %d branches have one (%d new) · %d of %d on origin registered\n", branches.WithID, branches.Assigned, branches.Registered, branches.OnOrigin)
 		if branches.NotAssigned != "" {

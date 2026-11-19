@@ -22,6 +22,12 @@ type BranchLedgerRemote interface {
 	RegisterBranchIDs(ctx context.Context, repoID string, branches []domain.BranchRegistration) ([]domain.BranchRegistrationResult, error)
 }
 
+// WorktreeListRemote tells the server which worktrees the repository has on
+// this computer, by name.
+type WorktreeListRemote interface {
+	ReportWorktrees(ctx context.Context, repoID, machine string, worktrees []domain.WorktreeRegistration) error
+}
+
 // CollectorStateStore keeps what the automatic collector last sent for the
 // repository holding cwd. It is a memory, never a source of facts: a lost
 // state only makes the next run send more.

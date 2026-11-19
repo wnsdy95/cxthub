@@ -65,7 +65,9 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 	})
 	// Branch IDs live in Git's own branch configuration. This is the one
 	// thing an upload writes on this computer.
-	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID), nil
+	// The server is told the names of this computer's worktrees, never their
+	// paths, so that a worktree no session worked in is still listed.
+	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID).WithWorktreeList(remote), nil
 }
 
 // newSegmentCollector is the same upload for the detached collector a hook

@@ -306,6 +306,8 @@ type SegmentPushResult struct {
 	AgentCallsWithoutSender int `json:"agent_calls_without_sender"`
 	// Branches is absent when this run does not handle branch IDs.
 	Branches *SegmentPushBranches `json:"branches,omitempty"`
+	// Worktrees is absent when this run does not report the worktree list.
+	Worktrees *SegmentPushWorktrees `json:"worktrees,omitempty"`
 }
 
 // SegmentPushBranches says what a run did about branch IDs. They are handled

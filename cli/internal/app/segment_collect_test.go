@@ -41,6 +41,7 @@ type collectorFixture struct {
 	content *segmentContentRemoteFake
 	state   *collectorStateFake
 	claude  *segmentSourceFake
+	git     *segmentGitFake
 	repo    domain.Repo
 	epoch   string
 	now     time.Time
@@ -68,6 +69,7 @@ func newCollectorFixture(t *testing.T) *collectorFixture {
 		{Provider: domain.ProviderClaude, ID: "without-commit", Scope: domain.SessionScopeFolder, Items: []domain.RecordedItem{item("w1", 10)}},
 	}}}
 	repo := func(context.Context, string) (domain.Repo, error) { return f.repo, nil }
+	f.git = git
 	f.service = NewSegmentUploadService(NewSegmentReportService(git, f.claude), f.remote, repo, "laptop").
 		WithSessionContent(f.content, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: f.source}).
 		WithCollectorState(f.state, func() time.Time { return f.now }, func(context.Context, string) string { return f.epoch })
@@ -266,6 +268,57 @@ func TestCollectorRegistersBranchesOnlyWhenTheyChanged(t *testing.T) {
 	ledger.err = nil
 	if result := f.run(t); len(ledger.reports) != 4 || result.Branches.Registered != 3 {
 		t.Fatalf("after a refused report: %+v reports=%d", result.Branches, len(ledger.reports))
+	}
+}
+
+type worktreeListRemoteFake struct {
+	repo, machine string
+	reports       [][]domain.WorktreeRegistration
+	err           error
+}
+
+func (f *worktreeListRemoteFake) ReportWorktrees(_ context.Context, repo, machine string, worktrees []domain.WorktreeRegistration) error {
+	f.repo, f.machine = repo, machine
+	f.reports = append(f.reports, worktrees)
+	return f.err
+}
+
+func TestCollectorReportsTheWorktreeListOnlyWhenItChanged(t *testing.T) {
+	f := newCollectorFixture(t)
+	f.began(time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC))
+	list := &worktreeListRemoteFake{}
+	f.service.WithWorktreeList(list)
+	for run := 1; run <= 2; run++ {
+		if result := f.run(t); result.Worktrees == nil || *result.Worktrees != (domain.SegmentPushWorktrees{Listed: 1, Reported: true}) {
+			t.Fatalf("run %d: %+v", run, result.Worktrees)
+		}
+	}
+	if len(list.reports) != 1 || list.repo != string(f.repo.ID) || list.machine != "laptop" ||
+		len(list.reports[0]) != 1 || list.reports[0][0] != (domain.WorktreeRegistration{Name: "app", Branch: "main"}) {
+		t.Fatalf("reported %d times for the same list: %+v", len(list.reports), list)
+	}
+	// A new worktree, and another branch checked out in the first one: one more report, with both.
+	f.git.records.Worktrees[0].Current = "feature"
+	f.git.records.Worktrees = append(f.git.records.Worktrees, domain.RecordedWorktree{Root: "/work/app-fix"})
+	if result := f.run(t); result.Worktrees.Listed != 2 || len(list.reports) != 2 ||
+		len(list.reports[1]) != 2 || list.reports[1][0] != (domain.WorktreeRegistration{Name: "app", Branch: "feature"}) || list.reports[1][1] != (domain.WorktreeRegistration{Name: "app-fix"}) {
+		t.Fatalf("after the list changed: %+v reports=%+v", result.Worktrees, list.reports)
+	}
+	// A refused list is not remembered as sent, and does not stop the sessions.
+	list.err = segmentUploadStatus(404)
+	f.git.records.Worktrees = f.git.records.Worktrees[:1]
+	refused := f.run(t)
+	if refused.Worktrees.Reported || refused.Worktrees.NotReported == "" || refused.Worktrees.Listed != 1 || len(refused.Sessions) == 0 {
+		t.Fatalf("a refused list: %+v sessions=%d", refused.Worktrees, len(refused.Sessions))
+	}
+	list.err = nil
+	if result := f.run(t); len(list.reports) != 4 || !result.Worktrees.Reported {
+		t.Fatalf("after a refused list: %+v reports=%d", result.Worktrees, len(list.reports))
+	}
+	// Sending to another server repository starts over.
+	f.repo.ID = domain.HashContent([]byte("another repository"))
+	if f.run(t); len(list.reports) != 5 {
+		t.Fatalf("another target: reports=%d", len(list.reports))
 	}
 }
 

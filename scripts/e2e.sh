@@ -315,6 +315,19 @@ expect "the same branches again change nothing" "$(cxt segments push --json 2>/d
 SEGOTHERID="$(python3 -c 'print("e"*32)')"
 expect "another ID for the same name joins the lifetime" "$(ccurl -sb "$JA" -X PUT "$B/repos/$CLIRID/branch-ids" -H 'Content-Type: application/json' -d "{\"branches\":[{\"name\":\"$SEGBRANCH\",\"local_id\":\"$SEGOTHERID\"}]}" | python3 -c 'import json,sys;r=json.load(sys.stdin)["branches"][0];print(r["outcome"],r["ledger_id"])')" "joined $SEGBRANCHID"
 expect "an account outside the repository cannot read the ledger" "$(code -b "$JM" "$B/repos/$CLIRID/branch-lifetimes")" 403
+# The worktree list: names and branches, never a path, and only for the member who sent it.
+SEGWORKTREE="$TMP/segments-extra"; git worktree add -q -b e2e-extra "$SEGWORKTREE"
+expect "the run lists both worktrees" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;w=json.load(sys.stdin)["worktrees"];print(w["listed"],w["reported"])')" "2 True"
+expect "the server holds their names and branches" "$(curl -sb "$JA" "$B/repos/$CLIRID/worktrees" | python3 -c 'import json,sys;print(sorted((w["name"],w.get("branch",""),w["removed"]) for w in json.load(sys.stdin)))')" "[('$(basename "$PWD")', '$SEGBRANCH', False), ('segments-extra', 'e2e-extra', False)]"
+expect "no path was sent" "$(curl -sb "$JA" "$B/repos/$CLIRID/worktrees" | grep -c "$TMP")" 0
+git worktree remove --force "$SEGWORKTREE"; git branch -q -D e2e-extra
+expect "a removed worktree keeps its name, marked removed" "$(cxt segments push --json >/dev/null 2>&1; curl -sb "$JA" "$B/repos/$CLIRID/worktrees" | python3 -c 'import json,sys;print(sorted((w["name"],w["removed"]) for w in json.load(sys.stdin)))')" "[('$(basename "$PWD")', False), ('segments-extra', True)]"
+expect "an account outside the repository cannot read the list" "$(code -b "$JM" "$B/repos/$CLIRID/worktrees")" 403
+# A manual note is masked like a captured session and readable only by its author.
+SEGNOTE="$(ccurl -sb "$JA" -X POST "$B/repos/$CLIRID/anchored-notes" -H 'Content-Type: application/json' -d "{\"target\":{\"kind\":\"commit\",\"commit\":\"$SEGSHA\"},\"body\":\"hand-applied; clone https://user:synthetic-pass@example.test/x.git\"}")"
+expect "the note is stored masked, with its author" "$(echo "$SEGNOTE" | python3 -c 'import json,sys;n=json.load(sys.stdin);print(n["target"]["kind"],"synthetic-pass" in n["body"],"redacted:password" in n["body"],bool(n["author"]))')" "commit False True True"
+expect "the author lists the note" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-notes" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 1
+expect "an account outside the repository cannot read notes" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-notes")" 403
 expect "the ledger makes no ref" "$(curl -sb "$JA" "$B/repos/$CLIRID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
 # The collector a hook wakes reads the same records and sends only what changed.
 # Runs are spaced; the test moves the last run back instead of waiting.

@@ -1336,6 +1336,14 @@ What is uploaded for a session:
 - how many of its records are copies that belong to an earlier session, and the
   agent-to-agent calls the session recorded.
 
+Each run also sends the list of the repository's worktrees on this computer:
+for each one its folder name and the branch checked out in it, with this
+computer's host name. No path is sent. The list replaces what you stored for
+this computer; a worktree that is no longer listed keeps its name on the
+server, marked removed, so that a note you wrote about it stays readable. Two
+folders with the same name are listed once. Only you can read the list. A list
+the server refuses does not stop the reports; the next run sends it again.
+
 The conversation is uploaded as one document per session:
 
 - It holds the session's own records only, in order. A record copied from an

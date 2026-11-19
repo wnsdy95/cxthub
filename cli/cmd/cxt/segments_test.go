@@ -205,6 +205,7 @@ type segmentsTestServer struct {
 	uploaded  int // chunk bodies received
 	requests  int // every request of any kind
 	branches  [][]domain.BranchRegistration
+	worktrees []string
 	answer    func(session string) (int, string)
 	token     string
 }
@@ -273,6 +274,9 @@ func (s *segmentsTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.manifests[manifest.Hash] = manifest
 		}
 		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/worktrees"):
+		s.worktrees = append(s.worktrees, string(raw))
+		_, _ = w.Write([]byte(`[]`))
 	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/branch-ids"):
 		var req struct {
 			Branches []domain.BranchRegistration `json:"branches"`
@@ -401,6 +405,11 @@ func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fake.branches, [][]domain.BranchRegistration{{{Name: "main", LocalID: mainID}}}) {
 		t.Fatalf("registered = %+v", fake.branches)
+	}
+	// The worktree is listed by its folder's name and branch, never by its path.
+	if result.Worktrees == nil || *result.Worktrees != (domain.SegmentPushWorktrees{Listed: 1, Reported: true}) || len(fake.worktrees) != 1 ||
+		!strings.Contains(fake.worktrees[0], `"worktrees":[{"name":"`+filepath.Base(repo)+`","branch":"main"}]`) || strings.Contains(fake.worktrees[0], base) {
+		t.Fatalf("worktrees = %+v sent=%q", result.Worktrees, fake.worktrees)
 	}
 	if result.Stored != 3 || result.Unchanged != 0 || result.Refused != 0 || result.ContentNotUploaded != 0 || len(result.Sessions) != 3 || len(result.Unread) != 1 {
 		t.Fatalf("result = %+v", result)
@@ -560,8 +569,8 @@ func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
 	// The fixture's sessions are recorded after automatic reading begins (now),
 	// so the first run sends all three, each with its conversation.
 	collect()
-	if len(fake.puts) != 3 || len(fake.manifests) != 3 {
-		t.Fatalf("first run: reports=%d documents=%d", len(fake.puts), len(fake.manifests))
+	if len(fake.puts) != 3 || len(fake.manifests) != 3 || len(fake.worktrees) != 1 {
+		t.Fatalf("first run: reports=%d documents=%d worktree lists=%d", len(fake.puts), len(fake.manifests), len(fake.worktrees))
 	}
 	raw, err := os.ReadFile(statePath)
 	if err != nil {

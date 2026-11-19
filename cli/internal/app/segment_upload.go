@@ -26,6 +26,8 @@ type SegmentUploadService struct {
 	branchIDs    outbound.BranchIDStore
 	branchRemote outbound.BranchLedgerRemote
 	newBranchID  func() (string, error)
+	// worktreeRemote is set by WithWorktreeList.
+	worktreeRemote outbound.WorktreeListRemote
 	// state, now and contentEpoch are set together by WithCollectorState.
 	state        outbound.CollectorStateStore
 	now          func() time.Time
@@ -53,6 +55,45 @@ func (s *SegmentUploadService) WithSessionContent(remote outbound.SessionContent
 func (s *SegmentUploadService) WithBranchIDs(store outbound.BranchIDStore, remote outbound.BranchLedgerRemote, newID func() (string, error)) *SegmentUploadService {
 	s.branchIDs, s.branchRemote, s.newBranchID = store, remote, newID
 	return s
+}
+
+// WithWorktreeList also tells the server which worktrees the repository has
+// on this computer: each folder's name and the branch checked out in it.
+func (s *SegmentUploadService) WithWorktreeList(remote outbound.WorktreeListRemote) *SegmentUploadService {
+	s.worktreeRemote = remote
+	return s
+}
+
+// pushWorktrees reports the worktree list. It does not stop the run: what
+// did not happen is said in the result and the next run tries again.
+func (s *SegmentUploadService) pushWorktrees(ctx context.Context, repoID string, worktrees []domain.RecordedWorktree, auto *collectorRun) (*domain.SegmentPushWorktrees, error) {
+	registrations := domain.WorktreeRegistrations(worktrees)
+	out := &domain.SegmentPushWorktrees{Listed: len(registrations)}
+	sent := ""
+	if auto != nil {
+		// An automatic run reports again only when the list differs from
+		// what it last reported.
+		if sent = domain.Fingerprint(struct {
+			Machine   string                        `json:"machine"`
+			Worktrees []domain.WorktreeRegistration `json:"worktrees"`
+		}{s.machine, registrations}); sent == auto.state.Worktrees {
+			out.Reported = true
+			return out, nil
+		}
+	}
+	err := s.worktreeRemote.ReportWorktrees(ctx, repoID, s.machine, registrations)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return out, ctxErr
+	}
+	if err != nil {
+		out.NotReported = err.Error()
+		return out, nil
+	}
+	out.Reported = true
+	if auto != nil {
+		auto.state.Worktrees = sent
+	}
+	return out, nil
 }
 
 // pushBranchIDs assigns and registers branch IDs. Neither step stops the
@@ -165,7 +206,7 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 	}
 	// What was sent was sent to one repository on one server.
 	if target := string(repo.ID) + "\n" + repo.RemoteURL; state.Target != target {
-		state.Target, state.Sessions, state.Branches = target, nil, ""
+		state.Target, state.Sessions, state.Branches, state.Worktrees = target, nil, "", ""
 	}
 	if state.Sessions == nil {
 		state.Sessions = map[string]domain.CollectorSessionState{}
@@ -215,6 +256,11 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 	inputs, err := s.reports.read(ctx, cwd)
 	if err != nil {
 		return result, err
+	}
+	if s.worktreeRemote != nil {
+		if result.Worktrees, err = s.pushWorktrees(ctx, string(repo.ID), inputs.Git.Worktrees, auto); err != nil {
+			return result, err
+		}
 	}
 	report, records := domain.BuildSegmentReportWithRecords(inputs)
 	plan := domain.BuildAnchoredUploadPlan(report, inputs.Git.Commits, s.machine)

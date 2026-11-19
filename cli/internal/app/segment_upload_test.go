@@ -330,6 +330,32 @@ func TestSegmentUploadAssignsAndRegistersBranchIDsFirst(t *testing.T) {
 	}
 }
 
+func TestSegmentUploadReportsTheWorktreeListByName(t *testing.T) {
+	remote, list := &segmentRemoteFake{}, &worktreeListRemoteFake{}
+	service := segmentUploadFixture(remote).WithWorktreeList(list)
+	for run := 1; run <= 2; run++ {
+		result, err := service.PushSegments(context.Background(), "/work/app")
+		if err != nil || result.Worktrees == nil || *result.Worktrees != (domain.SegmentPushWorktrees{Listed: 1, Reported: true}) {
+			t.Fatalf("run %d: %+v %v", run, result.Worktrees, err)
+		}
+	}
+	// An explicit run keeps no memory: it sends the list each time.
+	if len(list.reports) != 2 || list.machine != "laptop" || len(list.reports[0]) != 1 || list.reports[0][0] != (domain.WorktreeRegistration{Name: "app", Branch: "main"}) {
+		t.Fatalf("reports: %+v", list)
+	}
+	// A refused list is said and does not stop the sessions.
+	list.err = segmentUploadStatus(403)
+	uploads := len(remote.uploads)
+	result, err := service.PushSegments(context.Background(), "/work/app")
+	if err != nil || result.Worktrees.Reported || result.Worktrees.NotReported == "" || len(remote.uploads) <= uploads {
+		t.Fatalf("a refused list: %+v %v uploads=%d", result.Worktrees, err, len(remote.uploads)-uploads)
+	}
+	// Without the list configured the result says nothing about it.
+	if result, err := segmentUploadFixture(&segmentRemoteFake{}).PushSegments(context.Background(), "/work/app"); err != nil || result.Worktrees != nil {
+		t.Fatalf("no list configured: %+v %v", result.Worktrees, err)
+	}
+}
+
 func TestSegmentUploadGoesOnWhenBranchIDsCannotBeHandled(t *testing.T) {
 	a := strings.Repeat("a", 32)
 	newID := func() (string, error) { return strings.Repeat("b", 32), nil }

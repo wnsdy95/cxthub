@@ -25,8 +25,10 @@ type CollectorState struct {
 	Target   string                           `json:"target"`
 	Sessions map[string]CollectorSessionState `json:"sessions"`
 	// Branches is the fingerprint of the branch IDs last registered.
-	Branches string        `json:"branches,omitempty"`
-	LastRun  *CollectorRun `json:"last_run,omitempty"`
+	Branches string `json:"branches,omitempty"`
+	// Worktrees is the fingerprint of the worktree list last reported.
+	Worktrees string        `json:"worktrees,omitempty"`
+	LastRun   *CollectorRun `json:"last_run,omitempty"`
 }
 
 // CollectorSessionState is what was last sent for one session.
