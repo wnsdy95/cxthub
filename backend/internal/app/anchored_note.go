@@ -28,9 +28,15 @@ func (s *Service) reportedWorktreeStore() (outbound.ReportedWorktreeStore, error
 	return store, nil
 }
 
-// ListAnchoredNotes lists the caller's own notes. Until the rule that
-// publishes what a pushed commit explains exists, a note, like a session
-// report, is readable only by the account that wrote it.
+// ListAnchoredNotes lists the caller's own notes, and of other members'
+// notes those whose target is open to the team: a note is read by whoever
+// may see what it was written about.
+//
+//   - A commit: when the remote holds it, by the server's own read.
+//   - A lifetime of a branch name: always, because the ledger holds only
+//     lifetimes of names on the remote. A branch named without a lifetime
+//     is one that was never pushed.
+//   - A worktree: never. Worktrees are their member's alone.
 func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredNote, error) {
 	if err := validateHashes(repo); err != nil {
 		return nil, err
@@ -44,7 +50,47 @@ func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 		if err != nil {
 			return nil, err
 		}
-		return store.ListAnchoredNotes(bound, repo, actor)
+		all, err := store.ListRepositoryAnchoredNotes(bound, repo)
+		if err != nil {
+			return nil, err
+		}
+		var commits []string
+		for _, note := range all {
+			if note.Author != actor && note.Target.Kind == domain.AnchoredNoteCommit {
+				commits = append(commits, note.Target.Commit)
+			}
+		}
+		held := map[string]struct{}{}
+		if len(commits) > 0 {
+			remote, _, read, err := remoteGitCache(bound, s.meta, repo)
+			if err != nil {
+				return nil, err
+			}
+			if read {
+				stored, err := remote.GetRemoteCommits(bound, repo, commits)
+				if err != nil {
+					return nil, err
+				}
+				for _, commit := range stored {
+					held[commit.SHA] = struct{}{}
+				}
+			}
+		}
+		notes := []domain.AnchoredNote{}
+		for _, note := range all {
+			open := note.Author == actor
+			switch {
+			case open:
+			case note.Target.Kind == domain.AnchoredNoteCommit:
+				_, open = held[note.Target.Commit]
+			case note.Target.Kind == domain.AnchoredNoteBranch:
+				open = note.Target.LedgerID != ""
+			}
+			if open {
+				notes = append(notes, note)
+			}
+		}
+		return notes, nil
 	})
 }
 

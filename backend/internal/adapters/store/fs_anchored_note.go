@@ -148,6 +148,17 @@ func (s *FSStore) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 	return own, nil
 }
 
+func (s *FSStore) ListRepositoryAnchoredNotes(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredNote, error) {
+	lock := s.anchoredNoteLock(repo)
+	lock.Lock()
+	defer lock.Unlock()
+	notes, err := s.readAnchoredNotes(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	return append([]domain.AnchoredNote{}, notes...), nil
+}
+
 func (s *FSStore) DeleteAnchoredNote(ctx context.Context, repo domain.ContentHash, id string) error {
 	lock := s.anchoredNoteLock(repo)
 	lock.Lock()

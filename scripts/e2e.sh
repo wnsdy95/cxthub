@@ -329,6 +329,17 @@ SEGNOTE="$(ccurl -sb "$JA" -X POST "$B/repos/$CLIRID/anchored-notes" -H 'Content
 expect "the note is stored masked, with its author" "$(echo "$SEGNOTE" | python3 -c 'import json,sys;n=json.load(sys.stdin);print(n["target"]["kind"],"synthetic-pass" in n["body"],"redacted:password" in n["body"],bool(n["author"]))')" "commit False True True"
 expect "the author lists the note" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-notes" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 1
 expect "an account outside the repository cannot read notes" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-notes")" 403
+# A push is what opens a session to the team. This server reads no hosting
+# provider, so nothing is known to be pushed: a teammate reads nothing yet.
+JS="$TMP/s.jar"; login teammate@t.io Teammate "$JS"
+CLIWS="$(curl -sb "$JA" "$B/repositories" | python3 -c "import json,sys;print([r['id'] for r in json.load(sys.stdin) if r['slug']=='$CLISLUG'][0])")"
+ccurl -sb "$JS" -X POST "$B/invites/$(ccurl -sb "$JA" -X POST "$B/repositories/$CLIWS/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")/accept" >/dev/null
+expect "a teammate lists no session before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+expect "a teammate cannot read a session before a push" "$(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 404
+expect "a teammate cannot read its conversation before a push" "$(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=5")" 404
+expect "a teammate does not see a note about a commit not known to be pushed" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-notes" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+expect "the uploader reads the conversation through the session, without the document hash" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c "import json,sys;raw=sys.stdin.read();p=json.loads(raw);print(len(p['events']),p['offset'],p['next'],'$SEGDOC2' in raw)")" "6 0 -1 False"
+expect "a session's summary says nothing about the remote it never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;c=json.load(sys.stdin)[0]["commits"][0];print("on_remote" in c, c.get("copies"))')" "False None"
 expect "the ledger makes no ref" "$(curl -sb "$JA" "$B/repos/$CLIRID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
 # The collector a hook wakes reads the same records and sends only what changed.
 # Runs are spaced; the test moves the last run back instead of waiting.

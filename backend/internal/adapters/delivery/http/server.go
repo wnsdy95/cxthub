@@ -324,6 +324,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/branch-ids", s.guard(domain.RoleMember, s.putBranchIDs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branch-lifetimes", s.guard(domain.RoleMember, s.listBranchLifetimes))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls", s.guard(domain.RoleMember, s.anchoredSessionCalls))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/events", s.guard(domain.RoleMember, s.getAnchoredSessionEvents))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/event-fragments", s.guard(domain.RoleMember, s.getAnchoredSessionEventFragment))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-notes", s.guard(domain.RoleMember, s.listAnchoredNotes))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/anchored-notes", s.guard(domain.RoleMember, s.createAnchoredNote))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/anchored-notes/{noteID}", s.guard(domain.RoleMember, s.updateAnchoredNote))

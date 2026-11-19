@@ -59,6 +59,8 @@ func ValidateProductionStore(store any) error {
 		{"manual notes", supports[outbound.AnchoredNoteStore](store)},
 		{"reported worktrees", supports[outbound.ReportedWorktreeStore](store)},
 		{"remote Git cache", supports[outbound.RemoteGitStore](store)},
+		{"remote push record", supports[outbound.RemotePushStore](store)},
+		{"session publications", supports[outbound.AnchoredPublicationStore](store)},
 	}
 	var missing []string
 	for _, capability := range required {

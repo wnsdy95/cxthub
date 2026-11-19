@@ -867,7 +867,8 @@ components:
         first_event: { type: integer, minimum: 0, description: Where the range starts in the session's content document. Absent when the report names no content. }
         events: { type: integer, minimum: 0, description: How many events of the content document the range holds. }
         closes_turn: { type: boolean }
-        commits: { type: array, minItems: 1, items: { $ref: '#/components/schemas/AnchoredCommit' } }
+        commits: { type: array, items: { $ref: '#/components/schemas/AnchoredCommit' }, description: At least one in a report. Empty for a hidden segment. }
+        hidden: { type: boolean, description: Only in what another account reads. The segment is not open; it keeps its place so that segment numbers mean the same to everyone, and says nothing else. A report never carries it. }
     AnchoredPlace:
       type: object
       required: [worktree, rule]
@@ -897,6 +898,7 @@ components:
           items: { $ref: '#/components/schemas/AnchoredTurnMark' }
         places: { type: array, items: { $ref: '#/components/schemas/AnchoredPlace' } }
         unplaced: { type: boolean }
+        partial: { type: boolean, description: Only in what another account reads. The part is open up to here and goes on. A report never carries it. }
     AnchoredTurnMark:
       type: object
       required: [first_ordinal]
@@ -1098,7 +1100,7 @@ components:
     AnchoredSessionSummary:
       type: object
       description: A stored report without its ranges and agent calls.
-      required: [provider, session_id, sub, revision, body_hash, records, commands, segments, content, commits, updated_at]
+      required: [provider, session_id, sub, revision, body_hash, records, commands, segments, content, commits, uploader, updated_at]
       properties:
         provider: { type: string }
         session_id: { type: string }
@@ -1119,12 +1121,14 @@ components:
           items: { $ref: '#/components/schemas/AnchoredSummaryCommit' }
         uncommitted: { $ref: '#/components/schemas/AnchoredSummaryUncommitted' }
         spawned_in: { $ref: '#/components/schemas/AnchoredSummarySpawn' }
+        uploader: { type: string, description: The account the session belongs to. }
+        shared: { type: boolean, description: True when the session belongs to another account. The summary then holds only what is open to the team. }
         updated_at: { type: string, format: date-time }
     AnchoredSummarySpawn:
       type: object
       description: >-
-        Where a spawned session sits in its parent as the parent is cut now. Present when the parent is among the
-        caller's own reports and holds the spawn point.
+        Where a spawned session sits in its parent as the parent is cut now. Present when the caller may read the
+        parent at the spawn point and the parent holds it.
       required: [rule]
       properties:
         segment_no: { type: integer, minimum: 1 }
@@ -1140,6 +1144,16 @@ components:
         subject: { type: string }
         created_at: { type: string, format: date-time }
         authored_at: { type: string, format: date-time }
+        on_remote:
+          type: boolean
+          description: >-
+            Whether the remote holds this commit, from the server's own read of the Git hosting
+            provider. Absent while that is not known: the provider was not read yet, or the read
+            is unfinished and the commit was not found so far.
+        copies:
+          type: array
+          description: Commits on the remote with the same author time, author and subject as this one, when the remote does not hold it.
+          items: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
     AnchoredSummaryUncommitted:
       type: object
       description: Where the part of a session after its last commit was worked on.
@@ -1152,6 +1166,25 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AnchoredPlace' }
         unplaced: { type: boolean }
+    AnchoredEventPage:
+      type: object
+      description: A page of a session's conversation as one reader may read it.
+      required: [events, offset, next]
+      properties:
+        events:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            description: An event of the conversation, as the document view pages give it.
+            required: [event_index, event_bytes, kind]
+            properties:
+              event_index: { type: integer, minimum: 0, description: The event's place in the session's conversation. }
+              event_bytes: { type: integer, minimum: 0 }
+              deferred: { type: boolean, description: Only presentation metadata is present; read the body with view=raw or by fragments. }
+              kind: { type: string }
+        offset: { type: integer, minimum: 0 }
+        next: { type: integer, minimum: -1, description: The next event to ask for, or -1 at the end of what is open to the caller from here. }
     AnchoredNoteTarget:
       type: object
       additionalProperties: false
@@ -4857,12 +4890,17 @@ paths:
       - $ref: '#/components/parameters/DocIdentities'
     get:
       operationId: listAnchoredSessions
-      summary: List the caller's own anchored session reports
-      description: Member required. Returns only reports the signed-in account uploaded; until a session is published by the push of its commit, no other account can read it.
+      summary: List the anchored session reports the caller may read
+      description: >-
+        Member required. Returns the reports the signed-in account uploaded, and of other members' sessions
+        those with a part open to the team, listed with that part only (`shared` is true). A part opens when
+        what it explains is pushed: a segment when one of its commits, or a copy of it, is on the remote; the
+        uncommitted part up to the turns that had begun when a branch it passed through was seen pushed; a
+        spawned session when the point of its parent that spawned it is open. What was opened stays open.
       tags: [anchored-sessions]
       responses:
         '200':
-          description: The caller's reports, without their bodies
+          description: Reports, without their bodies
           content:
             application/json:
               schema:
@@ -4888,8 +4926,13 @@ paths:
         schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
     get:
       operationId: getAnchoredSession
-      summary: Read one of the caller's own anchored session reports
-      description: Member required. A report another account uploaded is reported as not found.
+      summary: Read an anchored session report
+      description: >-
+        Member required. The uploader reads all of it. Another member reads what is open to the team: a
+        segment that is not open keeps its place with `hidden` set and says nothing else, the uncommitted
+        part is cut to its open beginning (`partial` when it goes on), and the machine label, worktree names,
+        agent calls, turn marks, commit author emails and the content document's hash are left out. A
+        session nothing is open of is reported as not found.
       tags: [anchored-sessions]
       responses:
         '200':
@@ -4939,8 +4982,8 @@ paths:
         schema: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
     get:
       operationId: listAnchoredCommitSegments
-      summary: List the segments of the caller's own sessions that end at a commit
-      description: Member required. Only segments of reports the signed-in account uploaded are returned.
+      summary: List the segments that end at a commit
+      description: Member required. Returns the segments of the caller's own sessions, and of other members' sessions those that are open to the team.
       tags: [anchored-sessions]
       responses:
         '200':
@@ -5059,14 +5102,103 @@ paths:
         '422': { description: Invalid repository identity, tool or session identifier }
         '503': { description: Anchored session service unavailable }
 
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/events:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+      - name: offset
+        in: query
+        required: true
+        description: The event to start at, counted in the session's conversation.
+        schema: { type: integer, minimum: 0 }
+      - name: limit
+        in: query
+        required: false
+        schema: { type: integer, minimum: 1, maximum: 20, default: 20 }
+      - name: view
+        in: query
+        required: false
+        description: '"raw" answers the one event at offset in full, for a body a page deferred.'
+        schema: { type: string, enum: [all, raw], default: all }
+    get:
+      operationId: readAnchoredSessionEvents
+      summary: Read a session's conversation, as far as the caller may
+      description: Member required. The conversation is read by the session, never by the hash of the document that holds it. The uploader reads all of it; another member reads only the events that are open to the team. A page never crosses into what the caller may not read, and an offset there is not found.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: A page of events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredEventPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity, session identifier or event range }
+        '503': { description: The document is not ready to be read by range, or the service is unavailable }
+
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/event-fragments:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+      - name: index
+        in: query
+        required: true
+        schema: { type: integer, minimum: 0 }
+      - name: offset
+        in: query
+        required: false
+        schema: { type: integer, minimum: 0, default: 0 }
+      - name: budget
+        in: query
+        required: false
+        schema: { type: integer, minimum: 1, default: 65536 }
+    get:
+      operationId: readAnchoredSessionEventFragment
+      summary: Read a piece of one large event of a session's conversation
+      description: Member required. The same rule as the pages decides whether the caller may read the event.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: A piece of the event's JSON
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocViewFragment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity, session identifier or range }
+        '503': { description: The document is not ready to be read by range, or the service is unavailable }
+
   /repos/{repoID}/anchored-notes:
     parameters:
       - $ref: '#/components/parameters/repoID'
       - $ref: '#/components/parameters/DocIdentities'
     get:
       operationId: listAnchoredNotes
-      summary: List the caller's own manual notes
-      description: Member required. A manual note is what a person wrote about a commit, a branch or a worktree; it is kept apart from captured sessions. Only notes the signed-in account wrote are returned, oldest first.
+      summary: List the manual notes the caller may read
+      description: >-
+        Member required. A manual note is what a person wrote about a commit, a branch or a worktree; it is
+        kept apart from captured sessions. Returns the notes the signed-in account wrote, and other members'
+        notes about something that is open to the team: a commit the remote holds, or a lifetime of a branch
+        name in the ledger. A note about a worktree, or about a branch named without a lifetime, is its
+        author's alone. Oldest first.
       tags: [anchored-notes]
       responses:
         '200':
@@ -9807,7 +9939,7 @@ tags:
   - name: branch-ledger
     description: One permanent record for each lifetime of a branch name on the remote, and the IDs joined to it.
   - name: anchored-notes
-    description: What a person wrote about a commit, a branch or a worktree that no session explains. Readable only by its author until a published-by-push rule exists.
+    description: What a person wrote about a commit, a branch or a worktree that no session explains. Only its author changes or removes it; who else reads it follows what it was written about.
   - name: worktrees
     description: The working folders of the repository on a member's machines, by name. Readable only by the member who reported them.
   - name: remote-git

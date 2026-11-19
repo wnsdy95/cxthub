@@ -100,6 +100,10 @@ type AnchoredSegment struct {
 	AnchoredRange
 	ClosesTurn bool             `json:"closes_turn"`
 	Commits    []AnchoredCommit `json:"commits"`
+	// Hidden is set only in what another account reads: the segment keeps its
+	// place, so segment numbers mean the same to everyone, and says nothing
+	// else. A report never carries it.
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // AnchoredPlace is a worktree and branch an uncommitted part passed through.
@@ -120,6 +124,9 @@ type AnchoredUncommitted struct {
 	Turns    []AnchoredTurnMark `json:"turns,omitempty"`
 	Places   []AnchoredPlace    `json:"places"`
 	Unplaced bool               `json:"unplaced"`
+	// Partial is set only in what another account reads: the part is open up
+	// to here and goes on. A report never carries it.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // AnchoredTurnMark is where one turn begins: the position of its first record
@@ -205,7 +212,11 @@ type AnchoredSessionSummary struct {
 	Commits     []AnchoredSummaryCommit     `json:"commits"`
 	Uncommitted *AnchoredSummaryUncommitted `json:"uncommitted,omitempty"`
 	SpawnedIn   *AnchoredSummarySpawn       `json:"spawned_in,omitempty"`
-	UpdatedAt   time.Time                   `json:"updated_at"`
+	// Uploader is the account the session belongs to. Shared is true when
+	// that is not the caller: the summary then holds only what is open.
+	Uploader  string    `json:"uploader"`
+	Shared    bool      `json:"shared,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // AnchoredSummarySpawn places a spawned session in its parent as the parent is
@@ -224,6 +235,12 @@ type AnchoredSummaryCommit struct {
 	Subject    string     `json:"subject,omitempty"`
 	CreatedAt  *time.Time `json:"created_at,omitempty"`
 	AuthoredAt *time.Time `json:"authored_at,omitempty"`
+	// OnRemote and Copies say where the commit is now, from the server's own
+	// read of the hosting provider: on the remote itself, or as copies with
+	// the same author time, author and subject. OnRemote is absent until the
+	// provider was read: nothing is then known to be there, or missing.
+	OnRemote *bool    `json:"on_remote,omitempty"`
+	Copies   []string `json:"copies,omitempty"`
 }
 
 // AnchoredSummaryUncommitted is where the part after the last commit was
@@ -360,6 +377,9 @@ func (b AnchoredSessionBody) Validate() error {
 	next, nextEvent := 0, 0
 	seen := map[string]struct{}{}
 	for index, segment := range b.Segments {
+		if segment.Hidden {
+			return anchoredInvalid("segment %d is marked hidden; a report holds every segment", index+1)
+		}
 		if err := segment.validate(fmt.Sprintf("segment %d", index+1), next, nextEvent); err != nil {
 			return err
 		}
@@ -391,6 +411,9 @@ func (b AnchoredSessionBody) Validate() error {
 		}
 		if part.Unplaced != (len(part.Places) == 0) {
 			return anchoredInvalid("the uncommitted part is unplaced exactly when it has no place")
+		}
+		if part.Partial {
+			return anchoredInvalid("the uncommitted part is marked partial; a report holds all of it")
 		}
 		if len(part.Turns) > anchoredTurnLimit {
 			return anchoredInvalid("too many turns")
@@ -522,7 +545,7 @@ func (s AnchoredSession) Summary() AnchoredSessionSummary {
 	body := s.Body
 	summary := AnchoredSessionSummary{Provider: s.Provider, SessionID: s.SessionID, Parent: body.Parent, Sub: body.Sub, Revision: s.Revision,
 		BodyHash: s.BodyHash, Records: body.Records, Commands: body.Commands, Segments: len(body.Segments), Machine: body.Machine,
-		StartedAt: body.StartedAt, EndedAt: body.EndedAt, Content: body.Content != nil, Commits: []AnchoredSummaryCommit{}, UpdatedAt: s.UpdatedAt}
+		StartedAt: body.StartedAt, EndedAt: body.EndedAt, Content: body.Content != nil, Commits: []AnchoredSummaryCommit{}, Uploader: s.Uploader, UpdatedAt: s.UpdatedAt}
 	for index, segment := range body.Segments {
 		for _, commit := range segment.Commits {
 			summary.Commits = append(summary.Commits, AnchoredSummaryCommit{SHA: commit.SHA, SegmentNo: index + 1, Rule: commit.Rule,
@@ -548,4 +571,116 @@ func (b AnchoredSessionBody) SpawnedIn(spawn AnchoredSpawn) (AnchoredSummarySpaw
 		return AnchoredSummarySpawn{Uncommitted: true, Rule: spawn.Rule}, true
 	}
 	return AnchoredSummarySpawn{}, false
+}
+
+// OpenView returns the session as another account reads it: only what is
+// open. A segment that is not open keeps its place and says nothing else, so
+// a segment number means the same to everyone. The uncommitted part is cut to
+// its open beginning. Worktree names, the machine label, the agent calls, the
+// turn marks and the content document's hash are the uploader's alone; the
+// conversation is read through the session, never by that hash. It answers
+// false when nothing of the session is open.
+func (s AnchoredSession) OpenView(open []AnchoredPublishedRange) (AnchoredSession, bool) {
+	if len(open) == 0 {
+		return AnchoredSession{}, false
+	}
+	covered := func(first, last int) bool {
+		for _, span := range PublishedOrdinals(open) {
+			if span[0] <= first && last < span[1] {
+				return true
+			}
+		}
+		return false
+	}
+	body := s.Body
+	view := AnchoredSessionBody{RuleVersion: body.RuleVersion, Sub: body.Sub, Parent: body.Parent, Scope: body.Scope, StartedAt: body.StartedAt,
+		Segments: make([]AnchoredSegment, len(body.Segments))}
+	if body.Spawn != nil {
+		spawn := *body.Spawn
+		view.Spawn = &spawn
+	}
+	shown := false
+	for index, segment := range body.Segments {
+		if !covered(segment.FirstOrdinal, segment.LastOrdinal) {
+			view.Segments[index] = AnchoredSegment{Commits: []AnchoredCommit{}, Hidden: true}
+			continue
+		}
+		segment.Commits = append([]AnchoredCommit{}, segment.Commits...)
+		for position := range segment.Commits {
+			segment.Commits[position].AuthorEmail = ""
+		}
+		view.Segments[index] = segment
+		view.Records += segment.LastOrdinal - segment.FirstOrdinal + 1
+		view.Commands += segment.Commands
+		shown = true
+	}
+	if part := body.Uncommitted; part != nil {
+		// The part opens from its beginning; find how far.
+		end := part.FirstOrdinal
+		for _, span := range PublishedOrdinals(open) {
+			if span[0] <= part.FirstOrdinal && part.FirstOrdinal < span[1] {
+				end = span[1]
+			}
+		}
+		if end > part.LastOrdinal+1 {
+			end = part.LastOrdinal + 1
+		}
+		if end > part.FirstOrdinal {
+			cut := AnchoredUncommitted{AnchoredRange: AnchoredRange{FirstOrdinal: part.FirstOrdinal, LastOrdinal: end - 1, StartedAt: part.StartedAt, FirstEvent: part.FirstEvent},
+				Places: []AnchoredPlace{}, Partial: end <= part.LastOrdinal}
+			if cut.Partial {
+				for _, span := range PublishedEvents(open) {
+					if span[0] <= part.FirstEvent && part.FirstEvent <= span[1] && span[1]-part.FirstEvent > cut.Events {
+						cut.Events = span[1] - part.FirstEvent
+					}
+				}
+				if cut.Events > part.Events {
+					cut.Events = part.Events
+				}
+			} else {
+				cut.First, cut.Last, cut.Commands, cut.EndedAt, cut.Events = part.First, part.Last, part.Commands, part.EndedAt, part.Events
+			}
+			seen := map[string]struct{}{}
+			for _, place := range part.Places {
+				if _, dup := seen[place.Branch]; dup || place.Branch == "" {
+					continue
+				}
+				seen[place.Branch] = struct{}{}
+				cut.Places = append(cut.Places, AnchoredPlace{Branch: place.Branch, Rule: place.Rule})
+			}
+			view.Uncommitted = &cut
+			view.Records += end - part.FirstOrdinal
+			shown = true
+		}
+	}
+	if !shown {
+		return AnchoredSession{}, false
+	}
+	if body.Content != nil {
+		view.Content = &AnchoredContent{Events: body.Content.Events}
+	}
+	out := s
+	out.Body = view
+	return out, true
+}
+
+// OpenSummary lists a session as another account sees it in a list.
+func (s AnchoredSession) OpenSummary(open []AnchoredPublishedRange) (AnchoredSessionSummary, bool) {
+	view, ok := s.OpenView(open)
+	if !ok {
+		return AnchoredSessionSummary{}, false
+	}
+	summary := view.Summary()
+	summary.Shared, summary.Segments, summary.Commits = true, 0, []AnchoredSummaryCommit{}
+	for index, segment := range view.Body.Segments {
+		if segment.Hidden {
+			continue
+		}
+		summary.Segments++
+		for _, commit := range segment.Commits {
+			summary.Commits = append(summary.Commits, AnchoredSummaryCommit{SHA: commit.SHA, SegmentNo: index + 1, Rule: commit.Rule,
+				Subject: commit.Subject, CreatedAt: commit.CreatedAt, AuthoredAt: commit.AuthoredAt})
+		}
+	}
+	return summary, true
 }

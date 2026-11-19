@@ -48,6 +48,10 @@ func (backend *anchoredSessionHTTPBackend) AnchoredSessionCalls(context.Context,
 	return nil, backend.err
 }
 
+func (backend *anchoredSessionHTTPBackend) AnchoredSessionContentAccess(context.Context, domain.ContentHash, domain.ProviderKind, string) (domain.AnchoredContentAccess, error) {
+	return domain.AnchoredContentAccess{}, backend.err
+}
+
 func (backend *anchoredSessionHTTPBackend) ListAnchoredSessions(ctx context.Context, _ domain.ContentHash) ([]domain.AnchoredSessionSummary, error) {
 	backend.seen(ctx)
 	return []domain.AnchoredSessionSummary{}, backend.err

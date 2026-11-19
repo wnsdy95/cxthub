@@ -45,7 +45,7 @@ separate DML credentials. An unprepared or mismatched schema refuses startup.
 This is a release requirement, not an automatically provisioned Render service
 or pre-deploy hook. No new resources or credential grants are activated here.
 
-Use the complete **164-migration** bundle and digest in the
+Use the complete **165-migration** bundle and digest in the
 [current release catalog](../docs/DATABASE_MIGRATIONS.md#current-release-catalog).
 Bounded API, MCP, and worker roles use process admission **protocol 7**. The
 historical schema-152 and protocol-v2/v3 qualifications are not current release

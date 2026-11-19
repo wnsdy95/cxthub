@@ -83,3 +83,14 @@ type RemoteGitStore interface {
 	// first.
 	RemotePullsListing(ctx context.Context, repo domain.ContentHash, shas []string) (map[string][]int, error)
 }
+
+// RemotePushStore keeps when the server saw each branch of the remote pushed.
+// It belongs to the same origin as the rest of what was read from the
+// provider and is removed with it.
+type RemotePushStore interface {
+	// RecordRemotePushes adds pushes: one for each time a branch was seen
+	// pushed. The same branch at the same time again adds nothing.
+	RecordRemotePushes(ctx context.Context, repo domain.ContentHash, pushes []domain.RemoteBranchPush) error
+	// ListRemotePushes lists the pushes of the named branches, oldest first.
+	ListRemotePushes(ctx context.Context, repo domain.ContentHash, branches []string) ([]domain.RemoteBranchPush, error)
+}

@@ -160,6 +160,16 @@ func (s *FSStore) ListAnchoredSessions(ctx context.Context, repo domain.ContentH
 	return sessions, nil
 }
 
+func (s *FSStore) ListRepositoryAnchoredSessions(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSession, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	lock := s.anchoredSessionLock(repo)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.listAnchoredSessions(ctx, repo)
+}
+
 func (s *FSStore) PutAnchoredSession(ctx context.Context, session domain.AnchoredSession) error {
 	if err := validateAnchoredSession(session); err != nil {
 		return err

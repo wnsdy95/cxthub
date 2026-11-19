@@ -68,6 +68,21 @@ func (s *PostgresStore) ListAnchoredNotes(ctx context.Context, repo domain.Conte
 	if err != nil {
 		return nil, err
 	}
+	return collectAnchoredNotes(rows, repo)
+}
+
+func (s *PostgresStore) ListRepositoryAnchoredNotes(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredNote, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	rows, err := s.db(ctx).Query(ctx, `SELECT body FROM anchored_notes WHERE repo_id=$1 ORDER BY created_at, id`, repo)
+	if err != nil {
+		return nil, err
+	}
+	return collectAnchoredNotes(rows, repo)
+}
+
+func collectAnchoredNotes(rows pgx.Rows, repo domain.ContentHash) ([]domain.AnchoredNote, error) {
 	defer rows.Close()
 	notes := []domain.AnchoredNote{}
 	for rows.Next() {

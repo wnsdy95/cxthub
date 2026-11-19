@@ -41,4 +41,6 @@ type ProductionStore interface {
 	AnchoredNoteStore
 	ReportedWorktreeStore
 	RemoteGitStore
+	RemotePushStore
+	AnchoredPublicationStore
 }

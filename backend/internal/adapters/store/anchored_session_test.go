@@ -56,6 +56,18 @@ func checkAnchoredSessionPersistence(t *testing.T, ctx context.Context, storage 
 	if listed, err := storage.ListAnchoredSessions(ctx, repo, "uploader-1"); err != nil || len(listed) != 1 || listed[0].SessionID != "session-1" || listed[0].Provider != domain.ProviderClaude {
 		t.Fatalf("one uploader's reports: %+v %v", listed, err)
 	}
+	// The repository-wide list holds every uploader's reports.
+	if all, err := storage.ListRepositoryAnchoredSessions(ctx, repo); err != nil || len(all) < 1 || all[0].RepoID != repo {
+		t.Fatalf("every uploader's reports: %+v %v", all, err)
+	} else {
+		uploaders := map[string]int{}
+		for _, session := range all {
+			uploaders[session.Uploader]++
+		}
+		if own, _ := storage.ListAnchoredSessions(ctx, repo, "uploader-1"); uploaders["uploader-1"] != len(own) {
+			t.Fatalf("uploader-1 has %d reports, the repository-wide list holds %d of them", len(own), uploaders["uploader-1"])
+		}
+	}
 	if listed, err := storage.ListAnchoredSessions(ctx, repo, "nobody"); err != nil || len(listed) != 0 {
 		t.Fatalf("an unknown uploader's reports: %+v %v", listed, err)
 	}

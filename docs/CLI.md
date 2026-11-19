@@ -1372,12 +1372,32 @@ The same is done for a session whose records changed while they were read, or
 whose document the server did not take; each one says why. That is not a
 failure of the command: the next run uploads it.
 
-On the server a report belongs to the account that uploaded it, and only that
-account can read it. The document a report names is an ordinary repository
-document: this command shows its hash to nobody else, but the server does not
-yet keep a member who knows the hash from reading it. Uploading again replaces
-the session's report as a whole; a report with the same content changes
-nothing. Reports do not advance the repository revision.
+On the server a report belongs to the account that uploaded it. A push is what
+opens it to the other members of the repository, part by part:
+
+- a segment, when one of its commits, or a cherry-picked or rebased copy of
+  it, is on the remote;
+- the uncommitted part, up to the turns that had begun when a branch it passed
+  through was pushed. The turn in progress at the push is included whole;
+- a spawned session as a whole, when the point of its parent that spawned it
+  is open.
+
+The server decides this from its own read of the Git hosting provider, never
+from what a CLI says. The time of a push is the time the server saw the branch
+changed, which can be a few minutes after the push itself, and the first read
+of a repository says nothing about when its branches were pushed. What was
+opened stays open: a forced push that removes the commit, or cutting the
+session another way, takes nothing back.
+
+Another member reads only the open parts. Worktree names, the computer's host
+name, the agent calls, and the author email of a commit stay with the
+uploader. The conversation is read through the session; the hash of the
+document that holds it is shown to nobody else. That document is still an
+ordinary repository document, so the server does not keep a member who learned
+the hash some other way from reading it.
+
+Uploading again replaces the session's report as a whole; a report with the
+same content changes nothing. Reports do not advance the repository revision.
 
 Branch IDs. Before the sessions, every branch of the repository that has no ID
 gets a random one, stored by Git with the branch itself:

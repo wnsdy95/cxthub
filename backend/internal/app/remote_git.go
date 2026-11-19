@@ -229,7 +229,15 @@ func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, fa
 		}
 		next := pass.state
 		next.RequestedAt = stored.RequestedAt
-		return worker.store.FinishRemoteGitSync(tx, next.Ended(*pass.state.AttemptedAt, failed, pass.cut))
+		if err := worker.store.FinishRemoteGitSync(tx, next.Ended(*pass.state.AttemptedAt, failed, pass.cut)); err != nil {
+			return err
+		}
+		if failed {
+			return nil
+		}
+		// What was read may open parts of sessions to the team: a commit that
+		// is now on the remote, a branch that was pushed.
+		return openAnchoredSessions(tx, worker.work.meta, pass.repo, nil, worker.now())
 	})
 }
 
@@ -317,7 +325,23 @@ func (pass *remoteGitPass) branches(ctx context.Context) ([]string, error) {
 		}
 		return branches[left].Name < branches[right].Name
 	})
+	// A branch whose newest commit is another one than at the read before
+	// was pushed in between. The first read finds every branch new and says
+	// nothing about when any of them was pushed.
+	previous, err := pass.sync.store.ListRemoteBranches(ctx, pass.repo)
+	if err != nil {
+		return nil, err
+	}
+	var pushes []domain.RemoteBranchPush
+	if len(previous) > 0 || pass.state.SyncedAt != nil {
+		pushes = domain.RemoteBranchPushes(previous, branches, pass.sync.now())
+	}
 	if err := pass.sync.write(ctx, pass.repo, pass.origin, func(tx context.Context) error {
+		if log, ok := pass.sync.store.(outbound.RemotePushStore); ok {
+			if err := log.RecordRemotePushes(tx, pass.repo, pushes); err != nil {
+				return err
+			}
+		}
 		return pass.sync.store.ReplaceRemoteBranches(tx, pass.repo, branches)
 	}); err != nil {
 		return nil, err

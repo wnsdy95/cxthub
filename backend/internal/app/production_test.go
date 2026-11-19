@@ -53,6 +53,14 @@ type noRemoteGit struct {
 	productionFixture
 	ClaimRemoteGitSync int
 }
+type noRemotePushes struct {
+	productionFixture
+	RecordRemotePushes int
+}
+type noAnchoredPublications struct {
+	productionFixture
+	PutAnchoredPublication int
+}
 
 func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 	for _, row := range []struct {
@@ -65,7 +73,7 @@ func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 		{noRevision{}, "evidence revisions"}, {noFence{}, "PR lease fencing"},
 		{noAnchoredSessions{}, "anchored session reports"}, {noBranchLedger{}, "branch ledger"},
 		{noAnchoredNotes{}, "manual notes"}, {noReportedWorktrees{}, "reported worktrees"},
-		{noRemoteGit{}, "remote Git cache"},
+		{noRemoteGit{}, "remote Git cache"}, {noRemotePushes{}, "remote push record"}, {noAnchoredPublications{}, "session publications"},
 		{store.NewFSStore(t.TempDir()), "repository write/read transactions"},
 	} {
 		if err := ValidateProductionStore(row.value); err == nil || !strings.Contains(err.Error(), row.want) {

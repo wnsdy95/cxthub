@@ -56,6 +56,33 @@ func (s *PostgresStore) GetAnchoredSession(ctx context.Context, repo domain.Cont
 	return session, nil
 }
 
+func (s *PostgresStore) ListRepositoryAnchoredSessions(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSession, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	rows, err := s.db(ctx).Query(ctx, `SELECT `+anchoredSessionColumns+`
+ FROM anchored_sessions WHERE repo_id=$1 ORDER BY provider, session_id`, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sessions := []domain.AnchoredSession{}
+	for rows.Next() {
+		session, err := scanAnchoredSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		if session.RepoID != repo {
+			return nil, domain.ErrIntegrity
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
 func (s *PostgresStore) ListAnchoredSessions(ctx context.Context, repo domain.ContentHash, uploader string) ([]domain.AnchoredSession, error) {
 	if err := validateHash(repo); err != nil {
 		return nil, err

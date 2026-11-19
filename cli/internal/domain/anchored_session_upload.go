@@ -3,6 +3,7 @@ package domain
 import (
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 )
 
 // AnchoredSessionRuleVersion names the rule set BuildSegmentReport applies.
@@ -231,7 +232,7 @@ func BuildAnchoredUploadPlan(report SegmentReport, commits []RecordedCommit, mac
 				commit := AnchoredCommit{SHA: link.SHA, Rule: link.Rule}
 				if fact, ok := facts[link.SHA]; ok {
 					commit.CreatedAt, commit.AuthoredAt = anchoredCommitTime(fact.CreatedSec), anchoredCommitTime(fact.AuthoredSec)
-					commit.AuthorEmail, commit.Subject = fact.AuthorEmail, fact.Subject
+					commit.AuthorEmail, commit.Subject = fact.AuthorEmail, AnchoredCommitSubject(fact.Subject)
 				}
 				out.Commits = append(out.Commits, commit)
 			}
@@ -348,4 +349,23 @@ type SegmentPushBranches struct {
 	// NotAssigned and NotRegistered say why a step did not happen.
 	NotAssigned   string `json:"not_assigned,omitempty"`
 	NotRegistered string `json:"not_registered,omitempty"`
+}
+
+// AnchoredCommitSubjectLimit bounds a commit subject in a report, in bytes.
+// The server keeps the subjects it reads from the hosting provider to the
+// same length, cut the same way, so that a copy of a commit is still found by
+// its author time, author and subject.
+const AnchoredCommitSubjectLimit = 1024
+
+// AnchoredCommitSubject cuts a subject to the limit at the start of a
+// character.
+func AnchoredCommitSubject(subject string) string {
+	if len(subject) <= AnchoredCommitSubjectLimit {
+		return subject
+	}
+	cut := AnchoredCommitSubjectLimit
+	for cut > 0 && !utf8.RuneStart(subject[cut]) {
+		cut--
+	}
+	return subject[:cut]
 }

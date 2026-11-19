@@ -38,6 +38,8 @@ type fsRemoteGit struct {
 	Commits      []domain.RemoteCommit `json:"commits"`
 	Branches     []domain.RemoteBranch `json:"branches"`
 	Pulls        []domain.RemotePull   `json:"pulls"`
+	// Pushes are the times a branch was seen with another newest commit.
+	Pushes []domain.RemoteBranchPush `json:"pushes,omitempty"`
 }
 
 // remoteGitCommit returns a commit as both stores hand it out: with a list of
@@ -507,4 +509,72 @@ func (s *FSStore) RemotePullsListing(ctx context.Context, repo domain.ContentHas
 		sort.Ints(numbers)
 	}
 	return listing, nil
+}
+
+var _ outbound.RemotePushStore = (*FSStore)(nil)
+
+func (s *FSStore) RecordRemotePushes(ctx context.Context, repo domain.ContentHash, pushes []domain.RemoteBranchPush) error {
+	for _, push := range pushes {
+		if err := push.Validate(); err != nil {
+			return err
+		}
+	}
+	if len(pushes) == 0 {
+		return nil
+	}
+	return s.changeRemoteGit(ctx, repo, func(stored *fsRemoteGit) (bool, error) {
+		type sighting struct {
+			branch string
+			at     time.Time
+		}
+		seen := make(map[sighting]struct{}, len(stored.Pushes))
+		for _, push := range stored.Pushes {
+			seen[sighting{push.Branch, push.SeenAt.UTC()}] = struct{}{}
+		}
+		changed := false
+		for _, push := range pushes {
+			push.SeenAt = push.SeenAt.UTC()
+			key := sighting{push.Branch, push.SeenAt}
+			if _, had := seen[key]; had {
+				continue
+			}
+			seen[key] = struct{}{}
+			stored.Pushes = append(stored.Pushes, push)
+			changed = true
+		}
+		return changed, nil
+	})
+}
+
+func (s *FSStore) ListRemotePushes(ctx context.Context, repo domain.ContentHash, branches []string) ([]domain.RemoteBranchPush, error) {
+	stored, err := s.viewRemoteGit(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	wanted := make(map[string]struct{}, len(branches))
+	for _, branch := range branches {
+		wanted[branch] = struct{}{}
+	}
+	pushes := []domain.RemoteBranchPush{}
+	for _, push := range stored.Pushes {
+		if _, ok := wanted[push.Branch]; ok {
+			push.SeenAt = push.SeenAt.UTC()
+			pushes = append(pushes, push)
+		}
+	}
+	sortRemotePushes(pushes)
+	return pushes, nil
+}
+
+func sortRemotePushes(pushes []domain.RemoteBranchPush) {
+	sort.Slice(pushes, func(left, right int) bool {
+		a, b := pushes[left], pushes[right]
+		if !a.SeenAt.Equal(b.SeenAt) {
+			return a.SeenAt.Before(b.SeenAt)
+		}
+		if a.Branch != b.Branch {
+			return a.Branch < b.Branch
+		}
+		return a.SHA < b.SHA
+	})
 }

@@ -81,6 +81,7 @@ func (s *PostgresStore) ClaimRemoteGitSync(ctx context.Context, repo domain.Cont
 			`DELETE FROM remote_git_commits WHERE repo_id=$1`,
 			`DELETE FROM remote_git_branches WHERE repo_id=$1`,
 			`DELETE FROM remote_git_pulls WHERE repo_id=$1`,
+			`DELETE FROM remote_git_pushes WHERE repo_id=$1`,
 		} {
 			if _, err := tx.Exec(ctx, statement, repo); err != nil {
 				return domain.RemoteGitState{}, err
@@ -476,4 +477,50 @@ func (s *PostgresStore) RemotePullsListing(ctx context.Context, repo domain.Cont
 		listing[sha] = append(listing[sha], number)
 	}
 	return listing, rows.Err()
+}
+
+var _ outbound.RemotePushStore = (*PostgresStore)(nil)
+
+func (s *PostgresStore) RecordRemotePushes(ctx context.Context, repo domain.ContentHash, pushes []domain.RemoteBranchPush) error {
+	if err := validateHash(repo); err != nil {
+		return err
+	}
+	branches, shas, times := make([]string, 0, len(pushes)), make([]string, 0, len(pushes)), make([]time.Time, 0, len(pushes))
+	for _, push := range pushes {
+		if err := push.Validate(); err != nil {
+			return err
+		}
+		branches, shas, times = append(branches, push.Branch), append(shas, push.SHA), append(times, push.SeenAt.UTC())
+	}
+	if len(pushes) == 0 {
+		return nil
+	}
+	_, err := s.db(ctx).Exec(ctx, `INSERT INTO remote_git_pushes(repo_id,branch,sha,seen_at)
+ SELECT $1, seen.branch, seen.sha, seen.seen_at FROM unnest($2::text[],$3::text[],$4::timestamptz[]) AS seen(branch,sha,seen_at)
+ ON CONFLICT (repo_id,branch,seen_at) DO NOTHING`, repo, branches, shas, times)
+	return err
+}
+
+func (s *PostgresStore) ListRemotePushes(ctx context.Context, repo domain.ContentHash, branches []string) ([]domain.RemoteBranchPush, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	if branches == nil {
+		branches = []string{}
+	}
+	rows, err := s.db(ctx).Query(ctx, `SELECT branch, sha, seen_at FROM remote_git_pushes WHERE repo_id=$1 AND branch = ANY($2::text[]) ORDER BY seen_at, branch, sha`, repo, branches)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	pushes := []domain.RemoteBranchPush{}
+	for rows.Next() {
+		var push domain.RemoteBranchPush
+		if err := rows.Scan(&push.Branch, &push.SHA, &push.SeenAt); err != nil {
+			return nil, err
+		}
+		push.SeenAt = push.SeenAt.UTC()
+		pushes = append(pushes, push)
+	}
+	return pushes, rows.Err()
 }

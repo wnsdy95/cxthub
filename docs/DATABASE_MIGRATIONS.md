@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 164-file SQL bundle, from
-`0001_init.sql` through `0164_remote_git.sql`. Its catalog
+This source release requires the complete 165-file SQL bundle, from
+`0001_init.sql` through `0165_anchored_publications.sql`. Its catalog
 digest is
-`4fed4201157dff35ffec98cd7acadcbe87d3a6a136400270d11ef126a280dbb0`, matching
+`ef0590e20106abb00ec95c083e60dda8e06d963c108d563de12a0b5bd1801528`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current
@@ -73,7 +73,7 @@ even if that catalog was valid for an earlier release.
 There is no automatic destructive schema downgrade. Do not remove Codex
 settings, edit migration receipts, rewrite historical SQL, or point an old
 binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with the actual database catalog (164 after this release's upgrade),
+compatible with the actual database catalog (165 after this release's upgrade),
 or a separately verified pre-upgrade backup recovery that explicitly accounts
 for writes after the backup. Local fixture tests are not evidence that a
 production backup or recovery has been tested.
@@ -91,7 +91,7 @@ leave the previous constraint intact.
 The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
 That bundle belongs only to the corresponding historical artifacts, not the
-current 164-file release. Current verify-only startup still checks the public
+current 165-file release. Current verify-only startup still checks the public
 table and its validated, local, exact kind constraint. A receipt without the
 expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
 is not a compatible schema. Verification does not repair these conditions.

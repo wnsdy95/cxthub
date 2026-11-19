@@ -40,6 +40,13 @@ func checkAnchoredNotePersistence(t *testing.T, ctx context.Context, storage out
 	if got, err := storage.GetAnchoredNote(ctx, repo, worktree.ID); err != nil || !reflect.DeepEqual(got, worktree) {
 		t.Fatalf("one note: %+v %v", got, err)
 	}
+	// Every author's notes, oldest first.
+	if listed, err := storage.ListRepositoryAnchoredNotes(ctx, repo); err != nil || !reflect.DeepEqual(listed, []domain.AnchoredNote{worktree, commit, branch}) {
+		t.Fatalf("the repository's notes:\n got %+v\nwant %+v\n%v", listed, []domain.AnchoredNote{worktree, commit, branch}, err)
+	}
+	if listed, err := storage.ListRepositoryAnchoredNotes(ctx, domain.HashContent([]byte(string(repo)+"/elsewhere"))); err != nil || listed == nil || len(listed) != 0 {
+		t.Fatalf("the notes of another repository: %#v %v", listed, err)
+	}
 	// A note is replaced as a whole.
 	commit.Body, commit.UpdatedAt = "rewritten", commit.UpdatedAt.Add(time.Hour)
 	if err := storage.PutAnchoredNote(ctx, commit); err != nil {

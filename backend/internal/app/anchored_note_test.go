@@ -31,7 +31,9 @@ func TestAnchoredNoteBelongsToItsAuthorAndIsMasked(t *testing.T) {
 	if listed, err := service.ListAnchoredNotes(alice, repo); err != nil || len(listed) != 2 || listed[0].ID != note.ID || listed[1].ID != worktree.ID {
 		t.Fatalf("own notes, oldest first: %+v %v", listed, err)
 	}
-	// To another member the note does not exist: not listed, not changed, not removed.
+	// The commit is not known to be on the remote and a worktree is its
+	// member's alone, so to another member the notes do not exist: not
+	// listed, not changed, not removed.
 	if listed, err := service.ListAnchoredNotes(bob, repo); err != nil || listed == nil || len(listed) != 0 {
 		t.Fatalf("another member's list: %#v %v", listed, err)
 	}
@@ -62,7 +64,7 @@ func TestAnchoredNoteBelongsToItsAuthorAndIsMasked(t *testing.T) {
 	if listed, err := service.ListAnchoredNotes(alice, repo); err != nil || len(listed) != 1 || listed[0].Body != rewritten.Body {
 		t.Fatalf("after removing: %+v %v", listed, err)
 	}
-	// Notes are read only by their author, so nothing an open page shows changed.
+	// Notes are not part of what the repository revision covers.
 	after, err := service.GetRepositoryView(systemTestContext(), repo)
 	if err != nil || !reflect.DeepEqual(after.Revision, before.Revision) {
 		t.Fatalf("a note moved the repository revision: %+v -> %+v %v", before.Revision, after.Revision, err)
@@ -234,5 +236,74 @@ func TestAnchoredSessionCallsGatherWhatASessionSentAndReceived(t *testing.T) {
 	}
 	if _, err := service.AnchoredSessionCalls(alice, repo, domain.ProviderCodex, "a/b"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a malformed identifier: %v", err)
+	}
+}
+
+// A note is read by whoever may see what it was written about.
+func TestAnchoredNoteIsReadWithWhatItWasWrittenAbout(t *testing.T) {
+	fixture := anchoredPublicationFixture(t)
+	service, provider, repo := fixture.service, fixture.provider, fixture.repo
+	alice, bob := anchoredActor("member-a"), anchoredActor("member-b")
+	pushed := provider.chain(1, "")
+	provider.heads["main"] = pushed
+	local := anchoredTestSHA("d")
+	lifetime := branchLedgerTestID("a")
+	if _, err := service.RegisterBranchIDs(alice, repo, []domain.BranchRegistration{{Name: "topic", LocalID: lifetime}}); err != nil {
+		t.Fatal(err)
+	}
+	write := func(target domain.AnchoredNoteTarget, text string) domain.AnchoredNote {
+		t.Helper()
+		note, err := service.CreateAnchoredNote(alice, repo, target, text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return note
+	}
+	onRemote := write(domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteCommit, Commit: pushed}, "about a pushed commit")
+	onDisk := write(domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteCommit, Commit: local}, "about a local commit")
+	onBranch := write(domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteBranch, Branch: "topic", LedgerID: lifetime}, "about a pushed branch")
+	write(domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteBranch, Branch: "scratch"}, "about a branch that was never pushed")
+	write(domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteWorktree, Worktree: "app", Machine: "laptop"}, "about a worktree")
+	shared := func() []string {
+		t.Helper()
+		notes, err := service.ListAnchoredNotes(bob, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, note := range notes {
+			if note.Author != "member-a" {
+				t.Fatalf("a note lost its author: %+v", note)
+			}
+			ids = append(ids, note.ID)
+		}
+		return ids
+	}
+	// Before the server read the remote, nothing is known to be on it.
+	if ids := shared(); !reflect.DeepEqual(ids, []string{onBranch.ID}) {
+		t.Fatalf("open before the remote was read: %v", ids)
+	}
+	if _, err := fixture.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if ids := shared(); !reflect.DeepEqual(ids, []string{onRemote.ID, onBranch.ID}) {
+		t.Fatalf("open after the remote was read: %v", ids)
+	}
+	provider.commits[local] = domain.RemoteCommit{SHA: local, Parents: []string{pushed}, AuthorName: "Member A", AuthorEmail: "member-a@example.com",
+		AuthoredAt: remoteGitTestTime(70), CommittedAt: remoteGitTestTime(70), Subject: "Pushed work"}
+	provider.heads["main"] = local
+	fixture.nextPass(t)
+	if ids := shared(); !reflect.DeepEqual(ids, []string{onRemote.ID, onDisk.ID, onBranch.ID}) {
+		t.Fatalf("open after the local commit was pushed: %v", ids)
+	}
+	// Reading a note is not owning it.
+	if _, err := service.UpdateAnchoredNote(bob, repo, onRemote.ID, "taken over"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("another member rewrote a note they can read: %v", err)
+	}
+	if err := service.DeleteAnchoredNote(bob, repo, onRemote.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("another member removed a note they can read: %v", err)
+	}
+	if own, err := service.ListAnchoredNotes(alice, repo); err != nil || len(own) != 5 {
+		t.Fatalf("the author's own list: %+v %v", own, err)
 	}
 }

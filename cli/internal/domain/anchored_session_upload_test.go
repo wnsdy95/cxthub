@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func anchoredUploadReport() (SegmentReport, []RecordedCommit) {
@@ -150,5 +151,20 @@ func TestAnchoredUploadPlacesEveryTurnOfTheUncommittedPartInTheContent(t *testin
 		if other.AttachContent(ref, 9, make([]int, len(counts)), counts) {
 			t.Errorf("%s was attached", name)
 		}
+	}
+}
+
+func TestAnchoredCommitSubjectIsCutAtACharacter(t *testing.T) {
+	if got := AnchoredCommitSubject("Fix the parser"); got != "Fix the parser" {
+		t.Fatalf("a short subject changed: %q", got)
+	}
+	exact := strings.Repeat("a", AnchoredCommitSubjectLimit)
+	if got := AnchoredCommitSubject(exact); got != exact {
+		t.Fatalf("a subject at the limit changed: %d bytes", len(got))
+	}
+	// The limit falls inside a two-byte character, which is left out whole.
+	long := strings.Repeat("a", AnchoredCommitSubjectLimit-1) + "é and more"
+	if got := AnchoredCommitSubject(long); got != strings.Repeat("a", AnchoredCommitSubjectLimit-1) || !utf8.ValidString(got) {
+		t.Fatalf("a long subject was cut to %d bytes", len(got))
 	}
 }
