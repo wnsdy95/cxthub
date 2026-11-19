@@ -24,6 +24,9 @@ const (
 	remoteGitLease       = 2 * time.Minute
 	remoteGitPassTimeout = 90 * time.Second
 	remoteGitTick        = 30 * time.Second
+	// remoteGitOpenTimeout bounds applying the publication rule after a pass,
+	// which reads every session report of the repository.
+	remoteGitOpenTimeout = 60 * time.Second
 )
 
 func (s *Service) remoteGitStore() (outbound.RemoteGitStore, error) {
@@ -211,7 +214,13 @@ func (worker *RemoteGitSync) SyncRemoteGit(ctx context.Context, repo domain.Cont
 	}
 	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	return errors.Join(failure, worker.finish(finish, pass, failure != nil))
+	if err := worker.finish(finish, pass, failure != nil); err != nil || failure != nil {
+		return errors.Join(failure, err)
+	}
+	if err := worker.openSessions(ctx, repo); err != nil {
+		log.Printf("Remote Git read %s: opening sessions deferred: class=%s", repo, gitObservationFailureClass(err))
+	}
+	return nil
 }
 
 // finish stores how the pass ended and releases its claim. A pass that no
@@ -229,15 +238,21 @@ func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, fa
 		}
 		next := pass.state
 		next.RequestedAt = stored.RequestedAt
-		if err := worker.store.FinishRemoteGitSync(tx, next.Ended(*pass.state.AttemptedAt, failed, pass.cut)); err != nil {
-			return err
-		}
-		if failed {
-			return nil
-		}
-		// What was read may open parts of sessions to the team: a commit that
-		// is now on the remote, a branch that was pushed.
-		return openAnchoredSessions(tx, worker.work.meta, pass.repo, nil, worker.now())
+		return worker.store.FinishRemoteGitSync(tx, next.Ended(*pass.state.AttemptedAt, failed, pass.cut))
+	})
+}
+
+// openSessions applies the publication rule after a pass that finished: what
+// was read may open parts of sessions to the team, a commit that is now on
+// the remote or a branch that was pushed. It has its own transaction and
+// time, so that a repository with many sessions does not hold the pass's
+// state; a failure is tried again after the next pass, since the rule only
+// adds what the facts support.
+func (worker *RemoteGitSync) openSessions(ctx context.Context, repo domain.ContentHash) error {
+	work, done := context.WithTimeout(context.WithoutCancel(ctx), remoteGitOpenTimeout)
+	defer done()
+	return repositoryWriteErrorWithWork(context.WithValue(work, revisionScopeKey{}, "none"), worker.work, repo, func(tx context.Context) error {
+		return openAnchoredSessions(tx, worker.work.meta, repo, nil, worker.now())
 	})
 }
 

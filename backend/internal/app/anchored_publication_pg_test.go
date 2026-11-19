@@ -11,9 +11,10 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// A report and a read of the provider each open what is pushed, inside the
-// repository transaction that stores them. The pool of this fixture holds
-// two connections, so a store call that left its transaction would show.
+// A report opens what is pushed inside the transaction that stores it, and a
+// read of the provider in the transaction right after the one that finishes
+// it. The pool of this fixture holds two connections, so a store call that
+// left its transaction would show.
 func TestPGSessionOpensInTheTransactionThatLearnsOfThePush(t *testing.T) {
 	service, storage, repo := remoteGitPG(t)
 	ctx := systemTestContext()
