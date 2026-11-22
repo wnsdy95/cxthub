@@ -74,7 +74,17 @@ export interface AnchoredIndex {
   remoteRead: boolean;
   /** Sessions whose uncommitted part could not be placed. */
   unplaced: string[];
+  /** What of the caller's own sessions nobody else reads yet. */
+  held: AnchoredHeld;
 }
+/**
+ * The caller's own work before a push. `commits` are the commits of the
+ * caller's sessions that the server found neither on the remote nor copied
+ * there, newest first; a commit the server could not say this about is left
+ * out. `uncommitted` are the caller's sessions with a part after their last
+ * commit, newest first.
+ */
+export interface AnchoredHeld { commits: string[]; uncommitted: string[] }
 
 function time(value?: string): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -122,6 +132,7 @@ export function buildAnchoredIndex(
   for (const list of children.values()) list.sort((a, b) => oldestFirst(a.started_at, b.started_at) || a.session_id.localeCompare(b.session_id));
 
   const commitBySha = new Map<string, AnchoredCommitRow>();
+  const heldCommits: string[] = [];
   for (const commit of remote?.commits ?? []) {
     commitBySha.set(commit.sha, { sha: commit.sha, parents: commit.parents, at: commit.committed_at, subject: commit.subject, links: [], remote: true,
       author: commit.author_name ?? '', heads: [], pulls: [] });
@@ -138,6 +149,7 @@ export function buildAnchoredIndex(
       row.at ||= commit.created_at ?? commit.authored_at ?? '';
       row.links.push(link);
       commitBySha.set(commit.sha, row);
+      if (!summary.shared && commit.on_remote === false && !commit.copies?.length) pushUnique(heldCommits, commit.sha);
     }
   }
   for (const branch of remote?.branches ?? []) commitBySha.get(branch.sha)?.heads.push(branch.name);
@@ -194,7 +206,12 @@ export function buildAnchoredIndex(
   }
   const worktrees = [...worktreeRows.values()].sort((a, b) => a.name.localeCompare(b.name) || a.machine.localeCompare(b.machine));
   const branches = [...branchRows.values()].sort((a, b) => a.name.localeCompare(b.name));
-  return { sessions, roots, children, commits, commitBySha, worktrees, branches, pulls, defaultBranch: remote?.defaultBranch ?? '', remoteRead: Boolean(remote?.read), unplaced };
+  heldCommits.sort((a, b) => newestFirst(commitBySha.get(a)?.at, commitBySha.get(b)?.at) || a.localeCompare(b));
+  const heldParts = summaries.filter(summary => !summary.shared && summary.uncommitted)
+    .sort((a, b) => newestFirst(a.uncommitted!.ended_at ?? a.ended_at, b.uncommitted!.ended_at ?? b.ended_at) || a.session_id.localeCompare(b.session_id))
+    .map(summary => anchoredKey(summary.provider, summary.session_id));
+  return { sessions, roots, children, commits, commitBySha, worktrees, branches, pulls, defaultBranch: remote?.defaultBranch ?? '', remoteRead: Boolean(remote?.read), unplaced,
+    held: { commits: heldCommits, uncommitted: heldParts } };
 }
 
 /**

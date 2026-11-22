@@ -1,5 +1,6 @@
-// AnchoredView — the sessions tab. On the left the caller's worktrees, the
-// branches and the pull requests; in the middle the commit graph as the
+// AnchoredView — the sessions tab. On the left the caller's own work that is
+// not pushed yet, the caller's worktrees, the branches and the pull requests;
+// in the middle the commit graph as the
 // server read it from the hosting provider, with the commits only a report
 // names; on the right what the selected one holds: the segments of the
 // caller's own sessions and of teammates' sessions as far as they are pushed,
@@ -80,6 +81,10 @@ export function AnchoredView({ repo, repositoryId = null, canRestore = false, se
       <nav className="anchor-nav" aria-label={t('anchored.navAria')}>
         <AppLink className={`anchor-nav-item${shown.kind === 'all' ? ' on' : ''}`} href={href({ kind: 'all' })} aria-current={shown.kind === 'all' ? 'page' : undefined}>
           {t('anchored.allSessions')} <span className="count-badge">{index.sessions.size}</span>
+        </AppLink>
+        <AppLink className={`anchor-nav-item${shown.kind === 'held' ? ' on' : ''}`} href={href({ kind: 'held' })} aria-current={shown.kind === 'held' ? 'page' : undefined}>
+          {t('anchored.held')} <span className="count-badge">{index.held.commits.length + index.held.uncommitted.length}</span>
+          <span className="ref-badge pending">{t('anchored.heldOnlyYou')}</span>
         </AppLink>
         <h5 className="label">{t('anchored.worktrees')}</h5>
         {index.worktrees.length === 0 && <p className="anchor-nav-empty">{t('anchored.noWorktrees')}</p>}
@@ -168,6 +173,8 @@ export function AnchoredView({ repo, repositoryId = null, canRestore = false, se
         {shown.kind === 'session' ? (
           <AnchoredSessionView key={anchoredKey(shown.provider, shown.id)} repo={repo} provider={shown.provider} sessionId={shown.id}
             segment={shown.segment} rest={shown.rest} index={index} href={href} names={names} />
+        ) : shown.kind === 'held' ? (
+          <HeldDetail index={index} href={href} />
         ) : (
           <div className="anchor-split">
             <AnchoredCommits index={index} selected={shown.kind === 'commit' ? shown.sha : ''} highlighted={highlighted} marked={marked} href={href}
@@ -481,7 +488,37 @@ function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
   );
 }
 
-function UncommittedCards({ keys, index, href }: { keys: string[]; index: AnchoredIndex; href: AnchoredHref }) {
+/** The caller's own work before a push: commits the remote does not hold, and what is not committed yet. */
+function HeldDetail({ index, href }: { index: AnchoredIndex; href: AnchoredHref }) {
+  const t = useT();
+  const { commits, uncommitted } = index.held;
+  return (
+    <section className="anchor-detail" aria-label={t('anchored.held')}>
+      <h5 className="anchor-detail-title">{t('anchored.held')}</h5>
+      <p className="anchor-card-meta">{t('anchored.heldLead')}</p>
+      {!index.remoteRead && <p className="anchor-card-meta">{t('anchored.remoteNotRead')}</p>}
+      {commits.length + uncommitted.length === 0 && <p className="empty-box">{t('anchored.heldEmpty')}</p>}
+      {commits.length > 0 && (
+        <section className="anchor-use">
+          <h6>{t('anchored.heldCommits')} <span className="count-badge">{commits.length}</span></h6>
+          <CommitRefs shas={commits} index={index} href={href} />
+        </section>
+      )}
+      {uncommitted.length > 0 && (
+        <section className="anchor-use">
+          <h6>{t('anchored.heldUncommitted')} <span className="count-badge">{uncommitted.length}</span></h6>
+          <UncommittedCards keys={uncommitted} index={index} href={href} places />
+        </section>
+      )}
+    </section>
+  );
+}
+
+function UncommittedCards({ keys, index, href, places = false }: {
+  keys: string[]; index: AnchoredIndex; href: AnchoredHref;
+  /** Also says where each part was worked on, for a list that is not of one place. */
+  places?: boolean;
+}) {
   const t = useT();
   return (
     <ul className="anchor-cards">
@@ -497,6 +534,16 @@ function UncommittedCards({ keys, index, href }: { keys: string[]; index: Anchor
                   {t('anchored.afterLastCommit')} · {t('anchored.commandCount', { count: part.commands })}
                   {part.started_at && <> · <time dateTime={part.started_at}>{when(part.started_at, true)}</time></>}
                   {part.ended_at && <> – <time dateTime={part.ended_at}>{when(part.ended_at, true)}</time></>}
+                </p>
+              )}
+              {places && part && part.places.length > 0 && (
+                <p className="anchor-card-meta">
+                  {part.places.map((place, at) => (
+                    <span key={at}>
+                      {place.worktree && <>{t('anchored.worktreeTitle')} <code>{place.worktree}</code> </>}
+                      {place.branch && <AppLink className="ref-badge branch" href={href({ kind: 'branch', name: place.branch })}>{place.branch}</AppLink>}{' '}
+                    </span>
+                  ))}
                 </p>
               )}
             </SessionCard>

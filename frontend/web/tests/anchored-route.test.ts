@@ -6,6 +6,7 @@ const sha = 'a'.repeat(40);
 const selections: [AnchoredSelection | undefined, string][] = [
   [undefined, '/alice/cxthub?tab=sessions'],
   [{ kind: 'all' }, '/alice/cxthub?tab=sessions&show=all'],
+  [{ kind: 'held' }, '/alice/cxthub?tab=sessions&show=held'],
   [{ kind: 'commit', sha }, `/alice/cxthub?tab=sessions&commit=${sha}`],
   [{ kind: 'branch', name: 'feature/login page' }, '/alice/cxthub?tab=sessions&branch=feature%2Flogin+page'],
   [{ kind: 'worktree', name: 'app' }, '/alice/cxthub?tab=sessions&worktree=app'],

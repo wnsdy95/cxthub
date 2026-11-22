@@ -228,6 +228,23 @@ assert.match(sharedNote, /data-note="note_a{32}".*?manual note<\/span><em>bob<\/
 assert.doesNotMatch(sharedNote, /class="ghost mini"[^>]*>(Edit|Delete)<\/button>/, 'only its author changes or removes a note');
 assert.match(quiet, /class="ghost mini"[^>]*>Edit<\/button>/, 'the author does');
 
+// The caller's own work before a push: commits the remote does not hold, then what is not committed yet.
+const waiting: AnchoredSessionSummary[] = [
+  { ...summaries[0], segments: 3, commits: [...summaries[0].commits, { sha: sha('9'), segment_no: 3, rule: 'printed-number', subject: 'Draft the lexer', created_at: at(45), on_remote: false }] },
+  summaries[1],
+];
+assert.match(overview, /href="\/alice\/app\?tab=sessions&amp;show=held"[^>]*>On Hold <span class="count-badge">2<\/span><span class="ref-badge pending">only you<\/span>/,
+  'the list counts the uncommitted parts while no commit is known to be missing from the remote');
+const held = render({ kind: 'held' }, true, waiting);
+assert.match(held, /href="\/alice\/app\?tab=sessions&amp;show=held" aria-current="page">On Hold <span class="count-badge">3<\/span>/);
+assert.match(held, /Only you see this list\./);
+assert.match(held, /Committed, not pushed yet <span class="count-badge">1<\/span>.*?commit=9{40}.*?Draft the lexer.*?session=claude%3Aparent-session&amp;segment=3/s);
+assert.match(held, /Not committed yet <span class="count-badge">2<\/span>.*?session=claude%3Aparent-session&amp;segment=rest.*?Worktree <code>app<\/code>.*?branch=feature/s);
+assert.doesNotMatch(held, /class="anchor-commits"/, 'the list stands in place of the commit graph');
+assert.match(render({ kind: 'held' }, true, [{ ...summaries[0], uncommitted: undefined }]), /Nothing of yours is waiting for a push\./);
+assert.match(render({ kind: 'held' }, false, waiting), /The commit list has not been read from the remote yet\./, 'until the remote is read no commit is said to be missing there');
+assert.match(translate('ko', 'anchored.heldOnlyYou'), /\uB098\uB9CC \uBD04/);
+
 assert.match(translate('ko', 'anchored.noContext'), /\uB9E5\uB77D \uC5C6\uC74C/);
 assert.match(translate('ko', 'anchored.unplaced'), /\uC704\uCE58 \uBBF8\uC0C1/);
 console.log('sessions tab: lists by worktree, branch and commit; a session opens with a divider at each segment');

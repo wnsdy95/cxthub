@@ -151,6 +151,18 @@ test('the sessions tab shows a member their sessions by commit, branch and workt
   await expect(page).toHaveURL(url('?tab=sessions&worktree=app&machine=laptop'));
   await expect(page.getByRole('region', { name: 'Selected item' })).toContainText('Uncommitted conversations worked in this worktree.');
 
+  // The member's own work before a push stands in one list, in place of the graph.
+  await nav.getByRole('link', { name: /^On Hold/ }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&show=held'));
+  const held = page.getByRole('region', { name: 'On Hold' });
+  await expect(held).toContainText('Only you see this list.');
+  await expect(held.locator('.anchor-use h6')).toHaveText([/^Not committed yet/]);
+  await expect(held.locator('.anchor-card')).toHaveCount(2);
+  await expect(held.locator('.anchor-card').first()).toContainText('After the last commit · 1 command');
+  await expect(page.locator('.anchor-commits')).toHaveCount(0);
+  await held.getByRole('link', { name: 'parent-s', exact: true }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&session=claude%3Aparent-session&segment=rest'));
+
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

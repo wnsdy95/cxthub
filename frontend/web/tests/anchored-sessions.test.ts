@@ -50,6 +50,25 @@ test('a commit lists every segment that ends at it, newest commit first', () => 
   assert.deepEqual(anchoredSegmentCommits(undefined, 1), []);
 });
 
+test('the caller\'s work before a push is the commits the remote lacks and the parts not committed yet', () => {
+  const part = (minute: number) => ({ commands: 1, ended_at: at(minute), unplaced: false, places: [] });
+  const index = buildAnchoredIndex([
+    summary('mine', { segments: 3, uncommitted: part(40), commits: [
+      { sha: sha('a'), segment_no: 1, rule: 'printed-number', created_at: at(10), on_remote: true },
+      { sha: sha('b'), segment_no: 2, rule: 'printed-number', created_at: at(20), on_remote: false },
+      { sha: sha('c'), segment_no: 3, rule: 'printed-number', created_at: at(30), on_remote: false },
+      { sha: sha('d'), segment_no: 3, rule: 'printed-number', created_at: at(31), on_remote: false, copies: [sha('e')] },
+      { sha: sha('f'), segment_no: 3, rule: 'printed-number', created_at: at(32) },
+    ] }),
+    summary('idle', { started_at: at(1) }),
+    summary('talk', { uncommitted: part(50) }),
+    summary('theirs', { shared: true, uploader: 'bob', segments: 1, uncommitted: part(55),
+      commits: [{ sha: sha('9'), segment_no: 1, rule: 'printed-number', created_at: at(56), on_remote: false }] }),
+  ]);
+  assert.deepEqual(index.held.commits, [sha('c'), sha('b')], 'newest first; not one on the remote, copied there, or not yet checked');
+  assert.deepEqual(index.held.uncommitted, ['claude:talk', 'claude:mine'], 'newest first; never another member\'s');
+});
+
 test('uncommitted parts are listed by worktree and by the use of a branch name they fall in', () => {
   const index = buildAnchoredIndex([
     summary('now', { machine: 'laptop', uncommitted: { commands: 1, started_at: at(40), ended_at: at(45), unplaced: false,

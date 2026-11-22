@@ -10,6 +10,7 @@ const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'sessio
 /** What the sessions tab shows. It is the only selection below a tab that the address holds. */
 export type AnchoredSelection =
  | { kind: 'all' }
+ | { kind: 'held' }
  | { kind: 'commit'; sha: string }
  | { kind: 'branch'; name: string }
  | { kind: 'worktree'; name: string; machine?: string }
@@ -43,6 +44,7 @@ export function repositoryPath(repository: RepositoryAddress, tab?: RepositoryTa
 export function anchoredPath(repository: RepositoryAddress, selection?: AnchoredSelection): string {
  const params = new URLSearchParams({ tab: 'sessions' });
  if (selection?.kind === 'all') params.set('show', 'all');
+ if (selection?.kind === 'held') params.set('show', 'held');
  if (selection?.kind === 'commit') params.set('commit', selection.sha);
  if (selection?.kind === 'branch') params.set('branch', selection.name);
  if (selection?.kind === 'worktree') {
@@ -81,7 +83,8 @@ export function parseAnchoredSelection(query: URLSearchParams): AnchoredSelectio
   const machine = query.get('machine');
   return { kind: 'worktree', name: worktree, ...(machine && PLACE_NAME.test(machine) ? { machine } : {}) };
  }
- return query.get('show') === 'all' ? { kind: 'all' } : undefined;
+ const show = query.get('show');
+ return show === 'all' || show === 'held' ? { kind: show } : undefined;
 }
 /** Display-only connection name. Identity comes from the server, never this segment. */
 export function repositorySlug(repo: Pick<Repo, 'remote_url'>): string {
