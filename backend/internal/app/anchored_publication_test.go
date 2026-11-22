@@ -376,3 +376,114 @@ func TestNothingOpensBeforeTheRemoteWasRead(t *testing.T) {
 		t.Fatalf("another member's content access: %v", err)
 	}
 }
+
+// Whoever may view the repository reads what is open of it. A reader with
+// no account reads exactly what another member reads, owns nothing, and
+// stores nothing.
+func TestAReaderWithoutAnAccountReadsWhatIsOpen(t *testing.T) {
+	fixture := anchoredPublicationFixture(t)
+	service, provider, repo := fixture.service, fixture.provider, fixture.repo
+	alice, bob, visitor := anchoredActor("member-a"), anchoredActor("member-b"), context.Background()
+	pushed, local := provider.chain(1, ""), anchoredTestSHA("b")
+	provider.heads["main"] = pushed
+	if _, err := fixture.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	body := domain.AnchoredSessionBody{
+		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 5, Machine: "laptop",
+		Content: &domain.AnchoredContent{Doc: anchoredPublicationDoc(t, fixture, 5), Events: 5},
+		Segments: []domain.AnchoredSegment{
+			{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
+				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber}}},
+			{AnchoredRange: domain.AnchoredRange{First: "m3", Last: "m4", FirstOrdinal: 2, LastOrdinal: 3, FirstEvent: 2, Events: 2},
+				Commits: []domain.AnchoredCommit{{SHA: local, Rule: domain.AnchoredLinkPrintedNumber}}},
+		},
+		Uncommitted: &domain.AnchoredUncommitted{AnchoredRange: domain.AnchoredRange{First: "m5", Last: "m5", FirstOrdinal: 4, LastOrdinal: 4, FirstEvent: 4, Events: 1},
+			Places: []domain.AnchoredPlace{{Worktree: "app", Branch: "topic", Rule: domain.AnchoredPlaceRecorded}}},
+		AgentCalls: []domain.AnchoredAgentCall{{Tool: "Task", From: "session-1", To: []string{"session-2"}, Status: "completed"}},
+	}
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", body); err != nil {
+		t.Fatal(err)
+	}
+	// A session nothing is pushed of.
+	private := anchoredTestBody("m3")
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-private", private); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ReportWorktrees(alice, repo, domain.WorktreeReport{Machine: "laptop", Worktrees: []domain.WorktreeReportEntry{{Name: "app", Branch: "topic"}}}); err != nil {
+		t.Fatal(err)
+	}
+	onRemote, err := service.CreateAnchoredNote(alice, repo, domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteCommit, Commit: pushed}, "about a pushed commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []domain.AnchoredNoteTarget{{Kind: domain.AnchoredNoteCommit, Commit: local}, {Kind: domain.AnchoredNoteWorktree, Worktree: "app", Machine: "laptop"}} {
+		if _, err := service.CreateAnchoredNote(alice, repo, target, "not open"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The uploader has a public handle; such a reader may not read the member list.
+	if err := fixture.storage.UpsertUser(systemTestContext(), domain.User{ID: "member-a", Username: "alice", Email: "alice@example.test", Name: "Alice"}); err != nil {
+		t.Fatal(err)
+	}
+
+	theirs, err := service.GetAnchoredSession(bob, repo, domain.ProviderClaude, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := service.GetAnchoredSession(visitor, repo, domain.ProviderClaude, "session-1")
+	if err != nil || !reflect.DeepEqual(seen, theirs) || seen.Body.Segments[0].Hidden || !seen.Body.Segments[1].Hidden || seen.Body.Uncommitted != nil ||
+		seen.Body.Machine != "" || seen.Body.Content.Doc != "" || len(seen.Body.AgentCalls) != 0 {
+		t.Fatalf("what a reader without an account reads: %+v %v", seen.Body, err)
+	}
+	listed, err := service.ListAnchoredSessions(visitor, repo)
+	shared, sharedErr := service.ListAnchoredSessions(bob, repo)
+	if err != nil || sharedErr != nil || len(listed) != 1 || !listed[0].Shared || listed[0].UploaderName != "alice" || !reflect.DeepEqual(listed, shared) {
+		t.Fatalf("listed without an account: %+v %v (another member: %+v %v)", listed, err, shared, sharedErr)
+	}
+	if own, err := service.ListAnchoredSessions(alice, repo); err != nil || len(own) != 2 || own[0].Shared || own[0].UploaderName != "" {
+		t.Fatalf("the uploader's own list: %+v %v", own, err)
+	}
+	if access, err := service.AnchoredSessionContentAccess(visitor, repo, domain.ProviderClaude, "session-1"); err != nil || !reflect.DeepEqual(access.Open, [][2]int{{0, 2}}) {
+		t.Fatalf("events open without an account: %+v %v", access, err)
+	}
+	if segments, err := service.AnchoredCommitSegments(visitor, repo, pushed); err != nil || len(segments) != 1 || segments[0].SegmentNo != 1 {
+		t.Fatalf("segments of the pushed commit: %+v %v", segments, err)
+	}
+	if segments, err := service.AnchoredCommitSegments(visitor, repo, local); err != nil || len(segments) != 0 {
+		t.Fatalf("segments of the local commit: %+v %v", segments, err)
+	}
+	if notes, err := service.ListAnchoredNotes(visitor, repo); err != nil || len(notes) != 1 || notes[0].ID != onRemote.ID || notes[0].AuthorName != "alice" {
+		t.Fatalf("notes without an account: %+v %v", notes, err)
+	}
+	// What is its member's alone stays so.
+	if _, err := service.GetAnchoredSession(visitor, repo, domain.ProviderClaude, "session-private"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a session nothing is pushed of: %v", err)
+	}
+	if _, err := service.AnchoredSessionContentAccess(visitor, repo, domain.ProviderClaude, "session-private"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the conversation of a session nothing is pushed of: %v", err)
+	}
+	if worktrees, err := service.ListReportedWorktrees(visitor, repo); err != nil || worktrees == nil || len(worktrees) != 0 {
+		t.Fatalf("worktrees without an account: %+v %v", worktrees, err)
+	}
+	if _, err := service.AnchoredSessionCalls(visitor, repo, domain.ProviderClaude, "session-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("agent calls without an account: %v", err)
+	}
+	// Reading is all such a reader does: a write needs an account.
+	refused := func(err error) bool {
+		return errors.Is(err, domain.ErrUnauthorized) || errors.Is(err, domain.ErrForbidden)
+	}
+	if _, err := service.PutAnchoredSession(visitor, repo, domain.ProviderClaude, "session-9", private); !refused(err) {
+		t.Fatalf("a report without an account: %v", err)
+	}
+	if _, err := service.CreateAnchoredNote(visitor, repo, domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteCommit, Commit: pushed}, "anonymous"); !refused(err) {
+		t.Fatalf("a note without an account: %v", err)
+	}
+	if _, err := service.ReportWorktrees(visitor, repo, domain.WorktreeReport{Machine: "x", Worktrees: []domain.WorktreeReportEntry{{Name: "app"}}}); !refused(err) {
+		t.Fatalf("a worktree list without an account: %v", err)
+	}
+	if listed, err := service.ListAnchoredSessions(alice, repo); err != nil || len(listed) != 2 {
+		t.Fatalf("a refused write changed what is stored: %+v %v", listed, err)
+	}
+}

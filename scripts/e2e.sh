@@ -338,6 +338,15 @@ expect "a teammate lists no session before a push" "$(curl -sb "$JS" "$B/repos/$
 expect "a teammate cannot read a session before a push" "$(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 404
 expect "a teammate cannot read its conversation before a push" "$(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=5")" 404
 expect "a teammate does not see a note about a commit not known to be pushed" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-notes" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+# Whoever may view the repository reads what is open of it; only a member stores or writes.
+JW="$TMP/w.jar"; login onlooker@t.io Onlooker "$JW"
+ccurl -sb "$JW" -X POST "$B/invites/$(ccurl -sb "$JA" -X POST "$B/repositories/$CLIWS/invites" -H 'Content-Type: application/json' -d '{"role":"viewer"}' | jget "['token']")/accept" >/dev/null
+expect "a viewer lists no session before a push" "$(curl -sb "$JW" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+expect "a viewer reads the commit list the server holds" "$(code -b "$JW" "$B/repos/$CLIRID/remote-git")" 200
+expect "a viewer cannot read a session before a push" "$(code -b "$JW" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 404
+expect "a viewer cannot store a report" "$(ccurl -sb "$JW" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-viewer" -H 'Content-Type: application/json' -d '{"rule_version":1,"scope":"working-folder","records":0}')" 403
+expect "a viewer cannot write a note" "$(ccurl -sb "$JW" -o /dev/null -w '%{http_code}' -X POST "$B/repos/$CLIRID/anchored-notes" -H 'Content-Type: application/json' -d '{"target":{"kind":"branch","branch":"main"},"body":"x"}')" 403
+expect "a visitor who is not signed in reads nothing of a private repository" "$(code "$B/repos/$CLIRID/anchored-sessions")" 401
 expect "the uploader reads the conversation through the session, without the document hash" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c "import json,sys;raw=sys.stdin.read();p=json.loads(raw);print(len(p['events']),p['offset'],p['next'],'$SEGDOC2' in raw)")" "6 0 -1 False"
 expect "a session's summary says nothing about the remote it never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;c=json.load(sys.stdin)[0]["commits"][0];print("on_remote" in c, c.get("copies"))')" "False None"
 expect "the ledger makes no ref" "$(curl -sb "$JA" "$B/repos/$CLIRID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0

@@ -190,11 +190,9 @@ export function Dashboard() {
                   <button className={`tab${tab === 'onhold' ? ' on' : ''}`} onClick={() => goTab('onhold')}>
                     On Hold
                   </button>
-                  {atLeast(role, 'member') && (
-                    <button className={`tab${tab === 'sessions' ? ' on' : ''}`} onClick={() => goTab('sessions')}>
-                      {t('dashboard.sessions')}
-                    </button>
-                  )}
+                  <button className={`tab${tab === 'sessions' ? ' on' : ''}`} onClick={() => goTab('sessions')}>
+                    {t('dashboard.sessions')}
+                  </button>
                   <button className={`tab${tab === 'connections' ? ' on' : ''}`} onClick={() => goTab('connections')}>
                     {t('dashboard.connected')} <span className="count-badge">{repos.length}</span>
                   </button>
@@ -317,10 +315,8 @@ export function Dashboard() {
                       {activeRepo && <code className="repo-tag">{sanitizeRemoteUrl(activeRepo.remote_url) || short(activeRepo.id)}</code>}
                     </h4>
                   </div>
-                  {!atLeast(role, 'member') ? (
-                    <AccessDenied message={t('dashboard.sessionsAccessDenied')} />
-                  ) : activeRepo ? (
-                    <AnchoredView key={activeRepo.id} repo={activeRepo} repositoryId={selected?.id ?? null} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
+                  {activeRepo ? (
+                    <AnchoredView key={activeRepo.id} repo={activeRepo} member={atLeast(role, 'member')} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
                   ) : (
                     <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}

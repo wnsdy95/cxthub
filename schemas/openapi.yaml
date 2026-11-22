@@ -1122,7 +1122,8 @@ components:
         uncommitted: { $ref: '#/components/schemas/AnchoredSummaryUncommitted' }
         spawned_in: { $ref: '#/components/schemas/AnchoredSummarySpawn' }
         uploader: { type: string, description: The account the session belongs to. }
-        shared: { type: boolean, description: True when the session belongs to another account. The summary then holds only what is open to the team. }
+        shared: { type: boolean, description: True when the session belongs to another account. The summary then holds only what is open. }
+        uploader_name: { type: string, description: The uploader's public handle, given with a session that is not the caller's. }
         updated_at: { type: string, format: date-time }
     AnchoredSummarySpawn:
       type: object
@@ -1205,6 +1206,7 @@ components:
         id: { type: string, pattern: '^note_[0-9a-f]{32}$' }
         target: { $ref: '#/components/schemas/AnchoredNoteTarget' }
         author: { type: string }
+        author_name: { type: string, description: The author's public handle. Given when notes are listed; never stored. }
         body: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -4892,7 +4894,7 @@ paths:
       operationId: listAnchoredSessions
       summary: List the anchored session reports the caller may read
       description: >-
-        Member required. Returns the reports the signed-in account uploaded, and of other members' sessions
+        Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. Returns the reports the signed-in account uploaded, and of other accounts' sessions
         those with a part open to the team, listed with that part only (`shared` is true). A part opens when
         what it explains is pushed: a segment when one of its commits, or a copy of it, is on the remote; the
         uncommitted part up to the turns that had begun when a branch it passed through was seen pushed; a
@@ -4928,7 +4930,7 @@ paths:
       operationId: getAnchoredSession
       summary: Read an anchored session report
       description: >-
-        Member required. The uploader reads all of it. Another member reads what is open to the team: a
+        Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. The uploader reads all of it. Anyone else reads what is open: a
         segment that is not open keeps its place with `hidden` set and says nothing else, the uncommitted
         part is cut to its open beginning (`partial` when it goes on), and the machine label, worktree names,
         agent calls, turn marks, commit author emails and the content document's hash are left out. A
@@ -4983,7 +4985,7 @@ paths:
     get:
       operationId: listAnchoredCommitSegments
       summary: List the segments that end at a commit
-      description: Member required. Returns the segments of the caller's own sessions, and of other members' sessions those that are open to the team.
+      description: Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. Returns the segments of the caller's own sessions, and of other accounts' sessions those that are open.
       tags: [anchored-sessions]
       responses:
         '200':
@@ -5055,7 +5057,7 @@ paths:
     get:
       operationId: listBranchLifetimes
       summary: List the lifetimes of the repository's branch names
-      description: Member required. A lifetime is the time a branch name was on the remote, with the IDs joined to it. A closed lifetime stays in the list. Oldest first.
+      description: Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. A lifetime is the time a branch name was on the remote, with the IDs joined to it. A closed lifetime stays in the list. Oldest first.
       tags: [branch-ledger]
       responses:
         '200':
@@ -5086,7 +5088,7 @@ paths:
     get:
       operationId: listAnchoredSessionCalls
       summary: List the recorded agent calls that name one of the caller's sessions
-      description: Member required. A call sits in the report of the session that made it, so the calls a session received are gathered from the caller's other reports of the same tool. Oldest first; a call without a time last. Nothing is inferred about a party a call does not name.
+      description: Readable by the account the session belongs to; anyone else is answered not found. A call sits in the report of the session that made it, so the calls a session received are gathered from the caller's other reports of the same tool. Oldest first; a call without a time last. Nothing is inferred about a party a call does not name.
       tags: [anchored-sessions]
       responses:
         '200':
@@ -5131,7 +5133,7 @@ paths:
     get:
       operationId: readAnchoredSessionEvents
       summary: Read a session's conversation, as far as the caller may
-      description: Member required. The conversation is read by the session, never by the hash of the document that holds it. The uploader reads all of it; another member reads only the events that are open to the team. A page never crosses into what the caller may not read, and an offset there is not found.
+      description: Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. The conversation is read by the session, never by the hash of the document that holds it. The uploader reads all of it; anyone else reads only the events that are open to the team. A page never crosses into what the caller may not read, and an offset there is not found.
       tags: [anchored-sessions]
       responses:
         '200':
@@ -5172,7 +5174,7 @@ paths:
     get:
       operationId: readAnchoredSessionEventFragment
       summary: Read a piece of one large event of a session's conversation
-      description: Member required. The same rule as the pages decides whether the caller may read the event.
+      description: Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. The same rule as the pages decides whether the caller may read the event.
       tags: [anchored-sessions]
       responses:
         '200':
@@ -5194,8 +5196,8 @@ paths:
       operationId: listAnchoredNotes
       summary: List the manual notes the caller may read
       description: >-
-        Member required. A manual note is what a person wrote about a commit, a branch or a worktree; it is
-        kept apart from captured sessions. Returns the notes the signed-in account wrote, and other members'
+        Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. A manual note is what a person wrote about a commit, a branch or a worktree; it is
+        kept apart from captured sessions. Returns the notes the signed-in account wrote, and other accounts'
         notes about something that is open to the team: a commit the remote holds, or a lifetime of a branch
         name in the ledger. A note about a worktree, or about a branch named without a lifetime, is its
         author's alone. Oldest first.
@@ -5303,7 +5305,7 @@ paths:
     get:
       operationId: listReportedWorktrees
       summary: List the caller's own worktrees
-      description: Member required. The working folders of the repository on the signed-in account's machines, as its CLIs listed them, by machine then name. Only that account reads them.
+      description: The working folders of the repository on the signed-in account's machines, as its CLIs listed them, by machine then name. Only that account reads them; a reader with no account is answered an empty list.
       tags: [worktrees]
       responses:
         '200':
@@ -5360,7 +5362,7 @@ paths:
     get:
       operationId: getRemoteGit
       summary: Read the commits, branches and pull requests the server read from the Git hosting provider
-      description: Member required. Everything in the answer was read by the server from the provider of the repository origin. No client supplied any of it. The page from the top of the commit list also carries the default branch, the branches and the pull requests. With before the answer carries commits and next only. Commits are ordered by commit time with the newest first. The email of a commit author is never part of the answer.
+      description: Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. Everything in the answer was read by the server from the provider of the repository origin. No client supplied any of it. The page from the top of the commit list also carries the default branch, the branches and the pull requests. With before the answer carries commits and next only. Commits are ordered by commit time with the newest first. The email of a commit author is never part of the answer.
       tags: [remote-git]
       parameters:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }

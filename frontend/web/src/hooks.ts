@@ -810,14 +810,3 @@ export function useLogout() {
     },
   });
 }
-
-/** The names of a repository's members by account, for what another member wrote or uploaded. */
-export function useAccountNames(repositoryId: string | null, enabled: boolean) {
-  const members = useQuery({
-    queryKey: ['members', repositoryId],
-    queryFn: () => api.listMembers(repositoryId as string),
-    enabled: Boolean(repositoryId) && enabled,
-    retry: false,
-  });
-  return useMemo(() => new Map((members.data ?? []).map(member => [member.user_id, member.user?.username ?? member.user_id])), [members.data]);
-}

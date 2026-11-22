@@ -167,14 +167,71 @@ test('the sessions tab shows a member their sessions by commit, branch and workt
   expect(unexpected).toEqual([]);
 });
 
-test('the sessions tab is not offered to a viewer and reads nothing for one', async ({ page }) => {
+// What whoever may view the repository is given: another account's session as far as it is pushed, with its uploader's handle.
+const pushedOnly = [{ ...summaries[0], session_id: 'their-session', uploader: 'other-account', uploader_name: 'bob', shared: true, machine: undefined, segments: 1,
+  commits: [{ ...summaries[0].commits[0], on_remote: true }], uncommitted: undefined }];
+
+test('a viewer is offered the sessions tab and reads what is pushed', async ({ page }) => {
   const errors = capturePageErrors(page);
   const reads: string[] = [];
-  const unexpected = await installApiFixture(page, fixture('viewer', reads));
-  await page.goto('/alice/app?tab=sessions');
-  await expect(page.getByRole('alert')).toContainText('The Sessions tab requires member access.');
-  await expect(page.getByRole('button', { name: 'Sessions', exact: true })).toHaveCount(0);
-  expect(reads).toEqual([]);
+  const member = fixture('viewer', reads, true);
+  const unexpected = await installApiFixture(page, request => {
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/anchored-sessions') return { body: pushedOnly };
+    return member(request);
+  });
+  await page.goto('/alice/app');
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(page).toHaveURL(new URL('/alice/app?tab=sessions', origin).href);
+  await expect(page.getByText('Sessions are shown as far as they are pushed.')).toBeVisible();
+  const nav = page.getByRole('navigation', { name: 'Worktrees and branches' });
+  // Work before a push and worktrees are a member's own.
+  await expect(nav.getByRole('link', { name: /^On Hold/ })).toHaveCount(0);
+  await expect(nav.getByText('Worktrees', { exact: true })).toHaveCount(0);
+  await expect(nav.getByRole('link', { name: /^feature/ })).toBeVisible();
+  await expect(page.locator('.anchor-card')).toContainText('bob');
+  await expect(page.locator('.anchor-commit')).toHaveCount(5);
+  // A commit nothing explains offers no note to one who is not a member.
+  await page.locator(`[data-commit="${sha('d')}"]`).click();
+  await expect(page.getByRole('region', { name: 'Selected item' })).toContainText('No context');
+  await expect(page.getByRole('button', { name: 'Write a note' })).toHaveCount(0);
+  // The member list is not asked for names: they come with the sessions.
+  expect(reads).toContain('remote-git');
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('a visitor who is not signed in reads the pushed sessions of a public repository', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const reads: string[] = [];
+  const member = fixture('viewer', reads, true);
+  const unexpected = await installApiFixture(page, request => {
+    const { method, pathname, searchParams } = request;
+    if (method !== 'GET') return undefined;
+    if (pathname === '/api/v1/me') return { status: 401, body: { error: { message: 'not signed in' } } };
+    if (pathname === '/api/v1/public/repositories/alice/app') {
+      return { body: { id: 'repository', name: 'app', slug: 'app', owner_username: 'alice', visibility: 'public', public_role: 'viewer', created_at: at(0) } };
+    }
+    if (pathname === '/api/v1/repos' && searchParams.get('repository') === 'repository') return { body: [{ id: 'repo', default_branch: 'main', remote_url: 'https://example.test/alice/app' }] };
+    if (pathname === '/api/v1/repositories' || pathname.startsWith('/api/v1/repositories/')) return { status: 401, body: { error: { message: 'not signed in' } } };
+    if (pathname === '/api/v1/repos/repo/anchored-sessions') return { body: pushedOnly };
+    if (pathname === `/api/v1/repos/repo/anchored-commits/${sha('a')}`) {
+      return { body: [{ provider: 'claude', session_id: 'their-session', segment_no: 1, rule: 'printed-number', segment: segments[0] }] };
+    }
+    return member(request);
+  });
+  await page.goto('/alice/app');
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(page).toHaveURL(new URL('/alice/app?tab=sessions', origin).href);
+  await expect(page.getByText('Sessions are shown as far as they are pushed.')).toBeVisible();
+  await expect(page.locator('.anchor-card')).toContainText('bob');
+  await expect(page.locator('.anchor-commit')).toHaveCount(5);
+  await expect(page.getByRole('link', { name: /^On Hold/ })).toHaveCount(0);
+  // A selection is part of the address here too, and a reload keeps it.
+  await page.locator(`[data-commit="${sha('a')}"]`).click();
+  await expect(page).toHaveURL(new URL(`/alice/app?tab=sessions&commit=${sha('a')}`, origin).href);
+  await page.reload();
+  await expect(page.locator('.anchor-commit.on .anchor-commit-subject')).toContainText('Add the parser');
+  await expect(page.locator('[data-segment="claude:their-session#1"]')).toContainText('Segment 1 of 1');
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

@@ -179,7 +179,7 @@ assert.match(render({ kind: 'worktree', name: 'scratch', machine: 'laptop' }, tr
 // A teammate's session: listed with its uploader, read as far as it is pushed. The second segment is not open; the part
 // after the last commit is open up to the last push. Its places name no worktree, and its notes are read but not changed.
 const theirs: AnchoredSessionSummary = { provider: 'claude', session_id: 'their-session', sub: false, revision: 1, body_hash: `sha256:${'0'.repeat(64)}`,
-  records: 3, commands: 1, segments: 1, content: true, updated_at: at(55), uploader: 'bob-id', shared: true,
+  records: 3, commands: 1, segments: 1, content: true, updated_at: at(55), uploader: 'bob-id', uploader_name: 'bob', shared: true,
   commits: [{ sha: sha('a'), segment_no: 1, rule: 'printed-number', subject: 'Add the parser', on_remote: true }],
   uncommitted: { commands: 0, unplaced: false, places: [{ worktree: '', branch: 'feature', rule: 'recorded-by-tool' }] } };
 const theirSession: AnchoredSession = { ...session, session_id: 'their-session', uploader: 'bob-id', revision: 1, body: {
@@ -189,13 +189,13 @@ const theirSession: AnchoredSession = { ...session, session_id: 'their-session',
     places: [{ worktree: '', branch: 'feature', rule: 'recorded-by-tool' }] },
   content: { events: 4 },
 } };
-function renderShared(selection?: AnchoredSelection): string {
+// The names come with the sessions and notes: not every reader may read the member list.
+function renderShared(selection?: AnchoredSelection, reader: { member?: boolean; signedIn?: boolean; listed?: AnchoredSessionSummary } = {}): string {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(['me'], { id: 'alice-id', username: 'alice' });
-  client.setQueryData(['members', repository.id], [{ role: 'member', user_id: 'bob-id', user: { id: 'bob-id', username: 'bob' } }]);
-  client.setQueryData(['anchored-sessions', repo.id], [theirs]);
+  client.setQueryData(['me'], reader.signedIn === false ? null : { id: 'alice-id', username: 'alice' });
+  client.setQueryData(['anchored-sessions', repo.id], [reader.listed ?? theirs]);
   client.setQueryData(['branch-lifetimes', repo.id], lifetimes);
-  client.setQueryData(['anchored-notes', repo.id], [{ ...notes[0], author: 'bob-id' }]);
+  client.setQueryData(['anchored-notes', repo.id], [{ ...notes[0], author: 'bob-id', author_name: 'bob' }]);
   client.setQueryData(['remote-git', repo.id], { pageParams: [''], pages: [remotePage] });
   client.setQueryData(['reported-worktrees', repo.id], []);
   client.setQueryData(['anchored-session', repo.id, 'claude', 'their-session', 1], theirSession);
@@ -204,7 +204,7 @@ function renderShared(selection?: AnchoredSelection): string {
     { offset: 3, next: -1, events: [message(3, 'user', 'What is left?')] },
   ] });
   return renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client },
-    createElement(AnchoredView, { repo, repositoryId: repository.id, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
+    createElement(AnchoredView, { repo, member: reader.member, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
 }
 const sharedList = renderShared();
 assert.match(sharedList, /their-se<\/code><\/a><span class="ref-badge joined">bob<\/span>/, 'a teammate\'s session names its uploader');
@@ -221,6 +221,30 @@ const sharedNote = renderShared({ kind: 'commit', sha: sha('d') });
 assert.match(sharedNote, /data-note="note_a{32}".*?manual note<\/span><em>bob<\/em>.*?Applied by hand\./s);
 assert.doesNotMatch(sharedNote, /class="ghost mini"[^>]*>(Edit|Delete)<\/button>/, 'only its author changes or removes a note');
 assert.match(quiet, /class="ghost mini"[^>]*>Edit<\/button>/, 'the author does');
+
+// Whoever may view the repository reads what is pushed: a viewer, or a visitor who is not signed in. Such a reader has
+// no work of their own to list and writes no note.
+for (const signedIn of [true, false]) {
+  const viewed = renderShared(undefined, { member: false, signedIn });
+  assert.match(viewed, /their-se<\/code><\/a><span class="ref-badge joined">bob<\/span>/);
+  assert.match(viewed, /Sessions are shown as far as they are pushed\./);
+  assert.doesNotMatch(viewed, /On Hold|only you|>Worktrees<|Your sessions are shown in full/);
+  assert.match(viewed, /<h5 class="label">Branches<\/h5>/, 'branches and pull requests are everyone\'s');
+  const viewedNote = renderShared({ kind: 'commit', sha: sha('d') }, { member: false, signedIn });
+  assert.match(viewedNote, /manual note<\/span><em>bob<\/em>.*?Applied by hand\./s);
+  assert.doesNotMatch(viewedNote, /Write a note|class="ghost mini"/, 'a note is written by a member');
+  assert.doesNotMatch(renderShared({ kind: 'held' }, { member: false, signedIn }), /Only you see this list/, 'the list of work before a push is a member\'s own');
+}
+assert.match(renderShared(undefined, { member: false, signedIn: false, listed: { ...theirs, uploader_name: undefined } }), /<span class="ref-badge joined">a member<\/span>/,
+  'an uploader whose handle is not given is not shown by account');
+const nothingPushed = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+nothingPushed.setQueryData(['me'], null);
+for (const key of ['anchored-sessions', 'branch-lifetimes', 'anchored-notes', 'reported-worktrees']) nothingPushed.setQueryData([key, repo.id], []);
+nothingPushed.setQueryData(['remote-git', repo.id], { pageParams: [''], pages: [remotePage] });
+const empty = renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client: nothingPushed },
+  createElement(AnchoredView, { repo, member: false, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
+assert.match(empty, /Nothing of this repository&#x27;s sessions is pushed yet\./);
+assert.doesNotMatch(empty, /cxt segments push/, 'a reader who cannot upload is not told to');
 
 // The caller's own work before a push: commits the remote does not hold, then what is not committed yet.
 const waiting: AnchoredSessionSummary[] = [

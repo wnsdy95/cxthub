@@ -118,7 +118,7 @@ func TestBranchLifetimeReadHTTP(t *testing.T) {
 		serviceError error
 	}{
 		{"anonymous", "/branch-lifetimes", domain.RoleOwner, false, 401, "", nil},
-		{"viewer", "/branch-lifetimes", domain.RoleViewer, true, 403, "", nil},
+		{"viewer", "/branch-lifetimes", domain.RoleViewer, true, 200, "", nil},
 		{"member_all", "/branch-lifetimes", domain.RoleMember, true, 200, "", nil},
 		{"member_one_name", "/branch-lifetimes?name=feature%2Fone", domain.RoleMember, true, 200, "feature/one", nil},
 		{"invalid_name", "/branch-lifetimes?name=not%20a%20name", domain.RoleMember, true, 422, "not a name", domain.ErrValidation},

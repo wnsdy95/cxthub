@@ -39,6 +39,21 @@ func anchoredSessionActor(ctx context.Context) (string, error) {
 	return actor, nil
 }
 
+// anchoredReadActor returns the account that reads, or the empty string for
+// a reader who is not signed in: whoever may view the repository reads what
+// is open of it. Nothing is stored for the empty account, so such a reader
+// is given only what is open.
+func anchoredReadActor(ctx context.Context) (string, error) {
+	actor, system := inbound.RepositoryActor(ctx)
+	if system {
+		return "", domain.ErrForbidden
+	}
+	return actor, nil
+}
+
+// anchoredOwn reports whether what an account stored is the reader's own.
+func anchoredOwn(reader, account string) bool { return reader != "" && reader == account }
+
 // PutAnchoredSession stores the report a member's CLI computed for one
 // session, replacing that session's earlier report. A session belongs to the
 // account that first reported it. The same content again changes nothing.
@@ -133,7 +148,7 @@ func (s *Service) anchoredReader(ctx context.Context) (anchoredReader, error) {
 	if err != nil {
 		return anchoredReader{}, err
 	}
-	actor, err := anchoredSessionActor(ctx)
+	actor, err := anchoredReadActor(ctx)
 	if err != nil {
 		return anchoredReader{}, err
 	}
@@ -144,7 +159,7 @@ func (s *Service) anchoredReader(ctx context.Context) (anchoredReader, error) {
 // uploader, what is open for anyone else. It answers false when the reader
 // may read nothing of it.
 func (r anchoredReader) view(ctx context.Context, repo domain.ContentHash, session domain.AnchoredSession) (domain.AnchoredSession, bool, error) {
-	if session.Uploader == r.actor {
+	if anchoredOwn(r.actor, session.Uploader) {
 		return session, true, nil
 	}
 	ranges, err := r.open.GetAnchoredPublication(ctx, repo, session.Provider, session.SessionID)
@@ -188,7 +203,7 @@ func (s *Service) ListAnchoredSessions(ctx context.Context, repo domain.ContentH
 	if err := validateHashes(repo); err != nil {
 		return nil, err
 	}
-	return repositoryRead(ctx, s, func(bound context.Context) ([]domain.AnchoredSessionSummary, error) {
+	summaries, err := repositoryRead(ctx, s, func(bound context.Context) ([]domain.AnchoredSessionSummary, error) {
 		reader, err := s.anchoredReader(bound)
 		if err != nil {
 			return nil, err
@@ -215,7 +230,7 @@ func (s *Service) ListAnchoredSessions(ctx context.Context, repo domain.ContentH
 		}
 		summaries := make([]domain.AnchoredSessionSummary, 0, len(sessions))
 		for _, session := range sessions {
-			own := session.Uploader == reader.actor
+			own := anchoredOwn(reader.actor, session.Uploader)
 			summary := session.Summary()
 			if !own {
 				shared, ok := session.OpenSummary(open[anchoredKey{session.Provider, session.SessionID}])
@@ -246,7 +261,7 @@ func (s *Service) ListAnchoredSessions(ctx context.Context, repo domain.ContentH
 			// now, when the caller may read the parent at that point.
 			if spawn := session.Body.Spawn; spawn != nil {
 				parentKey := anchoredKey{session.Provider, session.Body.Parent}
-				if parent, ok := byKey[parentKey]; ok && (parent.Uploader == reader.actor || domain.OrdinalOpen(open[parentKey], spawn.AtOrdinal)) {
+				if parent, ok := byKey[parentKey]; ok && (anchoredOwn(reader.actor, parent.Uploader) || domain.OrdinalOpen(open[parentKey], spawn.AtOrdinal)) {
 					if place, found := parent.Body.SpawnedIn(*spawn); found {
 						summary.SpawnedIn = &place
 					}
@@ -256,6 +271,38 @@ func (s *Service) ListAnchoredSessions(ctx context.Context, repo domain.ContentH
 		}
 		return summaries, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	accounts := map[string]struct{}{}
+	for _, summary := range summaries {
+		if summary.Shared {
+			accounts[summary.Uploader] = struct{}{}
+		}
+	}
+	names := s.anchoredAccountNames(ctx, accounts)
+	for index := range summaries {
+		if summaries[index].Shared {
+			summaries[index].UploaderName = names[summaries[index].Uploader]
+		}
+	}
+	return summaries, nil
+}
+
+// anchoredAccountNames answers the public handle of each account that has
+// one: who a session or a note is by, for a reader who may not read the
+// member list. An account whose handle cannot be read is left out.
+func (s *Service) anchoredAccountNames(ctx context.Context, accounts map[string]struct{}) map[string]string {
+	names := map[string]string{}
+	if s.repositories == nil {
+		return names
+	}
+	for account := range accounts {
+		if user, err := s.repositories.GetUser(ctx, account); err == nil && user.Username != "" {
+			names[account] = user.Username
+		}
+	}
+	return names
 }
 
 // AnchoredCommitSegments returns the segments that end at a commit: of the
@@ -321,7 +368,7 @@ func (s *Service) AnchoredSessionContentAccess(ctx context.Context, repo domain.
 		if content != nil {
 			access.Doc, access.Events = content.Doc, content.Events
 		}
-		if session.Uploader == reader.actor {
+		if anchoredOwn(reader.actor, session.Uploader) {
 			if content == nil {
 				return domain.AnchoredContentAccess{}, domain.ErrNotFound
 			}

@@ -134,12 +134,12 @@ func TestAnchoredSessionReadHTTP(t *testing.T) {
 		serviceError error
 	}{
 		{"list_anonymous", "/anchored-sessions", domain.RoleOwner, false, 401, nil},
-		{"list_viewer", "/anchored-sessions", domain.RoleViewer, true, 403, nil},
+		{"list_viewer", "/anchored-sessions", domain.RoleViewer, true, 200, nil},
 		{"list_member", "/anchored-sessions", domain.RoleMember, true, 200, nil},
-		{"one_viewer", "/anchored-sessions/codex/session-1", domain.RoleViewer, true, 403, nil},
+		{"one_viewer", "/anchored-sessions/codex/session-1", domain.RoleViewer, true, 200, nil},
 		{"one_member", "/anchored-sessions/codex/session-1", domain.RoleMember, true, 200, nil},
 		{"one_of_another_uploader", "/anchored-sessions/codex/session-1", domain.RoleOwner, true, 404, domain.ErrNotFound},
-		{"commit_viewer", "/anchored-commits/" + sha, domain.RoleViewer, true, 403, nil},
+		{"commit_viewer", "/anchored-commits/" + sha, domain.RoleViewer, true, 200, nil},
 		{"commit_member", "/anchored-commits/" + sha, domain.RoleMember, true, 200, nil},
 		{"commit_invalid", "/anchored-commits/abc1234", domain.RoleMember, true, 422, domain.ErrValidation},
 	} {
@@ -166,6 +166,27 @@ func TestAnchoredSessionReadHTTP(t *testing.T) {
 				t.Fatalf("session key = %s %s", backend.provider, backend.session)
 			}
 		})
+	}
+}
+
+// Whoever may view a repository reads what is open of its sessions: in a
+// public repository that is also a visitor who is not signed in, and the
+// service is told that no account reads. Nothing is written for one.
+func TestAnchoredSessionsOfAPublicRepositoryAreReadWithoutSigningIn(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	backend := &anchoredSessionHTTPBackend{repo: domain.Repo{ID: domain.HashContent([]byte(t.Name())), RepositoryID: "ws_" + strings.Repeat("c", 32)}}
+	identity := branchPullHTTPIdentity{repo: domain.Repository{ID: backend.repo.RepositoryID, Visibility: domain.VisibilityPublic}}
+	handler, base := NewServer(backend, identity).Handler(), "/api/v1/repos/"+string(backend.repo.ID)
+	for _, path := range []string{"/anchored-sessions", "/anchored-sessions/codex/session-1", "/anchored-commits/" + sha} {
+		backend.calls, backend.actor = 0, "unset"
+		if response := bpHTTP(t, handler, http.MethodGet, base+path, "", false); response.Code != 200 || backend.calls != 1 || backend.actor != "" {
+			t.Fatalf("%s: status=%d, service %+v: %s", path, response.Code, backend, response.Body.String())
+		}
+	}
+	backend.calls = 0
+	response := bpHTTP(t, handler, http.MethodPut, base+"/anchored-sessions/codex/session-1", `{"rule_version":1,"scope":"working-folder","records":0}`, false)
+	if response.Code != 401 || backend.calls != 0 {
+		t.Fatalf("a visitor stored a report: status=%d calls=%d", response.Code, backend.calls)
 	}
 }
 

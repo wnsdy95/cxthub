@@ -86,8 +86,8 @@ func TestRemoteGitReadHTTP(t *testing.T) {
 		serviceError error
 	}{
 		{"anonymous", "", domain.RoleOwner, false, 401, false, 0, domain.RemoteCommitCursor{}, nil},
-		{"viewer", "", domain.RoleViewer, true, 403, false, 0, domain.RemoteCommitCursor{}, nil},
-		{"puller", "", domain.RolePuller, true, 403, false, 0, domain.RemoteCommitCursor{}, nil},
+		{"viewer", "", domain.RoleViewer, true, 200, true, 200, domain.RemoteCommitCursor{}, nil},
+		{"puller", "", domain.RolePuller, true, 200, true, 200, domain.RemoteCommitCursor{}, nil},
 		{"member", "", domain.RoleMember, true, 200, true, 200, domain.RemoteCommitCursor{}, nil},
 		{"owner", "", domain.RoleOwner, true, 200, true, 200, domain.RemoteCommitCursor{}, nil},
 		{"limit", "?limit=7", domain.RoleMember, true, 200, true, 7, domain.RemoteCommitCursor{}, nil},

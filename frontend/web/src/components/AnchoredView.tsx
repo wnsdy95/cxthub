@@ -11,7 +11,7 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
 import type { AnchoredSelection } from '../route';
 import type { AnchoredNote, AnchoredNoteTarget, AnchoredSessionSummary, RemotePull, Repo } from '../types';
 import {
-  useAccountNames, useAnchoredCommit, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
+  useAnchoredCommit, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
   useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
@@ -25,15 +25,17 @@ import { AppLink } from './AppLink';
 import { AnchoredSessionView } from './AnchoredSessionView';
 
 export type AnchoredHref = (selection?: AnchoredSelection) => string;
-/** Members' names by account, for the sessions and notes of other members. */
-const AccountNames = createContext<Map<string, string>>(new Map());
+/** Whether the reader is a member: one who has sessions and worktrees of their own and may write notes. */
+const Member = createContext(true);
 const COMMIT_STEP = 100;
 const LANE = 14;
 const ROW = 46;
 const LANE_COLORS = ['#16181d', '#2e7d5b', '#8250df', '#b4452c', '#0969da', '#bf8700'];
 
-export function AnchoredView({ repo, repositoryId = null, selection, href }: {
-  repo: Repo; repositoryId?: string | null; selection?: AnchoredSelection; href: AnchoredHref;
+export function AnchoredView({ repo, member = true, selection, href }: {
+  repo: Repo; selection?: AnchoredSelection; href: AnchoredHref;
+  /** False for a reader who only views the repository: a viewer, or a visitor who is not signed in. Such a reader is shown what is pushed. */
+  member?: boolean;
 }) {
   const t = useT();
   const sessionsQ = useAnchoredSessions(repo.id);
@@ -48,10 +50,6 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
   }, [remoteQ.data]);
   const index = useMemo(() => buildAnchoredIndex(sessionsQ.data ?? [], lifetimesQ.data ?? [], { worktrees: worktreesQ.data, remote }),
     [sessionsQ.data, lifetimesQ.data, worktreesQ.data, remote]);
-  // Names are read only when another member's session or note is shown.
-  const me = useMe().data;
-  const others = (sessionsQ.data ?? []).some(summary => summary.shared) || (notesQ.data ?? []).some(note => note.author !== me?.id);
-  const names = useAccountNames(repositoryId, others);
   // Commits that share the segment under the pointer are marked together.
   const [highlighted, setHighlighted] = useState<string[]>([]);
 
@@ -63,7 +61,8 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
       </p>
     );
   }
-  const shown = selection ?? { kind: 'all' as const };
+  // The list of work before a push is a member's own; anyone else is shown every session instead.
+  const shown = !selection || (selection.kind === 'held' && !member) ? { kind: 'all' as const } : selection;
   const notes = notesQ.data ?? [];
   const synced = remoteQ.data?.pages[0]?.synced_at;
   // The commits of the selected branch or pull request are marked in the graph.
@@ -73,18 +72,20 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
     void sessionsQ.refetch(); void lifetimesQ.refetch(); void worktreesQ.refetch(); void notesQ.refetch(); void remoteQ.refetch();
   };
   return (
-    <AccountNames.Provider value={names}>
+    <Member.Provider value={member}>
     <div className="anchor">
       <nav className="anchor-nav" aria-label={t('anchored.navAria')}>
         <AppLink className={`anchor-nav-item${shown.kind === 'all' ? ' on' : ''}`} href={href({ kind: 'all' })} aria-current={shown.kind === 'all' ? 'page' : undefined}>
           {t('anchored.allSessions')} <span className="count-badge">{index.sessions.size}</span>
         </AppLink>
-        <AppLink className={`anchor-nav-item${shown.kind === 'held' ? ' on' : ''}`} href={href({ kind: 'held' })} aria-current={shown.kind === 'held' ? 'page' : undefined}>
-          {t('anchored.held')} <span className="count-badge">{index.held.commits.length + index.held.uncommitted.length}</span>
-          <span className="ref-badge pending">{t('anchored.heldOnlyYou')}</span>
-        </AppLink>
-        <h5 className="label">{t('anchored.worktrees')}</h5>
-        {index.worktrees.length === 0 && <p className="anchor-nav-empty">{t('anchored.noWorktrees')}</p>}
+        {member && (
+          <AppLink className={`anchor-nav-item${shown.kind === 'held' ? ' on' : ''}`} href={href({ kind: 'held' })} aria-current={shown.kind === 'held' ? 'page' : undefined}>
+            {t('anchored.held')} <span className="count-badge">{index.held.commits.length + index.held.uncommitted.length}</span>
+            <span className="ref-badge pending">{t('anchored.heldOnlyYou')}</span>
+          </AppLink>
+        )}
+        {member && <h5 className="label">{t('anchored.worktrees')}</h5>}
+        {member && index.worktrees.length === 0 && <p className="anchor-nav-empty">{t('anchored.noWorktrees')}</p>}
         <ul>
           {index.worktrees.map(worktree => {
             const on = shown.kind === 'worktree' && shown.name === worktree.name && (shown.machine ?? '') === worktree.machine;
@@ -138,7 +139,7 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
       <div className="anchor-body">
         <div className="anchor-bar">
           <span>
-            {t('anchored.ownOnly')}{' '}
+            {t(member ? 'anchored.ownOnly' : 'anchored.openOnly')}{' '}
             {remoteQ.error ? t('anchored.remoteError') : synced ? <>{t('anchored.remoteReadAt')} <time dateTime={synced}>{when(synced, true)}</time></> : remoteQ.isLoading ? null : t('anchored.remoteNotRead')}
           </span>
           <button className="ghost" onClick={refresh} disabled={sessionsQ.isFetching}>
@@ -146,7 +147,7 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
           </button>
         </div>
         {lifetimesQ.error && <p role="alert" className="err">{lifetimesQ.error.message}</p>}
-        {index.sessions.size === 0 && (
+        {index.sessions.size === 0 && (member ? (
           <div className="empty-box">
             {t('anchored.emptyLead')}
             <br />
@@ -154,10 +155,12 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
             <br />
             {t('anchored.emptyTail')}
           </div>
-        )}
+        ) : (
+          <div className="empty-box">{t('anchored.emptyOpen')}</div>
+        ))}
         {shown.kind === 'session' ? (
           <AnchoredSessionView key={anchoredKey(shown.provider, shown.id)} repo={repo} provider={shown.provider} sessionId={shown.id}
-            segment={shown.segment} rest={shown.rest} index={index} href={href} names={names} />
+            segment={shown.segment} rest={shown.rest} index={index} href={href} />
         ) : shown.kind === 'held' ? (
           <HeldDetail index={index} href={href} />
         ) : (
@@ -175,7 +178,7 @@ export function AnchoredView({ repo, repositoryId = null, selection, href }: {
         )}
       </div>
     </div>
-    </AccountNames.Provider>
+    </Member.Provider>
   );
 }
 
@@ -271,7 +274,6 @@ function SessionCard({ summary, selection, index, href, children }: {
   summary: AnchoredSessionSummary; selection: AnchoredSelection; index: AnchoredIndex; href: AnchoredHref; children?: ReactNode;
 }) {
   const t = useT();
-  const names = useContext(AccountNames);
   const spawned = index.children.get(anchoredKey(summary.provider, summary.session_id))?.length ?? 0;
   return (
     <>
@@ -280,7 +282,7 @@ function SessionCard({ summary, selection, index, href, children }: {
         <AppLink href={href(selection)} title={summary.session_id}>
           <code>{anchoredShortId(summary.session_id)}</code>
         </AppLink>
-        {summary.shared && summary.uploader && <span className="ref-badge joined">{names.get(summary.uploader) ?? summary.uploader}</span>}
+        {summary.shared && <span className="ref-badge joined">{summary.uploader_name || t('anchored.aMember')}</span>}
         {summary.sub && <span className="ref-badge">{t('anchored.subSession')}</span>}
         {summary.uncommitted?.unplaced && <span className="ref-badge pending">{t('anchored.unplaced')}</span>}
         {!summary.content && <span className="ref-badge archived">{t('anchored.noContentBadge')}</span>}
@@ -309,10 +311,11 @@ function SessionLinks({ sessions, index, href }: { sessions: AnchoredSessionSumm
 }
 
 /** The notes written about one target, and the form to write one where no session explains it. */
-function Notes({ repo, notes, target, canAdd }: { repo: Repo; notes: AnchoredNote[]; target: AnchoredNoteTarget; canAdd: boolean }) {
+function Notes({ repo, notes, target, canAdd: nothingExplains }: { repo: Repo; notes: AnchoredNote[]; target: AnchoredNoteTarget; canAdd: boolean }) {
   const t = useT();
   const me = useMe().data;
-  const names = useContext(AccountNames);
+  // A note is written by a member, where no session explains the target.
+  const canAdd = useContext(Member) && nothingExplains;
   const save = useSaveAnchoredNote();
   const remove = useDeleteAnchoredNote();
   const [editing, setEditing] = useState<string | null>(null);
@@ -340,7 +343,7 @@ function Notes({ repo, notes, target, canAdd }: { repo: Repo; notes: AnchoredNot
         <article key={note.id} className="anchor-note" data-note={note.id}>
           <header className="anchor-card-head">
             <span className="ref-badge joined">{t('anchored.manualNote')}</span>
-            <em>{note.author === me?.id ? t('anchored.you') : names.get(note.author) ?? note.author}</em>
+            <em>{note.author === me?.id ? t('anchored.you') : note.author_name || t('anchored.aMember')}</em>
             <time dateTime={note.updated_at}>{when(note.updated_at)}</time>
           </header>
           {editing === note.id ? form(note.id) : (

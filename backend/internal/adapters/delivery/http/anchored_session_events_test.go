@@ -148,7 +148,7 @@ func TestAnchoredSessionEventFragmentsFollowTheSameRule(t *testing.T) {
 	}
 }
 
-func TestAnchoredSessionEventsNeedAMemberAndASessionTheyMayRead(t *testing.T) {
+func TestAnchoredSessionEventsNeedAViewerAndASessionTheyMayRead(t *testing.T) {
 	for _, path := range []string{"/events?offset=0", "/event-fragments?index=0"} {
 		for _, test := range []struct {
 			name   string
@@ -159,7 +159,7 @@ func TestAnchoredSessionEventsNeedAMemberAndASessionTheyMayRead(t *testing.T) {
 			status int
 		}{
 			{"anonymous", domain.RoleOwner, false, nil, nil, 401},
-			{"viewer", domain.RoleViewer, true, nil, nil, 403},
+			{"viewer", domain.RoleViewer, true, nil, nil, 200},
 			{"member", domain.RoleMember, true, nil, nil, 200},
 			{"a session nothing is open of", domain.RoleMember, true, domain.ErrNotFound, nil, 404},
 			{"a malformed identifier", domain.RoleMember, true, domain.ErrValidation, nil, 422},

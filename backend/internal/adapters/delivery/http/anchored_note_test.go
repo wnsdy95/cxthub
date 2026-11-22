@@ -182,7 +182,7 @@ func TestAnchoredNoteAndWorktreeReadHTTP(t *testing.T) {
 			serviceError error
 		}{
 			{"anonymous", domain.RoleOwner, false, 401, nil},
-			{"viewer", domain.RoleViewer, true, 403, nil},
+			{"viewer", domain.RoleViewer, true, 200, nil},
 			{"member", domain.RoleMember, true, 200, nil},
 			{"not_found", domain.RoleMember, true, 404, domain.ErrNotFound},
 		} {

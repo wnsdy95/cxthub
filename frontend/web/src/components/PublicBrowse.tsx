@@ -1,11 +1,13 @@
 // PublicBrowse — Public read-only access for GitHub public repos.
 // On entering /<username>/<slug>, if it's a public repository, show the context in read-only mode.
+// Its sessions are shown as far as they are pushed.
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { PublicRepository } from '../types';
 import { api } from '../api';
 import {
   navigate,
+  anchoredPath,
   repositoryPath,
   replacePath,
   findRepositoryByRoute,
@@ -17,6 +19,7 @@ import { LocaleSwitcher } from './LocaleSwitcher';
 import { Breadcrumb } from './Breadcrumb';
 import { useT } from '../i18n';
 import { ContextView } from './ContextView';
+import { AnchoredView } from './AnchoredView';
 import { AccessDenied } from './AccessDenied';
 import { useMe, useRepositories } from '../hooks';
 import { HeaderActions } from './HeaderActions';
@@ -126,11 +129,21 @@ export function PublicBrowse({
             {repositoryMetadata.visibility !== 'public' && <p className="warn-red">{t('organization.emergencySessionNotice')}</p>}
           </div>
 
+          <nav className="tabs" aria-label={t('dashboard.tabsAria')}>
+            <button className={`tab${tab === undefined ? ' on' : ''}`} onClick={() => navigate(repositoryPath(repositoryMetadata))}>
+              {t('dashboard.context')}
+            </button>
+            <button className={`tab${tab === 'sessions' ? ' on' : ''}`} onClick={() => navigate(anchoredPath(repositoryMetadata))}>
+              {t('dashboard.sessions')}
+            </button>
+          </nav>
+
           <section className="panel">
             {tab === 'settings' ? (
               <AccessDenied message={t('dashboard.repositoryAccessDenied')} />
-            ) : tab === 'sessions' ? (
-              <AccessDenied message={t('dashboard.sessionsAccessDenied')} />
+            ) : tab === 'sessions' && activeRepo ? (
+              // Whoever may view the repository reads its sessions as far as they are pushed.
+              <AnchoredView key={activeRepo.id} repo={activeRepo} member={false} selection={route.anchored} href={(selection) => anchoredPath(repositoryMetadata, selection)} />
             ) : activeRepo ? (
               <ContextView key={activeRepo.id} repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />
             ) : (

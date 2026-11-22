@@ -41,12 +41,12 @@ func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 	if err := validateHashes(repo); err != nil {
 		return nil, err
 	}
-	return repositoryRead(ctx, s, func(bound context.Context) ([]domain.AnchoredNote, error) {
+	notes, err := repositoryRead(ctx, s, func(bound context.Context) ([]domain.AnchoredNote, error) {
 		store, err := s.anchoredNoteStore()
 		if err != nil {
 			return nil, err
 		}
-		actor, err := anchoredSessionActor(bound)
+		actor, err := anchoredReadActor(bound)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +56,7 @@ func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 		}
 		var commits []string
 		for _, note := range all {
-			if note.Author != actor && note.Target.Kind == domain.AnchoredNoteCommit {
+			if !anchoredOwn(actor, note.Author) && note.Target.Kind == domain.AnchoredNoteCommit {
 				commits = append(commits, note.Target.Commit)
 			}
 		}
@@ -78,7 +78,7 @@ func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 		}
 		notes := []domain.AnchoredNote{}
 		for _, note := range all {
-			open := note.Author == actor
+			open := anchoredOwn(actor, note.Author)
 			switch {
 			case open:
 			case note.Target.Kind == domain.AnchoredNoteCommit:
@@ -92,6 +92,18 @@ func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 		}
 		return notes, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	accounts := map[string]struct{}{}
+	for _, note := range notes {
+		accounts[note.Author] = struct{}{}
+	}
+	names := s.anchoredAccountNames(ctx, accounts)
+	for index := range notes {
+		notes[index].AuthorName = names[notes[index].Author]
+	}
+	return notes, nil
 }
 
 // CreateAnchoredNote stores what the caller wrote about a commit, a branch or
@@ -261,9 +273,13 @@ func (s *Service) ListReportedWorktrees(ctx context.Context, repo domain.Content
 		if err != nil {
 			return nil, err
 		}
-		actor, err := anchoredSessionActor(bound)
+		actor, err := anchoredReadActor(bound)
 		if err != nil {
 			return nil, err
+		}
+		if actor == "" {
+			// A worktree is its member's alone.
+			return []domain.ReportedWorktree{}, nil
 		}
 		return store.ListReportedWorktrees(bound, repo, actor)
 	})
@@ -282,9 +298,13 @@ func (s *Service) AnchoredSessionCalls(ctx context.Context, repo domain.ContentH
 		if err != nil {
 			return nil, err
 		}
-		actor, err := anchoredSessionActor(bound)
+		actor, err := anchoredReadActor(bound)
 		if err != nil {
 			return nil, err
+		}
+		if actor == "" {
+			// Agent calls are their uploader's alone.
+			return nil, domain.ErrNotFound
 		}
 		sessions, err := store.ListAnchoredSessions(bound, repo, actor)
 		if err != nil {

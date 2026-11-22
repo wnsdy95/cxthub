@@ -822,6 +822,8 @@ export interface AnchoredSessionSummary {
   commits: AnchoredSummaryCommit[]; uncommitted?: AnchoredSummaryUncommitted; spawned_in?: AnchoredSummarySpawn; updated_at: string;
   /** The account the session belongs to. `shared` is true when that is another member: the summary then holds only what is open to the team. */
   uploader?: string; shared?: boolean;
+  /** The uploader's public handle, given with a session that is not the caller's. */
+  uploader_name?: string;
 }
 export interface AnchoredCommitSegment { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; segment: AnchoredSegment }
 export interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }
@@ -836,7 +838,11 @@ export type AnchoredNoteTarget =
   | { kind: 'branch'; branch: string; ledger_id?: string }
   | { kind: 'worktree'; worktree: string; machine?: string };
 /** What a person wrote about a commit, a branch or a worktree. Kept apart from captured sessions. */
-export interface AnchoredNote { repo_id: string; id: string; target: AnchoredNoteTarget; author: string; body: string; created_at: string; updated_at: string }
+export interface AnchoredNote {
+  repo_id: string; id: string; target: AnchoredNoteTarget; author: string; body: string; created_at: string; updated_at: string;
+  /** The author's public handle, as the server gives it with a listed note. */
+  author_name?: string;
+}
 /** A working folder of the repository on one of the caller's machines, by name. */
 export interface ReportedWorktree { machine?: string; name: string; branch?: string; removed: boolean; first_seen_at: string; last_seen_at: string }
 /** Commits, branches and pull requests as the server read them from the hosting provider. */

@@ -39,13 +39,16 @@ type AnchoredNoteTarget struct {
 
 // AnchoredNote is one stored manual note.
 type AnchoredNote struct {
-	RepoID    ContentHash        `json:"repo_id"`
-	ID        string             `json:"id"`
-	Target    AnchoredNoteTarget `json:"target"`
-	Author    string             `json:"author"`
-	Body      string             `json:"body"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
+	RepoID ContentHash        `json:"repo_id"`
+	ID     string             `json:"id"`
+	Target AnchoredNoteTarget `json:"target"`
+	Author string             `json:"author"`
+	// AuthorName is the author's public handle. It is filled when notes are
+	// listed and is never stored.
+	AuthorName string    `json:"author_name,omitempty"`
+	Body       string    `json:"body"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // NewAnchoredNoteID returns an identifier for a new note.

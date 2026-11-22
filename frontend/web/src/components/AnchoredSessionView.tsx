@@ -19,10 +19,8 @@ import { EventStream } from './EventStream';
 
 type Href = (selection?: AnchoredSelection) => string;
 
-export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, index, href, names = new Map() }: {
+export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, index, href }: {
   repo: Repo; provider: AnchoredProvider; sessionId: string; segment?: number; rest?: boolean; index: AnchoredIndex; href: Href;
-  /** Members' names by account, for another member's session. */
-  names?: Map<string, string>;
 }) {
   const t = useT();
   const listed = index.sessions.get(anchoredKey(provider, sessionId));
@@ -60,8 +58,8 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
           <span className="anchor-provider" style={{ color: ANCHORED_PROVIDERS[provider]?.ink }}>{ANCHORED_PROVIDERS[provider]?.name ?? provider}</span>{' '}
           <code>{sessionId}</code>
         </p>
-        {shared && listed?.uploader && (
-          <p className="anchor-card-meta anchor-shared">{t('anchored.sharedBy', { name: names.get(listed.uploader) ?? listed.uploader })}</p>
+        {shared && (
+          <p className="anchor-card-meta anchor-shared">{t('anchored.sharedBy', { name: listed?.uploader_name || t('anchored.aMember') })}</p>
         )}
         <p className="anchor-card-meta">
           {body.machine && <><em>{body.machine}</em> · </>}

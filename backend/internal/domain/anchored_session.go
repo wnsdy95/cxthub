@@ -214,9 +214,12 @@ type AnchoredSessionSummary struct {
 	SpawnedIn   *AnchoredSummarySpawn       `json:"spawned_in,omitempty"`
 	// Uploader is the account the session belongs to. Shared is true when
 	// that is not the caller: the summary then holds only what is open.
-	Uploader  string    `json:"uploader"`
-	Shared    bool      `json:"shared,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Uploader string `json:"uploader"`
+	Shared   bool   `json:"shared,omitempty"`
+	// UploaderName is the uploader's public handle, given with a session that
+	// is not the caller's: not every reader may read the member list.
+	UploaderName string    `json:"uploader_name,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // AnchoredSummarySpawn places a spawned session in its parent as the parent is

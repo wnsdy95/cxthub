@@ -1373,7 +1373,8 @@ whose document the server did not take; each one says why. That is not a
 failure of the command: the next run uploads it.
 
 On the server a report belongs to the account that uploaded it. A push is what
-opens it to the other members of the repository, part by part:
+opens it, part by part, to whoever may view the repository: its members and
+viewers, and in a public repository also a visitor who is not signed in:
 
 - a segment, when one of its commits, or a cherry-picked or rebased copy of
   it, is on the remote;
@@ -1389,9 +1390,10 @@ of a repository says nothing about when its branches were pushed. What was
 opened stays open: a forced push that removes the commit, or cutting the
 session another way, takes nothing back.
 
-Another member reads only the open parts. Worktree names, the computer's host
+Anyone but the uploader reads only the open parts, and is given the uploader's
+public handle with them. Worktree names, the computer's host
 name, the agent calls, and the author email of a commit stay with the
-uploader. The conversation is read through the session; the hash of the
+uploader. Only a member writes a note. The conversation is read through the session; the hash of the
 document that holds it is shown to nobody else. That document is still an
 ordinary repository document, so the server does not keep a member who learned
 the hash some other way from reading it.
