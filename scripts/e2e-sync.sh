@@ -428,8 +428,9 @@ printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s","prompt":"task E"}\
 session "$TMP/repo2" UNOWNED
 
 # A plain desktop-app shell has no cxt supervisor. It must checkpoint and record
-# the branch birth independently of the conversation, but keep the vendor-owned native session file open and inject
-# only one bounded memory handoff on the next official lifecycle hook.
+# the branch birth independently of the conversation, but keep the vendor-owned native session file open. On the
+# next official lifecycle hook the session is given the most recent summary along the branch it came to, read from
+# the server and from Git as they are then; the server's main memory is no longer injected.
 APP_JSONL_BEFORE=$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')
 git checkout -qb app-feature-x >"$TMP/app-sw.out" 2>&1
 expect "app switch checkpoints previous branch" "$([ "$(grep -c 'cxt: checkpoint' "$TMP/app-sw.out")" -ge 1 ] && echo yes)" yes
@@ -462,20 +463,15 @@ fi
 expect "prior historical publication finished before immediate handoff" yes yes
 APP_HANDOFF=$(echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"continue\"}" | cxt hook --provider claude --event UserPromptSubmit)
 printf '%s\n' "$APP_HANDOFF" > "$TMP/app-handoff.json"
-expect "app handoff is one bounded project-memory injection" "$(echo "$APP_HANDOFF" | python3 -c "
-import json,sys
-try:
-    text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
-    prefix='[cxt context package v1]'
-    package,end=json.JSONDecoder().raw_decode(text.split(prefix,1)[1].lstrip())
-    selected=package['selection']
-    proofs=[selected.get('context_delivery_hash',''), selected.get('memory_delivery_hash','')]
-    proofs_valid=all(len(p)==71 and p.startswith('sha256:') and all(c in '0123456789abcdef' for c in p[7:]) for p in proofs)
-    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and selected['branch']=='main' and selected['source_policy']=='latest_server_main' and selected['working_position']['branch']=='app-feature-x' and selected['repository_id']=='$RID' and proofs_valid and not package.get('historical_evidence') else 'no')
-except Exception: print('no')")" yes
-expect "app handoff is consumed once" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
+# The request the checkout hook queued is dropped, never emitted: what the session is given is decided when this hook
+# runs. No session wrote a summary along this branch, so nothing is given here; that the server was asked for this
+# branch shows in what cxt remembers for the session. The summary itself is checked in scripts/e2e.sh.
+expect "app switch no longer injects the server's main memory" "$(printf '%s' "$APP_HANDOFF" | grep -c 'cxt context package v1')" 0
+expect "the session is asked for the summary along the branch it came to" "$(cat "$(cd "$(git rev-parse --git-common-dir)" && pwd)/cxt/summary-given-v1/claude-$APP_SESSION_ID" 2>/dev/null)" app-feature-x
+expect "the queued handoff request is dropped" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
 git checkout -q main >/dev/null 2>&1
 echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"back on main\"}" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
+expect "back on the first branch the session is asked for again" "$(cat "$(cd "$(git rev-parse --git-common-dir)" && pwd)/cxt/summary-given-v1/claude-$APP_SESSION_ID" 2>/dev/null)" main
 
 # Resume the same file under an actual cxt wrapper and grow it once. The fake
 # Claude child performs git checkout itself, so the hook's process ancestry is
