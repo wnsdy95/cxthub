@@ -34,4 +34,7 @@ type AnchoredSearch interface {
 type AnchoredSummaries interface {
 	PutAnchoredSummary(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID, commit string, body domain.AnchoredSummaryBody) (domain.AnchoredSummaryReceipt, error)
 	ListAnchoredSummaries(ctx context.Context, repo domain.ContentHash, commits []string) ([]domain.AnchoredSummary, error)
+	// ReadAnchoredMemory lists the summaries along a branch, the summary of
+	// the newest commit first.
+	ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, limit int) (domain.AnchoredMemory, error)
 }

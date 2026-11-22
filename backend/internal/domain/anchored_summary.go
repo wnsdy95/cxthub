@@ -115,6 +115,26 @@ func (s AnchoredSummary) Validate() error {
 	return nil
 }
 
+// AnchoredMemoryLimit is the most summaries one read along a branch answers.
+const AnchoredMemoryLimit = 20
+
+// AnchoredMemory is what the summaries say along a branch, the summary of
+// the newest commit first. It is found by walking the commits the server
+// read from the hosting provider back from the branch's newest commit, so it
+// goes on into the commits the branch started from: the newest summary of
+// the branch itself comes first, and where the branch has none, that of the
+// branch it was made from.
+type AnchoredMemory struct {
+	// Branch is the branch that was walked: the one asked for, or the
+	// default branch when the remote holds no branch of that name. Head is
+	// its newest commit. Both are empty when the remote was not read yet.
+	Branch string `json:"branch,omitempty"`
+	Head   string `json:"head,omitempty"`
+	// Walked counts the commits the walk went through.
+	Walked    int               `json:"walked"`
+	Summaries []AnchoredSummary `json:"summaries"`
+}
+
 // AnchoredSummaryReceipt answers a stored summary. Changed is false when the
 // same text was stored before.
 type AnchoredSummaryReceipt struct {

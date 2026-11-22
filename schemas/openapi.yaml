@@ -1283,6 +1283,19 @@ components:
         segment_no: { type: integer, description: The segment of the session that ends at the commit. Given when summaries are read. }
         uploader: { type: string, description: The account the session belongs to. Given when summaries are read. }
         uploader_name: { type: string, description: The uploader's public handle. Given when summaries are read. }
+    AnchoredMemory:
+      type: object
+      description: >-
+        What the summaries say along a branch, the summary of the newest commit first.
+      required: [walked, summaries]
+      properties:
+        branch: { type: string, description: The branch that was walked. It is the one asked for, or the default branch when the remote holds no branch of that name. Absent before the remote was read. }
+        head: { type: string, description: The newest commit of that branch. Absent before the remote was read. }
+        walked: { type: integer, minimum: 0, description: How many commits the walk went through. }
+        summaries:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/AnchoredSummary' }
     AnchoredSummaryReceipt:
       type: object
       required: [body_hash, changed]
@@ -5356,6 +5369,42 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { description: A query shorter than 2 or longer than 256 characters }
+  /repos/{repoID}/anchored-memory:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: readAnchoredMemory
+      summary: Read the summaries along a branch
+      description: >-
+        Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in.
+        The server walks back from the newest commit of the branch through the commits it read from the hosting
+        provider, among the newest 1000 it holds, and lists the summaries it finds, the summary of the newest
+        commit first. The walk goes on into the commits the branch started from, so the summaries of the branch
+        itself come first and those of the branch it was made from after them. A commit a pull request was merged
+        as, also by a squash, stands for the commits of that pull request, and a commit that was rebased or
+        cherry-picked is found where its copy stands. A summary is listed only when the caller may read the
+        segment it belongs to. A commit that is on no branch of the remote is not on the walk.
+      tags: [anchored-sessions]
+      parameters:
+        - name: branch
+          in: query
+          description: The branch to walk. The default branch is walked when this is absent or the remote holds no branch of that name.
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: How many summaries to list at most.
+          schema: { type: integer, minimum: 1, maximum: 20, default: 5 }
+      responses:
+        '200':
+          description: The summaries found, the summary of the newest commit first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredMemory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: A limit outside 1 to 20, or a branch name that cannot be one }
   /repos/{repoID}/anchored-notes:
     parameters:
       - $ref: '#/components/parameters/repoID'

@@ -3,8 +3,10 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -138,4 +140,24 @@ func (s *Server) listAnchoredCommitSummaries(w http.ResponseWriter, r *http.Requ
 	}
 	summaries, err := service.ListAnchoredSummaries(r.Context(), s.repoID(r), []string{r.PathValue("sha")})
 	s.respond(w, summaries, err)
+}
+
+// readAnchoredMemory lists the summaries along a branch that the caller may
+// read, the summary of the newest commit first.
+func (s *Server) readAnchoredMemory(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.anchoredSummaries(w)
+	if !ok {
+		return
+	}
+	limit := 5
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			s.respond(w, nil, fmt.Errorf("%w: limit is a number", domain.ErrValidation))
+			return
+		}
+		limit = parsed
+	}
+	memory, err := service.ReadAnchoredMemory(r.Context(), s.repoID(r), r.URL.Query().Get("branch"), limit)
+	s.respond(w, memory, err)
 }

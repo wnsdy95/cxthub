@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -13,6 +14,10 @@ import (
 
 // anchoredSummaryCommits is the most commits one read of summaries names.
 const anchoredSummaryCommits = 200
+
+// anchoredMemoryCommits is how many of the newest commits the server holds a
+// walk along a branch looks at.
+const anchoredMemoryCommits = 1000
 
 func (s *Service) anchoredSummaryStore() (outbound.AnchoredSummaryStore, error) {
 	store, ok := s.meta.(outbound.AnchoredSummaryStore)
@@ -121,6 +126,163 @@ func (s *Service) ListAnchoredSummaries(ctx context.Context, repo domain.Content
 	}
 	s.nameAnchoredSummaries(ctx, listed)
 	return listed, nil
+}
+
+// ReadAnchoredMemory lists the summaries along a branch that the caller may
+// read, the summary of the newest commit first. The walk goes back from the
+// branch's newest commit through the commits the server read from the
+// hosting provider, so after the branch's own commits come those of the
+// branch it was made from. A commit a pull request was merged as, also by a
+// squash, stands for that pull request's commits; a commit that was rebased
+// or cherry-picked is found at its copy. A branch the remote does not hold
+// is read as the default branch.
+func (s *Service) ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, limit int) (domain.AnchoredMemory, error) {
+	if err := validateHashes(repo); err != nil {
+		return domain.AnchoredMemory{}, err
+	}
+	if limit < 1 || limit > domain.AnchoredMemoryLimit || (branch != "" && !domain.ValidRemoteBranchName(branch)) {
+		return domain.AnchoredMemory{}, fmt.Errorf("%w: summaries along a branch are read for a branch name, 1 to %d at a time", domain.ErrValidation, domain.AnchoredMemoryLimit)
+	}
+	memory, err := repositoryRead(ctx, s, func(bound context.Context) (domain.AnchoredMemory, error) {
+		memory := domain.AnchoredMemory{Summaries: []domain.AnchoredSummary{}}
+		reader, err := s.anchoredReader(bound)
+		if err != nil {
+			return memory, err
+		}
+		summaries, err := s.anchoredSummaryStore()
+		if err != nil {
+			return memory, err
+		}
+		remote, state, read, err := remoteGitCache(bound, s.meta, repo)
+		if err != nil || !read {
+			return memory, err
+		}
+		branches, err := remote.ListRemoteBranches(bound, repo)
+		if err != nil {
+			return memory, err
+		}
+		heads := make(map[string]string, len(branches))
+		for _, listed := range branches {
+			heads[listed.Name] = listed.SHA
+		}
+		name := branch
+		if _, held := heads[name]; !held {
+			name = state.DefaultBranch
+		}
+		head, held := heads[name]
+		if !held {
+			return memory, nil
+		}
+		memory.Branch, memory.Head = name, head
+		stored, err := remote.ListRemoteCommits(bound, repo, domain.RemoteCommitCursor{}, anchoredMemoryCommits)
+		if err != nil {
+			return memory, err
+		}
+		bySHA := make(map[string]domain.RemoteCommit, len(stored))
+		for _, commit := range stored {
+			bySHA[commit.SHA] = commit
+		}
+		// The head and what it descends from, among the commits held.
+		var ancestors []domain.RemoteCommit
+		seen, queue := map[string]struct{}{head: {}}, []string{head}
+		for len(queue) > 0 {
+			commit, ok := bySHA[queue[0]]
+			queue = queue[1:]
+			if !ok {
+				continue
+			}
+			ancestors = append(ancestors, commit)
+			for _, parent := range commit.Parents {
+				if _, dup := seen[parent]; !dup {
+					seen[parent] = struct{}{}
+					queue = append(queue, parent)
+				}
+			}
+		}
+		sort.SliceStable(ancestors, func(left, right int) bool {
+			if !ancestors[left].CommittedAt.Equal(ancestors[right].CommittedAt) {
+				return ancestors[left].CommittedAt.After(ancestors[right].CommittedAt)
+			}
+			return ancestors[left].SHA > ancestors[right].SHA
+		})
+		memory.Walked = len(ancestors)
+		pulls, err := remote.ListRemotePulls(bound, repo)
+		if err != nil {
+			return memory, err
+		}
+		merged := map[string]domain.RemotePull{}
+		for _, pull := range pulls {
+			if pull.MergeSHA != "" {
+				merged[pull.MergeSHA] = pull
+			}
+		}
+		// Where summaries are looked for, newest first: each commit, and after
+		// a commit a pull request was merged as, that pull request's commits.
+		position, asked := map[string]int{}, []string{}
+		place := func(sha string) {
+			if _, dup := position[sha]; !dup {
+				position[sha] = len(asked)
+				asked = append(asked, sha)
+			}
+		}
+		for _, commit := range ancestors {
+			place(commit.SHA)
+			if pull, ok := merged[commit.SHA]; ok {
+				for index := len(pull.Commits) - 1; index >= 0; index-- {
+					place(pull.Commits[index])
+				}
+			}
+		}
+		// A commit a session made may be on the remote as a copy only: its
+		// summary stands where the copy does.
+		sessions, err := reader.store.ListRepositoryAnchoredSessions(bound, repo)
+		if err != nil {
+			return memory, err
+		}
+		facts, err := readAnchoredRemoteFacts(bound, s.meta, repo, sessions)
+		if err != nil {
+			return memory, err
+		}
+		for _, session := range sessions {
+			for _, segment := range session.Body.Segments {
+				for _, commit := range segment.Commits {
+					if _, direct := position[commit.SHA]; direct {
+						continue
+					}
+					held, copies := facts.of(commit)
+					at := -1
+					for _, sha := range copies {
+						if found, ok := position[sha]; ok && (at < 0 || found < at) {
+							at = found
+						}
+					}
+					if !held && at >= 0 {
+						position[commit.SHA] = at
+						asked = append(asked, commit.SHA)
+					}
+				}
+			}
+		}
+		kept, err := summaries.ListCommitAnchoredSummaries(bound, repo, asked)
+		if err != nil {
+			return memory, err
+		}
+		readable, err := reader.summaries(bound, repo, kept)
+		if err != nil {
+			return memory, err
+		}
+		sort.SliceStable(readable, func(left, right int) bool { return position[readable[left].Commit] < position[readable[right].Commit] })
+		if len(readable) > limit {
+			readable = readable[:limit]
+		}
+		memory.Summaries = readable
+		return memory, nil
+	})
+	if err != nil {
+		return domain.AnchoredMemory{}, err
+	}
+	s.nameAnchoredSummaries(ctx, memory.Summaries)
+	return memory, nil
 }
 
 // summaries keeps of the stored summaries those the reader may read, and

@@ -21,6 +21,7 @@ type anchoredSessionHTTPBackend struct {
 	sha      string
 	body     domain.AnchoredSessionBody
 	summary  domain.AnchoredSummaryBody
+	limit    int
 	err      error
 }
 
@@ -63,6 +64,12 @@ func (backend *anchoredSessionHTTPBackend) ListAnchoredSummaries(ctx context.Con
 	backend.seen(ctx)
 	backend.sha = strings.Join(commits, ",")
 	return []domain.AnchoredSummary{}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) ReadAnchoredMemory(ctx context.Context, _ domain.ContentHash, branch string, limit int) (domain.AnchoredMemory, error) {
+	backend.seen(ctx)
+	backend.session, backend.limit = branch, limit
+	return domain.AnchoredMemory{Branch: branch, Summaries: []domain.AnchoredSummary{}}, backend.err
 }
 
 func (backend *anchoredSessionHTTPBackend) SearchAnchored(ctx context.Context, _ domain.ContentHash, query string) (domain.AnchoredSearchResult, error) {
@@ -252,6 +259,49 @@ func TestAnchoredSummaryHTTP(t *testing.T) {
 			}
 			if test.name == "read_viewer" && (backend.sha != sha || strings.TrimSpace(response.Body.String()) != "[]") {
 				t.Fatalf("the read: %q %s", backend.sha, response.Body.String())
+			}
+		})
+	}
+}
+
+// The summaries along a branch are read by whoever may view the repository,
+// five at a time unless the request says otherwise.
+func TestAnchoredMemoryHTTP(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		query        string
+		role         domain.MemberRole
+		authed       bool
+		status       int
+		branch       string
+		limit        int
+		serviceError error
+	}{
+		{"anonymous", "?branch=main", domain.RoleOwner, false, 401, "", 0, nil},
+		{"viewer", "?branch=feature%2Fparser", domain.RoleViewer, true, 200, "feature/parser", 5, nil},
+		{"member_limit", "?branch=main&limit=2", domain.RoleMember, true, 200, "main", 2, nil},
+		{"no_branch", "", domain.RoleMember, true, 200, "", 5, nil},
+		{"limit_not_a_number", "?branch=main&limit=two", domain.RoleMember, true, 422, "", 0, nil},
+		{"refused_by_the_service", "?branch=main&limit=99", domain.RoleMember, true, 422, "main", 99, domain.ErrValidation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
+			backend.err = test.serviceError
+			response := bpHTTP(t, handler, http.MethodGet, base+"/anchored-memory"+test.query, "", test.authed)
+			if response.Code != test.status {
+				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.limit == 0 {
+				if backend.calls != 0 {
+					t.Fatal("a refused request reached the service")
+				}
+				return
+			}
+			if backend.calls != 1 || backend.actor != "actor" || backend.session != test.branch || backend.limit != test.limit {
+				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if test.name == "no_branch" && strings.TrimSpace(response.Body.String()) != `{"walked":0,"summaries":[]}` {
+				t.Fatalf("answer: %s", response.Body.String())
 			}
 		})
 	}

@@ -1409,6 +1409,15 @@ result counts what this run stored, and a session says in `summary_reason` why
 one was not; the next run tries it again. The collector writes a commit's
 summary once; `cxt segments push` writes every one again.
 
+The server lists the summaries along a branch, the summary of the newest commit
+first (`GET /repos/{id}/anchored-memory?branch=`). It walks back from the
+branch's newest commit through the commits it read from GitHub, so the
+summaries of the branch itself come first and those of the branch it was made
+from after them. A commit a pull request was merged as, also by a squash,
+stands for that pull request's commits, and a rebased or cherry-picked commit
+is found where its copy stands. A branch GitHub does not hold is read as the
+default branch, and a commit that is on no branch of GitHub is not on the walk.
+
 The Sessions tab searches all of this at once: pull request titles, branch
 names, commit subjects and the beginning of commit numbers, the conversations
 and the notes. Each result says which of these it is. A reader is answered
