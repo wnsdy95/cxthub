@@ -1437,6 +1437,20 @@ and the notes. Each result says which of these it is. A reader is answered
 only from what that reader may read, so a part that is not pushed is found by
 its uploader alone.
 
+Two commits can be compared in the Sessions tab. One commit is set as the
+base; every commit opened from the list afterwards shows what lies between the
+two, as `git log base..commit` lists it: the commits the opened one descends
+from and the base does not, newest first, each with the segments that explain
+it. Only commits the server read from GitHub can be compared.
+
+A session can be archived, by the member it belongs to or by a maintainer of
+the repository. An archived session is left out of a commit's segments, of the
+search and of the summaries, also those a session is given along a branch, for
+every reader including its uploader. It is listed under "Archived sessions"
+and is opened from there under the usual rule; nothing of it is removed, and a
+report cxt uploads again leaves it archived. Restoring it brings it back
+everywhere.
+
 Uploading again replaces the session's report as a whole; a report with the
 same content changes nothing. Reports do not advance the repository revision.
 

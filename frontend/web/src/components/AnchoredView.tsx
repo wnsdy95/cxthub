@@ -15,7 +15,7 @@ import {
   useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
-  ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
+  ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredCompare, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
   type AnchoredBranchUse, type AnchoredCommitRow, type AnchoredIndex, type AnchoredRemote,
 } from '../anchoredSessions';
 import { layoutGitGraph, type GitRow } from '../anchoredGraph';
@@ -33,10 +33,12 @@ const LANE = 14;
 const ROW = 46;
 const LANE_COLORS = ['#16181d', '#2e7d5b', '#8250df', '#b4452c', '#0969da', '#bf8700'];
 
-export function AnchoredView({ repo, member = true, selection, href }: {
+export function AnchoredView({ repo, member = true, manage = false, selection, href }: {
   repo: Repo; selection?: AnchoredSelection; href: AnchoredHref;
   /** False for a reader who only views the repository: a viewer, or a visitor who is not signed in. Such a reader is shown what is pushed. */
   member?: boolean;
+  /** True for a reader who manages the repository: such a reader archives and restores any member's session. */
+  manage?: boolean;
 }) {
   const t = useT();
   const sessionsQ = useAnchoredSessions(repo.id);
@@ -66,9 +68,12 @@ export function AnchoredView({ repo, member = true, selection, href }: {
   const shown = !selection || (selection.kind === 'held' && !member) ? { kind: 'all' as const } : selection;
   const notes = notesQ.data ?? [];
   const synced = remoteQ.data?.pages[0]?.synced_at;
-  // The commits of the selected branch or pull request are marked in the graph.
+  // The commit another one is compared with stays chosen while other commits are opened.
+  const base = shown.kind === 'commit' ? shown.base : undefined;
+  // The commits of the selected branch or pull request, or those between two compared commits, are marked in the graph.
   const marked = shown.kind === 'branch' ? anchoredBranchCommits(index, shown.name).shas
-    : shown.kind === 'pull' ? index.pulls.find(pull => pull.number === shown.number)?.commits ?? [] : [];
+    : shown.kind === 'pull' ? index.pulls.find(pull => pull.number === shown.number)?.commits ?? []
+    : shown.kind === 'commit' && base && base !== shown.sha ? anchoredCompare(index, base, shown.sha).shas : [];
   const refresh = () => {
     void sessionsQ.refetch(); void lifetimesQ.refetch(); void worktreesQ.refetch(); void notesQ.refetch(); void remoteQ.refetch();
   };
@@ -83,6 +88,11 @@ export function AnchoredView({ repo, member = true, selection, href }: {
           <AppLink className={`anchor-nav-item${shown.kind === 'held' ? ' on' : ''}`} href={href({ kind: 'held' })} aria-current={shown.kind === 'held' ? 'page' : undefined}>
             {t('anchored.held')} <span className="count-badge">{index.held.commits.length + index.held.uncommitted.length}</span>
             <span className="ref-badge pending">{t('anchored.heldOnlyYou')}</span>
+          </AppLink>
+        )}
+        {index.archived.size > 0 && (
+          <AppLink className={`anchor-nav-item${shown.kind === 'archived' ? ' on' : ''}`} href={href({ kind: 'archived' })} aria-current={shown.kind === 'archived' ? 'page' : undefined}>
+            {t('anchored.archivedSessions')} <span className="count-badge">{index.archived.size}</span>
           </AppLink>
         )}
         {member && <h5 className="label">{t('anchored.worktrees')}</h5>}
@@ -157,7 +167,7 @@ export function AnchoredView({ repo, member = true, selection, href }: {
           </button>
         </div>
         {lifetimesQ.error && <p role="alert" className="err">{lifetimesQ.error.message}</p>}
-        {index.sessions.size === 0 && (member ? (
+        {index.sessions.size === 0 && index.archived.size === 0 && (member ? (
           <div className="empty-box">
             {t('anchored.emptyLead')}
             <br />
@@ -170,17 +180,19 @@ export function AnchoredView({ repo, member = true, selection, href }: {
         ))}
         {shown.kind === 'session' ? (
           <AnchoredSessionView key={anchoredKey(shown.provider, shown.id)} repo={repo} provider={shown.provider} sessionId={shown.id}
-            segment={shown.segment} rest={shown.rest} index={index} href={href} />
+            segment={shown.segment} rest={shown.rest} index={index} href={href} manage={manage} />
         ) : shown.kind === 'held' ? (
           <HeldDetail index={index} href={href} />
+        ) : shown.kind === 'archived' ? (
+          <ArchivedDetail index={index} href={href} />
         ) : shown.kind === 'search' ? (
           <SearchResults key={shown.query} repo={repo} query={shown.query} href={href} />
         ) : (
           <div className="anchor-split">
-            <AnchoredCommits index={index} selected={shown.kind === 'commit' ? shown.sha : ''} highlighted={highlighted} marked={marked} href={href}
+            <AnchoredCommits index={index} selected={shown.kind === 'commit' ? shown.sha : ''} base={base} highlighted={highlighted} marked={marked} href={href}
               more={remoteQ.hasNextPage ? () => void remoteQ.fetchNextPage() : undefined} loading={remoteQ.isFetchingNextPage} />
             <section className="anchor-detail" aria-label={t('anchored.detailAria')}>
-              {shown.kind === 'commit' && <CommitDetail key={shown.sha} repo={repo} index={index} notes={notes} sha={shown.sha} href={href} onHighlight={setHighlighted} />}
+              {shown.kind === 'commit' && <CommitDetail key={shown.sha} repo={repo} index={index} notes={notes} sha={shown.sha} base={base} href={href} onHighlight={setHighlighted} />}
               {shown.kind === 'branch' && <BranchDetail key={shown.name} repo={repo} index={index} notes={notes} name={shown.name} href={href} />}
               {shown.kind === 'worktree' && <WorktreeDetail key={`${shown.machine ?? ''}\n${shown.name}`} repo={repo} index={index} notes={notes} name={shown.name} machine={shown.machine ?? ''} href={href} />}
               {shown.kind === 'pull' && <PullDetail index={index} number={shown.number} href={href} />}
@@ -222,8 +234,10 @@ function Lanes({ row, width, missing }: { row: GitRow<AnchoredCommitRow>; width:
   );
 }
 
-function AnchoredCommits({ index, selected, highlighted, marked, href, more, loading }: {
+function AnchoredCommits({ index, selected, base, highlighted, marked, href, more, loading }: {
   index: AnchoredIndex; selected: string; highlighted: string[]; marked: string[]; href: AnchoredHref; more?: () => void; loading: boolean;
+  /** The commit chosen to compare with: every commit opened from the list is compared with it. */
+  base?: string;
 }) {
   const t = useT();
   const [limit, setLimit] = useState(COMMIT_STEP);
@@ -246,12 +260,13 @@ function AnchoredCommits({ index, selected, highlighted, marked, href, more, loa
           return (
             <li key={commit.sha}>
               <AppLink className={`anchor-commit${on ? ' on' : ''}${highlighted.includes(commit.sha) ? ' hl' : ''}${marked.includes(commit.sha) ? ' in' : ''}`}
-                href={href({ kind: 'commit', sha: commit.sha })} aria-current={on ? 'true' : undefined} data-commit={commit.sha} data-lane={row.lane}>
+                href={href({ kind: 'commit', sha: commit.sha, ...(base ? { base } : {}) })} aria-current={on ? 'true' : undefined} data-commit={commit.sha} data-lane={row.lane}>
                 <Lanes row={row} width={width} missing={missing} />
                 <span className="anchor-commit-text">
                   <span className="anchor-commit-subject">
                     {commit.heads.map(name => <span key={name} className="ref-badge branch">{name}</span>)}
                     {commit.merged !== undefined && <span className="ref-badge">#{commit.merged}</span>}
+                    {commit.sha === base && <span className="ref-badge pending">{t('anchored.compareBase')}</span>}
                     {commit.subject || t('anchored.noSubject')}
                   </span>
                   <span className="anchor-commit-meta">
@@ -409,8 +424,29 @@ function PullLink({ pull, href }: { pull: RemotePull; href: AnchoredHref }) {
   return <AppLink className="ref-badge" href={href({ kind: 'pull', number: pull.number })} title={pull.title}>#{pull.number}</AppLink>;
 }
 
-function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
+/** What lies between the commit chosen to compare with and the opened one: its commits, newest first, each with the segments that explain it. */
+function Compare({ index, base, sha, href }: { index: AnchoredIndex; base: string; sha: string; href: AnchoredHref }) {
+  const t = useT();
+  if (base === sha) return <p className="anchor-card-meta anchor-compare-pick">{t('anchored.comparePick')}</p>;
+  const range = anchoredCompare(index, base, sha);
+  return (
+    <section className="anchor-use anchor-compare" aria-label={t('anchored.compare')}>
+      <h6>
+        {t('anchored.compare')}: <AppLink href={href({ kind: 'commit', sha: base, base })}><code>{anchoredShortSha(base)}</code></AppLink> → <code>{anchoredShortSha(sha)}</code>
+        {range.comparable && <span className="anchor-card-meta"> · {t('anchored.compareCount', { count: range.shas.length })}</span>}
+      </h6>
+      {!range.comparable ? <p className="anchor-card-meta">{t('anchored.compareUnknown')}</p>
+        : range.shas.length === 0 ? <p className="anchor-card-meta">{t('anchored.compareNone')}</p>
+          : <CommitRefs shas={range.shas} index={index} href={href} />}
+      {range.comparable && !range.complete && <p className="anchor-card-meta">{t('anchored.compareIncomplete')}</p>}
+    </section>
+  );
+}
+
+function CommitDetail({ repo, index, notes, sha, base, href, onHighlight }: {
   repo: Repo; index: AnchoredIndex; notes: AnchoredNote[]; sha: string; href: AnchoredHref; onHighlight: (shas: string[]) => void;
+  /** The commit this one is compared with, when one was chosen. */
+  base?: string;
 }) {
   const t = useT();
   const commit: AnchoredCommitRow | undefined = index.commitBySha.get(sha);
@@ -435,6 +471,12 @@ function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
           {commit.pulls.map(number => index.pulls.find(pull => pull.number === number)).map(pull => pull && <PullLink key={pull.number} pull={pull} href={href} />)}
         </p>
       )}
+      <p className="anchor-compare-bar">
+        {base
+          ? <AppLink className="ghost" href={href({ kind: 'commit', sha })}>{t('anchored.compareClear')}</AppLink>
+          : <AppLink className="ghost" href={href({ kind: 'commit', sha, base: sha })}>{t('anchored.compareSet')}</AppLink>}
+      </p>
+      {base && <Compare index={index} base={base} sha={sha} href={href} />}
       {(commit?.links.length ?? 0) === 0 && <p className="empty-box">{t('anchored.noContext')}</p>}
       <ul className="anchor-cards">
         {(commit?.links ?? []).map(link => {
@@ -565,6 +607,34 @@ function SearchResults({ repo, query, href }: { repo: Repo; query: string; href:
 }
 
 /** The caller's own work before a push: commits the remote does not hold, and what is not committed yet. */
+/** The archived sessions: the only place they are listed. Each is opened from here and read as far as the reader may. */
+function ArchivedDetail({ index, href }: { index: AnchoredIndex; href: AnchoredHref }) {
+  const t = useT();
+  const sessions = [...index.archived.values()];
+  return (
+    <section className="anchor-detail" aria-label={t('anchored.archivedSessions')}>
+      <h5 className="anchor-detail-title">{t('anchored.archivedSessions')}</h5>
+      <p className="anchor-card-meta">{t('anchored.archivedLead')}</p>
+      {sessions.length === 0 ? <p className="anchor-nav-empty">{t('anchored.archivedEmpty')}</p> : (
+        <ul className="anchor-archived">
+          {sessions.map(session => (
+            <li key={anchoredKey(session.provider, session.session_id)}>
+              <AppLink href={href({ kind: 'session', provider: session.provider, id: session.session_id })}>
+                <span className="anchor-provider" style={{ color: ANCHORED_PROVIDERS[session.provider]?.ink }}>{ANCHORED_PROVIDERS[session.provider]?.name ?? session.provider}</span>{' '}
+                <code>{anchoredShortId(session.session_id)}</code>
+              </AppLink>
+              <span className="anchor-card-meta">
+                {session.shared && <> · {session.uploader_name || t('anchored.aMember')}</>}
+                {session.archived_at && <> · {t('anchored.archivedOn')} <time dateTime={session.archived_at}>{when(session.archived_at)}</time></>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function HeldDetail({ index, href }: { index: AnchoredIndex; href: AnchoredHref }) {
   const t = useT();
   const { commits, uncommitted } = index.held;

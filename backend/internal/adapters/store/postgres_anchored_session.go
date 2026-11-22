@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,16 +17,20 @@ import (
 
 var _ outbound.AnchoredSessionStore = (*PostgresStore)(nil)
 
-const anchoredSessionColumns = `repo_id,provider,session_id,uploader,body,body_hash,revision,created_at,updated_at`
+const anchoredSessionColumns = `repo_id,provider,session_id,uploader,body,body_hash,revision,created_at,updated_at,archived_at,archived_by`
 
 func scanAnchoredSession(row pgx.Row) (domain.AnchoredSession, error) {
 	var session domain.AnchoredSession
 	var body []byte
 	if err := row.Scan(&session.RepoID, &session.Provider, &session.SessionID, &session.Uploader, &body, &session.BodyHash,
-		&session.Revision, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		&session.Revision, &session.CreatedAt, &session.UpdatedAt, &session.ArchivedAt, &session.ArchivedBy); err != nil {
 		return domain.AnchoredSession{}, err
 	}
 	session.CreatedAt, session.UpdatedAt = session.CreatedAt.UTC(), session.UpdatedAt.UTC()
+	if session.ArchivedAt != nil {
+		at := session.ArchivedAt.UTC()
+		session.ArchivedAt = &at
+	}
 	if err := json.Unmarshal(body, &session.Body); err != nil {
 		return domain.AnchoredSession{}, fmt.Errorf("%w: invalid stored anchored session body: %v", domain.ErrIntegrity, err)
 	}
@@ -110,8 +115,25 @@ func (s *PostgresStore) ListAnchoredSessions(ctx context.Context, repo domain.Co
 	return sessions, nil
 }
 
+// SetAnchoredSessionArchive sets or clears the archive mark of a session.
+func (s *PostgresStore) SetAnchoredSessionArchive(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, at *time.Time, by string) error {
+	if err := validateAnchoredSessionArchive(repo, provider, sessionID, at, by); err != nil {
+		return err
+	}
+	tag, err := s.db(ctx).Exec(ctx, `UPDATE anchored_sessions SET archived_at=$4, archived_by=$5 WHERE repo_id=$1 AND provider=$2 AND session_id=$3`,
+		repo, provider, sessionID, at, by)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 // PutAnchoredSession replaces a session's report and its commit index entries.
-// The caller's repository transaction makes the two one change.
+// The caller's repository transaction makes the two one change. The archive
+// mark is not among the columns it writes.
 func (s *PostgresStore) PutAnchoredSession(ctx context.Context, session domain.AnchoredSession) error {
 	if err := validateAnchoredSession(session); err != nil {
 		return err

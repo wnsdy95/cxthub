@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -30,6 +31,9 @@ func validateAnchoredSession(session domain.AnchoredSession) error {
 	}
 	if strings.TrimSpace(session.Uploader) == "" || session.Revision < 1 || session.CreatedAt.IsZero() || session.UpdatedAt.IsZero() {
 		return fmt.Errorf("%w: anchored session attribution required", domain.ErrValidation)
+	}
+	if (session.ArchivedAt == nil) != (session.ArchivedBy == "") {
+		return fmt.Errorf("%w: an archived anchored session names when and by whom", domain.ErrValidation)
 	}
 	if err := session.Body.Validate(); err != nil {
 		return err
@@ -170,7 +174,25 @@ func (s *FSStore) ListRepositoryAnchoredSessions(ctx context.Context, repo domai
 	return s.listAnchoredSessions(ctx, repo)
 }
 
+// validateAnchoredSessionArchive checks a change of a session's archive mark:
+// a time and an account together, or neither.
+func validateAnchoredSessionArchive(repo domain.ContentHash, provider domain.ProviderKind, sessionID string, at *time.Time, by string) error {
+	if err := validateHash(repo); err != nil {
+		return err
+	}
+	if !domain.ValidAnchoredSessionKey(provider, sessionID) {
+		return fmt.Errorf("%w: anchored session key", domain.ErrValidation)
+	}
+	if (at == nil) != (by == "") || (at != nil && at.IsZero()) || strings.TrimSpace(by) != by || len(by) > 512 {
+		return fmt.Errorf("%w: an archived anchored session names when and by whom", domain.ErrValidation)
+	}
+	return nil
+}
+
+// PutAnchoredSession replaces a session's report. The archive mark of the
+// stored session stays as it is, whatever the given one says.
 func (s *FSStore) PutAnchoredSession(ctx context.Context, session domain.AnchoredSession) error {
+	session.ArchivedAt, session.ArchivedBy = nil, ""
 	if err := validateAnchoredSession(session); err != nil {
 		return err
 	}
@@ -180,11 +202,46 @@ func (s *FSStore) PutAnchoredSession(ctx context.Context, session domain.Anchore
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	path := s.anchoredSessionPath(session.RepoID, session.Provider, session.SessionID)
+	stored, err := s.readAnchoredSessionFile(session.RepoID, path)
+	if err == nil {
+		session.ArchivedAt, session.ArchivedBy = stored.ArchivedAt, stored.ArchivedBy
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
 	raw, err := json.Marshal(session)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.anchoredSessionPath(session.RepoID, session.Provider, session.SessionID), raw)
+	return writeAtomic(path, raw)
+}
+
+// SetAnchoredSessionArchive sets or clears the archive mark of a session.
+func (s *FSStore) SetAnchoredSessionArchive(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, at *time.Time, by string) error {
+	if err := validateAnchoredSessionArchive(repo, provider, sessionID, at, by); err != nil {
+		return err
+	}
+	lock := s.anchoredSessionLock(repo)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path := s.anchoredSessionPath(repo, provider, sessionID)
+	session, err := s.readAnchoredSessionFile(repo, path)
+	if err != nil {
+		return err
+	}
+	session.ArchivedAt, session.ArchivedBy = nil, by
+	if at != nil {
+		utc := at.UTC()
+		session.ArchivedAt = &utc
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, raw)
 }
 
 // ListAnchoredCommitLinks derives the commit index from the stored reports.

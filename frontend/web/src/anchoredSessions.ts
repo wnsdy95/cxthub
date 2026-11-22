@@ -76,6 +76,8 @@ export interface AnchoredIndex {
   unplaced: string[];
   /** What of the caller's own sessions nobody else reads yet. */
   held: AnchoredHeld;
+  /** The archived sessions by key, the one archived last first. Nothing else in the index holds them. */
+  archived: Map<string, AnchoredSessionSummary>;
 }
 /**
  * The caller's own work before a push. `commits` are the commits of the
@@ -116,10 +118,15 @@ function branchUse(row: AnchoredBranchRow, at?: string): AnchoredBranchUse {
 }
 
 export function buildAnchoredIndex(
-  summaries: AnchoredSessionSummary[], lifetimes: BranchLifetime[] = [],
+  listed: AnchoredSessionSummary[], lifetimes: BranchLifetime[] = [],
   extra: { worktrees?: ReportedWorktree[]; remote?: AnchoredRemote } = {},
 ): AnchoredIndex {
   const remote = extra.remote;
+  // An archived session is left out of everything the tab lists; it is kept apart for the list of archived sessions.
+  const summaries = listed.filter(summary => !summary.archived_at);
+  const archived = new Map(listed.filter(summary => summary.archived_at)
+    .sort((a, b) => newestFirst(a.archived_at, b.archived_at) || a.session_id.localeCompare(b.session_id))
+    .map(summary => [anchoredKey(summary.provider, summary.session_id), summary]));
   const sessions = new Map(summaries.map(summary => [anchoredKey(summary.provider, summary.session_id), summary]));
   const children = new Map<string, AnchoredSessionSummary[]>();
   const roots: AnchoredSessionSummary[] = [];
@@ -211,7 +218,7 @@ export function buildAnchoredIndex(
     .sort((a, b) => newestFirst(a.uncommitted!.ended_at ?? a.ended_at, b.uncommitted!.ended_at ?? b.ended_at) || a.session_id.localeCompare(b.session_id))
     .map(summary => anchoredKey(summary.provider, summary.session_id));
   return { sessions, roots, children, commits, commitBySha, worktrees, branches, pulls, defaultBranch: remote?.defaultBranch ?? '', remoteRead: Boolean(remote?.read), unplaced,
-    held: { commits: heldCommits, uncommitted: heldParts } };
+    held: { commits: heldCommits, uncommitted: heldParts }, archived };
 }
 
 /**
@@ -226,6 +233,18 @@ export function anchoredBranchCommits(index: AnchoredIndex, name: string): { sha
   const base = index.branches.find(row => row.name === index.defaultBranch)?.head;
   if (!branch?.head || !base || name === index.defaultBranch) return { shas: [], complete: true };
   return commitsNotOn(index.commitBySha, branch.head, base);
+}
+
+/**
+ * What lies between two commits, as `git log base..head` lists it: the commits
+ * `head` descends from and `base` does not, newest first. Only a commit the
+ * server read from the remote has its parents, so both must be such commits:
+ * `comparable` is false otherwise. `complete` is false when the commits read
+ * so far end before the range does.
+ */
+export function anchoredCompare(index: AnchoredIndex, base: string, head: string): { shas: string[]; complete: boolean; comparable: boolean } {
+  if (!index.commitBySha.get(base)?.remote || !index.commitBySha.get(head)?.remote) return { shas: [], complete: false, comparable: false };
+  return { ...commitsNotOn(index.commitBySha, head, base), comparable: true };
 }
 
 function sameTarget(a: AnchoredNoteTarget, b: AnchoredNoteTarget): boolean {

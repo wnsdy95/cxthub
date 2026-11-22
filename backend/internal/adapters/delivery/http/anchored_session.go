@@ -161,3 +161,37 @@ func (s *Server) readAnchoredMemory(w http.ResponseWriter, r *http.Request) {
 	memory, err := service.ReadAnchoredMemory(r.Context(), s.repoID(r), r.URL.Query().Get("branch"), r.URL.Query()["local"], limit)
 	s.respond(w, memory, err)
 }
+
+// setAnchoredSessionArchive archives a session or restores it. The body says
+// which: {"archived": true} or {"archived": false}.
+func (s *Server) setAnchoredSessionArchive(w http.ResponseWriter, r *http.Request) {
+	if !isJSONBody(r) {
+		s.writeError(w, http.StatusUnsupportedMediaType, "bad_request", "Content-Type must be application/json")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request struct {
+		Archived *bool `json:"archived"`
+	}
+	if err := decoder.Decode(&request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds transport limit")
+			return
+		}
+		s.writeDecodeError(w, err)
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF || request.Archived == nil {
+		s.writeError(w, http.StatusBadRequest, "bad_request", "expected a single JSON object that says whether the session is archived")
+		return
+	}
+	service, ok := s.anchoredSessions(w)
+	if !ok {
+		return
+	}
+	receipt, err := service.SetAnchoredSessionArchived(r.Context(), s.repoID(r), domain.ProviderKind(r.PathValue("provider")), r.PathValue("sessionID"), *request.Archived)
+	s.respond(w, receipt, err)
+}

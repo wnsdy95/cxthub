@@ -316,7 +316,7 @@ export function Dashboard() {
                     </h4>
                   </div>
                   {activeRepo ? (
-                    <AnchoredView key={activeRepo.id} repo={activeRepo} member={atLeast(role, 'member')} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
+                    <AnchoredView key={activeRepo.id} repo={activeRepo} member={atLeast(role, 'member')} manage={atLeast(role, 'maintainer')} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
                   ) : (
                     <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}

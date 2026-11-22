@@ -1379,6 +1379,12 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .anchor-hits li { padding: 6px 0; }
 .anchor-hits .ref-badge { margin: 0 2px 0 0; color: var(--ink); }
 .anchor-hits .anchor-card-meta { margin: 2px 0 0; }
+.anchor-compare-bar { margin: 6px 0; }
+.anchor-compare { margin-bottom: 10px; padding: 0 10px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.anchor-archived { list-style: none; margin: 8px 0 0; padding: 0; }
+.anchor-archived li { padding: 6px 0; border-top: 1px solid var(--line); }
+.anchor-archive-ask, .anchor-archive-confirm, .anchor-archived-note { margin: 6px 0 0; }
+.anchor-archive-confirm { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 0.86rem; }
 .anchor-notes { margin-top: 10px; }
 .anchor-note { margin-bottom: 8px; padding: 8px 10px; border: 1px dashed rgba(210, 153, 34, 0.55); border-radius: 8px; }
 .anchor-note-body { margin: 6px 0; font-size: 0.86rem; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -381,3 +381,105 @@ test('the graph holds commits no session made, and a note can be written where n
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+test('a member archives a session, finds it only among the archived sessions, and restores it', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const reads: string[] = [];
+  const unexpected = await installApiFixture(page, fixture('member', reads));
+  // The server keeps the mark with the session and lists the session with it.
+  const state = { archived: false, writes: [] as boolean[] };
+  await page.route('**/api/v1/repos/repo/anchored-sessions**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'PUT' && pathname.endsWith('/anchored-sessions/claude/parent-session/archive')) {
+      state.archived = (request.postDataJSON() as { archived: boolean }).archived;
+      state.writes.push(state.archived);
+      return route.fulfill({ json: state.archived ? { archived: true, archived_at: at(56) } : { archived: false } });
+    }
+    if (request.method() === 'GET' && pathname.endsWith('/anchored-sessions')) {
+      return route.fulfill({ json: summaries.map(summary => (state.archived && summary.session_id === 'parent-session' ? { ...summary, archived_at: at(56) } : summary)) });
+    }
+    return route.fallback();
+  });
+  const url = (search: string) => new URL(`/alice/app${search}`, origin).href;
+
+  await page.goto('/alice/app?tab=sessions&session=claude%3Aparent-session');
+  const nav = page.getByRole('navigation', { name: 'Worktrees and branches' });
+  await expect(page.locator('.anchor-session-head')).toContainText('parent-session');
+  await expect(nav.getByRole('link', { name: /Archived sessions/ })).toHaveCount(0);
+
+  // Asking shows what archiving does; nothing is sent before it is confirmed, and it can be called off.
+  await page.getByRole('button', { name: 'Archive session' }).click();
+  const confirm = page.getByRole('group', { name: 'Archive session' });
+  await expect(confirm).toContainText('Nothing of it is removed');
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+  await page.getByRole('button', { name: 'Archive session' }).click();
+  await confirm.getByRole('button', { name: 'Archive session' }).click();
+  await expect(page.locator('.anchor-archived-note')).toContainText('This session is listed only among the archived sessions.');
+  expect(state.writes).toEqual([true]);
+
+  // It left the lists: the sessions, and the commits only it made.
+  await expect(nav.getByRole('link', { name: /Archived sessions/ })).toContainText('1');
+  await nav.getByRole('link', { name: /All sessions/ }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&show=all'));
+  await expect(nav.getByRole('link', { name: /All sessions/ })).toContainText('1');
+  await expect(page.locator('.anchor-commit')).toHaveCount(0);
+
+  // It is opened from the archived sessions, with its conversation, and restored there.
+  await nav.getByRole('link', { name: /Archived sessions/ }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&show=archived'));
+  await page.locator('.anchor-archived').getByRole('link', { name: /parent-s/ }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&session=claude%3Aparent-session'));
+  await expect(page.getByText('conversation 0', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Restore session' }).click();
+  await page.getByRole('group', { name: 'Restore session' }).getByRole('button', { name: 'Restore session' }).click();
+  await expect(page.locator('.anchor-archived-note')).toHaveCount(0);
+  await expect(nav.getByRole('link', { name: /Archived sessions/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Archive session' })).toBeVisible();
+  expect(state.writes).toEqual([true, false]);
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('two commits are compared: a base is set, and another commit shows what lies between them', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, fixture('member', [], true));
+  await stubNotes(page);
+  // The base commit is opened too: the first segment of the session ends at it.
+  await page.route(`**/api/v1/repos/repo/anchored-commits/${sha('a')}`, route => route.fulfill({
+    json: [{ provider: 'claude', session_id: 'parent-session', segment_no: 1, rule: 'printed-number', segment: segments[0] }] }));
+  const url = (search: string) => new URL(`/alice/app${search}`, origin).href;
+  const detail = page.getByRole('region', { name: 'Selected item' });
+  const compare = page.getByRole('region', { name: 'Compare' });
+
+  await page.goto(`/alice/app?tab=sessions&commit=${sha('a')}`);
+  await detail.getByRole('link', { name: 'Set as compare base' }).click();
+  await expect(page).toHaveURL(url(`?tab=sessions&commit=${sha('a')}&base=${sha('a')}`));
+  await expect(detail).toContainText('This commit is the compare base.');
+  await expect(page.locator(`[data-commit="${sha('a')}"]`)).toContainText('base');
+
+  // Another commit opened from the list is compared with the base: the commits between the two, newest first,
+  // each with the segment that explains it, and the same commits marked in the graph.
+  await page.locator(`[data-commit="${sha('e')}"]`).click();
+  await expect(page).toHaveURL(url(`?tab=sessions&commit=${sha('e')}&base=${sha('a')}`));
+  await expect(compare).toContainText('3 commits');
+  await expect(compare.locator('.anchor-refs li')).toHaveText([/Merge pull request/, /Fix the parser tests.*parent-s · Segment 2/, /Fix the parser.*parent-s · Segment 2/]);
+  await expect(page.locator('.anchor-commit.in')).toHaveCount(3);
+  await expect(page.locator(`[data-commit="${sha('d')}"]`)).not.toHaveClass(/\bin\b/);
+
+  // The base stays while other commits are opened, survives a reload, and is cleared on request.
+  await page.locator(`[data-commit="${sha('d')}"]`).click();
+  await expect(compare).toContainText('1 commit');
+  await page.reload();
+  await expect(compare.locator('.anchor-refs li')).toHaveText([/Quiet change.*No context/]);
+  await detail.getByRole('link', { name: 'Clear compare base' }).click();
+  await expect(page).toHaveURL(url(`?tab=sessions&commit=${sha('d')}`));
+  await expect(compare).toHaveCount(0);
+  await expect(page.locator('.anchor-commit.in')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

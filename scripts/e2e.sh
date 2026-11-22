@@ -411,6 +411,17 @@ print("cxthub branch summary" in text, sys.argv[1][:12] in text)' "$SEGSHA"
 }
 expect "a prompt hook gives another session the summary along its branch" "$(hooksummary e2e-reader)" "True True"
 expect "the same session is not given it a second time" "$(hooksummary e2e-reader)" "False False"
+# A session is archived by its uploader: it leaves its commit's segments and summaries, stays in the list as archived,
+# is still opened by its key, and comes back when it is restored.
+segarchive() { ccurl -sb "$1" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/archive" -H 'Content-Type: application/json' -d "{\"archived\":$2}"; }
+segcount() { curl -sb "$JA" "$B/repos/$CLIRID/$1" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))'; }
+expect "a teammate who does not manage the repository cannot archive another member's session" "$(segarchive "$JS" true)" 403
+expect "the session is at its commit with a summary before it is archived" "$(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "1 1"
+expect "the uploader archives its session" "$(segarchive "$JA" true)" 200
+expect "an archived session leaves its commit's segments and summaries" "$(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "0 0"
+expect "it stays in the list as archived and is still opened" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),bool(r[0].get("archived_at")))') $(code -b "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" "1 True 200"
+expect "a report uploaded again leaves it archived" "$(segappend m9 30; segcollect; segcount "anchored-commits/$SEGSHA")" 0
+expect "the uploader restores it" "$(segarchive "$JA" false) $(segcount "anchored-commits/$SEGSHA")" "200 1"
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"

@@ -90,6 +90,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"AnchoredSummary", reflect.TypeOf(domain.AnchoredSummary{})},
 		{"AnchoredSummaryReceipt", reflect.TypeOf(domain.AnchoredSummaryReceipt{})},
 		{"AnchoredMemory", reflect.TypeOf(domain.AnchoredMemory{})},
+		{"AnchoredSessionArchive", reflect.TypeOf(domain.AnchoredSessionArchive{})},
 		{"AnchoredSearchHit", reflect.TypeOf(domain.AnchoredSearchHit{})},
 		{"AnchoredSearchResult", reflect.TypeOf(domain.AnchoredSearchResult{})},
 		{"WorktreeReportEntry", reflect.TypeOf(domain.WorktreeReportEntry{})},

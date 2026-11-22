@@ -808,7 +808,11 @@ export interface AnchoredSessionBody {
 export interface AnchoredSession {
   repo_id: string; provider: AnchoredProvider; session_id: string; uploader: string; revision: number; body_hash: string;
   created_at: string; updated_at: string; body: AnchoredSessionBody;
+  /** Present while the session is archived. `archived_by` is given to the session's uploader only. */
+  archived_at?: string; archived_by?: string;
 }
+/** Whether a session is archived after a request to archive or restore it. */
+export interface AnchoredSessionArchive { archived: boolean; archived_at?: string }
 export interface AnchoredSummaryCommit {
   sha: string; segment_no: number; rule: AnchoredLinkRule; subject?: string; created_at?: string; authored_at?: string;
   /** True when the remote holds the commit; otherwise `copies` names the remote commits that are copies of it. */
@@ -824,6 +828,8 @@ export interface AnchoredSessionSummary {
   uploader?: string; shared?: boolean;
   /** The uploader's public handle, given with a session that is not the caller's. */
   uploader_name?: string;
+  /** Present for an archived session: it is listed only among the archived sessions. */
+  archived_at?: string;
 }
 /**
  * What a CLI wrote of a session when the session made a commit. It is read under the rule of the segment that ends at

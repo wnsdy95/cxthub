@@ -11,8 +11,9 @@ const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'sessio
 export type AnchoredSelection =
  | { kind: 'all' }
  | { kind: 'held' }
+ | { kind: 'archived' }
  | { kind: 'search'; query: string }
- | { kind: 'commit'; sha: string }
+ | { kind: 'commit'; sha: string; /** The commit this one is compared with: what lies between the two is shown. */ base?: string }
  | { kind: 'branch'; name: string }
  | { kind: 'worktree'; name: string; machine?: string }
  | { kind: 'pull'; number: number }
@@ -46,8 +47,12 @@ export function anchoredPath(repository: RepositoryAddress, selection?: Anchored
  const params = new URLSearchParams({ tab: 'sessions' });
  if (selection?.kind === 'all') params.set('show', 'all');
  if (selection?.kind === 'held') params.set('show', 'held');
+ if (selection?.kind === 'archived') params.set('show', 'archived');
  if (selection?.kind === 'search') params.set('q', selection.query);
- if (selection?.kind === 'commit') params.set('commit', selection.sha);
+ if (selection?.kind === 'commit') {
+  params.set('commit', selection.sha);
+  if (selection.base) params.set('base', selection.base);
+ }
  if (selection?.kind === 'branch') params.set('branch', selection.name);
  if (selection?.kind === 'worktree') {
   params.set('worktree', selection.name);
@@ -74,7 +79,11 @@ export function parseAnchoredSelection(query: URLSearchParams): AnchoredSelectio
   return { kind: 'session', provider, id, ...segment };
  }
  const commit = query.get('commit');
- if (commit !== null) return COMMIT_SHA.test(commit) ? { kind: 'commit', sha: commit } : undefined;
+ if (commit !== null) {
+  if (!COMMIT_SHA.test(commit)) return undefined;
+  const base = query.get('base');
+  return { kind: 'commit', sha: commit, ...(base !== null && COMMIT_SHA.test(base) ? { base } : {}) };
+ }
  const pull = query.get('pull');
  if (pull !== null) return /^[1-9][0-9]{0,8}$/.test(pull) ? { kind: 'pull', number: Number(pull) } : undefined;
  const branch = query.get('branch');
@@ -88,7 +97,7 @@ export function parseAnchoredSelection(query: URLSearchParams): AnchoredSelectio
  const search = query.get('q');
  if (search !== null) return search.trim() !== '' && search.length <= 256 ? { kind: 'search', query: search } : undefined;
  const show = query.get('show');
- return show === 'all' || show === 'held' ? { kind: show } : undefined;
+ return show === 'all' || show === 'held' || show === 'archived' ? { kind: show } : undefined;
 }
 /** Display-only connection name. Identity comes from the server, never this segment. */
 export function repositorySlug(repo: Pick<Repo, 'remote_url'>): string {

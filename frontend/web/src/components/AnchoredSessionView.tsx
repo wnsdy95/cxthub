@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AnchoredSelection } from '../route';
 import type { AnchoredProvider, Repo } from '../types';
 import { api } from '../api';
-import { useAnchoredEvents, useAnchoredSession, useAnchoredSessionCalls } from '../hooks';
+import { useAnchoredEvents, useAnchoredSession, useAnchoredSessionCalls, useSetAnchoredSessionArchived } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredKey, anchoredOpenStarts, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredShortId, anchoredShortSha,
   anchoredStart, anchoredStream, type AnchoredIndex, type AnchoredPart, type AnchoredPartner,
@@ -19,11 +19,16 @@ import { EventStream } from './EventStream';
 
 type Href = (selection?: AnchoredSelection) => string;
 
-export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, index, href }: {
+export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, index, href, manage = false }: {
   repo: Repo; provider: AnchoredProvider; sessionId: string; segment?: number; rest?: boolean; index: AnchoredIndex; href: Href;
+  /** True for a reader who manages the repository and so archives and restores any member's session. */
+  manage?: boolean;
 }) {
   const t = useT();
-  const listed = index.sessions.get(anchoredKey(provider, sessionId));
+  // An archived session is in no list of the index but the one of archived sessions.
+  const listed = index.sessions.get(anchoredKey(provider, sessionId)) ?? index.archived.get(anchoredKey(provider, sessionId));
+  const archive = useSetAnchoredSessionArchived();
+  const [confirming, setConfirming] = useState(false);
   const sessionQ = useAnchoredSession(repo.id, provider, sessionId, listed?.revision);
   const body = sessionQ.data?.body;
   const parts = useMemo(() => (body ? anchoredParts(body) : []), [body]);
@@ -43,7 +48,11 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
     );
   }
   const key = anchoredKey(provider, sessionId);
-  const summary = index.sessions.get(key);
+  const summary = listed;
+  const archivedAt = sessionQ.data?.archived_at ?? listed?.archived_at;
+  // Its uploader archives and restores a session, and so does whoever manages the repository.
+  const mayArchive = Boolean(listed) && (!shared || manage);
+  const setArchived = (archived: boolean) => archive.mutate({ repoId: repo.id, provider, sessionId, archived }, { onSuccess: () => setConfirming(false) });
   const children = index.children.get(key) ?? [];
   const first = anchoredPartIndex(parts, segment, rest);
   const session = (part?: AnchoredPart): AnchoredSelection => ({
@@ -83,6 +92,28 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
           </p>
         )}
         {body.copied_records > 0 && <p className="anchor-card-meta">{t('anchored.copiedRecords', { count: body.copied_records })}</p>}
+        {archivedAt && (
+          <p className="anchor-card-meta anchor-archived-note">
+            <span className="ref-badge archived">{t('anchored.archivedBadge')}</span>{' '}
+            {t('anchored.archivedNote')} <time dateTime={archivedAt}>{when(archivedAt)}</time>
+          </p>
+        )}
+        {mayArchive && (confirming ? (
+          <p className="anchor-archive-confirm" role="group" aria-label={t(archivedAt ? 'anchored.restoreSession' : 'anchored.archiveSession')}>
+            {t(archivedAt ? 'anchored.restoreWarning' : 'anchored.archiveWarning')}{' '}
+            <button type="button" disabled={archive.isPending} onClick={() => setArchived(!archivedAt)}>
+              {archive.isPending ? t('anchored.archiveSaving') : t(archivedAt ? 'anchored.restoreSession' : 'anchored.archiveSession')}
+            </button>{' '}
+            <button type="button" className="ghost" disabled={archive.isPending} onClick={() => setConfirming(false)}>{t('common.cancel')}</button>
+          </p>
+        ) : (
+          <p className="anchor-archive-ask">
+            <button type="button" className="ghost" onClick={() => { archive.reset(); setConfirming(true); }}>
+              {t(archivedAt ? 'anchored.restoreSession' : 'anchored.archiveSession')}
+            </button>
+          </p>
+        ))}
+        {archive.error && <p role="alert" className="err">{archive.error.message}</p>}
       </header>
 
       <section className="anchor-parts" aria-label={t('anchored.parts')}>

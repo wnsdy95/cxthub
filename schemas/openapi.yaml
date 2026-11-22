@@ -1097,6 +1097,15 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         body: { $ref: '#/components/schemas/AnchoredSessionBody' }
+        archived_at: { type: string, format: date-time, description: Present while the session is archived. }
+        archived_by: { type: string, description: The account that archived the session. Given to the session's uploader only. }
+    AnchoredSessionArchive:
+      type: object
+      description: Whether a session is archived after a request to archive or restore it.
+      required: [archived]
+      properties:
+        archived: { type: boolean }
+        archived_at: { type: string, format: date-time, description: Since when, for an archived session. }
     AnchoredSessionSummary:
       type: object
       description: A stored report without its ranges and agent calls.
@@ -1125,6 +1134,12 @@ components:
         shared: { type: boolean, description: True when the session belongs to another account. The summary then holds only what is open. }
         uploader_name: { type: string, description: The uploader's public handle, given with a session that is not the caller's. }
         updated_at: { type: string, format: date-time }
+        archived_at:
+          type: string
+          format: date-time
+          description: >-
+            Present for an archived session. The list holds archived sessions so that they can be listed as such;
+            a commit's segments, the search and the summaries leave them out.
     AnchoredSummarySpawn:
       type: object
       description: >-
@@ -5228,6 +5243,54 @@ paths:
         '413': { description: The summary exceeds the transport limit }
         '415': { description: Content-Type is not application/json }
         '422': { description: Invalid identity, a summary that says nothing or exceeds its limits, or a commit no segment of the session ends at }
+        '503': { description: Anchored session service unavailable }
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/archive:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    put:
+      operationId: setAnchoredSessionArchive
+      summary: Archive a session or restore it
+      description: >-
+        Member required, rechecked inside the repository transaction. The account the session belongs to may
+        archive and restore it, and so may a maintainer of the repository; any other member is refused, in the
+        same way for a session that exists and for one that does not. An archived session is left out of a
+        commit's segments, of the search and of the summaries, also those read along a branch, for every reader
+        including its uploader. It stays in the session list with `archived_at`, and it is still read by its
+        key under the usual rule. Nothing of it is removed, and a report uploaded again leaves it archived.
+        Asking for the state the session already has changes nothing.
+      tags: [anchored-sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [archived]
+              properties:
+                archived: { type: boolean, description: True to archive the session, false to restore it. }
+      responses:
+        '200':
+          description: The state the session now has
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSessionArchive' }
+        '400': { description: Malformed JSON, an unknown field or a body that does not say which }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { description: The body exceeds the transport limit }
+        '415': { description: Content-Type is not application/json }
+        '422': { description: Invalid identity }
         '503': { description: Anchored session service unavailable }
   /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls:
     parameters:

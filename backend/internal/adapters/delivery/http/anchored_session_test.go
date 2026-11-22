@@ -22,6 +22,7 @@ type anchoredSessionHTTPBackend struct {
 	body     domain.AnchoredSessionBody
 	summary  domain.AnchoredSummaryBody
 	limit    int
+	archived *bool
 	err      error
 }
 
@@ -64,6 +65,12 @@ func (backend *anchoredSessionHTTPBackend) ListAnchoredSummaries(ctx context.Con
 	backend.seen(ctx)
 	backend.sha = strings.Join(commits, ",")
 	return []domain.AnchoredSummary{}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) SetAnchoredSessionArchived(ctx context.Context, _ domain.ContentHash, provider domain.ProviderKind, session string, archived bool) (domain.AnchoredSessionArchive, error) {
+	backend.seen(ctx)
+	backend.provider, backend.session, backend.archived = provider, session, &archived
+	return domain.AnchoredSessionArchive{Archived: archived}, backend.err
 }
 
 func (backend *anchoredSessionHTTPBackend) ReadAnchoredMemory(ctx context.Context, _ domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error) {
@@ -259,6 +266,52 @@ func TestAnchoredSummaryHTTP(t *testing.T) {
 			}
 			if test.name == "read_viewer" && (backend.sha != sha || strings.TrimSpace(response.Body.String()) != "[]") {
 				t.Fatalf("the read: %q %s", backend.sha, response.Body.String())
+			}
+		})
+	}
+}
+
+// A member asks for a session to be archived or restored; the service decides
+// whether that member may.
+func TestAnchoredSessionArchiveHTTP(t *testing.T) {
+	const path = "/anchored-sessions/claude/session-1/archive"
+	for _, test := range []struct {
+		name         string
+		body         string
+		role         domain.MemberRole
+		authed       bool
+		status       int
+		archived     bool
+		serviceError error
+	}{
+		{"anonymous", `{"archived":true}`, domain.RoleOwner, false, 401, false, nil},
+		{"viewer", `{"archived":true}`, domain.RoleViewer, true, 403, false, nil},
+		{"archive", `{"archived":true}`, domain.RoleMember, true, 200, true, nil},
+		{"restore", `{"archived":false}`, domain.RoleMember, true, 200, false, nil},
+		{"says_nothing", `{}`, domain.RoleMember, true, 400, false, nil},
+		{"unknown_field", `{"archived":true,"by":"someone"}`, domain.RoleMember, true, 400, false, nil},
+		{"two_objects", `{"archived":true}{"archived":false}`, domain.RoleMember, true, 400, false, nil},
+		{"neither_uploader_nor_manager", `{"archived":true}`, domain.RoleMember, true, 403, true, domain.ErrForbidden},
+		{"not_stored", `{"archived":true}`, domain.RoleMaintainer, true, 404, true, domain.ErrNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
+			backend.err = test.serviceError
+			response := bpHTTP(t, handler, http.MethodPut, base+path, test.body, test.authed)
+			if response.Code != test.status {
+				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.status != 200 && test.serviceError == nil {
+				if backend.calls != 0 {
+					t.Fatal("a refused request reached the service")
+				}
+				return
+			}
+			if backend.calls != 1 || backend.actor != "actor" || backend.provider != domain.ProviderClaude || backend.session != "session-1" || backend.archived == nil || *backend.archived != test.archived {
+				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if test.status == 200 && strings.TrimSpace(response.Body.String()) != map[bool]string{true: `{"archived":true}`, false: `{"archived":false}`}[test.archived] {
+				t.Fatalf("answer: %s", response.Body.String())
 			}
 		})
 	}

@@ -321,7 +321,8 @@ func walkAnchoredMemory(ctx context.Context, repo domain.ContentHash, remote out
 	return ancestors, merged, nil
 }
 
-// summaries keeps of the stored summaries those the reader may read, and
+// summaries keeps of the stored summaries those the reader may read and whose
+// session is not archived, and
 // says for each which segment it belongs to and whose session it is.
 func (r anchoredReader) summaries(ctx context.Context, repo domain.ContentHash, stored []domain.AnchoredSummary) ([]domain.AnchoredSummary, error) {
 	readable := []domain.AnchoredSummary{}
@@ -335,7 +336,7 @@ func (r anchoredReader) summaries(ctx context.Context, repo domain.ContentHash, 
 				return nil, err
 			}
 			if err == nil {
-				given, ok, err := r.view(ctx, repo, session)
+				given, ok, err := r.listed(ctx, repo, session)
 				if err != nil {
 					return nil, err
 				}

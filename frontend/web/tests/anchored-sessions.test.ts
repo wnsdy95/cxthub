@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredOpenStarts, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredSegmentCommits, anchoredStart,
+  anchoredBranchCommits, anchoredCompare, anchoredKey, anchoredNotesFor, anchoredOpenStarts, anchoredPartIndex, anchoredPartners, anchoredParts, anchoredSegmentCommits, anchoredStart,
   anchoredStream, buildAnchoredIndex,
   type AnchoredRemote,
 } from '../src/anchoredSessions';
@@ -67,6 +67,25 @@ test('the caller\'s work before a push is the commits the remote lacks and the p
   ]);
   assert.deepEqual(index.held.commits, [sha('c'), sha('b')], 'newest first; not one on the remote, copied there, or not yet checked');
   assert.deepEqual(index.held.uncommitted, ['claude:talk', 'claude:mine'], 'newest first; never another member\'s');
+});
+
+test('an archived session is held apart from everything the tab lists', () => {
+  const part = (minute: number) => ({ commands: 1, ended_at: at(minute), unplaced: false, places: [{ worktree: 'app', branch: 'feature', rule: 'recorded-by-tool' as const }] });
+  const index = buildAnchoredIndex([
+    summary('kept', { segments: 1, commits: [{ sha: sha('a'), segment_no: 1, rule: 'printed-number', created_at: at(10), on_remote: false }] }),
+    summary('old', { archived_at: at(50), segments: 1, uncommitted: part(40),
+      commits: [{ sha: sha('a'), segment_no: 1, rule: 'printed-number', created_at: at(10), on_remote: false }, { sha: sha('b'), segment_no: 1, rule: 'printed-number', created_at: at(20), on_remote: false }] }),
+    summary('older', { archived_at: at(45) }),
+    summary('child', { parent: 'old', sub: true }),
+  ]);
+  assert.deepEqual([...index.archived.keys()], ['claude:old', 'claude:older'], 'the one archived last comes first');
+  assert.deepEqual([...index.sessions.keys()], ['claude:kept', 'claude:child']);
+  assert.deepEqual(index.roots.map(root => root.session_id).sort(), ['child', 'kept'], 'a session whose parent is archived is listed on its own');
+  assert.deepEqual(index.commits.map(commit => commit.sha), [sha('a')], 'a commit only an archived session made is not listed');
+  assert.deepEqual(index.commitBySha.get(sha('a'))!.links.map(link => link.session_id), ['kept']);
+  assert.deepEqual(index.held, { commits: [sha('a')], uncommitted: [] }, 'what is archived does not wait for a push');
+  assert.deepEqual(index.worktrees, [], 'and makes no worktree row');
+  assert.equal(buildAnchoredIndex([summary('one')]).archived.size, 0);
 });
 
 test('uncommitted parts are listed by worktree and by the use of a branch name they fall in', () => {
@@ -203,6 +222,22 @@ const remote: AnchoredRemote = {
   ],
   commits: [remoteCommit('a', 1), remoteCommit('b', 2, 'a'), remoteCommit('1', 3, 'b'), remoteCommit('2', 4, '1'), remoteCommit('e', 5, 'b', '2'), remoteCommit('9', 6, 'b')],
 };
+
+test('two commits are compared by what one descends from and the other does not', () => {
+  const index = buildAnchoredIndex([summary('one', { segments: 2, commits: [
+    { sha: sha('1'), segment_no: 1, rule: 'printed-number', on_remote: true },
+    { sha: sha('f'), segment_no: 2, rule: 'printed-number', on_remote: false },
+  ] })], [], { remote });
+  assert.deepEqual(anchoredCompare(index, sha('a'), sha('e')), { shas: [sha('e'), sha('2'), sha('1'), sha('b')], complete: true, comparable: true }, 'newest first, through a merge');
+  assert.deepEqual(anchoredCompare(index, sha('b'), sha('9')), { shas: [sha('9')], complete: true, comparable: true });
+  assert.deepEqual(anchoredCompare(index, sha('9'), sha('e')).shas, [sha('e'), sha('2'), sha('1')], 'two branches: what the one has and the other does not');
+  assert.deepEqual(anchoredCompare(index, sha('e'), sha('a')), { shas: [], complete: true, comparable: true }, 'nothing lies before the base');
+  assert.deepEqual(anchoredCompare(index, sha('a'), sha('f')), { shas: [], complete: false, comparable: false }, 'a commit that is not on the remote has no parents to follow');
+  assert.deepEqual(anchoredCompare(index, sha('7'), sha('e')).comparable, false, 'nor has a commit that was not read');
+  // The commits read so far end before the range does.
+  const window = buildAnchoredIndex([], [], { remote: { ...remote, commits: remote.commits.filter(commit => commit.sha !== sha('1')) } });
+  assert.deepEqual(anchoredCompare(window, sha('a'), sha('e')), { shas: [sha('e'), sha('2'), sha('b')], complete: false, comparable: true });
+});
 
 test('the commit list holds what the remote lists and what only a report names', () => {
   const index = buildAnchoredIndex([

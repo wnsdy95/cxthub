@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 166-file SQL bundle, from
-`0001_init.sql` through `0166_anchored_session_summaries.sql`. Its catalog
+This source release requires the complete 167-file SQL bundle, from
+`0001_init.sql` through `0167_anchored_session_archive.sql`. Its catalog
 digest is
-`69ebe8d4c2c4e963f81d6c3f92be7383e5c3ae7a84a8b13fb01483e448036e50`, matching
+`38346f46c66ae8352fd671d277ab2a92fe1d7e2fd193243e0bd2ba3d6897be55`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current
@@ -73,7 +73,7 @@ even if that catalog was valid for an earlier release.
 There is no automatic destructive schema downgrade. Do not remove Codex
 settings, edit migration receipts, rewrite historical SQL, or point an old
 binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with the actual database catalog (166 after this release's upgrade),
+compatible with the actual database catalog (167 after this release's upgrade),
 or a separately verified pre-upgrade backup recovery that explicitly accounts
 for writes after the backup. Local fixture tests are not evidence that a
 production backup or recovery has been tested.
@@ -91,7 +91,7 @@ leave the previous constraint intact.
 The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
 That bundle belongs only to the corresponding historical artifacts, not the
-current 166-file release. Current verify-only startup still checks the public
+current 167-file release. Current verify-only startup still checks the public
 table and its validated, local, exact kind constraint. A receipt without the
 expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
 is not a compatible schema. Verification does not repair these conditions.

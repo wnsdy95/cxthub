@@ -100,6 +100,10 @@ func (backend *anchoredNoteHTTPBackend) AnchoredSessionContentAccess(context.Con
 	return domain.AnchoredContentAccess{}, backend.err
 }
 
+func (backend *anchoredNoteHTTPBackend) SetAnchoredSessionArchived(context.Context, domain.ContentHash, domain.ProviderKind, string, bool) (domain.AnchoredSessionArchive, error) {
+	return domain.AnchoredSessionArchive{}, backend.err
+}
+
 func anchoredNoteHTTPFixture(t *testing.T, role domain.MemberRole) (*anchoredNoteHTTPBackend, http.Handler, string) {
 	t.Helper()
 	backend := &anchoredNoteHTTPBackend{repo: domain.Repo{ID: domain.HashContent([]byte(t.Name())), RepositoryID: "ws_" + strings.Repeat("c", 32)}}

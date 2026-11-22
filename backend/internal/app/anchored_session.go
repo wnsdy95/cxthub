@@ -155,6 +155,16 @@ func (s *Service) anchoredReader(ctx context.Context) (anchoredReader, error) {
 	return anchoredReader{actor: actor, store: store, open: open}, nil
 }
 
+// listed returns the session as view does, and answers false for an archived
+// session too: it is what every list, search and read along a branch uses.
+// An archived session is opened by its key alone.
+func (r anchoredReader) listed(ctx context.Context, repo domain.ContentHash, session domain.AnchoredSession) (domain.AnchoredSession, bool, error) {
+	if session.Archived() {
+		return domain.AnchoredSession{}, false, nil
+	}
+	return r.view(ctx, repo, session)
+}
+
 // view returns the session as this reader may read it: all of it for its
 // uploader, what is open for anyone else. It answers false when the reader
 // may read nothing of it.
@@ -332,7 +342,7 @@ func (s *Service) AnchoredCommitSegments(ctx context.Context, repo domain.Conten
 			if link.SegmentNo < 1 || link.SegmentNo > len(session.Body.Segments) {
 				return nil, fmt.Errorf("%w: anchored commit index names a missing segment", domain.ErrIntegrity)
 			}
-			view, ok, err := reader.view(bound, repo, session)
+			view, ok, err := reader.listed(bound, repo, session)
 			if err != nil {
 				return nil, err
 			}
@@ -344,6 +354,62 @@ func (s *Service) AnchoredCommitSegments(ctx context.Context, repo domain.Conten
 		}
 		return segments, nil
 	})
+}
+
+// errAnchoredArchiveNotOwn says that the caller is not the session's uploader.
+var errAnchoredArchiveNotOwn = errors.New("anchored session: not the caller's own")
+
+// SetAnchoredSessionArchived archives a session or restores it. The session's
+// uploader may, and so may whoever manages the repository. An archived
+// session is left out of every list, search and read along a branch and is
+// opened only from the list of archived sessions; nothing of it is removed.
+// Asking for the state a session already has changes nothing.
+func (s *Service) SetAnchoredSessionArchived(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, archived bool) (domain.AnchoredSessionArchive, error) {
+	if err := anchoredSessionKey(repo, provider, sessionID); err != nil {
+		return domain.AnchoredSessionArchive{}, err
+	}
+	action := "anchored_session.restored"
+	if archived {
+		action = "anchored_session.archived"
+	}
+	set := func(bound context.Context, own bool) (domain.AnchoredSessionArchive, error) {
+		store, err := s.anchoredSessionStore()
+		if err != nil {
+			return domain.AnchoredSessionArchive{}, err
+		}
+		actor, err := anchoredSessionActor(bound)
+		if err != nil {
+			return domain.AnchoredSessionArchive{}, err
+		}
+		session, err := store.GetAnchoredSession(bound, repo, provider, sessionID)
+		if own && (errors.Is(err, domain.ErrNotFound) || (err == nil && session.Uploader != actor)) {
+			// Whether the session exists is not said to a caller who is not
+			// its uploader before that caller is known to manage the repository.
+			return domain.AnchoredSessionArchive{}, errAnchoredArchiveNotOwn
+		}
+		if err != nil {
+			return domain.AnchoredSessionArchive{}, err
+		}
+		if archived == session.Archived() {
+			return domain.AnchoredSessionArchive{Archived: archived, ArchivedAt: session.ArchivedAt}, nil
+		}
+		var at *time.Time
+		by := ""
+		if archived {
+			now := time.Now().UTC()
+			at, by = &now, actor
+		}
+		if err := store.SetAnchoredSessionArchive(bound, repo, provider, sessionID, at, by); err != nil {
+			return domain.AnchoredSessionArchive{}, err
+		}
+		return domain.AnchoredSessionArchive{Archived: archived, ArchivedAt: at}, nil
+	}
+	ctx = context.WithValue(auditOperation(ctx, action), revisionScopeKey{}, "none")
+	receipt, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredSessionArchive, error) { return set(bound, true) })
+	if !errors.Is(err, errAnchoredArchiveNotOwn) {
+		return receipt, err
+	}
+	return repositoryWrite(writeAction(ctx, "manage"), s, repo, func(bound context.Context) (domain.AnchoredSessionArchive, error) { return set(bound, false) })
 }
 
 // AnchoredSessionContentAccess says what the caller may read of a session's

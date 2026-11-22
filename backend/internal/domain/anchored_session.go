@@ -190,6 +190,21 @@ type AnchoredSession struct {
 	CreatedAt time.Time           `json:"created_at"`
 	UpdatedAt time.Time           `json:"updated_at"`
 	Body      AnchoredSessionBody `json:"body"`
+	// ArchivedAt is set while the session is archived. An archived session
+	// is left out of every list, search and read along a branch, and is
+	// opened only from the list of archived sessions. ArchivedBy is the
+	// account that archived it; another account is not told which.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	ArchivedBy string     `json:"archived_by,omitempty"`
+}
+
+// Archived reports whether the session is archived.
+func (s AnchoredSession) Archived() bool { return s.ArchivedAt != nil }
+
+// AnchoredSessionArchive answers a request to archive or restore a session.
+type AnchoredSessionArchive struct {
+	Archived   bool       `json:"archived"`
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // AnchoredSessionSummary lists a stored report without its ranges: what a
@@ -220,6 +235,10 @@ type AnchoredSessionSummary struct {
 	// is not the caller's: not every reader may read the member list.
 	UploaderName string    `json:"uploader_name,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	// ArchivedAt is set for an archived session. A list holds archived
+	// sessions too, so that the list of archived sessions can be shown;
+	// every other view leaves them out.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // AnchoredSummarySpawn places a spawned session in its parent as the parent is
@@ -548,7 +567,8 @@ func (s AnchoredSession) Summary() AnchoredSessionSummary {
 	body := s.Body
 	summary := AnchoredSessionSummary{Provider: s.Provider, SessionID: s.SessionID, Parent: body.Parent, Sub: body.Sub, Revision: s.Revision,
 		BodyHash: s.BodyHash, Records: body.Records, Commands: body.Commands, Segments: len(body.Segments), Machine: body.Machine,
-		StartedAt: body.StartedAt, EndedAt: body.EndedAt, Content: body.Content != nil, Commits: []AnchoredSummaryCommit{}, Uploader: s.Uploader, UpdatedAt: s.UpdatedAt}
+		StartedAt: body.StartedAt, EndedAt: body.EndedAt, Content: body.Content != nil, Commits: []AnchoredSummaryCommit{}, Uploader: s.Uploader, UpdatedAt: s.UpdatedAt,
+		ArchivedAt: s.ArchivedAt}
 	for index, segment := range body.Segments {
 		for _, commit := range segment.Commits {
 			summary.Commits = append(summary.Commits, AnchoredSummaryCommit{SHA: commit.SHA, SegmentNo: index + 1, Rule: commit.Rule,
@@ -663,7 +683,7 @@ func (s AnchoredSession) OpenView(open []AnchoredPublishedRange) (AnchoredSessio
 		view.Content = &AnchoredContent{Events: body.Content.Events}
 	}
 	out := s
-	out.Body = view
+	out.Body, out.ArchivedBy = view, ""
 	return out, true
 }
 

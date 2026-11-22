@@ -7,8 +7,11 @@ const selections: [AnchoredSelection | undefined, string][] = [
   [undefined, '/alice/cxthub?tab=sessions'],
   [{ kind: 'all' }, '/alice/cxthub?tab=sessions&show=all'],
   [{ kind: 'held' }, '/alice/cxthub?tab=sessions&show=held'],
+  [{ kind: 'archived' }, '/alice/cxthub?tab=sessions&show=archived'],
   [{ kind: 'search', query: 'parser fix #7' }, '/alice/cxthub?tab=sessions&q=parser+fix+%237'],
   [{ kind: 'commit', sha }, `/alice/cxthub?tab=sessions&commit=${sha}`],
+  [{ kind: 'commit', sha, base: 'b'.repeat(40) }, `/alice/cxthub?tab=sessions&commit=${sha}&base=${'b'.repeat(40)}`],
+  [{ kind: 'commit', sha, base: sha }, `/alice/cxthub?tab=sessions&commit=${sha}&base=${sha}`],
   [{ kind: 'branch', name: 'feature/login page' }, '/alice/cxthub?tab=sessions&branch=feature%2Flogin+page'],
   [{ kind: 'worktree', name: 'app' }, '/alice/cxthub?tab=sessions&worktree=app'],
   [{ kind: 'pull', number: 571 }, '/alice/cxthub?tab=sessions&pull=571'],
@@ -35,6 +38,9 @@ for (const search of [
 }
 assert.deepEqual(parseRoute('/alice/cxthub', '?tab=sessions&session=claude:abc&segment=0'),
   { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions', anchored: { kind: 'session', provider: 'claude', id: 'abc' } }, 'segments are numbered from one');
+assert.deepEqual(parseRoute('/alice/cxthub', `?tab=sessions&commit=${sha}&base=abc`),
+  { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions', anchored: { kind: 'commit', sha } }, 'a compare base that is not a commit number is dropped');
+assert.deepEqual(parseRoute('/alice/cxthub', `?tab=sessions&base=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions' }, 'a base alone selects nothing');
 assert.deepEqual(parseRoute('/alice/cxthub', `?tab=onhold&commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'onhold' }, 'only the sessions tab holds a selection');
 assert.deepEqual(parseRoute('/alice/cxthub', `?commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub' });
 console.log('sessions tab routes: one selection in the address, read back exactly, malformed values dropped');

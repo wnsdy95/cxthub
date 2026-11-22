@@ -142,7 +142,7 @@ func (s *Service) searchAnchoredRepository(ctx context.Context, repo domain.Cont
 	sort.SliceStable(sessions, func(left, right int) bool { return sessions[left].UpdatedAt.After(sessions[right].UpdatedAt) })
 	local := 0
 	for _, session := range sessions {
-		view, ok, err := reader.view(ctx, repo, session)
+		view, ok, err := reader.listed(ctx, repo, session)
 		if err != nil {
 			return found, err
 		}

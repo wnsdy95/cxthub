@@ -196,7 +196,7 @@ const theirSession: AnchoredSession = { ...session, session_id: 'their-session',
   content: { events: 4 },
 } };
 // The names come with the sessions and notes: not every reader may read the member list.
-function renderShared(selection?: AnchoredSelection, reader: { member?: boolean; signedIn?: boolean; listed?: AnchoredSessionSummary } = {}): string {
+function renderShared(selection?: AnchoredSelection, reader: { member?: boolean; manage?: boolean; signedIn?: boolean; listed?: AnchoredSessionSummary } = {}): string {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(['me'], reader.signedIn === false ? null : { id: 'alice-id', username: 'alice' });
   client.setQueryData(['anchored-sessions', repo.id], [reader.listed ?? theirs]);
@@ -210,7 +210,7 @@ function renderShared(selection?: AnchoredSelection, reader: { member?: boolean;
     { offset: 3, next: -1, events: [message(3, 'user', 'What is left?')] },
   ] });
   return renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client },
-    createElement(AnchoredView, { repo, member: reader.member, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
+    createElement(AnchoredView, { repo, member: reader.member, manage: reader.manage, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
 }
 const sharedList = renderShared();
 assert.match(sharedList, /their-se<\/code><\/a><span class="ref-badge joined">bob<\/span>/, 'a teammate\'s session names its uploader');
@@ -304,6 +304,54 @@ assert.match(renderSearch('p'), /Type at least two characters\./);
 assert.match(translate('ko', 'anchored.hit_segment'), /\uC870\uAC01/);
 
 assert.match(translate('ko', 'anchored.heldOnlyYou'), /\uB098\uB9CC \uBD04/);
+
+// Two commits are compared: one is set as the base, and every commit opened from the list afterwards shows what lies
+// between the two, each commit with the segments that explain it.
+assert.match(commit, /<a class="ghost" href="\/alice\/app\?tab=sessions&amp;commit=b{40}&amp;base=b{40}">⇆ Set as compare base<\/a>/);
+const picking = render({ kind: 'commit', sha: sha('a'), base: sha('a') }, true);
+assert.match(picking, /This commit is the compare base\. Open another commit from the list/);
+assert.match(picking, /data-commit="e{40}"[^>]*href="\/alice\/app\?tab=sessions&amp;commit=e{40}&amp;base=a{40}"/, 'the list keeps the base while another commit is opened');
+assert.match(picking, /data-commit="a{40}"[^>]*>.*?<span class="ref-badge pending">base<\/span>Add the parser/s);
+assert.match(picking, /<a class="ghost" href="\/alice\/app\?tab=sessions&amp;commit=a{40}">Clear compare base<\/a>/);
+const compared = render({ kind: 'commit', sha: sha('e'), base: sha('a') }, true);
+assert.match(compared, /<section class="anchor-use anchor-compare" aria-label="Compare"><h6>Compare: <a href="[^"]*commit=a{40}&amp;base=a{40}"><code>a{10}<\/code><\/a> → <code>e{10}<\/code><span class="anchor-card-meta"> · 3 commits<\/span>/);
+assert.deepEqual([...compared.match(/<section class="anchor-use anchor-compare".*?<\/section>/s)![0].matchAll(/commit=([0-9a-f]{40})"><code>/g)].map(match => match[1][0]), ['e', 'c', 'b'],
+  'the commits between the two, newest first');
+assert.match(compared, /<section class="anchor-use anchor-compare".*?commit=b{40}"><code>b{10}<\/code><\/a> <span>Fix the parser<\/span>.*?session=claude%3Aparent-session&amp;segment=2/s,
+  'each with the segment that explains it');
+assert.equal(count(compared, /class="anchor-commit[^"]* in"/g), 3, 'and they are marked in the graph');
+assert.match(render({ kind: 'commit', sha: sha('a'), base: sha('e') }, true), /This commit has nothing the base does not have\./);
+assert.match(render({ kind: 'commit', sha: sha('b'), base: sha('a') }), /Only commits read from the remote can be compared\./);
+assert.match(translate('ko', 'anchored.compareSet'), /\uBE44\uAD50 \uAE30\uC900/);
+
+// An archived session is listed only among the archived sessions, and is opened from there. Its uploader archives and
+// restores it, and so does a reader who manages the repository.
+assert.doesNotMatch(overview, /Archived sessions/, 'the list is offered once a session is archived');
+const openedOwn = render({ kind: 'session', provider: 'claude', id: 'parent-session' });
+assert.match(openedOwn, /<button type="button" class="ghost">Archive session<\/button>/);
+assert.doesNotMatch(openedOwn, /class="ref-badge archived">archived</);
+const withArchived: AnchoredSessionSummary[] = [{ ...summaries[0], archived_at: at(56) }, summaries[1]];
+const afterArchive = render(undefined, false, withArchived);
+assert.match(afterArchive, /href="\/alice\/app\?tab=sessions&amp;show=archived"[^>]*>Archived sessions <span class="count-badge">1<\/span>/);
+assert.match(afterArchive, />All sessions <span class="count-badge">1<\/span>/, 'an archived session is not counted among the sessions');
+assert.doesNotMatch(afterArchive, /data-commit="/, 'the commits only an archived session made are not listed');
+assert.doesNotMatch(afterArchive, /session=claude%3Aparent-session/);
+const archivedList = render({ kind: 'archived' }, false, withArchived);
+assert.match(archivedList, /class="anchor-nav-item on" aria-current="page" href="\/alice\/app\?tab=sessions&amp;show=archived">/);
+assert.match(archivedList, /It is opened from here; nothing of it is removed\./);
+assert.match(archivedList, /<ul class="anchor-archived"><li><a href="\/alice\/app\?tab=sessions&amp;session=claude%3Aparent-session">.*?<code>parent-s<\/code><\/a>.*?archived <time/s);
+assert.doesNotMatch(archivedList, /class="anchor-commits"/, 'the list stands in place of the commit graph');
+assert.match(render({ kind: 'archived' }), /No archived sessions\./);
+const openedArchived = render({ kind: 'session', provider: 'claude', id: 'parent-session' }, false, withArchived);
+assert.match(openedArchived, /<span class="ref-badge archived">archived<\/span> This session is listed only among the archived sessions\. Archived <time/);
+assert.match(openedArchived, /<button type="button" class="ghost">Restore session<\/button>/);
+assert.match(openedArchived, /Write the parser\./, 'its conversation is still read');
+assert.doesNotMatch(renderShared({ kind: 'session', provider: 'claude', id: 'their-session' }), /Archive session/, 'another member\'s session is not theirs to archive');
+assert.match(renderShared({ kind: 'session', provider: 'claude', id: 'their-session' }, { manage: true }), /<button type="button" class="ghost">Archive session<\/button>/,
+  'a reader who manages the repository archives any session');
+assert.match(renderShared({ kind: 'archived' }, { member: false, signedIn: false, listed: { ...theirs, archived_at: at(56) } }),
+  /session=claude%3Atheir-session">.*?<code>their-se<\/code><\/a>.*? · bob.*?archived <time/s, 'a visitor opens what is pushed of an archived session');
+assert.match(translate('ko', 'anchored.archivedSessions'), /\uBCF4\uAD00\uD55C \uC138\uC158/);
 
 assert.match(translate('ko', 'anchored.noContext'), /\uB9E5\uB77D \uC5C6\uC74C/);
 assert.match(translate('ko', 'anchored.unplaced'), /\uC704\uCE58 \uBBF8\uC0C1/);

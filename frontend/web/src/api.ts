@@ -172,6 +172,8 @@ export const api = {
   anchoredCommit: (repoId: string, sha: string, signal?: AbortSignal) =>
     call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
   /** The summaries written at a commit that the caller may read. */
+  setAnchoredSessionArchived: (repoId: string, provider: string, sessionId: string, archived: boolean) =>
+    call<import('./types').AnchoredSessionArchive>('PUT', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/archive`, { archived }),
   anchoredCommitSummaries: (repoId: string, sha: string, signal?: AbortSignal) =>
     call<import('./types').AnchoredSummary[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}/summaries`, undefined, undefined, signal),
   /** Looks for a query in what the sessions tab shows, as far as the caller may read it. */

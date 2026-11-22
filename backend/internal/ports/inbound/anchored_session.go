@@ -20,6 +20,9 @@ type AnchoredSessions interface {
 	// AnchoredSessionContentAccess says what the caller may read of a
 	// session's conversation.
 	AnchoredSessionContentAccess(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredContentAccess, error)
+	// SetAnchoredSessionArchived archives a session or restores it: its
+	// uploader may, and whoever manages the repository.
+	SetAnchoredSessionArchived(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, archived bool) (domain.AnchoredSessionArchive, error)
 }
 
 // AnchoredSearch looks for a query in what the sessions tab shows: pull

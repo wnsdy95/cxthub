@@ -95,6 +95,73 @@ func checkAnchoredSessionPersistence(t *testing.T, ctx context.Context, storage 
 		t.Fatalf("the new entry: %+v %v", links, err)
 	}
 
+	// A session is archived by an account at a time, and restored. A report
+	// uploaded again leaves the mark as it is, whatever it says itself.
+	archivedAt := first.UpdatedAt.Add(time.Hour)
+	if err := storage.SetAnchoredSessionArchive(ctx, repo, domain.ProviderClaude, "session-1", &archivedAt, "manager-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := storage.GetAnchoredSession(ctx, repo, domain.ProviderClaude, "session-1"); err != nil || got.ArchivedAt == nil || !got.ArchivedAt.Equal(archivedAt) || got.ArchivedBy != "manager-1" || got.Revision != 2 {
+		t.Fatalf("an archived session: %+v %v", got, err)
+	}
+	if got, err := storage.GetAnchoredSession(ctx, repo, domain.ProviderCodex, "session-1"); err != nil || got.ArchivedAt != nil || got.ArchivedBy != "" {
+		t.Fatalf("the other session was archived with it: %+v %v", got, err)
+	}
+	if listed, err := storage.ListRepositoryAnchoredSessions(ctx, repo); err != nil {
+		t.Fatal(err)
+	} else {
+		archived := 0
+		for _, session := range listed {
+			if session.Archived() {
+				archived++
+			}
+		}
+		if archived != 1 {
+			t.Fatalf("the list holds %d archived sessions", archived)
+		}
+	}
+	again := anchoredStoreSession(t, repo, domain.ProviderClaude, "session-1", "uploader-1", a, c)
+	again.Revision, again.UpdatedAt = 3, first.UpdatedAt.Add(2*time.Hour)
+	if err := storage.PutAnchoredSession(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := storage.GetAnchoredSession(ctx, repo, domain.ProviderClaude, "session-1"); err != nil || got.Revision != 3 || got.ArchivedAt == nil || !got.ArchivedAt.Equal(archivedAt) || got.ArchivedBy != "manager-1" {
+		t.Fatalf("a report uploaded again undid the archive: %+v %v", got, err)
+	}
+	if err := storage.SetAnchoredSessionArchive(ctx, repo, domain.ProviderClaude, "session-1", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := storage.GetAnchoredSession(ctx, repo, domain.ProviderClaude, "session-1"); err != nil || got.ArchivedAt != nil || got.ArchivedBy != "" || got.Revision != 3 {
+		t.Fatalf("a restored session: %+v %v", got, err)
+	}
+	// A report that claims to be archived does not archive.
+	claimed := anchoredStoreSession(t, repo, domain.ProviderClaude, "session-3", "uploader-1", a)
+	claimed.ArchivedAt, claimed.ArchivedBy = &archivedAt, "uploader-1"
+	if err := storage.PutAnchoredSession(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := storage.GetAnchoredSession(ctx, repo, domain.ProviderClaude, "session-3"); err != nil || got.Archived() {
+		t.Fatalf("a report archived its session: %+v %v", got, err)
+	}
+	if err := storage.SetAnchoredSessionArchive(ctx, repo, domain.ProviderClaude, "missing", &archivedAt, "manager-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("archiving a session that is not stored: %v", err)
+	}
+	for name, change := range map[string]func() error{
+		"a time without an account": func() error {
+			return storage.SetAnchoredSessionArchive(ctx, repo, domain.ProviderClaude, "session-1", &archivedAt, "")
+		},
+		"an account without a time": func() error {
+			return storage.SetAnchoredSessionArchive(ctx, repo, domain.ProviderClaude, "session-1", nil, "manager-1")
+		},
+		"a key that is not one": func() error {
+			return storage.SetAnchoredSessionArchive(ctx, repo, domain.ProviderClaude, "a/b", &archivedAt, "manager-1")
+		},
+	} {
+		if err := change(); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+
 	// A report whose hash is not the hash of its body is never stored.
 	forged := anchoredStoreSession(t, repo, domain.ProviderClaude, "session-2", "uploader-1", a)
 	forged.BodyHash = domain.HashContent([]byte("something else"))

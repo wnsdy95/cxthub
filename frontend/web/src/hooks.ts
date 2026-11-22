@@ -663,6 +663,16 @@ export function useAnchoredNotes(repoId: string | null) {
     retry: false,
   });
 }
+/** Archives a session or restores it. Everything the tab lists is read again: an archived session leaves all of it. */
+export function useSetAnchoredSessionArchived() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: { repoId: string; provider: string; sessionId: string; archived: boolean }) =>
+      api.setAnchoredSessionArchived(value.repoId, value.provider, value.sessionId, value.archived),
+    onSuccess: (_result, value) => Promise.all(['anchored-sessions', 'anchored-session', 'anchored-commit', 'anchored-commit-summaries', 'anchored-search']
+      .map(key => qc.invalidateQueries({ queryKey: [key, value.repoId] }))),
+  });
+}
 export function useSaveAnchoredNote() {
   const qc = useQueryClient();
   return useMutation({

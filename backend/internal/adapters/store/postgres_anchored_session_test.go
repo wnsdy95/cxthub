@@ -23,11 +23,13 @@ func TestPGAnchoredSessionTableConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, statement := range map[string]string{
-		"an unknown tool":            `UPDATE anchored_sessions SET provider='other' WHERE repo_id=$1`,
-		"an identifier with a slash": `UPDATE anchored_sessions SET session_id='a/b' WHERE repo_id=$1`,
-		"a blank uploader":           `UPDATE anchored_sessions SET uploader=' ' WHERE repo_id=$1`,
-		"a short commit number":      `UPDATE anchored_session_commits SET commit_sha='abc1234' WHERE repo_id=$1`,
-		"an unknown link rule":       `UPDATE anchored_session_commits SET rule='guessed' WHERE repo_id=$1`,
+		"an unknown tool":               `UPDATE anchored_sessions SET provider='other' WHERE repo_id=$1`,
+		"an identifier with a slash":    `UPDATE anchored_sessions SET session_id='a/b' WHERE repo_id=$1`,
+		"a blank uploader":              `UPDATE anchored_sessions SET uploader=' ' WHERE repo_id=$1`,
+		"an archive without an account": `UPDATE anchored_sessions SET archived_at=now() WHERE repo_id=$1`,
+		"an account without an archive": `UPDATE anchored_sessions SET archived_by='someone' WHERE repo_id=$1`,
+		"a short commit number":         `UPDATE anchored_session_commits SET commit_sha='abc1234' WHERE repo_id=$1`,
+		"an unknown link rule":          `UPDATE anchored_session_commits SET rule='guessed' WHERE repo_id=$1`,
 	} {
 		if _, err := st.pool.Exec(ctx, statement, repo); err == nil {
 			t.Errorf("%s was accepted by the table", name)
