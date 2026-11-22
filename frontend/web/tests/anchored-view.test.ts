@@ -230,7 +230,7 @@ const waiting: AnchoredSessionSummary[] = [
 assert.match(overview, /href="\/alice\/app\?tab=sessions&amp;show=held"[^>]*>On Hold <span class="count-badge">2<\/span><span class="ref-badge pending">only you<\/span>/,
   'the list counts the uncommitted parts while no commit is known to be missing from the remote');
 const held = render({ kind: 'held' }, true, waiting);
-assert.match(held, /href="\/alice\/app\?tab=sessions&amp;show=held" aria-current="page">On Hold <span class="count-badge">3<\/span>/);
+assert.match(held, /class="anchor-nav-item on" aria-current="page" href="\/alice\/app\?tab=sessions&amp;show=held">On Hold <span class="count-badge">3<\/span>/);
 assert.match(held, /Only you see this list\./);
 assert.match(held, /Committed, not pushed yet <span class="count-badge">1<\/span>.*?commit=9{40}.*?Draft the lexer.*?session=claude%3Aparent-session&amp;segment=3/s);
 assert.match(held, /Not committed yet <span class="count-badge">2<\/span>.*?session=claude%3Aparent-session&amp;segment=rest.*?Worktree <code>app<\/code>.*?branch=feature/s);
