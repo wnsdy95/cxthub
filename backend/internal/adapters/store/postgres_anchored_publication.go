@@ -64,14 +64,6 @@ func (s *PostgresStore) PutAnchoredPublication(ctx context.Context, repo domain.
 	return err
 }
 
-func (s *PostgresStore) ClearAnchoredPublication(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error {
-	if err := validateHash(repo); err != nil {
-		return err
-	}
-	_, err := s.db(ctx).Exec(ctx, `DELETE FROM anchored_session_publications WHERE repo_id=$1 AND provider=$2 AND session_id=$3`, repo, provider, sessionID)
-	return err
-}
-
 func (s *PostgresStore) ListAnchoredPublications(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredPublication, error) {
 	if err := validateHash(repo); err != nil {
 		return nil, err

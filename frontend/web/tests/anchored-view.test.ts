@@ -189,11 +189,11 @@ const theirSession: AnchoredSession = { ...session, session_id: 'their-session',
     places: [{ worktree: '', branch: 'feature', rule: 'recorded-by-tool' }] },
   content: { events: 4 },
 } };
-function renderShared(selection?: AnchoredSelection, listed: AnchoredSessionSummary = theirs, canRestore = false): string {
+function renderShared(selection?: AnchoredSelection): string {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(['me'], { id: 'alice-id', username: 'alice' });
   client.setQueryData(['members', repository.id], [{ role: 'member', user_id: 'bob-id', user: { id: 'bob-id', username: 'bob' } }]);
-  client.setQueryData(['anchored-sessions', repo.id], [listed]);
+  client.setQueryData(['anchored-sessions', repo.id], [theirs]);
   client.setQueryData(['branch-lifetimes', repo.id], lifetimes);
   client.setQueryData(['anchored-notes', repo.id], [{ ...notes[0], author: 'bob-id' }]);
   client.setQueryData(['remote-git', repo.id], { pageParams: [''], pages: [remotePage] });
@@ -204,7 +204,7 @@ function renderShared(selection?: AnchoredSelection, listed: AnchoredSessionSumm
     { offset: 3, next: -1, events: [message(3, 'user', 'What is left?')] },
   ] });
   return renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client },
-    createElement(AnchoredView, { repo, repositoryId: repository.id, canRestore, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
+    createElement(AnchoredView, { repo, repositoryId: repository.id, selection, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
 }
 const sharedList = renderShared();
 assert.match(sharedList, /their-se<\/code><\/a><span class="ref-badge joined">bob<\/span>/, 'a teammate\'s session names its uploader');
@@ -217,12 +217,6 @@ assert.match(sharedOpened, /Write the parser\..*?Committed the parser\..*?class=
   'reading goes on past the part that is not open');
 assert.doesNotMatch(sharedOpened, /Fixed the parser\./);
 assert.doesNotMatch(sharedOpened, /Calls between agents/);
-// A session the server rebuilt from earlier captures belongs to no account.
-const restoredList = renderShared(undefined, { ...theirs, uploader: 'cxt:captures' });
-assert.match(restoredList, /<span class="ref-badge joined">rebuilt from earlier captures<\/span>/);
-assert.match(renderShared({ kind: 'session', provider: 'claude', id: 'their-session' }, { ...theirs, uploader: 'cxt:captures' }), /This session was rebuilt from earlier captures/);
-assert.doesNotMatch(sharedList, /Restore earlier sessions/, 'only a maintainer is offered the restoration');
-assert.match(renderShared(undefined, theirs, true), />Restore earlier sessions<\/button>/);
 const sharedNote = renderShared({ kind: 'commit', sha: sha('d') });
 assert.match(sharedNote, /data-note="note_a{32}".*?manual note<\/span><em>bob<\/em>.*?Applied by hand\./s);
 assert.doesNotMatch(sharedNote, /class="ghost mini"[^>]*>(Edit|Delete)<\/button>/, 'only its author changes or removes a note');

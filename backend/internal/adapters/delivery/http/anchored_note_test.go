@@ -96,10 +96,6 @@ func (backend *anchoredNoteHTTPBackend) AnchoredSessionCalls(ctx context.Context
 	return nil, backend.err
 }
 
-func (backend *anchoredNoteHTTPBackend) RestoreAnchoredSessions(context.Context, domain.ContentHash) (domain.AnchoredRestoreResult, error) {
-	return domain.AnchoredRestoreResult{}, nil
-}
-
 func (backend *anchoredNoteHTTPBackend) AnchoredSessionContentAccess(context.Context, domain.ContentHash, domain.ProviderKind, string) (domain.AnchoredContentAccess, error) {
 	return domain.AnchoredContentAccess{}, backend.err
 }

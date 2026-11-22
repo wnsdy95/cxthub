@@ -58,7 +58,7 @@ and offline tooling; production roots do not receive its apply capability.
 This source release requires the complete 165-file SQL bundle, from
 `0001_init.sql` through `0165_anchored_publications.sql`. Its catalog
 digest is
-`833f0ba3b2009b17450dc4ded47fc3f3200f84226dd36ee32fd465e60fdc952a`, matching
+`ef0590e20106abb00ec95c083e60dda8e06d963c108d563de12a0b5bd1801528`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current

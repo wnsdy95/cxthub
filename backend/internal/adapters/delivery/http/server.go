@@ -318,7 +318,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/graph-readiness", s.guard(domain.RoleViewer, s.graphReadiness))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/archive", s.guard(domain.RoleMaintainer, s.archiveSession))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions", s.guard(domain.RoleMember, s.listAnchoredSessions))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/anchored-sessions/restore", s.guard(domain.RoleMaintainer, s.restoreAnchoredSessions))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}", s.guard(domain.RoleMember, s.getAnchoredSession))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}", s.guard(domain.RoleMember, s.putAnchoredSession))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-commits/{sha}", s.guard(domain.RoleMember, s.anchoredCommitSegments))

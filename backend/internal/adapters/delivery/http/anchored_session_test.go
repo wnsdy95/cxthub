@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -51,11 +50,6 @@ func (backend *anchoredSessionHTTPBackend) AnchoredSessionCalls(context.Context,
 
 func (backend *anchoredSessionHTTPBackend) AnchoredSessionContentAccess(context.Context, domain.ContentHash, domain.ProviderKind, string) (domain.AnchoredContentAccess, error) {
 	return domain.AnchoredContentAccess{}, backend.err
-}
-
-func (backend *anchoredSessionHTTPBackend) RestoreAnchoredSessions(ctx context.Context, _ domain.ContentHash) (domain.AnchoredRestoreResult, error) {
-	backend.seen(ctx)
-	return domain.AnchoredRestoreResult{Restored: 2, Remaining: true}, backend.err
 }
 
 func (backend *anchoredSessionHTTPBackend) ListAnchoredSessions(ctx context.Context, _ domain.ContentHash) ([]domain.AnchoredSessionSummary, error) {
@@ -181,47 +175,5 @@ func TestAnchoredSessionHTTPWithoutService(t *testing.T) {
 	response := bpHTTP(t, NewServer(backend, identity).Handler(), http.MethodGet, "/api/v1/repos/"+string(backend.repo.ID)+"/anchored-sessions", "", true)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d: %s", response.Code, response.Body.String())
-	}
-}
-
-func TestAnchoredSessionRestoreHTTP(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		role   domain.MemberRole
-		authed bool
-		json   bool
-		status int
-	}{
-		{"anonymous", domain.RoleOwner, false, true, 401},
-		{"member", domain.RoleMember, true, true, 403},
-		{"maintainer", domain.RoleMaintainer, true, true, 200},
-		{"owner", domain.RoleOwner, true, true, 200},
-		{"no_json", domain.RoleOwner, true, false, 415},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
-			var response *httptest.ResponseRecorder
-			if test.json {
-				response = bpHTTP(t, handler, http.MethodPost, base+"/anchored-sessions/restore", "{}", test.authed)
-			} else {
-				request := httptest.NewRequest(http.MethodPost, base+"/anchored-sessions/restore", nil)
-				request.Header.Set("Authorization", "Bearer fixture-token")
-				response = httptest.NewRecorder()
-				handler.ServeHTTP(response, request)
-			}
-			if response.Code != test.status {
-				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
-			}
-			if test.status != 200 {
-				if backend.calls != 0 {
-					t.Fatal("a refused request reached the service")
-				}
-				return
-			}
-			var result domain.AnchoredRestoreResult
-			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Restored != 2 || !result.Remaining || backend.actor != "actor" {
-				t.Fatalf("result: %s %v", response.Body.String(), err)
-			}
-		})
 	}
 }

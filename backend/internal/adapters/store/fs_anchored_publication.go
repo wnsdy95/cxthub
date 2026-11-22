@@ -87,29 +87,6 @@ func (s *FSStore) PutAnchoredPublication(ctx context.Context, repo domain.Conten
 	return writeRepoJSON(s.anchoredPublicationPath(repo), next)
 }
 
-func (s *FSStore) ClearAnchoredPublication(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error {
-	if err := validateHash(repo); err != nil {
-		return err
-	}
-	lock := s.anchoredSessionLock(repo)
-	lock.Lock()
-	defer lock.Unlock()
-	publications, err := s.readAnchoredPublications(ctx, repo)
-	if err != nil {
-		return err
-	}
-	next := make([]domain.AnchoredPublication, 0, len(publications))
-	for _, existing := range publications {
-		if existing.Provider != provider || existing.SessionID != sessionID {
-			next = append(next, existing)
-		}
-	}
-	if len(next) == len(publications) {
-		return nil
-	}
-	return writeRepoJSON(s.anchoredPublicationPath(repo), next)
-}
-
 func (s *FSStore) ListAnchoredPublications(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredPublication, error) {
 	lock := s.anchoredSessionLock(repo)
 	lock.Lock()

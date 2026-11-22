@@ -821,31 +821,3 @@ export function useAccountNames(repositoryId: string | null, enabled: boolean) {
   });
   return useMemo(() => new Map((members.data ?? []).map(member => [member.user_id, member.user?.username ?? member.user_id])), [members.data]);
 }
-
-/**
- * Rebuilds the sessions no CLI reported from the server's earlier captures,
- * asking again while the server says some remain and the last request made
- * progress, at most `rounds` times. A conversation the server is still
- * preparing makes no progress; asking later reads it.
- */
-export function useRestoreAnchoredSessions() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ repoId, rounds = 25 }: { repoId: string; rounds?: number }) => {
-      const total: import('./types').AnchoredRestoreResult = { restored: 0, unchanged: 0, reported: 0, unreadable: 0, remaining: true };
-      for (let round = 0; round < rounds && total.remaining; round++) {
-        const result = await api.restoreAnchoredSessions(repoId);
-        total.restored += result.restored;
-        total.unreadable = result.unreadable;
-        total.unchanged = result.unchanged;
-        total.reported = result.reported;
-        total.remaining = result.remaining;
-        if (result.restored === 0) break;
-      }
-      return total;
-    },
-    onSuccess: (_result, value) => {
-      qc.invalidateQueries({ queryKey: ['anchored-sessions', value.repoId] });
-    },
-  });
-}

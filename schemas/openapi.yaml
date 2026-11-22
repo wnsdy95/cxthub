@@ -847,7 +847,7 @@ components:
       description: A commit a segment ends at. The author time, author and subject are what a rebase or cherry-pick keeps, so the commit's copies can be found without the uploader's repository.
       properties:
         sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
-        rule: { type: string, enum: [printed-number, same-folder-and-time, captured-at-commit] }
+        rule: { type: string, enum: [printed-number, same-folder-and-time] }
         created_at: { type: string, format: date-time }
         authored_at: { type: string, format: date-time }
         author_email: { type: string }
@@ -934,7 +934,7 @@ components:
         sub: { type: boolean }
         parent: { type: string }
         spawn: { $ref: '#/components/schemas/AnchoredSpawn' }
-        scope: { type: string, enum: [working-folder, origin-url, captures], description: How the session was found to belong to the repository; `captures` marks a report the server rebuilt from its earlier captures. A client cannot upload it. }
+        scope: { type: string, enum: [working-folder, origin-url] }
         machine: { type: string }
         started_at: { type: string, format: date-time }
         ended_at: { type: string, format: date-time }
@@ -1140,7 +1140,7 @@ components:
       properties:
         sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
         segment_no: { type: integer, minimum: 1 }
-        rule: { type: string, enum: [printed-number, same-folder-and-time, captured-at-commit] }
+        rule: { type: string, enum: [printed-number, same-folder-and-time] }
         subject: { type: string }
         created_at: { type: string, format: date-time }
         authored_at: { type: string, format: date-time }
@@ -1166,16 +1166,6 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AnchoredPlace' }
         unplaced: { type: boolean }
-    AnchoredRestoreResult:
-      type: object
-      description: What one restoration request did.
-      required: [restored, unchanged, reported, unreadable, remaining]
-      properties:
-        restored: { type: integer, minimum: 0, description: Sessions rebuilt or rebuilt again. }
-        unchanged: { type: integer, minimum: 0, description: Sessions whose captures explain them as they are stored. }
-        reported: { type: integer, minimum: 0, description: Sessions a CLI reported, which are left alone. }
-        unreadable: { type: integer, minimum: 0, description: Sessions whose captures could not be read now; the next request tries again. }
-        remaining: { type: boolean, description: True when the next request has sessions to rebuild. }
     AnchoredEventPage:
       type: object
       description: A page of a session's conversation as one reader may read it.
@@ -1249,7 +1239,7 @@ components:
         provider: { type: string }
         session_id: { type: string }
         segment_no: { type: integer, minimum: 1 }
-        rule: { type: string, enum: [printed-number, same-folder-and-time, captured-at-commit] }
+        rule: { type: string, enum: [printed-number, same-folder-and-time] }
         segment: { $ref: '#/components/schemas/AnchoredSegment' }
     ContentHash:
       type: string
@@ -5394,37 +5384,6 @@ paths:
         '409': { description: Storage is unavailable }
         '422': { description: Invalid repository identity or limit or before }
         '503': { description: Remote Git service unavailable }
-
-  /repos/{repoID}/anchored-sessions/restore:
-    parameters:
-      - $ref: '#/components/parameters/repoID'
-      - $ref: '#/components/parameters/DocIdentities'
-    post:
-      operationId: restoreAnchoredSessions
-      summary: Rebuild sessions no CLI reported from the server's earlier captures
-      description: >-
-        Maintainer required. JSON Content-Type required; the body is not read. Each session that was captured into the
-        repository and that no CLI reported is rebuilt at the granularity of its captures: the newest capture holds the
-        conversation, an earlier capture whose whole conversation is the beginning of the newest one places a boundary,
-        and one that published commits ends a segment linked to them by `captured-at-commit`. What follows the last
-        segment is the uncommitted part, with no known place. A rebuilt report belongs to no account (`uploader` is
-        `cxt:captures`): every member reads what of it is open, and a CLI's exact report of the session replaces it. One
-        request rebuilds up to 20 sessions; repeat it while `remaining` is true. A session whose captures did not change
-        is not read again. Nothing advances the repository revision.
-      tags: [anchored-sessions]
-      responses:
-        '200':
-          description: What this request did
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AnchoredRestoreResult' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: Session storage or context history unavailable }
-        '415': { description: Content-Type must be application/json }
-        '422': { description: Invalid repository identity }
-        '503': { description: Anchored session service unavailable }
 
   /repos/{repoID}/remote-git/refresh:
     parameters:

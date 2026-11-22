@@ -9,10 +9,10 @@
 // segment begins.
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import type { AnchoredSelection } from '../route';
-import { ANCHORED_RESTORED_UPLOADER, type AnchoredNote, type AnchoredNoteTarget, type AnchoredSessionSummary, type RemotePull, type Repo } from '../types';
+import type { AnchoredNote, AnchoredNoteTarget, AnchoredSessionSummary, RemotePull, Repo } from '../types';
 import {
   useAccountNames, useAnchoredCommit, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
-  useReportedWorktrees, useRestoreAnchoredSessions, useSaveAnchoredNote,
+  useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
@@ -32,10 +32,8 @@ const LANE = 14;
 const ROW = 46;
 const LANE_COLORS = ['#16181d', '#2e7d5b', '#8250df', '#b4452c', '#0969da', '#bf8700'];
 
-export function AnchoredView({ repo, repositoryId = null, canRestore = false, selection, href }: {
+export function AnchoredView({ repo, repositoryId = null, selection, href }: {
   repo: Repo; repositoryId?: string | null; selection?: AnchoredSelection; href: AnchoredHref;
-  /** A maintainer may rebuild the sessions no CLI reported from the server's earlier captures. */
-  canRestore?: boolean;
 }) {
   const t = useT();
   const sessionsQ = useAnchoredSessions(repo.id);
@@ -54,7 +52,6 @@ export function AnchoredView({ repo, repositoryId = null, canRestore = false, se
   const me = useMe().data;
   const others = (sessionsQ.data ?? []).some(summary => summary.shared) || (notesQ.data ?? []).some(note => note.author !== me?.id);
   const names = useAccountNames(repositoryId, others);
-  const restore = useRestoreAnchoredSessions();
   // Commits that share the segment under the pointer are marked together.
   const [highlighted, setHighlighted] = useState<string[]>([]);
 
@@ -147,20 +144,8 @@ export function AnchoredView({ repo, repositoryId = null, canRestore = false, se
           <button className="ghost" onClick={refresh} disabled={sessionsQ.isFetching}>
             {sessionsQ.isFetching ? t('anchored.refreshing') : t('anchored.refresh')}
           </button>
-          {canRestore && (
-            <button className="ghost" onClick={() => restore.mutate({ repoId: repo.id })} disabled={restore.isPending}>
-              {restore.isPending ? t('anchored.restoring') : t('anchored.restore')}
-            </button>
-          )}
         </div>
         {lifetimesQ.error && <p role="alert" className="err">{lifetimesQ.error.message}</p>}
-        {restore.error && <p role="alert" className="err">{restore.error.message}</p>}
-        {restore.data && (
-          <p role="status" className="anchor-card-meta">
-            {t('anchored.restored', { restored: restore.data.restored, reported: restore.data.reported })}
-            {restore.data.remaining && <> {t('anchored.restoredMore', { unreadable: restore.data.unreadable })}</>}
-          </p>
-        )}
         {index.sessions.size === 0 && (
           <div className="empty-box">
             {t('anchored.emptyLead')}
@@ -295,9 +280,7 @@ function SessionCard({ summary, selection, index, href, children }: {
         <AppLink href={href(selection)} title={summary.session_id}>
           <code>{anchoredShortId(summary.session_id)}</code>
         </AppLink>
-        {summary.shared && summary.uploader && (
-          <span className="ref-badge joined">{summary.uploader === ANCHORED_RESTORED_UPLOADER ? t('anchored.restoredUploader') : names.get(summary.uploader) ?? summary.uploader}</span>
-        )}
+        {summary.shared && summary.uploader && <span className="ref-badge joined">{names.get(summary.uploader) ?? summary.uploader}</span>}
         {summary.sub && <span className="ref-badge">{t('anchored.subSession')}</span>}
         {summary.uncommitted?.unplaced && <span className="ref-badge pending">{t('anchored.unplaced')}</span>}
         {!summary.content && <span className="ref-badge archived">{t('anchored.noContentBadge')}</span>}

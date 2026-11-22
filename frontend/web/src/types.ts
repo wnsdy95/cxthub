@@ -782,7 +782,7 @@ export interface AccountAuditEvent { grant_id?:string; id:string; user_id:string
 // Anchored sessions: a coding-agent session cut at the commits it made, as the
 // uploader's CLI read it from the records the tools and Git left behind.
 export type AnchoredProvider = 'claude' | 'codex';
-export type AnchoredLinkRule = 'printed-number' | 'same-folder-and-time' | 'captured-at-commit';
+export type AnchoredLinkRule = 'printed-number' | 'same-folder-and-time';
 export type AnchoredSpawnRule = 'tool-call' | 'start-time';
 export type AnchoredPlaceRule = 'recorded-by-tool' | 'head-log' | 'current-branch' | 'folder-no-longer-a-worktree';
 /** A part of one session. `first_event` and `events` are absent when zero. */
@@ -801,7 +801,7 @@ export interface AnchoredAgentCall { tool: string; from: string; to: string[]; s
 /** The conversation of a session. `doc` is given to the uploader only; everyone reads the conversation through the session. */
 export interface AnchoredContent { doc?: string; identity?: string; events: number }
 export interface AnchoredSessionBody {
-  rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url' | 'captures'; machine?: string;
+  rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url'; machine?: string;
   started_at?: string; ended_at?: string; records: number; commands: number; copied_records: number; copied_from?: string[]; file_copies?: number;
   segments: AnchoredSegment[]; uncommitted?: AnchoredUncommitted; agent_calls?: AnchoredAgentCall[]; content?: AnchoredContent;
 }
@@ -830,10 +830,6 @@ export interface BranchLifetime {
   linked: { id: string; linked_at: string; by: BranchEvidence }[];
   reopenings?: { closed_at: string; closed_by: BranchEvidence; reopened_at: string; reopened_by: BranchEvidence; name?: string }[];
 }
-/** The uploader of a session the server rebuilt from its earlier captures: no account. */
-export const ANCHORED_RESTORED_UPLOADER = 'cxt:captures';
-/** What one restoration request did; `remaining` asks for another. */
-export interface AnchoredRestoreResult { restored: number; unchanged: number; reported: number; unreadable: number; remaining: boolean }
 /** What a manual note is attached to. Exactly the fields of its kind are present. */
 export type AnchoredNoteTarget =
   | { kind: 'commit'; commit: string }

@@ -114,7 +114,6 @@ func TestFSAnchoredSessionPersistence(t *testing.T) {
 	storage := NewFSStore(t.TempDir())
 	repo := domain.HashContent([]byte(t.Name()))
 	checkAnchoredSessionPersistence(t, context.Background(), storage, repo)
-	checkRestoredAnchoredSessionPersistence(t, context.Background(), storage, repo)
 }
 
 func TestFSAnchoredSessionNeverUsesAnIdentifierAsAPath(t *testing.T) {
@@ -146,35 +145,5 @@ func TestFSAnchoredSessionNeverUsesAnIdentifierAsAPath(t *testing.T) {
 	}
 	if _, err := storage.GetAnchoredSession(context.Background(), repo, domain.ProviderClaude, ".."); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("a body changed on disk: %v", err)
-	}
-}
-
-// checkRestoredAnchoredSessionPersistence: a report rebuilt from captures is
-// stored, and leads from its commits, like any other.
-func checkRestoredAnchoredSessionPersistence(t *testing.T, ctx context.Context, storage outbound.AnchoredSessionStore, repo domain.ContentHash) {
-	t.Helper()
-	sha := anchoredStoreSHA("d")
-	body, ok := domain.RestoreAnchoredSession([]domain.AnchoredCapture{{Snapshot: domain.HashContent([]byte("capture")), Doc: domain.HashContent([]byte("capture")),
-		Identity: domain.DocumentIdentityLegacy, CreatedAt: time.Date(2031, 1, 2, 3, 0, 0, 0, time.UTC), Commits: []string{sha}, Events: 3, Prefix: true}})
-	if !ok {
-		t.Fatal("nothing restored")
-	}
-	hash, err := body.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	at := time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC)
-	restored := domain.AnchoredSession{RepoID: repo, Provider: domain.ProviderClaude, SessionID: "session-restored", Uploader: domain.AnchoredRestoredUploader,
-		Revision: 1, BodyHash: hash, CreatedAt: at, UpdatedAt: at, Body: body}
-	if err := storage.PutAnchoredSession(ctx, restored); err != nil {
-		t.Fatal(err)
-	}
-	got, err := storage.GetAnchoredSession(ctx, repo, domain.ProviderClaude, "session-restored")
-	if err != nil || got.Uploader != domain.AnchoredRestoredUploader || got.Body.Scope != domain.AnchoredScopeCaptures {
-		t.Fatalf("restored report: %+v %v", got, err)
-	}
-	links, err := storage.ListAnchoredCommitLinks(ctx, repo, sha)
-	if err != nil || len(links) != 1 || links[0].Rule != domain.AnchoredLinkCapturedAtCommit || links[0].SessionID != "session-restored" {
-		t.Fatalf("links of the restored commit: %+v %v", links, err)
 	}
 }
