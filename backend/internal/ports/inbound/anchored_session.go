@@ -42,3 +42,21 @@ type AnchoredSummaries interface {
 	// as the caller's folder has it; they are looked at first.
 	ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error)
 }
+
+// AnchoredQueries is the read side of the session structure, for a process
+// that only reads: sessions, the segments at a commit, summaries at commits
+// and along a branch, the search, and a session's conversation in pieces a
+// tool takes at once. Every read is answered under the rule of the reader in
+// the context: all of a session to its uploader, the open parts to anyone
+// else.
+type AnchoredQueries interface {
+	GetAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredSession, error)
+	ListAnchoredSessions(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSessionSummary, error)
+	AnchoredCommitSegments(ctx context.Context, repo domain.ContentHash, commitSHA string) ([]domain.AnchoredCommitSegment, error)
+	ListAnchoredSummaries(ctx context.Context, repo domain.ContentHash, commits []string) ([]domain.AnchoredSummary, error)
+	ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error)
+	SearchAnchored(ctx context.Context, repo domain.ContentHash, query string) (domain.AnchoredSearchResult, error)
+	// ReadAnchoredSessionFragments reads a session's conversation from one
+	// event on, within a byte budget and within what the caller may read.
+	ReadAnchoredSessionFragments(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, index, offset, limit, budget int) (domain.AnchoredFragmentPage, error)
+}

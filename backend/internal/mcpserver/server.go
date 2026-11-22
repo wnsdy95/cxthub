@@ -55,5 +55,8 @@ func HandlerWithReadPreparation(r *serverruntime.Runtime, resourceOrigin string,
 	}
 	s.SetMemoryPreparationRequester(requester)
 	s.SetConversationFind(r.ConversationFind, conversation)
+	if r.Anchored != nil {
+		s.SetAnchoredQueries(r.Anchored)
+	}
 	return r.HealthHandler(s.Handler()), nil
 }

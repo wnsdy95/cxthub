@@ -345,6 +345,7 @@ func toolDefinitions() []map[string]any {
 			"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "description": "Default 10; the byte budget may reduce each page."},
 		}, "repository"),
 	})
+	defs = append(defs, sessionToolDefinitions()...)
 	for _, def := range defs {
 		props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		props["cursor"] = map[string]any{"type": "string", "maxLength": 4096, "description": "Continuation from next_cursor. Keep repository and selection/filter arguments unchanged."}

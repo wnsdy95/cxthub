@@ -283,6 +283,34 @@ func (a AnchoredContentAccess) Span(index int) ([2]int, bool) {
 	return [2]int{}, false
 }
 
+// From returns the first open event at or after index: index itself when it
+// is open, otherwise the beginning of the next open span.
+func (a AnchoredContentAccess) From(index int) (int, [2]int, bool) {
+	for _, span := range a.Open {
+		if index < span[0] {
+			return span[0], span, true
+		}
+		if index < span[1] {
+			return index, span, true
+		}
+	}
+	return 0, [2]int{}, false
+}
+
+// AnchoredFragmentPage is a piece of a session's conversation as one reader
+// may read it, cut to a size a tool takes at once: whole events where they
+// fit, and a part of one event where it alone is larger. NextIndex is the
+// event to go on with and NextOffset the byte within it; NextIndex is -1 at
+// the end of what is open to that reader. Neither ever points into what is
+// not open: reading goes on at the next open part.
+type AnchoredFragmentPage struct {
+	Fragments  []DocEventFragment `json:"fragments"`
+	Total      int                `json:"total_events"`
+	Open       [][2]int           `json:"open_events"`
+	NextIndex  int                `json:"next_index"`
+	NextOffset int                `json:"next_offset"`
+}
+
 // AnchoredEventPage is a page of a session's conversation as one reader may
 // read it. Next is the next event to ask for, or -1 at the end of what is
 // open to that reader from here; it never points into what is not.

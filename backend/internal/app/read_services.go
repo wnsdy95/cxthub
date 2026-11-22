@@ -40,9 +40,12 @@ type ReadServices struct {
 	GitAssociationStatus inbound.GitAssociationStatusQuery
 	CodeApplicability    inbound.CodeApplicabilityQuery
 	ConversationFind     inbound.ConversationFindQuery
-	memoryOwner          *memoryReadOwner
-	segmentCache         repositoryquery.SegmentCache
-	deliveryCache        memoryquery.DeliveryCache
+	// Anchored is the read side of the session structure. It is nil over
+	// stores that do not keep sessions.
+	Anchored      inbound.AnchoredQueries
+	memoryOwner   *memoryReadOwner
+	segmentCache  repositoryquery.SegmentCache
+	deliveryCache memoryquery.DeliveryCache
 }
 
 func NewReadServices(config ReadServicesConfig) (*ReadServices, error) {
@@ -139,6 +142,10 @@ func NewReadServices(config ReadServicesConfig) (*ReadServices, error) {
 		return nil, err
 	}
 	archiveScope := &archiveQueryScope{repository: repository, document: documentScope, presence: presence}
+	accounts, _ := config.Metadata.(outbound.RepositoryStore)
+	if anchored, anchoredErr := NewAnchoredReadService(config.Metadata, config.Blobs, accounts); anchoredErr == nil {
+		services.Anchored = anchored
+	}
 	services.Archive, err = newReadServicesArchive(config, archiveScope, transactions != nil)
 	if err != nil {
 		return nil, err

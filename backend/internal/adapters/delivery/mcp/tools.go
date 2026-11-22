@@ -34,6 +34,12 @@ type toolArgs struct {
 	Scope        string   `json:"scope"`
 	Position     string   `json:"position"`
 	MemoryHash   string   `json:"memory_hash"`
+	// The session tools name a session by its tool and identifier, a part of
+	// it by its segment number or "rest", and a commit by its full number.
+	Provider string `json:"provider"`
+	Session  string `json:"session"`
+	Segment  string `json:"segment"`
+	Commit   string `json:"commit"`
 }
 
 const (
@@ -123,6 +129,8 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		return s.historyPage(ctx, repo, args)
 	case "context_search":
 		return s.searchPage(ctx, repo, args)
+	case "session_list", "session_read", "session_commit", "session_summaries", "session_search":
+		return s.sessionTool(ctx, user, repo, name, args)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}

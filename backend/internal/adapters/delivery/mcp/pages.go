@@ -45,6 +45,9 @@ func cursorFor(repo, tool string, a toolArgs) (pageCursor, error) {
 	if a.ChangeID != "" {
 		selection = append(selection, "git-change:"+a.ChangeID)
 	}
+	if a.Provider != "" || a.Session != "" || a.Segment != "" || a.Commit != "" {
+		selection = append(selection, "session:"+a.Provider+":"+a.Session+":"+a.Segment, "commit:"+a.Commit)
+	}
 	// Preserve cursor bindings issued before explicit modes existed.
 	if a.Mode != "" {
 		selection = append(selection, a.Mode)

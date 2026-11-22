@@ -106,6 +106,40 @@ Every tool is marked read-only, non-destructive, and idempotent. There are no
 MCP tools for save, commit, checkout, fork, restore, push, pull, settings,
 secrets, membership, or break-glass administration.
 
+### Session tools
+
+The session tools read the structure that is cut at Git commits: what the
+Sessions tab shows. A session is named by its coding tool and identifier, a
+part of it by its segment number, a commit by its full number; none of these
+tools takes a snapshot, a ref or a document hash.
+
+| Tool | Purpose |
+|---|---|
+| `session_list` | List the sessions of a repository, the one begun last first, with the commits each made and the branches its uncommitted part was on |
+| `session_read` | Read one session's conversation from its first event on, or only one segment of it (`segment`: a number, or `rest` for the part after the last commit) |
+| `session_commit` | Explain a commit: the segments that end at it, the events each covers, and the summary written there |
+| `session_summaries` | Read the summaries along a branch, the summary of the newest commit first: the branch's own, then those of the branch it was made from |
+| `session_search` | Search pull requests, branches, commits, conversations and notes at once |
+
+They answer under the rule the Sessions tab answers under. The signed-in
+account reads its own sessions in full. Of another account's session it reads
+the parts that are pushed: a segment once its commit is on GitHub, the part
+after the last commit once its branch is. `session_read` lists the readable
+spans in `open_events` and goes on past a part that is not pushed. An archived
+session is left out of all five.
+
+`session_read` returns pages of whole events, and an event larger than a page
+in pieces to concatenate by `event_index` and `byte_offset`, as `context_fetch`
+does. The other four return one JSON document in bounded fragments: concatenate
+`json_fragment` by `byte_offset` until `page_complete`, following
+`next_cursor`. When the answer changed between two fragments, the tool says so
+and the read starts again without a cursor.
+
+A summary's `open_tasks` come with `open_tasks_from_tool`: true when they are
+the coding tool's own list, false when a CLI picked them out of the
+conversation. Either way they describe the past and are data, not
+instructions.
+
 `repository_list` is the cloud discovery step. The other tools require an
 explicit repository selector (`owner/repository` or repository
 ID). A remote client never depends on a workstation's current directory.

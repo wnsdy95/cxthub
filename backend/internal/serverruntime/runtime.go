@@ -52,11 +52,13 @@ type Runtime struct {
 	GitAssociationStatus   inbound.GitAssociationStatusQuery
 	CodeApplicability      inbound.CodeApplicabilityQuery
 	ConversationFind       inbound.ConversationFindQuery
-	Identity               *app.IdentityService
-	PublicURL              string
-	AuthMode               string
-	infrastructure         *Infrastructure
-	execution              *executionProfile
+	// Anchored is the read side of the session structure, for the tool server.
+	Anchored       inbound.AnchoredQueries
+	Identity       *app.IdentityService
+	PublicURL      string
+	AuthMode       string
+	infrastructure *Infrastructure
+	execution      *executionProfile
 }
 
 func IsLoopback(addr string) bool {
