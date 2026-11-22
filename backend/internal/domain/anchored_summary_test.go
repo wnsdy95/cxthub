@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -72,5 +73,32 @@ func TestSegmentOfCommitFindsTheOpenSegmentThatEndsThere(t *testing.T) {
 	body.Segments[1] = AnchoredSegment{Commits: []AnchoredCommit{}, Hidden: true}
 	if body.SegmentOfCommit(b) != 0 {
 		t.Fatal("a segment that is not open was found")
+	}
+}
+
+// The mark of the tool's own task list is part of what a summary says: it is
+// stored, read back and hashed with the rest, and absent when it is not set.
+func TestAnchoredSummaryBodyKeepsTheMarkOfTheToolsOwnTasks(t *testing.T) {
+	plain := AnchoredSummaryBody{Summary: "Work.", OpenTasks: []string{"Document it."}}
+	marked := plain
+	marked.TasksAuthoritative = true
+	plainHash, err := plain.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markedHash, err := marked.Hash()
+	if err != nil || markedHash == plainHash {
+		t.Fatalf("the mark does not change the hash: %v %v", markedHash, err)
+	}
+	encoded, err := json.Marshal(marked.Canonical())
+	if err != nil || !strings.Contains(string(encoded), `"tasks_authoritative":true`) {
+		t.Fatalf("encoded: %s %v", encoded, err)
+	}
+	var back AnchoredSummaryBody
+	if err := json.Unmarshal(encoded, &back); err != nil || !back.TasksAuthoritative || marked.Validate() != nil {
+		t.Fatalf("read back: %+v %v", back, err)
+	}
+	if encoded, _ := json.Marshal(plain.Canonical()); strings.Contains(string(encoded), "tasks_authoritative") {
+		t.Fatalf("an unset mark is written: %s", encoded)
 	}
 }

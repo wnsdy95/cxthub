@@ -380,6 +380,17 @@ func buildContainer(cfg config) container {
 	contextHistory := app.NewContextHistoryService(store, store)
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
 	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices).WithSegmentCollector(delivcli.SpawnSegmentCollector)
+	// A session is given the most recent summary along its branch, read from
+	// the server and from Git as they are when a hook wakes cxt.
+	hookHdl.WithBranchSummaries(app.NewBranchSummaryService(gitCtx.CurrentRepo, gitctx.NewBranchPlace(), remote, gitctx.NewBranchSummaryGiven()).
+		WithConnection(func(ctx context.Context, cwd string) bool {
+			root, enabled := gitctx.ContextRoot(ctx, cwd)
+			if !enabled {
+				return false
+			}
+			_, connected := remotecfg.Origin(root)
+			return connected || os.Getenv("CXT_REMOTE") != ""
+		}))
 	hookHdl.WithCaptureAdmission(func(ctx context.Context, cwd string) error {
 		repo, err := gitCtx.CurrentRepo(ctx, cwd)
 		if err != nil {

@@ -136,12 +136,22 @@ func (s *Service) ListAnchoredSummaries(ctx context.Context, repo domain.Content
 // squash, stands for that pull request's commits; a commit that was rebased
 // or cherry-picked is found at its copy. A branch the remote does not hold
 // is read as the default branch.
-func (s *Service) ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, limit int) (domain.AnchoredMemory, error) {
+//
+// local names the newest commits of the branch as the caller's own folder
+// has it, the newest first. They are looked at first, in that order: what a
+// member committed and did not push, or pushed a moment ago, is newer than
+// anything the server read of that branch.
+func (s *Service) ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error) {
 	if err := validateHashes(repo); err != nil {
 		return domain.AnchoredMemory{}, err
 	}
-	if limit < 1 || limit > domain.AnchoredMemoryLimit || (branch != "" && !domain.ValidRemoteBranchName(branch)) {
-		return domain.AnchoredMemory{}, fmt.Errorf("%w: summaries along a branch are read for a branch name, 1 to %d at a time", domain.ErrValidation, domain.AnchoredMemoryLimit)
+	valid := limit >= 1 && limit <= domain.AnchoredMemoryLimit && len(local) <= domain.AnchoredMemoryLocalCommits && (branch == "" || domain.ValidRemoteBranchName(branch))
+	for _, sha := range local {
+		valid = valid && domain.ValidRemoteCommitSHA(sha)
+	}
+	if !valid {
+		return domain.AnchoredMemory{}, fmt.Errorf("%w: summaries along a branch are read for a branch name, 1 to %d at a time, with at most %d full commit numbers of the caller's folder",
+			domain.ErrValidation, domain.AnchoredMemoryLimit, domain.AnchoredMemoryLocalCommits)
 	}
 	memory, err := repositoryRead(ctx, s, func(bound context.Context) (domain.AnchoredMemory, error) {
 		memory := domain.AnchoredMemory{Summaries: []domain.AnchoredSummary{}}
@@ -154,114 +164,73 @@ func (s *Service) ReadAnchoredMemory(ctx context.Context, repo domain.ContentHas
 			return memory, err
 		}
 		remote, state, read, err := remoteGitCache(bound, s.meta, repo)
-		if err != nil || !read {
-			return memory, err
-		}
-		branches, err := remote.ListRemoteBranches(bound, repo)
 		if err != nil {
 			return memory, err
 		}
-		heads := make(map[string]string, len(branches))
-		for _, listed := range branches {
-			heads[listed.Name] = listed.SHA
-		}
-		name := branch
-		if _, held := heads[name]; !held {
-			name = state.DefaultBranch
-		}
-		head, held := heads[name]
-		if !held {
-			return memory, nil
-		}
-		memory.Branch, memory.Head = name, head
-		stored, err := remote.ListRemoteCommits(bound, repo, domain.RemoteCommitCursor{}, anchoredMemoryCommits)
-		if err != nil {
-			return memory, err
-		}
-		bySHA := make(map[string]domain.RemoteCommit, len(stored))
-		for _, commit := range stored {
-			bySHA[commit.SHA] = commit
-		}
-		// The head and what it descends from, among the commits held.
 		var ancestors []domain.RemoteCommit
-		seen, queue := map[string]struct{}{head: {}}, []string{head}
-		for len(queue) > 0 {
-			commit, ok := bySHA[queue[0]]
-			queue = queue[1:]
-			if !ok {
-				continue
-			}
-			ancestors = append(ancestors, commit)
-			for _, parent := range commit.Parents {
-				if _, dup := seen[parent]; !dup {
-					seen[parent] = struct{}{}
-					queue = append(queue, parent)
-				}
-			}
-		}
-		sort.SliceStable(ancestors, func(left, right int) bool {
-			if !ancestors[left].CommittedAt.Equal(ancestors[right].CommittedAt) {
-				return ancestors[left].CommittedAt.After(ancestors[right].CommittedAt)
-			}
-			return ancestors[left].SHA > ancestors[right].SHA
-		})
-		memory.Walked = len(ancestors)
-		pulls, err := remote.ListRemotePulls(bound, repo)
-		if err != nil {
-			return memory, err
-		}
 		merged := map[string]domain.RemotePull{}
-		for _, pull := range pulls {
-			if pull.MergeSHA != "" {
-				merged[pull.MergeSHA] = pull
+		if read {
+			if ancestors, merged, err = walkAnchoredMemory(bound, repo, remote, state.DefaultBranch, branch, &memory); err != nil {
+				return memory, err
 			}
 		}
 		// Where summaries are looked for, newest first: each commit, and after
 		// a commit a pull request was merged as, that pull request's commits.
 		position, asked := map[string]int{}, []string{}
-		place := func(sha string) {
+		one := func(sha string) {
 			if _, dup := position[sha]; !dup {
 				position[sha] = len(asked)
 				asked = append(asked, sha)
 			}
 		}
+		place := func(sha string) {
+			one(sha)
+			if pull, ok := merged[sha]; ok {
+				for index := len(pull.Commits) - 1; index >= 0; index-- {
+					one(pull.Commits[index])
+				}
+			}
+		}
+		for _, sha := range local {
+			place(sha)
+		}
 		for _, commit := range ancestors {
 			place(commit.SHA)
-			if pull, ok := merged[commit.SHA]; ok {
-				for index := len(pull.Commits) - 1; index >= 0; index-- {
-					place(pull.Commits[index])
-				}
+		}
+		if read {
+			// A commit a session made may be on the remote as a copy only: its
+			// summary stands where the copy does.
+			sessions, err := reader.store.ListRepositoryAnchoredSessions(bound, repo)
+			if err != nil {
+				return memory, err
 			}
-		}
-		// A commit a session made may be on the remote as a copy only: its
-		// summary stands where the copy does.
-		sessions, err := reader.store.ListRepositoryAnchoredSessions(bound, repo)
-		if err != nil {
-			return memory, err
-		}
-		facts, err := readAnchoredRemoteFacts(bound, s.meta, repo, sessions)
-		if err != nil {
-			return memory, err
-		}
-		for _, session := range sessions {
-			for _, segment := range session.Body.Segments {
-				for _, commit := range segment.Commits {
-					if _, direct := position[commit.SHA]; direct {
-						continue
-					}
-					held, copies := facts.of(commit)
-					at := -1
-					for _, sha := range copies {
-						if found, ok := position[sha]; ok && (at < 0 || found < at) {
-							at = found
+			facts, err := readAnchoredRemoteFacts(bound, s.meta, repo, sessions)
+			if err != nil {
+				return memory, err
+			}
+			for _, session := range sessions {
+				for _, segment := range session.Body.Segments {
+					for _, commit := range segment.Commits {
+						if _, direct := position[commit.SHA]; direct {
+							continue
+						}
+						held, copies := facts.of(commit)
+						at := -1
+						for _, sha := range copies {
+							if found, ok := position[sha]; ok && (at < 0 || found < at) {
+								at = found
+							}
+						}
+						if !held && at >= 0 {
+							position[commit.SHA] = at
+							asked = append(asked, commit.SHA)
 						}
 					}
-					if !held && at >= 0 {
-						position[commit.SHA] = at
-						asked = append(asked, commit.SHA)
-					}
 				}
 			}
+		}
+		if len(asked) == 0 {
+			return memory, nil
 		}
 		kept, err := summaries.ListCommitAnchoredSummaries(bound, repo, asked)
 		if err != nil {
@@ -283,6 +252,73 @@ func (s *Service) ReadAnchoredMemory(ctx context.Context, repo domain.ContentHas
 	}
 	s.nameAnchoredSummaries(ctx, memory.Summaries)
 	return memory, nil
+}
+
+// walkAnchoredMemory reads the commits of a branch on the remote, newest
+// first: each commit the branch's newest commit descends from, among the
+// newest commits the server holds. It also answers the merged pull requests
+// by the commit each became, and says in memory which branch it walked.
+func walkAnchoredMemory(ctx context.Context, repo domain.ContentHash, remote outbound.RemoteGitStore, defaultBranch, branch string, memory *domain.AnchoredMemory) ([]domain.RemoteCommit, map[string]domain.RemotePull, error) {
+	merged := map[string]domain.RemotePull{}
+	pulls, err := remote.ListRemotePulls(ctx, repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, pull := range pulls {
+		if pull.MergeSHA != "" {
+			merged[pull.MergeSHA] = pull
+		}
+	}
+	branches, err := remote.ListRemoteBranches(ctx, repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	heads := make(map[string]string, len(branches))
+	for _, listed := range branches {
+		heads[listed.Name] = listed.SHA
+	}
+	name := branch
+	if _, held := heads[name]; !held {
+		name = defaultBranch
+	}
+	head, held := heads[name]
+	if !held {
+		return nil, merged, nil
+	}
+	memory.Branch, memory.Head = name, head
+	stored, err := remote.ListRemoteCommits(ctx, repo, domain.RemoteCommitCursor{}, anchoredMemoryCommits)
+	if err != nil {
+		return nil, nil, err
+	}
+	bySHA := make(map[string]domain.RemoteCommit, len(stored))
+	for _, commit := range stored {
+		bySHA[commit.SHA] = commit
+	}
+	// The head and what it descends from, among the commits held.
+	var ancestors []domain.RemoteCommit
+	seen, queue := map[string]struct{}{head: {}}, []string{head}
+	for len(queue) > 0 {
+		commit, ok := bySHA[queue[0]]
+		queue = queue[1:]
+		if !ok {
+			continue
+		}
+		ancestors = append(ancestors, commit)
+		for _, parent := range commit.Parents {
+			if _, dup := seen[parent]; !dup {
+				seen[parent] = struct{}{}
+				queue = append(queue, parent)
+			}
+		}
+	}
+	sort.SliceStable(ancestors, func(left, right int) bool {
+		if !ancestors[left].CommittedAt.Equal(ancestors[right].CommittedAt) {
+			return ancestors[left].CommittedAt.After(ancestors[right].CommittedAt)
+		}
+		return ancestors[left].SHA > ancestors[right].SHA
+	})
+	memory.Walked = len(ancestors)
+	return ancestors, merged, nil
 }
 
 // summaries keeps of the stored summaries those the reader may read, and

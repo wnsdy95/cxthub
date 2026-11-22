@@ -831,7 +831,8 @@ export interface AnchoredSessionSummary {
  */
 export interface AnchoredSummary {
   repo_id: string; provider: AnchoredProvider; session_id: string; commit: string; body_hash: string;
-  body: { summary: string; key_facts: string[]; open_tasks: string[] };
+  /** `tasks_authoritative`: the open tasks are the tool's own list, not what a CLI picked out of the conversation. */
+  body: { summary: string; key_facts: string[]; open_tasks: string[]; tasks_authoritative?: boolean };
   created_at: string; updated_at: string; segment_no?: number; uploader?: string; uploader_name?: string;
 }
 /**

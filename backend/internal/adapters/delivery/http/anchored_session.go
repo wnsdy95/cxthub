@@ -158,6 +158,6 @@ func (s *Server) readAnchoredMemory(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	memory, err := service.ReadAnchoredMemory(r.Context(), s.repoID(r), r.URL.Query().Get("branch"), limit)
+	memory, err := service.ReadAnchoredMemory(r.Context(), s.repoID(r), r.URL.Query().Get("branch"), r.URL.Query()["local"], limit)
 	s.respond(w, memory, err)
 }

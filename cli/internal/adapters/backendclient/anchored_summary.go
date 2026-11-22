@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
@@ -25,6 +26,32 @@ func (c *BackendClient) PutAnchoredSummary(ctx context.Context, repoID string, p
 		Changed  bool   `json:"changed"`
 	}
 	return c.doLimited(ctx, http.MethodPut, path, body, &receipt, 1<<20)
+}
+
+// ReadAnchoredMemory reads the summaries along a branch, the summary of the
+// newest commit first, with GET /repos/{repoID}/anchored-memory. local names
+// the newest commits of the branch as this folder has it; the server looks at
+// them before what it read of the branch itself.
+func (c *BackendClient) ReadAnchoredMemory(ctx context.Context, repoID, branch string, local []string, limit int) (domain.AnchoredMemory, error) {
+	var memory domain.AnchoredMemory
+	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
+		return memory, err
+	}
+	if len(local) > domain.AnchoredMemoryLocalCommits {
+		local = local[:domain.AnchoredMemoryLocalCommits]
+	}
+	query := url.Values{"limit": {strconv.Itoa(limit)}}
+	if branch != "" {
+		query.Set("branch", branch)
+	}
+	for _, commit := range local {
+		if !fullCommitNumber(commit) {
+			return memory, fmt.Errorf("%w: a commit of this folder is named by its full number", domain.ErrInvalidRef)
+		}
+		query.Add("local", commit)
+	}
+	err := c.doLimited(ctx, http.MethodGet, c.reposPath(repoID)+"/anchored-memory?"+query.Encode(), nil, &memory, 4<<20)
+	return memory, err
 }
 
 // fullCommitNumber reports whether sha is a whole SHA-1 or SHA-256 commit

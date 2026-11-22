@@ -379,6 +379,20 @@ type BranchHandoff interface {
 	RenderBranchHandoff(ctx context.Context, in BranchHandoffInput) (string, error)
 }
 
+// BranchSummaries gives a session the most recent summary along the branch
+// its folder is on, once for each branch the session comes to. emit writes
+// the text to the session's tool; a summary is counted as given only after
+// emit returned without an error.
+type BranchSummaries interface {
+	DeliverBranchSummary(ctx context.Context, in BranchSummaryInput, emit func(text string) error) error
+}
+
+type BranchSummaryInput struct {
+	Cwd       string
+	Provider  domain.ProviderKind
+	SessionID string
+}
+
 type BranchHandoffInput struct {
 	Cwd        string
 	MemoryHash domain.ContentHash // Explicit memory-only provenance for an orphan root.

@@ -1268,6 +1268,12 @@ components:
           type: array
           maxItems: 256
           items: { type: string, description: 'At most 4 KiB.' }
+        tasks_authoritative:
+          type: boolean
+          description: >-
+            True when the open tasks are the tool's own list, taken from the summary the tool wrote of its
+            conversation. A CLI gives only such a list to another session as what is left to do; a list a CLI
+            picked out of the conversation is for people to read.
     AnchoredSummary:
       type: object
       required: [repo_id, provider, session_id, commit, body_hash, body, created_at, updated_at]
@@ -1291,7 +1297,7 @@ components:
       properties:
         branch: { type: string, description: The branch that was walked. It is the one asked for, or the default branch when the remote holds no branch of that name. Absent before the remote was read. }
         head: { type: string, description: The newest commit of that branch. Absent before the remote was read. }
-        walked: { type: integer, minimum: 0, description: How many commits the walk went through. }
+        walked: { type: integer, minimum: 0, description: How many commits of the remote the walk went through. }
         summaries:
           type: array
           maxItems: 20
@@ -5384,13 +5390,22 @@ paths:
         itself come first and those of the branch it was made from after them. A commit a pull request was merged
         as, also by a squash, stands for the commits of that pull request, and a commit that was rebased or
         cherry-picked is found where its copy stands. A summary is listed only when the caller may read the
-        segment it belongs to. A commit that is on no branch of the remote is not on the walk.
+        segment it belongs to. A commit that is on no branch of the remote is not on the walk. The caller names
+        the newest commits of the branch as its own folder has it in `local`; they are looked at first, in that
+        order, so that what a member committed and did not push, or pushed a moment ago, is found.
       tags: [anchored-sessions]
       parameters:
         - name: branch
           in: query
           description: The branch to walk. The default branch is walked when this is absent or the remote holds no branch of that name.
           schema: { type: string }
+        - name: local
+          in: query
+          description: >-
+            Full commit numbers of the newest commits of the branch in the caller's own folder, the newest
+            first, given once per commit. Their summaries come first, before those of the commits the server
+            read of the branch. The summary at a commit that is not pushed is read only by the member who wrote it.
+          schema: { type: array, maxItems: 50, items: { type: string } }
         - name: limit
           in: query
           description: How many summaries to list at most.
@@ -5404,7 +5419,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { description: A limit outside 1 to 20, or a branch name that cannot be one }
+        '422': { description: 'A limit outside 1 to 20, a branch name that cannot be one, or more than 50 or short commit numbers' }
   /repos/{repoID}/anchored-notes:
     parameters:
       - $ref: '#/components/parameters/repoID'

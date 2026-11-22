@@ -110,7 +110,7 @@ func TestSummariesAreReadAlongABranch(t *testing.T) {
 	alice, bob, visitor := anchoredActor("member-a"), anchoredActor("member-b"), context.Background()
 
 	// Nothing was read from the remote yet: no branch, no summary.
-	if empty, err := service.ReadAnchoredMemory(bob, repo, "main", 5); err != nil || empty.Branch != "" || empty.Head != "" || empty.Summaries == nil || len(empty.Summaries) != 0 {
+	if empty, err := service.ReadAnchoredMemory(bob, repo, "main", nil, 5); err != nil || empty.Branch != "" || empty.Head != "" || empty.Summaries == nil || len(empty.Summaries) != 0 {
 		t.Fatalf("before the remote was read: %+v %v", empty, err)
 	}
 
@@ -148,7 +148,7 @@ func TestSummariesAreReadAlongABranch(t *testing.T) {
 	}
 	read := func(reader context.Context, branch string, limit int) domain.AnchoredMemory {
 		t.Helper()
-		memory, err := service.ReadAnchoredMemory(reader, repo, branch, limit)
+		memory, err := service.ReadAnchoredMemory(reader, repo, branch, nil, limit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,6 +176,25 @@ func TestSummariesAreReadAlongABranch(t *testing.T) {
 		}
 		if topic.Summaries[0].Commit != first || topic.Summaries[0].SegmentNo != 2 || topic.Summaries[0].Uploader != "member-a" {
 			t.Fatalf("a summary does not say where it belongs: %+v", topic.Summaries[0])
+		}
+	}
+	// A commit of the caller's folder is looked at when the caller names it,
+	// before the branch's commits. One that is not pushed is read by its
+	// uploader alone.
+	named := func(reader context.Context) []string {
+		t.Helper()
+		memory, err := service.ReadAnchoredMemory(reader, repo, "topic", []string{local, anchoredTestSHA("d")}, 5)
+		if err != nil || memory.Walked != 4 {
+			t.Fatalf("with a commit of the folder: %+v %v", memory, err)
+		}
+		return texts(memory)
+	}
+	if own := named(alice); !same(own, "Local work.", "Topic work.", "Base work.") {
+		t.Fatalf("what the uploader reads with its commit that is not pushed: %v", own)
+	}
+	for name, reader := range map[string]context.Context{"another member": bob, "a reader without an account": visitor} {
+		if other := named(reader); !same(other, "Topic work.", "Base work.") {
+			t.Fatalf("what %s reads with a commit that is not pushed: %v", name, other)
 		}
 	}
 	if main := read(bob, "main", 5); main.Branch != "main" || main.Head != base || main.Walked != 2 || !same(texts(main), "Base work.") {
@@ -227,17 +246,55 @@ func TestSummariesAreReadAlongABranch(t *testing.T) {
 			t.Fatalf("along %q after the squash: %+v", name, merged)
 		}
 	}
+	// The same holds for the commits the caller names from its own folder:
+	// the pull request's commits come right after the commit it became.
+	pulled, err := service.ReadAnchoredMemory(visitor, repo, "main", []string{squashed, base}, 5)
+	if err != nil || !same(texts(pulled), "Local work.", "Topic work.", "Base work.") {
+		t.Fatalf("naming the squashed commit: %+v %v", pulled, err)
+	}
 
 	for name, call := range map[string]func() error{
-		"no summary asked for": func() error { _, err := service.ReadAnchoredMemory(bob, repo, "main", 0); return err },
+		"no summary asked for": func() error { _, err := service.ReadAnchoredMemory(bob, repo, "main", nil, 0); return err },
 		"too many asked for": func() error {
-			_, err := service.ReadAnchoredMemory(bob, repo, "main", domain.AnchoredMemoryLimit+1)
+			_, err := service.ReadAnchoredMemory(bob, repo, "main", nil, domain.AnchoredMemoryLimit+1)
 			return err
 		},
-		"a name with a NUL": func() error { _, err := service.ReadAnchoredMemory(bob, repo, "ma\x00in", 5); return err },
+		"a short commit number": func() error {
+			_, err := service.ReadAnchoredMemory(bob, repo, "main", []string{"abc1234"}, 5)
+			return err
+		},
+		"too many commits": func() error {
+			_, err := service.ReadAnchoredMemory(bob, repo, "main", make([]string, domain.AnchoredMemoryLocalCommits+1), 5)
+			return err
+		},
+		"a name with a NUL": func() error { _, err := service.ReadAnchoredMemory(bob, repo, "ma\x00in", nil, 5); return err },
 	} {
 		if err := call(); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("%s: %v", name, err)
 		}
+	}
+}
+
+// A repository whose remote was never read has no branch to walk. A member
+// still finds what that member wrote at a commit of that member's folder.
+func TestSummaryOfACommitThatIsNotPushedIsFoundWithoutTheRemote(t *testing.T) {
+	service, _, repo := anchoredSessionFixture(t)
+	alice, bob := anchoredActor("member-a"), anchoredActor("member-b")
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", anchoredTestBody("m3")); err != nil {
+		t.Fatal(err)
+	}
+	commit := anchoredTestSHA("a")
+	if _, err := service.PutAnchoredSummary(alice, repo, domain.ProviderClaude, "session-1", commit, domain.AnchoredSummaryBody{Summary: "Local work."}); err != nil {
+		t.Fatal(err)
+	}
+	own, err := service.ReadAnchoredMemory(alice, repo, "main", []string{commit}, 5)
+	if err != nil || own.Branch != "" || own.Walked != 0 || len(own.Summaries) != 1 || own.Summaries[0].Body.Summary != "Local work." || own.Summaries[0].SegmentNo != 1 {
+		t.Fatalf("what the uploader reads: %+v %v", own, err)
+	}
+	if other, err := service.ReadAnchoredMemory(bob, repo, "main", []string{commit}, 5); err != nil || len(other.Summaries) != 0 {
+		t.Fatalf("what another member reads: %+v %v", other, err)
+	}
+	if none, err := service.ReadAnchoredMemory(alice, repo, "main", nil, 5); err != nil || none.Summaries == nil || len(none.Summaries) != 0 {
+		t.Fatalf("without naming the commit: %+v %v", none, err)
 	}
 }

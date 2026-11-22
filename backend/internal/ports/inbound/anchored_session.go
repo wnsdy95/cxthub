@@ -35,6 +35,7 @@ type AnchoredSummaries interface {
 	PutAnchoredSummary(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID, commit string, body domain.AnchoredSummaryBody) (domain.AnchoredSummaryReceipt, error)
 	ListAnchoredSummaries(ctx context.Context, repo domain.ContentHash, commits []string) ([]domain.AnchoredSummary, error)
 	// ReadAnchoredMemory lists the summaries along a branch, the summary of
-	// the newest commit first.
-	ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, limit int) (domain.AnchoredMemory, error)
+	// the newest commit first. local names the newest commits of the branch
+	// as the caller's folder has it; they are looked at first.
+	ReadAnchoredMemory(ctx context.Context, repo domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error)
 }

@@ -41,8 +41,10 @@ type Handler struct {
 	coord    *capture.CaptureCoordinator
 	notices  inbound.SessionNotices
 	preparer inbound.PrepareAgentContext
-	admit    func(context.Context, string) error
-	observe  func(string, domain.ProviderKind, string)
+	// summaries gives a session the most recent summary along its branch.
+	summaries inbound.BranchSummaries
+	admit     func(context.Context, string) error
+	observe   func(string, domain.ProviderKind, string)
 	// wakeCollector starts the detached session report collector. An agent
 	// hook only wakes it; the collector reads what the tools recorded.
 	wakeCollector func(string)
@@ -223,6 +225,18 @@ func (h *Handler) WithAgentContext(preparer inbound.PrepareAgentContext) *Handle
 	return h
 }
 
+// WithBranchSummaries makes a session's hooks give it the most recent summary
+// along the branch its folder is on, once for each branch it comes to. It
+// takes the place of the queued handoff: the summary is read from the server
+// and from Git as they are when the hook runs, whatever ran at the checkout.
+func (h *Handler) WithBranchSummaries(summaries inbound.BranchSummaries) *Handler {
+	h.summaries = summaries
+	return h
+}
+
+// branchSummaryWait bounds how long a prompt waits for the server's answer.
+const branchSummaryWait = 4 * time.Second
+
 const appHandoffMaxBytes = 16 << 10
 
 // emitBriefing uses the documented SessionStart/UserPromptSubmit JSON channel:
@@ -233,7 +247,7 @@ func (h *Handler) emitBriefing(ctx context.Context, provider domain.ProviderKind
 	if text, ok := capture.ConsumeBriefing(cwd); ok {
 		entries = append(entries, text)
 	}
-	emissionAttempted := false
+	emissionAttempted, handoffWritten := false, false
 	emit := func(handoff string, validate func() error) error {
 		emissionAttempted = true
 		emitted := false
@@ -255,6 +269,9 @@ func (h *Handler) emitBriefing(ctx context.Context, provider domain.ProviderKind
 			// Independent identifier/selection notices still deliver and acknowledge
 			// normally when authorization for the project-memory handoff fails.
 			writeErr = h.writeContext(event, noticeEntries)
+			if writeErr == nil && validate != nil && handoffErr == nil {
+				handoffWritten = true
+			}
 			return writeErr
 		}
 		if h.notices != nil {
@@ -267,6 +284,27 @@ func (h *Handler) emitBriefing(ctx context.Context, provider domain.ProviderKind
 			writeErr = write(entries)
 		}
 		return errors.Join(handoffErr, writeErr, noticeErr)
+	}
+	if h.summaries != nil {
+		// A request the checkout hook queued is dropped, never emitted.
+		capture.ConsumeSessionHandoff(cwd, sessionID)
+		read, cancel := context.WithTimeout(ctx, branchSummaryWait)
+		defer cancel()
+		var besides error
+		summaryErr := h.summaries.DeliverBranchSummary(read, inbound.BranchSummaryInput{Cwd: cwd, Provider: provider, SessionID: sessionID}, func(text string) error {
+			err := emit(text, func() error { return nil })
+			if handoffWritten {
+				// The text reached the tool. What else failed is reported, and
+				// does not make the summary one that was not given.
+				besides = err
+				return nil
+			}
+			return err
+		})
+		if !emissionAttempted {
+			return errors.Join(summaryErr, emit("", nil))
+		}
+		return errors.Join(summaryErr, besides)
 	}
 	_, handoffErr := capture.DeliverSessionHandoff(ctx, cwd, sessionID, func() error {
 		validator, ok := h.preparer.(inbound.AgentContextDeliveryValidator)

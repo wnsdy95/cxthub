@@ -53,3 +53,41 @@ func TestAnchoredSummaryPointsAreTheEndsOfSegmentsThatEndAtACommit(t *testing.T)
 		t.Fatalf("remembered: %v", got)
 	}
 }
+
+// A session is given the newest summary another session wrote.
+func TestBranchSummaryForStepsOverTheSessionsOwn(t *testing.T) {
+	memory := AnchoredMemory{Summaries: []AnchoredSummary{
+		{Provider: ProviderClaude, SessionID: "s1", Commit: "c3"},
+		{Provider: ProviderCodex, SessionID: "s1", Commit: "c2"},
+		{Provider: ProviderClaude, SessionID: "s2", Commit: "c1"},
+	}}
+	if got, ok := BranchSummaryFor(memory, ProviderClaude, "s1"); !ok || got.Commit != "c2" {
+		t.Fatalf("the same ID of another tool is another session: %+v %v", got, ok)
+	}
+	if got, ok := BranchSummaryFor(memory, ProviderCodex, "s1"); !ok || got.Commit != "c3" {
+		t.Fatalf("for the other tool: %+v %v", got, ok)
+	}
+	if got, ok := BranchSummaryFor(memory, ProviderClaude, "s3"); !ok || got.Commit != "c3" {
+		t.Fatalf("for a session that wrote none: %+v %v", got, ok)
+	}
+	only := AnchoredMemory{Summaries: memory.Summaries[:1]}
+	if _, ok := BranchSummaryFor(only, ProviderClaude, "s1"); ok {
+		t.Fatal("a session was given what it wrote itself")
+	}
+	if _, ok := BranchSummaryFor(AnchoredMemory{}, ProviderClaude, "s1"); ok {
+		t.Fatal("a summary where there is none")
+	}
+}
+
+// The mark of the tool's own task list goes with the tasks, and only with them.
+func TestAnchoredSummaryOfKeepsTheMarkOfTheToolsOwnTasks(t *testing.T) {
+	if body, _ := AnchoredSummaryOf(MemoryDigest{Summary: "Work.", OpenTasks: []string{"Document it."}, TasksAuthoritative: true}); !body.TasksAuthoritative {
+		t.Fatalf("the mark was lost: %+v", body)
+	}
+	if body, _ := AnchoredSummaryOf(MemoryDigest{Summary: "Work.", OpenTasks: []string{"Document it."}}); body.TasksAuthoritative {
+		t.Fatalf("a list cxt picked out was marked: %+v", body)
+	}
+	if body, _ := AnchoredSummaryOf(MemoryDigest{Summary: "Work.", TasksAuthoritative: true}); body.TasksAuthoritative {
+		t.Fatalf("no task, and a mark: %+v", body)
+	}
+}

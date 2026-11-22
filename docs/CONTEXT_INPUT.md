@@ -16,8 +16,10 @@ hash; local-only history identifies itself as an observation rather than an
 authorization or server acknowledgement.
 
 Every managed fresh context injection uses the latest authorized **server
-`main`**: default memory input, explicit budgeted history, `load` delivery,
-branch seeds and desktop handoffs. The local branch, worktree, local `main` ref
+`main`**: default memory input, explicit budgeted history, `load` delivery
+and branch seeds. An app session that stays open across a branch switch is not
+such an injection: a hook gives it the most recent summary along the branch it
+comes to (see `cxt hook` in the [CLI reference](CLI.md)). The local branch, worktree, local `main` ref
 and rewound memory cursor do not select that input. The server resolves `main`
 directly; local aliases, refs and the local Git commit cannot pin its tip.
 
@@ -60,8 +62,8 @@ package. A repository change completed before those reads can therefore be
 accepted when the selected input is unchanged; a change between those reads
 still rejects delivery. Older servers and packages without the paired proofs
 retain the strict original revision check. Partial, malformed or disappearing
-proofs cannot select a weaker fallback. Desktop handoff failures retain their
-queue entry for a later preparation.
+proofs cannot select a weaker fallback. A summary that could not be given to an
+open app session is tried again at that session's next hook.
 
 A Git checkout defers background branch publication requested by its own replay
 or activation until foreground context preparation finishes. Applied branch

@@ -304,7 +304,7 @@ Runs Claude Code with fresh input from latest authorized server `main` and
 passes remaining arguments to the installed `claude` executable. The wrapper
 owns process restart/resume on a branch switch. It is optional for Claude
 Desktop's Code tab, where lifecycle hooks preserve the live app session and
-apply one bounded memory handoff from latest authorized server `main`.
+give it the most recent summary along the branch it comes to.
 Existing native resume does not reinject context.
 
 ### `cxt codex`
@@ -316,12 +316,12 @@ cxt codex [codex-arguments...]
 Runs Codex with fresh input from latest authorized server `main` and passes
 remaining arguments to the installed `codex` executable. The wrapper owns
 process restart/resume on a branch switch. It is optional for Codex app/IDE
-sessions, where lifecycle hooks preserve the live app session and apply one
-bounded memory handoff from latest authorized server `main`.
+sessions, where lifecycle hooks preserve the live app session and give it the
+most recent summary along the branch it comes to.
 Existing native resume does not reinject context.
 
 All managed fresh injections use this source rule: default memory, explicit
-budgeted history, `load` delivery, branch seeds and desktop handoffs. The server
+budgeted history, `load` delivery and branch seeds. The server
 resolves `main` directly; the local branch/worktree, local `main`, local Git
 commit and rewound memory cursor cannot select its tip. Source selection
 `branch`, `snapshot_id` and `code_commit` identify main. The additive, optional
@@ -370,16 +370,26 @@ are reported without blocking the provider.
 
 Supported coding-app events are `SessionStart`, `UserPromptSubmit`, `Stop`, and
 `SessionEnd`. A desktop branch switch never renames the vendor-owned active
-session file. Instead, the next start/prompt hook consumes a session-scoped,
-maximum-16-KiB project-memory handoff from latest authorized server `main`
-after source/memory revalidation. Successful delivery acknowledges the queued
-request; a process crash between output and acknowledgement can cause a retry.
-Its input is independent of the
-selected local branch or historical cursor. Full transcripts remain in
+session file. Instead, a start or prompt hook gives the session the most
+recent summary along the branch its folder is on, once for each branch the
+session comes to: at its first hook, and again after the folder moved to
+another branch. cxt reads the branch from Git when the hook runs and remembers
+beside Git's files which branch each session was last given a summary for, so
+nothing depends on a hook having run at the checkout. The summary is the newest
+one another session wrote: first at the newest 50 commits of the branch as this
+folder has it, then along the branch on GitHub, and where the branch has none,
+along the branch it was made from. It is at most 16 KiB, and a session is not given what
+it wrote itself. Of a summary's open tasks, a session is given only the tool's
+own list, the one the tool wrote in the summary of its conversation
+(`tasks_authoritative`); tasks that cxt picked out of a conversation are shown
+to people and never handed to a session as what is left to do. A branch without a summary gives nothing and is not asked for
+again; a server that did not answer within four seconds, or a text that did
+not reach the tool, is tried again at the next hook. A folder on no branch, and
+a repository without a server, are given nothing. Full transcripts remain in
 the immutable CXTHub DAG. The web viewer exposes archived conversation; current
 MCP tools provide bounded history results with the limits documented in
-[MCP connections](MCP.md#current-history-retrieval-limits). A per-handoff limit
-does not bound the total input accumulated across many branch switches.
+[MCP connections](MCP.md#current-history-retrieval-limits). The limit is for
+one summary and does not bound what many branch switches add up to.
 
 Claude Desktop's general Chat tab is outside this hook model and is not
 passively captured.
@@ -661,7 +671,7 @@ Restores a ref. With `-b`, creates and restores a new context branch from that
 ref. Git checkout hooks normally invoke the corresponding behavior
 automatically. A branch's natural parents and archival memory follow its actual
 creation source, including an explicit historical ref. Managed fresh seed input
-and desktop handoffs use latest authorized server `main`; that input does not
+uses latest authorized server `main`; that input does not
 rewrite branch ancestry, archival memory or the worktree's selected cursor.
 An orphan's inherited archival memory remains distinct from prepared main input.
 
@@ -1142,7 +1152,7 @@ Reading a key prints its effective local value. Supported keys are:
 |---|---|---|---|
 | `checkout.mode` | `auto`, `prepare` | `auto` | Restore automatically or only prepare the resume action after Git checkout |
 | `load.mode` | `full`, `reconstructed`, `memory`, `default` | structured memory | Retained for compatibility; does not override managed latest-server-main input. Archive replay requires explicit `--mode` per command; `default` clears the stored preference. |
-| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Managed fresh wrappers prepare and validate the next input before stopping their current child; failed preparation preserves it. Legacy native-resume wrappers use the prepared-seed restart path. Unmanaged app sessions stay open and receive a bounded handoff. |
+| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Managed fresh wrappers prepare and validate the next input before stopping their current child; failed preparation preserves it. Legacy native-resume wrappers use the prepared-seed restart path. Unmanaged app sessions stay open and are given the summary along the new branch at their next prompt. |
 | `capture.debounce` | non-negative seconds, `default` | 60 seconds | Minimum interval for repeated Stop-event captures |
 | `capture.identity` | `cxt-manifest-sha256-v1`, `legacy`, `default` | `legacy` | Explicit local capture-format preference; root selection requires a successful capability confirmation for the configured origin. |
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
@@ -1416,7 +1426,10 @@ summaries of the branch itself come first and those of the branch it was made
 from after them. A commit a pull request was merged as, also by a squash,
 stands for that pull request's commits, and a rebased or cherry-picked commit
 is found where its copy stands. A branch GitHub does not hold is read as the
-default branch, and a commit that is on no branch of GitHub is not on the walk.
+default branch. A commit that is on no branch of GitHub is not on the walk. The
+caller names the newest commits of the branch as its own folder has it
+(`local=`), and they are looked at first, so that what a member committed and
+did not push, or pushed a moment ago, is found.
 
 The Sessions tab searches all of this at once: pull request titles, branch
 names, commit subjects and the beginning of commit numbers, the conversations

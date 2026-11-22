@@ -365,6 +365,8 @@ expect "a teammate cannot write a summary of another member's session" "$(sumput
 expect "the uploader reads the summary with its segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["segment_no"],r[0]["body"]["summary"])')" "1 1 Committed the segment work."
 expect "a teammate reads no summary before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
 expect "no summary is found along a branch of a remote that was never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-memory?branch=main" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r.get("branch"),r["walked"],len(r["summaries"]))')" "None 0 0"
+expect "the uploader finds the summary at a commit of its folder by naming it" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-memory?branch=main&local=$SEGSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r["summaries"]),r["summaries"][0]["segment_no"],r["summaries"][0]["body"]["summary"])')" "1 1 Committed the segment work."
+expect "a teammate naming that commit finds nothing before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-memory?branch=main&local=$SEGSHA" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["summaries"]))')" 0
 expect "more than 20 summaries along a branch are refused" "$(curl -sb "$JA" -o /dev/null -w '%{http_code}' "$B/repos/$CLIRID/anchored-memory?branch=main&limit=21")" 422
 expect "the uploader reads the conversation through the session, without the document hash" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c "import json,sys;raw=sys.stdin.read();p=json.loads(raw);print(len(p['events']),p['offset'],p['next'],'$SEGDOC2' in raw)")" "6 0 -1 False"
 expect "a session's summary says nothing about the remote it never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;c=json.load(sys.stdin)[0]["commits"][0];print("on_remote" in c, c.get("copies"))')" "False None"
@@ -397,6 +399,18 @@ expect "an account outside the repository cannot list reports" "$(code -b "$JM" 
 expect "an account outside the repository cannot read a report" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 403
 expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 401
 expect "reports do not advance the repository revision" "$(curl -fsSb "$JA" "$B/repos/$CLIRID/view" | jget "['revision']")" "$SEGREV_BEFORE"
+# A prompt hook gives a session the most recent summary along the branch its folder is on, once. Here that is the
+# summary at a commit of this folder that the server never read from a remote, which another session of the same
+# member wrote.
+hooksummary() {
+  printf '{"session_id":"%s","cwd":"%s","prompt":"go on"}' "$1" "$PWD" | cxt hook --provider claude --event UserPromptSubmit 2>"$TMP/hook-summary.err" | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+text = json.loads(raw)["hookSpecificOutput"]["additionalContext"] if raw else ""
+print("cxthub branch summary" in text, sys.argv[1][:12] in text)' "$SEGSHA"
+}
+expect "a prompt hook gives another session the summary along its branch" "$(hooksummary e2e-reader)" "True True"
+expect "the same session is not given it a second time" "$(hooksummary e2e-reader)" "False False"
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"

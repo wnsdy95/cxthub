@@ -23,3 +23,27 @@ type SessionSummarizer interface {
 type AnchoredSummaryRemote interface {
 	PutAnchoredSummary(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID, commit string, body domain.AnchoredSummaryBody) error
 }
+
+// AnchoredMemoryRemote reads from the server the summaries along a branch,
+// the summary of the newest commit first. local names the newest commits of
+// the branch as this folder has it, the newest first; the server looks at
+// them before what it read of the branch itself.
+type AnchoredMemoryRemote interface {
+	ReadAnchoredMemory(ctx context.Context, repoID, branch string, local []string, limit int) (domain.AnchoredMemory, error)
+}
+
+// BranchSummaryPlace reads from Git where a folder stands.
+type BranchSummaryPlace interface {
+	// BranchPlace returns the branch the folder is on, empty when it is on
+	// none, and the newest commits of that branch, the newest first and at
+	// most limit.
+	BranchPlace(ctx context.Context, cwd string, limit int) (branch string, newest []string, err error)
+}
+
+// BranchSummaryGiven remembers for which branch a session was last given a
+// summary. It is a memory of what was given: losing it gives a session the
+// summary of its branch once more.
+type BranchSummaryGiven interface {
+	GivenBranch(ctx context.Context, cwd string, provider domain.ProviderKind, sessionID string) (string, error)
+	SetGivenBranch(ctx context.Context, cwd string, provider domain.ProviderKind, sessionID, branch string) error
+}

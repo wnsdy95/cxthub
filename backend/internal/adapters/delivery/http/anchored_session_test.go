@@ -66,9 +66,9 @@ func (backend *anchoredSessionHTTPBackend) ListAnchoredSummaries(ctx context.Con
 	return []domain.AnchoredSummary{}, backend.err
 }
 
-func (backend *anchoredSessionHTTPBackend) ReadAnchoredMemory(ctx context.Context, _ domain.ContentHash, branch string, limit int) (domain.AnchoredMemory, error) {
+func (backend *anchoredSessionHTTPBackend) ReadAnchoredMemory(ctx context.Context, _ domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error) {
 	backend.seen(ctx)
-	backend.session, backend.limit = branch, limit
+	backend.session, backend.sha, backend.limit = branch, strings.Join(local, ","), limit
 	return domain.AnchoredMemory{Branch: branch, Summaries: []domain.AnchoredSummary{}}, backend.err
 }
 
@@ -279,7 +279,7 @@ func TestAnchoredMemoryHTTP(t *testing.T) {
 	}{
 		{"anonymous", "?branch=main", domain.RoleOwner, false, 401, "", 0, nil},
 		{"viewer", "?branch=feature%2Fparser", domain.RoleViewer, true, 200, "feature/parser", 5, nil},
-		{"member_limit", "?branch=main&limit=2", domain.RoleMember, true, 200, "main", 2, nil},
+		{"member_limit", "?branch=main&limit=2&local=" + strings.Repeat("a", 40) + "&local=" + strings.Repeat("b", 40), domain.RoleMember, true, 200, "main", 2, nil},
 		{"no_branch", "", domain.RoleMember, true, 200, "", 5, nil},
 		{"limit_not_a_number", "?branch=main&limit=two", domain.RoleMember, true, 422, "", 0, nil},
 		{"refused_by_the_service", "?branch=main&limit=99", domain.RoleMember, true, 422, "main", 99, domain.ErrValidation},
@@ -299,6 +299,9 @@ func TestAnchoredMemoryHTTP(t *testing.T) {
 			}
 			if backend.calls != 1 || backend.actor != "actor" || backend.session != test.branch || backend.limit != test.limit {
 				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if want := map[string]string{"member_limit": strings.Repeat("a", 40) + "," + strings.Repeat("b", 40)}[test.name]; backend.sha != want {
+				t.Fatalf("the commits that are not pushed: %q", backend.sha)
 			}
 			if test.name == "no_branch" && strings.TrimSpace(response.Body.String()) != `{"walked":0,"summaries":[]}` {
 				t.Fatalf("answer: %s", response.Body.String())

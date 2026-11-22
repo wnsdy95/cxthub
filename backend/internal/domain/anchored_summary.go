@@ -29,6 +29,11 @@ type AnchoredSummaryBody struct {
 	Summary   string   `json:"summary"`
 	KeyFacts  []string `json:"key_facts"`
 	OpenTasks []string `json:"open_tasks"`
+	// TasksAuthoritative says that the open tasks are the tool's own list,
+	// taken from the summary the tool wrote of its conversation, and not
+	// what a CLI picked out of the conversation. Only such a list is given
+	// to another session as what is left to do.
+	TasksAuthoritative bool `json:"tasks_authoritative,omitempty"`
 }
 
 // Canonical returns the body as it is stored and hashed: lists are never null.
@@ -118,6 +123,10 @@ func (s AnchoredSummary) Validate() error {
 // AnchoredMemoryLimit is the most summaries one read along a branch answers.
 const AnchoredMemoryLimit = 20
 
+// AnchoredMemoryLocalCommits is the most commits of the caller's own folder
+// one read along a branch may name.
+const AnchoredMemoryLocalCommits = 50
+
 // AnchoredMemory is what the summaries say along a branch, the summary of
 // the newest commit first. It is found by walking the commits the server
 // read from the hosting provider back from the branch's newest commit, so it
@@ -130,7 +139,7 @@ type AnchoredMemory struct {
 	// its newest commit. Both are empty when the remote was not read yet.
 	Branch string `json:"branch,omitempty"`
 	Head   string `json:"head,omitempty"`
-	// Walked counts the commits the walk went through.
+	// Walked counts the commits of the remote the walk went through.
 	Walked    int               `json:"walked"`
 	Summaries []AnchoredSummary `json:"summaries"`
 }
