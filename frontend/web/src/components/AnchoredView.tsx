@@ -9,9 +9,9 @@
 // segment begins.
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import { navigate, type AnchoredSelection } from '../route';
-import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, RemotePull, Repo } from '../types';
+import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, AnchoredSummary, RemotePull, Repo } from '../types';
 import {
-  useAnchoredCommit, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
+  useAnchoredCommit, useAnchoredCommitSummaries, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
   useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
@@ -23,6 +23,7 @@ import { when } from '../snapshotFormat';
 import { useT } from '../i18n';
 import { AppLink } from './AppLink';
 import { AnchoredSessionView } from './AnchoredSessionView';
+import { Markdown } from './Markdown';
 
 export type AnchoredHref = (selection?: AnchoredSelection) => string;
 /** Whether the reader is a member: one who has sessions and worktrees of their own and may write notes. */
@@ -418,6 +419,7 @@ function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
   const revisions = (commit?.links ?? []).map(link => `${anchoredKey(link.provider, link.session_id)}@${index.sessions.get(anchoredKey(link.provider, link.session_id))?.revision ?? 0}`).join(',');
   // A commit no segment ends at has nothing to read.
   const segmentsQ = useAnchoredCommit(repo.id, made[0] ?? null, revisions);
+  const summariesQ = useAnchoredCommitSummaries(repo.id, made[0] ?? null, revisions);
   const merged = commit?.merged !== undefined ? index.pulls.find(pull => pull.number === commit.merged) : undefined;
   return (
     <>
@@ -468,6 +470,7 @@ function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
                     <SessionLinks sessions={spawned} index={index} href={href} />
                   </>
                 )}
+                <SummaryBox summary={summariesQ.data?.find(entry => entry.provider === link.provider && entry.session_id === link.session_id && entry.commit === (link.copyOf ?? sha))} />
               </SessionCard>
             </li>
           );
@@ -482,6 +485,31 @@ function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
       )}
       <Notes repo={repo} notes={notes} target={{ kind: 'commit', commit: sha }} canAdd={(commit?.links.length ?? 0) === 0} />
     </>
+  );
+}
+
+/** What the session's CLI wrote down when the commit was made: what was done, what is worth keeping, what is left. */
+function SummaryBox({ summary }: { summary?: AnchoredSummary }) {
+  const t = useT();
+  if (!summary) return null;
+  const { summary: text, key_facts: facts, open_tasks: tasks } = summary.body;
+  return (
+    <details className="memory-box anchor-summary" data-summary={`${summary.provider}:${summary.session_id}`}>
+      <summary className="label">◆ {t('anchored.summary')}</summary>
+      {text.trim() && <section className="memory-section"><Markdown text={text} /></section>}
+      {facts.length > 0 && (
+        <section className="memory-section">
+          <h4 className="memory-section-label">{t('anchored.summaryFacts')}</h4>
+          <ul>{facts.map((fact, at) => <li key={at}>{fact}</li>)}</ul>
+        </section>
+      )}
+      {tasks.length > 0 && (
+        <section className="memory-section">
+          <h4 className="memory-section-label">{t('anchored.summaryTasks')}</h4>
+          <ul className="tasks">{tasks.map((task, at) => <li key={at}>{task}</li>)}</ul>
+        </section>
+      )}
+    </details>
   );
 }
 

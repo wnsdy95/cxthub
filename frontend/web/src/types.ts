@@ -826,6 +826,15 @@ export interface AnchoredSessionSummary {
   uploader_name?: string;
 }
 /**
+ * What a CLI wrote of a session when the session made a commit. It is read under the rule of the segment that ends at
+ * the commit: by the uploader always, by anyone else once the commit is pushed.
+ */
+export interface AnchoredSummary {
+  repo_id: string; provider: AnchoredProvider; session_id: string; commit: string; body_hash: string;
+  body: { summary: string; key_facts: string[]; open_tasks: string[] };
+  created_at: string; updated_at: string; segment_no?: number; uploader?: string; uploader_name?: string;
+}
+/**
  * One thing a search of the sessions tab found the query in. `kind` says which: a pull request, a branch, a commit, a
  * part of a session's conversation, or a manual note.
  */

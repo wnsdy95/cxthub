@@ -28,3 +28,10 @@ type AnchoredSessions interface {
 type AnchoredSearch interface {
 	SearchAnchored(ctx context.Context, repo domain.ContentHash, query string) (domain.AnchoredSearchResult, error)
 }
+
+// AnchoredSummaries stores and reads the summary of a session at a commit a
+// segment of it ends at. A summary is read under the rule of that segment.
+type AnchoredSummaries interface {
+	PutAnchoredSummary(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID, commit string, body domain.AnchoredSummaryBody) (domain.AnchoredSummaryReceipt, error)
+	ListAnchoredSummaries(ctx context.Context, repo domain.ContentHash, commits []string) ([]domain.AnchoredSummary, error)
+}

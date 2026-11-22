@@ -614,6 +614,16 @@ export function useAnchoredCommit(repoId: string | null, sha: string | null, rev
     placeholderData: keepPreviousData,
   });
 }
+/** The summaries written at a commit. They change when a report of a session linked to the commit does. */
+export function useAnchoredCommitSummaries(repoId: string | null, sha: string | null, revisions = '') {
+  return useQuery({
+    queryKey: ['anchored-commit-summaries', repoId, sha, revisions],
+    queryFn: ({ signal }) => api.anchoredCommitSummaries(repoId as string, sha as string, signal),
+    enabled: Boolean(repoId && sha),
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
 /** What a search of the sessions tab found. A query shorter than two characters asks for nothing. */
 export function useAnchoredSearch(repoId: string | null, query: string) {
   const asked = query.trim();

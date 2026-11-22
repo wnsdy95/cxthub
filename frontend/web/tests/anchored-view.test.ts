@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { I18nProvider, translate } from '../src/i18n/index.tsx';
 import { AnchoredView } from '../src/components/AnchoredView.tsx';
 import { anchoredPath, type AnchoredSelection } from '../src/route';
-import type { AnchoredCommitSegment, AnchoredNote, AnchoredSession, AnchoredSearchResult, AnchoredSessionSummary, BranchLifetime, RemoteCommit, RemoteGitView, Repo, ReportedWorktree } from '../src/types';
+import type { AnchoredCommitSegment, AnchoredNote, AnchoredSession, AnchoredSearchResult, AnchoredSessionSummary, AnchoredSummary, BranchLifetime, RemoteCommit, RemoteGitView, Repo, ReportedWorktree } from '../src/types';
 
 const repo = { id: `sha256:${'9'.repeat(64)}`, remote_url: 'https://example.test/alice/app', default_branch: 'main' } as Repo;
 const repository = { id: 'repository-1', owner_username: 'alice', slug: 'app' };
@@ -45,6 +45,8 @@ const session: AnchoredSession = {
   },
 };
 const commitSegments: AnchoredCommitSegment[] = [{ provider: 'claude', session_id: 'parent-session', segment_no: 2, rule: 'same-folder-and-time', segment: session.body.segments[1] }];
+const commitSummaries: AnchoredSummary[] = [{ repo_id: repo.id, provider: 'claude', session_id: 'parent-session', commit: sha('b'), body_hash: `sha256:${'3'.repeat(64)}`,
+  body: { summary: 'Fixed the **parser** edge case.', key_facts: ['The parser reads TOML.'], open_tasks: ['Document the parser.'] }, created_at: at(21), updated_at: at(21), segment_no: 2, uploader: 'alice-id' }];
 const message = (index: number, role: string, text: string) => ({ kind: 'message', role, blocks: [{ type: 'text', text }], event_index: index });
 
 // What the server read from the provider: main a - e (merge of pull request 7: b, c), and d on a branch no session worked on.
@@ -76,6 +78,7 @@ function render(selection?: AnchoredSelection, withRemote = false, sessions = su
   client.setQueryData(['anchored-sessions', repo.id], sessions);
   client.setQueryData(['branch-lifetimes', repo.id], lifetimes);
   client.setQueryData(['anchored-commit', repo.id, sha('b'), 'claude:parent-session@2'], commitSegments);
+  client.setQueryData(['anchored-commit-summaries', repo.id, sha('b'), 'claude:parent-session@2'], commitSummaries);
   client.setQueryData(['anchored-session', repo.id, 'claude', 'parent-session', 2], session);
   // The conversation is read by the session, never by its document's hash.
   client.setQueryData(['anchored-events', repo.id, 'claude', 'parent-session', 2, 0], { pageParams: [0], pages: [{ offset: 0, next: -1, events: [
@@ -107,6 +110,9 @@ assert.match(commit, /Segment 2 of 2 · linked by the same folder and time · 1 
 assert.match(commit, /Commits sharing this segment:.*?href="\/alice\/app\?tab=sessions&amp;commit=c{40}"/s);
 assert.match(commit, /Sub-sessions spawned in this segment:.*?session=claude%3Achild-session/s);
 assert.match(commit, /href="\/alice\/app\?tab=sessions&amp;session=claude%3Aparent-session&amp;segment=2"/, 'the session opens at that segment');
+assert.match(commit, /data-summary="claude:parent-session"><summary class="label">◆ Summary at this commit<\/summary>.*?<strong>parser<\/strong>.*?Worth keeping.*?The parser reads TOML\..*?Left to do.*?Document the parser\./s,
+  'the summary written at the commit sits with its segment');
+assert.doesNotMatch(render({ kind: 'commit', sha: sha('f') }), /Summary at this commit/, 'a commit without a summary shows none');
 assert.match(render({ kind: 'commit', sha: sha('f') }), /No context/, 'a commit no segment ends at has no context');
 
 // A branch: the name as it is now and its earlier use, each with the uncommitted parts that fall in it.

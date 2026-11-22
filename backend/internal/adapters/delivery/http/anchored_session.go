@@ -88,3 +88,54 @@ func (s *Server) searchAnchored(w http.ResponseWriter, r *http.Request) {
 	result, err := service.SearchAnchored(r.Context(), s.repoID(r), r.URL.Query().Get("q"))
 	s.respond(w, result, err)
 }
+
+func (s *Server) anchoredSummaries(w http.ResponseWriter) (inbound.AnchoredSummaries, bool) {
+	service, ok := s.b.(inbound.AnchoredSummaries)
+	if !ok {
+		s.writeError(w, http.StatusServiceUnavailable, "anchored_sessions_unavailable", "anchored session service unavailable")
+	}
+	return service, ok
+}
+
+// putAnchoredSummary stores the summary a member's CLI made of one of that
+// member's sessions at a commit.
+func (s *Server) putAnchoredSummary(w http.ResponseWriter, r *http.Request) {
+	if !isJSONBody(r) {
+		s.writeError(w, http.StatusUnsupportedMediaType, "bad_request", "Content-Type must be application/json")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, domain.AnchoredSummaryBodyLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body domain.AnchoredSummaryBody
+	if err := decoder.Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds transport limit")
+			return
+		}
+		s.writeDecodeError(w, err)
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		s.writeError(w, http.StatusBadRequest, "bad_request", "expected a single JSON object")
+		return
+	}
+	service, ok := s.anchoredSummaries(w)
+	if !ok {
+		return
+	}
+	receipt, err := service.PutAnchoredSummary(r.Context(), s.repoID(r), domain.ProviderKind(r.PathValue("provider")), r.PathValue("sessionID"), r.PathValue("sha"), body)
+	s.respond(w, receipt, err)
+}
+
+// listAnchoredCommitSummaries lists the summaries at one commit that the
+// caller may read.
+func (s *Server) listAnchoredCommitSummaries(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.anchoredSummaries(w)
+	if !ok {
+		return
+	}
+	summaries, err := service.ListAnchoredSummaries(r.Context(), s.repoID(r), []string{r.PathValue("sha")})
+	s.respond(w, summaries, err)
+}

@@ -321,6 +321,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}", s.guard(domain.RoleViewer, s.getAnchoredSession))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}", s.guard(domain.RoleMember, s.putAnchoredSession))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-commits/{sha}", s.guard(domain.RoleViewer, s.anchoredCommitSegments))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-commits/{sha}/summaries", s.guard(domain.RoleViewer, s.listAnchoredCommitSummaries))
+	mux.HandleFunc("PUT /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/summaries/{sha}", s.guard(domain.RoleMember, s.putAnchoredSummary))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/branch-ids", s.guard(domain.RoleMember, s.putBranchIDs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branch-lifetimes", s.guard(domain.RoleViewer, s.listBranchLifetimes))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls", s.guard(domain.RoleViewer, s.anchoredSessionCalls))

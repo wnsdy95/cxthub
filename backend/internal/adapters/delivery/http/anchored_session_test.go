@@ -20,6 +20,7 @@ type anchoredSessionHTTPBackend struct {
 	session  string
 	sha      string
 	body     domain.AnchoredSessionBody
+	summary  domain.AnchoredSummaryBody
 	err      error
 }
 
@@ -50,6 +51,18 @@ func (backend *anchoredSessionHTTPBackend) AnchoredSessionCalls(context.Context,
 
 func (backend *anchoredSessionHTTPBackend) AnchoredSessionContentAccess(context.Context, domain.ContentHash, domain.ProviderKind, string) (domain.AnchoredContentAccess, error) {
 	return domain.AnchoredContentAccess{}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) PutAnchoredSummary(ctx context.Context, _ domain.ContentHash, provider domain.ProviderKind, session, commit string, body domain.AnchoredSummaryBody) (domain.AnchoredSummaryReceipt, error) {
+	backend.seen(ctx)
+	backend.provider, backend.session, backend.sha, backend.summary = provider, session, commit, body
+	return domain.AnchoredSummaryReceipt{BodyHash: domain.HashContent([]byte("summary")), Changed: true}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) ListAnchoredSummaries(ctx context.Context, _ domain.ContentHash, commits []string) ([]domain.AnchoredSummary, error) {
+	backend.seen(ctx)
+	backend.sha = strings.Join(commits, ",")
+	return []domain.AnchoredSummary{}, backend.err
 }
 
 func (backend *anchoredSessionHTTPBackend) SearchAnchored(ctx context.Context, _ domain.ContentHash, query string) (domain.AnchoredSearchResult, error) {
@@ -193,6 +206,54 @@ func TestAnchoredSessionsOfAPublicRepositoryAreReadWithoutSigningIn(t *testing.T
 	response := bpHTTP(t, handler, http.MethodPut, base+"/anchored-sessions/codex/session-1", `{"rule_version":1,"scope":"working-folder","records":0}`, false)
 	if response.Code != 401 || backend.calls != 0 {
 		t.Fatalf("a visitor stored a report: status=%d calls=%d", response.Code, backend.calls)
+	}
+}
+
+func TestAnchoredSummaryHTTP(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	const valid = `{"summary":"Added the parser.","key_facts":["It reads TOML."],"open_tasks":[]}`
+	for _, test := range []struct {
+		name         string
+		method       string
+		path         string
+		body         string
+		role         domain.MemberRole
+		authed       bool
+		status       int
+		serviceError error
+	}{
+		{"write_anonymous", http.MethodPut, "/anchored-sessions/claude/session-1/summaries/" + sha, valid, domain.RoleOwner, false, 401, nil},
+		{"write_viewer", http.MethodPut, "/anchored-sessions/claude/session-1/summaries/" + sha, valid, domain.RoleViewer, true, 403, nil},
+		{"write_member", http.MethodPut, "/anchored-sessions/claude/session-1/summaries/" + sha, valid, domain.RoleMember, true, 200, nil},
+		{"write_unknown_field", http.MethodPut, "/anchored-sessions/claude/session-1/summaries/" + sha, `{"summary":"x","uploader":"someone"}`, domain.RoleMember, true, 400, nil},
+		{"write_not_the_uploader", http.MethodPut, "/anchored-sessions/claude/session-1/summaries/" + sha, valid, domain.RoleMember, true, 404, domain.ErrNotFound},
+		{"read_anonymous", http.MethodGet, "/anchored-commits/" + sha + "/summaries", "", domain.RoleOwner, false, 401, nil},
+		{"read_viewer", http.MethodGet, "/anchored-commits/" + sha + "/summaries", "", domain.RoleViewer, true, 200, nil},
+		{"read_invalid", http.MethodGet, "/anchored-commits/abc1234/summaries", "", domain.RoleMember, true, 422, domain.ErrValidation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
+			backend.err = test.serviceError
+			response := bpHTTP(t, handler, test.method, base+test.path, test.body, test.authed)
+			if response.Code != test.status {
+				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.status != 200 && test.serviceError == nil {
+				if backend.calls != 0 {
+					t.Fatal("a refused request reached the service")
+				}
+				return
+			}
+			if backend.calls != 1 || backend.actor != "actor" {
+				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if test.name == "write_member" && (backend.provider != domain.ProviderClaude || backend.session != "session-1" || backend.sha != sha || backend.summary.Summary != "Added the parser." || len(backend.summary.KeyFacts) != 1) {
+				t.Fatalf("the summary that reached the service: %+v", backend)
+			}
+			if test.name == "read_viewer" && (backend.sha != sha || strings.TrimSpace(response.Body.String()) != "[]") {
+				t.Fatalf("the read: %q %s", backend.sha, response.Body.String())
+			}
+		})
 	}
 }
 

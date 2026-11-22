@@ -171,6 +171,9 @@ export const api = {
     call<import('./types').AnchoredSession>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`, undefined, undefined, signal),
   anchoredCommit: (repoId: string, sha: string, signal?: AbortSignal) =>
     call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
+  /** The summaries written at a commit that the caller may read. */
+  anchoredCommitSummaries: (repoId: string, sha: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSummary[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}/summaries`, undefined, undefined, signal),
   /** Looks for a query in what the sessions tab shows, as far as the caller may read it. */
   anchoredSearch: (repoId: string, query: string, signal?: AbortSignal) =>
     call<import('./types').AnchoredSearchResult>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-search?q=${encodeURIComponent(query)}`, undefined, undefined, signal),

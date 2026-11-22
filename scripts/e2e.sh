@@ -354,6 +354,13 @@ expect "a teammate finds nothing of a session before a push" "$(seghits "$JS" co
 expect "a viewer finds nothing of a session before a push" "$(seghits "$JW" committed)" "[]"
 expect "a search needs two characters" "$(code -b "$JA" "$B/repos/$CLIRID/anchored-search?q=a")" 422
 expect "a visitor who is not signed in searches nothing of a private repository" "$(code "$B/repos/$CLIRID/anchored-search?q=segment")" 401
+# A summary is written by the uploader at a commit of the session, and read under the rule of the segment that ends there.
+sumput() { ccurl -sb "$1" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/summaries/$2" -H 'Content-Type: application/json' -d '{"summary":"Committed the segment work.","key_facts":["e2e fact"],"open_tasks":[]}'; }
+expect "the uploader stores a summary at its commit" "$(sumput "$JA" "$SEGSHA")" 200
+expect "a summary at a commit the session did not make is refused" "$(sumput "$JA" "$(printf 'f%.0s' $(seq 40))")" 422
+expect "a teammate cannot write a summary of another member's session" "$(sumput "$JS" "$SEGSHA")" 404
+expect "the uploader reads the summary with its segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["segment_no"],r[0]["body"]["summary"])')" "1 1 Committed the segment work."
+expect "a teammate reads no summary before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
 expect "the uploader reads the conversation through the session, without the document hash" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c "import json,sys;raw=sys.stdin.read();p=json.loads(raw);print(len(p['events']),p['offset'],p['next'],'$SEGDOC2' in raw)")" "6 0 -1 False"
 expect "a session's summary says nothing about the remote it never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;c=json.load(sys.stdin)[0]["commits"][0];print("on_remote" in c, c.get("copies"))')" "False None"
 expect "the ledger makes no ref" "$(curl -sb "$JA" "$B/repos/$CLIRID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0

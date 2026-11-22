@@ -79,6 +79,11 @@ function fixture(role: string, reads: string[], withRemote = false) {
     if (resource === 'anchored-sessions') return { body: summaries };
     if (resource === 'branch-lifetimes') return { body: lifetimes };
     if (resource === 'anchored-sessions/claude/parent-session') return { body: session };
+    if (resource === `anchored-commits/${sha('b')}/summaries`) {
+      return { body: [{ repo_id: 'repo', provider: 'claude', session_id: 'parent-session', commit: sha('b'), body_hash: hash,
+        body: { summary: 'Fixed the parser edge case.', key_facts: ['The parser reads TOML.'], open_tasks: [] }, created_at: at(21), updated_at: at(21), segment_no: 2, uploader: 'member' }] };
+    }
+    if (/^anchored-commits\/[0-9a-f]{40}\/summaries$/.test(resource)) return { body: [] };
     if (resource === `anchored-commits/${sha('b')}`) return { body: [{ provider: 'claude', session_id: 'parent-session', segment_no: 2, rule: 'same-folder-and-time', segment: segments[1] }] };
     if (resource === `anchored-commits/${sha('c')}`) return { body: [{ provider: 'claude', session_id: 'parent-session', segment_no: 2, rule: 'same-folder-and-time', segment: segments[1] }] };
     // A session's conversation is read by the session, never by its document's hash.
@@ -120,6 +125,11 @@ test('the sessions tab shows a member their sessions by commit, branch and workt
   await expect(page.locator('.anchor-commit.hl')).toHaveCount(0);
   await card.hover();
   await expect(page.locator('.anchor-commit.hl .anchor-commit-subject')).toHaveText(['Fix the parser tests', 'Fix the parser']);
+  // The summary written at the commit sits with its segment, closed until asked for.
+  await expect(card.getByText('The parser reads TOML.')).toBeHidden();
+  await card.getByText('Summary at this commit').click();
+  await expect(card.getByText('Fixed the parser edge case.')).toBeVisible();
+  await expect(card.getByText('The parser reads TOML.')).toBeVisible();
 
   // The session opens at that segment; the earlier part is one click away.
   await card.getByRole('link', { name: 'parent-s', exact: true }).click();

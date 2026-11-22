@@ -1254,6 +1254,41 @@ components:
         removed: { type: boolean, description: True when the machine's latest list no longer holds the worktree. }
         first_seen_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time }
+    AnchoredSummaryBody:
+      type: object
+      description: What a CLI wrote of a session when it made a commit. At least one of the three says something.
+      required: [summary, key_facts, open_tasks]
+      properties:
+        summary: { type: string, description: 'At most 64 KiB.' }
+        key_facts:
+          type: array
+          maxItems: 256
+          items: { type: string, description: 'At most 4 KiB.' }
+        open_tasks:
+          type: array
+          maxItems: 256
+          items: { type: string, description: 'At most 4 KiB.' }
+    AnchoredSummary:
+      type: object
+      required: [repo_id, provider, session_id, commit, body_hash, body, created_at, updated_at]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        provider: { type: string, enum: [claude, codex] }
+        session_id: { type: string }
+        commit: { type: string, description: Full commit number. }
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        body: { $ref: '#/components/schemas/AnchoredSummaryBody' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        segment_no: { type: integer, description: The segment of the session that ends at the commit. Given when summaries are read. }
+        uploader: { type: string, description: The account the session belongs to. Given when summaries are read. }
+        uploader_name: { type: string, description: The uploader's public handle. Given when summaries are read. }
+    AnchoredSummaryReceipt:
+      type: object
+      required: [body_hash, changed]
+      properties:
+        body_hash: { $ref: '#/components/schemas/ContentHash' }
+        changed: { type: boolean, description: False when the same text was stored before. }
     AnchoredSessionReceipt:
       type: object
       required: [revision, body_hash, changed]
@@ -5100,6 +5135,81 @@ paths:
         '422': { description: Invalid repository identity or branch name }
         '503': { description: Branch ledger service unavailable }
 
+  /repos/{repoID}/anchored-commits/{sha}/summaries:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: sha
+        in: path
+        required: true
+        description: Full commit number.
+        schema: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    get:
+      operationId: listAnchoredCommitSummaries
+      summary: List the summaries written at a commit
+      description: >-
+        Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in.
+        A summary is what a CLI wrote of a session when the session made the commit. It is read under the rule
+        of the segment that ends at the commit, so the uploader reads it always and anyone else once the commit
+        is pushed. By tool, then session.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: Summaries at the commit that the caller may read
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid repository identity or commit number }
+        '503': { description: Anchored session service unavailable }
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/summaries/{sha}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+      - name: sha
+        in: path
+        required: true
+        description: Full number of a commit a segment of the session ends at.
+        schema: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+    put:
+      operationId: putAnchoredSummary
+      summary: Store the summary of a session at a commit
+      description: >-
+        Member required, rechecked inside the repository transaction. Only the account the session belongs to
+        stores its summaries; to anyone else the session is not found. The session's report must hold a segment
+        that ends at the commit. The summary replaces the one stored before; the same text again changes nothing.
+      tags: [anchored-sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnchoredSummaryBody' }
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSummaryReceipt' }
+        '400': { description: Malformed JSON or an unknown field }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { description: The summary exceeds the transport limit }
+        '415': { description: Content-Type is not application/json }
+        '422': { description: Invalid identity, a summary that says nothing or exceeds its limits, or a commit no segment of the session ends at }
+        '503': { description: Anchored session service unavailable }
   /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls:
     parameters:
       - $ref: '#/components/parameters/repoID'
