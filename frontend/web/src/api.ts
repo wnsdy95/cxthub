@@ -171,6 +171,9 @@ export const api = {
     call<import('./types').AnchoredSession>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`, undefined, undefined, signal),
   anchoredCommit: (repoId: string, sha: string, signal?: AbortSignal) =>
     call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
+  /** Looks for a query in what the sessions tab shows, as far as the caller may read it. */
+  anchoredSearch: (repoId: string, query: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSearchResult>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-search?q=${encodeURIComponent(query)}`, undefined, undefined, signal),
   branchLifetimes: (repoId: string, signal?: AbortSignal) =>
     call<import('./types').BranchLifetime[]>('GET', `/repos/${encodeURIComponent(repoId)}/branch-lifetimes`, undefined, undefined, signal),
   /** A page of a session's conversation, read by the session: the server holds it to what the caller may read. */

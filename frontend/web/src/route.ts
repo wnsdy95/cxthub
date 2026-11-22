@@ -11,6 +11,7 @@ const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'sessio
 export type AnchoredSelection =
  | { kind: 'all' }
  | { kind: 'held' }
+ | { kind: 'search'; query: string }
  | { kind: 'commit'; sha: string }
  | { kind: 'branch'; name: string }
  | { kind: 'worktree'; name: string; machine?: string }
@@ -45,6 +46,7 @@ export function anchoredPath(repository: RepositoryAddress, selection?: Anchored
  const params = new URLSearchParams({ tab: 'sessions' });
  if (selection?.kind === 'all') params.set('show', 'all');
  if (selection?.kind === 'held') params.set('show', 'held');
+ if (selection?.kind === 'search') params.set('q', selection.query);
  if (selection?.kind === 'commit') params.set('commit', selection.sha);
  if (selection?.kind === 'branch') params.set('branch', selection.name);
  if (selection?.kind === 'worktree') {
@@ -83,6 +85,8 @@ export function parseAnchoredSelection(query: URLSearchParams): AnchoredSelectio
   const machine = query.get('machine');
   return { kind: 'worktree', name: worktree, ...(machine && PLACE_NAME.test(machine) ? { machine } : {}) };
  }
+ const search = query.get('q');
+ if (search !== null) return search.trim() !== '' && search.length <= 256 ? { kind: 'search', query: search } : undefined;
  const show = query.get('show');
  return show === 'all' || show === 'held' ? { kind: show } : undefined;
 }

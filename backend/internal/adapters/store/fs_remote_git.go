@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -371,6 +372,35 @@ func (s *FSStore) ListRemoteCommits(ctx context.Context, repo domain.ContentHash
 		page = append(page, remoteGitCommit(commit))
 	}
 	return page, nil
+}
+
+func (s *FSStore) SearchRemoteCommits(ctx context.Context, repo domain.ContentHash, query string, limit int) ([]domain.RemoteCommit, error) {
+	if err := remoteGitLimit(limit); err != nil {
+		return nil, err
+	}
+	stored, err := s.viewRemoteGit(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	found, query := []domain.RemoteCommit{}, strings.ToLower(query)
+	if query == "" {
+		return found, nil
+	}
+	for _, commit := range stored.Commits {
+		if strings.Contains(strings.ToLower(commit.Subject), query) || strings.HasPrefix(commit.SHA, query) {
+			found = append(found, remoteGitCommit(commit))
+		}
+	}
+	sort.Slice(found, func(left, right int) bool {
+		if !found[left].CommittedAt.Equal(found[right].CommittedAt) {
+			return found[left].CommittedAt.After(found[right].CommittedAt)
+		}
+		return found[left].SHA > found[right].SHA
+	})
+	if len(found) > limit {
+		found = found[:limit]
+	}
+	return found, nil
 }
 
 func (s *FSStore) RemoteCommitFrontier(ctx context.Context, repo domain.ContentHash, limit int) ([]string, error) {

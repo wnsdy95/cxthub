@@ -8,10 +8,10 @@
 // A session opens as its whole conversation with a divider where each
 // segment begins.
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import type { AnchoredSelection } from '../route';
-import type { AnchoredNote, AnchoredNoteTarget, AnchoredSessionSummary, RemotePull, Repo } from '../types';
+import { navigate, type AnchoredSelection } from '../route';
+import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, RemotePull, Repo } from '../types';
 import {
-  useAnchoredCommit, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
+  useAnchoredCommit, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
   useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
@@ -142,6 +142,15 @@ export function AnchoredView({ repo, member = true, selection, href }: {
             {t(member ? 'anchored.ownOnly' : 'anchored.openOnly')}{' '}
             {remoteQ.error ? t('anchored.remoteError') : synced ? <>{t('anchored.remoteReadAt')} <time dateTime={synced}>{when(synced, true)}</time></> : remoteQ.isLoading ? null : t('anchored.remoteNotRead')}
           </span>
+          <form className="anchor-search" role="search" onSubmit={event => {
+            event.preventDefault();
+            const asked = String(new FormData(event.currentTarget).get('q') ?? '').trim();
+            navigate(href(asked ? { kind: 'search', query: asked } : undefined));
+          }}>
+            <input key={shown.kind === 'search' ? shown.query : ''} type="search" name="q" defaultValue={shown.kind === 'search' ? shown.query : ''} maxLength={256}
+              placeholder={t('anchored.searchPlaceholder')} aria-label={t('anchored.search')} />
+            <button className="ghost" type="submit">{t('anchored.search')}</button>
+          </form>
           <button className="ghost" onClick={refresh} disabled={sessionsQ.isFetching}>
             {sessionsQ.isFetching ? t('anchored.refreshing') : t('anchored.refresh')}
           </button>
@@ -163,6 +172,8 @@ export function AnchoredView({ repo, member = true, selection, href }: {
             segment={shown.segment} rest={shown.rest} index={index} href={href} />
         ) : shown.kind === 'held' ? (
           <HeldDetail index={index} href={href} />
+        ) : shown.kind === 'search' ? (
+          <SearchResults key={shown.query} repo={repo} query={shown.query} href={href} />
         ) : (
           <div className="anchor-split">
             <AnchoredCommits index={index} selected={shown.kind === 'commit' ? shown.sha : ''} highlighted={highlighted} marked={marked} href={href}
@@ -471,6 +482,57 @@ function CommitDetail({ repo, index, notes, sha, href, onHighlight }: {
       )}
       <Notes repo={repo} notes={notes} target={{ kind: 'commit', commit: sha }} canAdd={(commit?.links.length ?? 0) === 0} />
     </>
+  );
+}
+
+/** Where a hit leads: the pull request, branch, commit, part of a session, or what a note was written about. */
+function hitSelection(hit: AnchoredSearchHit): AnchoredSelection | undefined {
+  if (hit.kind === 'pull' && hit.pull) return { kind: 'pull', number: hit.pull };
+  if (hit.kind === 'branch' && hit.branch) return { kind: 'branch', name: hit.branch };
+  if (hit.kind === 'commit' && hit.commit) return { kind: 'commit', sha: hit.commit };
+  if (hit.kind === 'segment' && hit.provider && hit.session_id) {
+    return { kind: 'session', provider: hit.provider, id: hit.session_id, ...(hit.segment_no ? { segment: hit.segment_no } : hit.rest ? { rest: true as const } : {}) };
+  }
+  const target = hit.kind === 'note' ? hit.target : undefined;
+  if (target?.kind === 'commit') return { kind: 'commit', sha: target.commit };
+  if (target?.kind === 'branch') return { kind: 'branch', name: target.branch };
+  if (target?.kind === 'worktree') return { kind: 'worktree', name: target.worktree, ...(target.machine ? { machine: target.machine } : {}) };
+  return undefined;
+}
+
+/** What the query was found in. Every hit begins with what it is: a pull request, a branch, a commit, a segment or a note. */
+function SearchResults({ repo, query, href }: { repo: Repo; query: string; href: AnchoredHref }) {
+  const t = useT();
+  const searchQ = useAnchoredSearch(repo.id, query);
+  const hits = searchQ.data?.hits ?? [];
+  return (
+    <section className="anchor-detail" aria-label={t('anchored.searchResults', { query })}>
+      <h5 className="anchor-detail-title">{t('anchored.searchResults', { query })}</h5>
+      {query.trim().length < 2 && <p className="empty-box">{t('anchored.searchShort')}</p>}
+      {searchQ.isLoading && <div className="skel" role="status" aria-label={t('anchored.loading')} style={{ height: 60 }} />}
+      {searchQ.error && <p role="alert" className="err">{searchQ.error.message}</p>}
+      {searchQ.data && hits.length === 0 && <p className="empty-box">{t('anchored.searchNone')}</p>}
+      <ul className="anchor-refs anchor-hits">
+        {hits.map((hit, at) => {
+          const selection = hitSelection(hit);
+          const where = hit.kind === 'pull' ? `#${hit.pull}`
+            : hit.kind === 'commit' && hit.commit ? anchoredShortSha(hit.commit)
+            : hit.kind === 'segment' && hit.session_id ? `${anchoredShortId(hit.session_id)} · ${hit.segment_no ? t('anchored.segmentNo', { no: hit.segment_no }) : t('anchored.afterLastCommit')}`
+            : hit.kind === 'note' && hit.target ? hit.target.kind === 'commit' ? anchoredShortSha(hit.target.commit) : hit.target.kind === 'branch' ? hit.target.branch : hit.target.worktree
+            : '';
+          return (
+            <li key={`${hit.kind}:${at}`} data-hit={hit.kind}>
+              <span className={`ref-badge hit-${hit.kind}`}>{t(`anchored.hit_${hit.kind}`)}</span>{' '}
+              {selection ? <AppLink href={href(selection)}><code>{where || hit.title}</code></AppLink> : <code>{where || hit.title}</code>}{' '}
+              {where && hit.title && <span>{hit.title}</span>}
+              {hit.at && <> <time dateTime={hit.at}>{when(hit.at, true)}</time></>}
+              {hit.snippet && <p className="anchor-card-meta">{hit.snippet}</p>}
+            </li>
+          );
+        })}
+      </ul>
+      {searchQ.data?.truncated && <p className="anchor-card-meta">{t('anchored.searchTruncated')}</p>}
+    </section>
   );
 }
 

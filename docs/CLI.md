@@ -1398,6 +1398,12 @@ document that holds it is shown to nobody else. That document is still an
 ordinary repository document, so the server does not keep a member who learned
 the hash some other way from reading it.
 
+The Sessions tab searches all of this at once: pull request titles, branch
+names, commit subjects and the beginning of commit numbers, the conversations
+and the notes. Each result says which of these it is. A reader is answered
+only from what that reader may read, so a part that is not pushed is found by
+its uploader alone.
+
 Uploading again replaces the session's report as a whole; a report with the
 same content changes nothing. Reports do not advance the repository revision.
 

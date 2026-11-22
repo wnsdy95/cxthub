@@ -1198,6 +1198,33 @@ components:
         ledger_id: { type: string, pattern: '^[0-9a-f]{32}$', description: The lifetime of the branch name the note belongs to. Absent for a name the remote never held. }
         worktree: { type: string, description: A worktree's name, never a path. }
         machine: { type: string }
+    AnchoredSearchHit:
+      type: object
+      description: One thing a search of the sessions tab found the query in.
+      required: [kind, title]
+      properties:
+        kind: { type: string, enum: [pull, branch, commit, segment, note] }
+        title: { type: string, description: The pull request's title, the branch name, the commit subject, who spoke the matching part of a conversation, or the handle of a note's author. }
+        snippet: { type: string, description: The text around the match, for a conversation or a note. }
+        pull: { type: integer }
+        branch: { type: string }
+        commit: { type: string }
+        provider: { type: string, enum: [claude, codex] }
+        session_id: { type: string }
+        segment_no: { type: integer, description: The segment the matching event is in. }
+        rest: { type: boolean, description: True when the matching event is in the part after the last commit. }
+        event: { type: integer, description: The index of the matching event in the session's conversation. }
+        note_id: { type: string }
+        target: { $ref: '#/components/schemas/AnchoredNoteTarget' }
+        at: { type: string, format: date-time }
+    AnchoredSearchResult:
+      type: object
+      required: [hits, truncated]
+      properties:
+        hits:
+          type: array
+          items: { $ref: '#/components/schemas/AnchoredSearchHit' }
+        truncated: { type: boolean, description: True when a kind reached its limit or not every conversation was read. }
     AnchoredNote:
       type: object
       required: [repo_id, id, target, author, body, created_at, updated_at]
@@ -5188,6 +5215,37 @@ paths:
         '422': { description: Invalid repository identity, session identifier or range }
         '503': { description: The document is not ready to be read by range, or the service is unavailable }
 
+  /repos/{repoID}/anchored-search:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: searchAnchored
+      summary: Search what the sessions tab shows
+      description: >-
+        Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in.
+        One query is looked for in pull request titles and branch names, in commit subjects and the beginning of
+        commit numbers, in the conversations of sessions and in manual notes. Each hit says which of these it is.
+        The caller is answered only from what that caller may read: a part of another account's session that is
+        not open is never a hit. A kind lists at most 20 hits and a session at most 3; `truncated` says that
+        more was found, or that not every conversation could be read.
+      tags: [anchored-sessions]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: What to look for, 2 to 256 characters. Letter case and surrounding space are ignored.
+          schema: { type: string, minLength: 2, maxLength: 256 }
+      responses:
+        '200':
+          description: What the query was found in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSearchResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: A query shorter than 2 or longer than 256 characters }
   /repos/{repoID}/anchored-notes:
     parameters:
       - $ref: '#/components/parameters/repoID'

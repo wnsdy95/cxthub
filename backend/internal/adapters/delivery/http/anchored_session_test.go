@@ -52,6 +52,12 @@ func (backend *anchoredSessionHTTPBackend) AnchoredSessionContentAccess(context.
 	return domain.AnchoredContentAccess{}, backend.err
 }
 
+func (backend *anchoredSessionHTTPBackend) SearchAnchored(ctx context.Context, _ domain.ContentHash, query string) (domain.AnchoredSearchResult, error) {
+	backend.seen(ctx)
+	backend.session = query
+	return domain.AnchoredSearchResult{Hits: []domain.AnchoredSearchHit{}}, backend.err
+}
+
 func (backend *anchoredSessionHTTPBackend) ListAnchoredSessions(ctx context.Context, _ domain.ContentHash) ([]domain.AnchoredSessionSummary, error) {
 	backend.seen(ctx)
 	return []domain.AnchoredSessionSummary{}, backend.err
@@ -187,6 +193,44 @@ func TestAnchoredSessionsOfAPublicRepositoryAreReadWithoutSigningIn(t *testing.T
 	response := bpHTTP(t, handler, http.MethodPut, base+"/anchored-sessions/codex/session-1", `{"rule_version":1,"scope":"working-folder","records":0}`, false)
 	if response.Code != 401 || backend.calls != 0 {
 		t.Fatalf("a visitor stored a report: status=%d calls=%d", response.Code, backend.calls)
+	}
+}
+
+func TestAnchoredSearchHTTP(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		query        string
+		role         domain.MemberRole
+		authed       bool
+		status       int
+		serviceError error
+	}{
+		{"anonymous", "?q=parser", domain.RoleOwner, false, 401, nil},
+		{"viewer", "?q=parser", domain.RoleViewer, true, 200, nil},
+		{"member", "?q=the%20parser", domain.RoleMember, true, 200, nil},
+		{"too_short", "?q=p", domain.RoleMember, true, 422, domain.ErrValidation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
+			backend.err = test.serviceError
+			response := bpHTTP(t, handler, http.MethodGet, base+"/anchored-search"+test.query, "", test.authed)
+			if response.Code != test.status {
+				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.status == 401 {
+				if backend.calls != 0 {
+					t.Fatal("a refused request reached the service")
+				}
+				return
+			}
+			want := strings.ReplaceAll(strings.TrimPrefix(test.query, "?q="), "%20", " ")
+			if backend.calls != 1 || backend.actor != "actor" || backend.session != want {
+				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if test.status == 200 && strings.TrimSpace(response.Body.String()) != `{"hits":[],"truncated":false}` {
+				t.Fatalf("answer: %s", response.Body.String())
+			}
+		})
 	}
 }
 

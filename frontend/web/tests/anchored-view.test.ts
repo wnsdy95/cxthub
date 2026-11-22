@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { I18nProvider, translate } from '../src/i18n/index.tsx';
 import { AnchoredView } from '../src/components/AnchoredView.tsx';
 import { anchoredPath, type AnchoredSelection } from '../src/route';
-import type { AnchoredCommitSegment, AnchoredNote, AnchoredSession, AnchoredSessionSummary, BranchLifetime, RemoteCommit, RemoteGitView, Repo, ReportedWorktree } from '../src/types';
+import type { AnchoredCommitSegment, AnchoredNote, AnchoredSession, AnchoredSearchResult, AnchoredSessionSummary, BranchLifetime, RemoteCommit, RemoteGitView, Repo, ReportedWorktree } from '../src/types';
 
 const repo = { id: `sha256:${'9'.repeat(64)}`, remote_url: 'https://example.test/alice/app', default_branch: 'main' } as Repo;
 const repository = { id: 'repository-1', owner_username: 'alice', slug: 'app' };
@@ -261,6 +261,42 @@ assert.match(held, /Not committed yet <span class="count-badge">2<\/span>.*?sess
 assert.doesNotMatch(held, /class="anchor-commits"/, 'the list stands in place of the commit graph');
 assert.match(render({ kind: 'held' }, true, [{ ...summaries[0], uncommitted: undefined }]), /Nothing of yours is waiting for a push\./);
 assert.match(render({ kind: 'held' }, false, waiting), /The commit list has not been read from the remote yet\./, 'until the remote is read no commit is said to be missing there');
+// A search lists what the query was found in, each hit beginning with what it is and leading to it.
+function renderSearch(query: string, found?: AnchoredSearchResult): string {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(['me'], { id: 'alice-id', username: 'alice' });
+  for (const key of ['anchored-sessions', 'branch-lifetimes', 'anchored-notes', 'reported-worktrees']) client.setQueryData([key, repo.id], key === 'anchored-sessions' ? summaries : []);
+  client.setQueryData(['remote-git', repo.id], { pageParams: [''], pages: [remotePage] });
+  if (found) client.setQueryData(['anchored-search', repo.id, query.trim()], found);
+  return renderToStaticMarkup(createElement(I18nProvider, null, createElement(QueryClientProvider, { client },
+    createElement(AnchoredView, { repo, selection: { kind: 'search', query }, href: (target?: AnchoredSelection) => anchoredPath(repository, target) }))));
+}
+const searched = renderSearch('parser', { truncated: true, hits: [
+  { kind: 'pull', title: 'Fix the parser', pull: 7, branch: 'feature' },
+  { kind: 'branch', title: 'parser-notes', branch: 'parser-notes' },
+  { kind: 'commit', title: 'Add the parser', commit: sha('a'), at: at(10) },
+  { kind: 'segment', title: 'assistant', snippet: 'Committed the parser.', provider: 'claude', session_id: 'parent-session', segment_no: 2, event: 1 },
+  { kind: 'segment', title: 'user', snippet: 'Is the parser done?', provider: 'claude', session_id: 'parent-session', rest: true, event: 3 },
+  { kind: 'note', title: 'bob', snippet: 'The parser was applied by hand.', note_id: `note_${'a'.repeat(32)}`, target: { kind: 'commit', commit: sha('d') } },
+  { kind: 'note', title: 'alice', snippet: 'parser scratch', note_id: `note_${'b'.repeat(32)}`, target: { kind: 'worktree', worktree: 'app', machine: 'laptop' } },
+] });
+assert.match(searched, /<input[^>]*type="search"[^>]*name="q"[^>]*value="parser"/, 'the box keeps what was asked');
+assert.match(searched, /Found for &quot;parser&quot;/);
+assert.deepEqual([...searched.matchAll(/data-hit="([a-z]+)"><span class="ref-badge hit-[a-z]+">([^<]+)</g)].map(match => `${match[1]}:${match[2]}`),
+  ['pull:PR', 'branch:Branch', 'commit:Commit', 'segment:Segment', 'segment:Segment', 'note:Note', 'note:Note'], 'every hit begins with what it is');
+assert.match(searched, /href="\/alice\/app\?tab=sessions&amp;pull=7"><code>#7<\/code><\/a> <span>Fix the parser<\/span>/);
+assert.match(searched, /href="\/alice\/app\?tab=sessions&amp;branch=parser-notes"><code>parser-notes<\/code>/);
+assert.match(searched, /href="\/alice\/app\?tab=sessions&amp;commit=a{40}"><code>a{10}<\/code><\/a> <span>Add the parser<\/span>/);
+assert.match(searched, /session=claude%3Aparent-session&amp;segment=2"><code>parent-s · Segment 2<\/code><\/a> <span>assistant<\/span>.*?Committed the parser\./s);
+assert.match(searched, /session=claude%3Aparent-session&amp;segment=rest"><code>parent-s · After the last commit<\/code>/);
+assert.match(searched, /commit=d{40}"><code>d{10}<\/code><\/a> <span>bob<\/span>.*?applied by hand/s, 'a note leads to what it was written about');
+assert.match(searched, /worktree=app&amp;machine=laptop"><code>app<\/code>/);
+assert.match(searched, /More was found than is listed\./);
+assert.doesNotMatch(searched, /class="anchor-commits"/, 'the results stand in place of the commit graph');
+assert.match(renderSearch('parser', { truncated: false, hits: [] }), /Nothing was found\./);
+assert.match(renderSearch('p'), /Type at least two characters\./);
+assert.match(translate('ko', 'anchored.hit_segment'), /\uC870\uAC01/);
+
 assert.match(translate('ko', 'anchored.heldOnlyYou'), /\uB098\uB9CC \uBD04/);
 
 assert.match(translate('ko', 'anchored.noContext'), /\uB9E5\uB77D \uC5C6\uC74C/);

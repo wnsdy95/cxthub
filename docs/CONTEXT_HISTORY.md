@@ -261,8 +261,9 @@ repository URL without a tab query. The sessions tab is the only one whose
 selection is part of the address: one of `commit=<full commit number>`,
 `branch=<name>`, `pull=<number>`, `worktree=<name>` (with `machine=<label>`
 when the report carries one), `session=<tool>:<session identifier>` (with `segment=<number>`,
-or `segment=rest` for the part after the last commit), `show=all`, or
-`show=held` for the reader's own work that is not pushed yet. A value
+or `segment=rest` for the part after the last commit), `show=all`,
+`show=held` for the reader's own work that is not pushed yet, or
+`q=<text>` for a search. A value
 that is not well formed selects nothing and is never sent to the server. Registered legacy three-segment addresses redirect to the
 canonical repository while preserving query parameters. Repository names such
 as `settings` remain valid because tabs are separate from the path. The retired

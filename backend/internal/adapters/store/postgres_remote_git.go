@@ -259,6 +259,21 @@ func (s *PostgresStore) ListRemoteCommits(ctx context.Context, repo domain.Conte
  ORDER BY stored.committed_at DESC, stored.sha DESC LIMIT $4`, repo, before.CommittedAt.UTC(), before.SHA, limit))
 }
 
+func (s *PostgresStore) SearchRemoteCommits(ctx context.Context, repo domain.ContentHash, query string, limit int) ([]domain.RemoteCommit, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	if err := remoteGitLimit(limit); err != nil {
+		return nil, err
+	}
+	if query == "" {
+		return []domain.RemoteCommit{}, nil
+	}
+	return scanRemoteGitCommits(s.db(ctx).Query(ctx, `SELECT `+remoteGitCommitColumns+` FROM remote_git_commits stored
+ WHERE stored.repo_id=$1 AND (position(lower($2::text) in lower(stored.subject)) > 0 OR starts_with(stored.sha, lower($2::text)))
+ ORDER BY stored.committed_at DESC, stored.sha DESC LIMIT $3`, repo, query, limit))
+}
+
 func (s *PostgresStore) RemoteCommitFrontier(ctx context.Context, repo domain.ContentHash, limit int) ([]string, error) {
 	if err := validateHash(repo); err != nil {
 		return nil, err

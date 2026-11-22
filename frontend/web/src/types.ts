@@ -825,6 +825,19 @@ export interface AnchoredSessionSummary {
   /** The uploader's public handle, given with a session that is not the caller's. */
   uploader_name?: string;
 }
+/**
+ * One thing a search of the sessions tab found the query in. `kind` says which: a pull request, a branch, a commit, a
+ * part of a session's conversation, or a manual note.
+ */
+export interface AnchoredSearchHit {
+  kind: 'pull' | 'branch' | 'commit' | 'segment' | 'note';
+  title: string; snippet?: string; at?: string;
+  pull?: number; branch?: string; commit?: string;
+  provider?: AnchoredProvider; session_id?: string; segment_no?: number; rest?: boolean; event?: number;
+  note_id?: string; target?: AnchoredNoteTarget;
+}
+/** `truncated` is true when more was found than is listed. */
+export interface AnchoredSearchResult { hits: AnchoredSearchHit[]; truncated: boolean }
 export interface AnchoredCommitSegment { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; segment: AnchoredSegment }
 export interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }
 export interface BranchLifetime {

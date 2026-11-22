@@ -76,3 +76,15 @@ func (s *Server) anchoredCommitSegments(w http.ResponseWriter, r *http.Request) 
 	segments, err := service.AnchoredCommitSegments(r.Context(), s.repoID(r), r.PathValue("sha"))
 	s.respond(w, segments, err)
 }
+
+// searchAnchored looks for one query in what the sessions tab shows, as far
+// as the caller may read it.
+func (s *Server) searchAnchored(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.b.(inbound.AnchoredSearch)
+	if !ok {
+		s.writeError(w, http.StatusServiceUnavailable, "anchored_sessions_unavailable", "anchored session service unavailable")
+		return
+	}
+	result, err := service.SearchAnchored(r.Context(), s.repoID(r), r.URL.Query().Get("q"))
+	s.respond(w, result, err)
+}

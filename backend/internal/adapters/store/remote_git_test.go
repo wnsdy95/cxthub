@@ -197,6 +197,21 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 		t.Fatalf("after the last page: %#v %v", page, err)
 	}
 
+	// A search finds commits by a part of the subject, whatever the letter
+	// case, and by the beginning of the commit number; newest first.
+	for query, want := range map[string]string{"COMMIT": "dcba", "mit b": "b", strings.Repeat("c", 7): "c", "nothing like it": "", "": ""} {
+		found, err := storage.SearchRemoteCommits(ctx, repo, query, 10)
+		if err != nil || found == nil || remoteGitStoreSHAs(found) != want {
+			t.Fatalf("search for %q: %s %v", query, remoteGitStoreSHAs(found), err)
+		}
+	}
+	if found, err := storage.SearchRemoteCommits(ctx, repo, "commit", 2); err != nil || remoteGitStoreSHAs(found) != "dc" {
+		t.Fatalf("a search cut at its limit: %s %v", remoteGitStoreSHAs(found), err)
+	}
+	if _, err := storage.SearchRemoteCommits(ctx, repo, "commit", 0); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a search without a limit: %v", err)
+	}
+
 	// The frontier is the parents that stored commits name and that are not
 	// stored, by commit number.
 	if frontier, err := storage.RemoteCommitFrontier(ctx, repo, 10); err != nil || !reflect.DeepEqual(frontier, []string{e}) {

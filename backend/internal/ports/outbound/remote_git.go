@@ -59,6 +59,11 @@ type RemoteGitStore interface {
 	// commit number, largest first, starting after before. The cursor of a
 	// page is its last commit.
 	ListRemoteCommits(ctx context.Context, repo domain.ContentHash, before domain.RemoteCommitCursor, limit int) ([]domain.RemoteCommit, error)
+	// SearchRemoteCommits lists the stored commits whose subject contains
+	// query, compared without regard to letter case, or whose commit number
+	// begins with it, by commit time, newest first. An empty query finds
+	// nothing.
+	SearchRemoteCommits(ctx context.Context, repo domain.ContentHash, query string, limit int) ([]domain.RemoteCommit, error)
 	// RemoteCommitFrontier returns parents that stored commits name and that
 	// are not stored, without the commits the state lists as unreadable, in
 	// the order of their numbers.

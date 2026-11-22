@@ -67,6 +67,13 @@ function fixture(role: string, reads: string[], withRemote = false) {
     if (['branch-lifetimes', 'worktrees', 'remote-git'].includes(resource) || resource.startsWith('anchored-')) reads.push(resource);
     if (resource === 'worktrees') return { body: withRemote ? reportedWorktrees : [] };
     if (resource === 'anchored-notes') return { body: [] };
+    if (resource === 'anchored-search') {
+      return { body: searchParams.get('q') === 'parser' ? { truncated: false, hits: [
+        { kind: 'pull', title: 'Fix the parser', pull: 7, branch: 'feature' },
+        { kind: 'commit', title: 'Add the parser', commit: sha('a'), at: at(10) },
+        { kind: 'segment', title: 'assistant', snippet: 'Fixed the parser.', provider: 'claude', session_id: 'parent-session', segment_no: 2, event: 21 },
+      ] } : { truncated: false, hits: [] } };
+    }
     if (resource === 'remote-git') return { body: withRemote ? remotePages[searchParams.get('before') ?? ''] : { commits: [] } };
     if (resource === 'anchored-sessions/claude/parent-session/calls') return { body: [] };
     if (resource === 'anchored-sessions') return { body: summaries };
@@ -162,6 +169,23 @@ test('the sessions tab shows a member their sessions by commit, branch and workt
   await expect(page.locator('.anchor-commits')).toHaveCount(0);
   await held.getByRole('link', { name: 'parent-s', exact: true }).click();
   await expect(page).toHaveURL(url('?tab=sessions&session=claude%3Aparent-session&segment=rest'));
+
+  // A search lists what the query was found in; each hit says what it is and leads to it.
+  const box = page.getByRole('searchbox', { name: 'Search' });
+  await box.fill('parser');
+  await box.press('Enter');
+  await expect(page).toHaveURL(url('?tab=sessions&q=parser'));
+  const results = page.getByRole('region', { name: 'Found for "parser"' });
+  await expect(results.locator('[data-hit] > .ref-badge')).toHaveText(['PR', 'Commit', 'Segment']);
+  await expect(results).toContainText('Fixed the parser.');
+  await page.reload();
+  await expect(box).toHaveValue('parser');
+  await results.getByRole('link', { name: /parent-s · Segment 2/ }).click();
+  await expect(page).toHaveURL(url('?tab=sessions&session=claude%3Aparent-session&segment=2'));
+  await page.goBack();
+  await box.fill('nothing like it');
+  await box.press('Enter');
+  await expect(page.getByText('Nothing was found.')).toBeVisible();
 
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);

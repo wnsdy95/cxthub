@@ -614,6 +614,16 @@ export function useAnchoredCommit(repoId: string | null, sha: string | null, rev
     placeholderData: keepPreviousData,
   });
 }
+/** What a search of the sessions tab found. A query shorter than two characters asks for nothing. */
+export function useAnchoredSearch(repoId: string | null, query: string) {
+  const asked = query.trim();
+  return useQuery({
+    queryKey: ['anchored-search', repoId, asked],
+    queryFn: ({ signal }) => api.anchoredSearch(repoId as string, asked, signal),
+    enabled: Boolean(repoId) && asked.length >= 2,
+    retry: false,
+  });
+}
 /** The recorded agent calls that name a session as sender or receiver. */
 export function useAnchoredSessionCalls(repoId: string | null, provider: string | null, sessionId: string | null, revisions = '') {
   return useQuery({

@@ -326,6 +326,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/calls", s.guard(domain.RoleViewer, s.anchoredSessionCalls))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/events", s.guard(domain.RoleViewer, s.getAnchoredSessionEvents))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}/event-fragments", s.guard(domain.RoleViewer, s.getAnchoredSessionEventFragment))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-search", s.guard(domain.RoleViewer, s.bulkRead(s.searchAnchored)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-notes", s.guard(domain.RoleViewer, s.listAnchoredNotes))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/anchored-notes", s.guard(domain.RoleMember, s.createAnchoredNote))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/anchored-notes/{noteID}", s.guard(domain.RoleMember, s.updateAnchoredNote))

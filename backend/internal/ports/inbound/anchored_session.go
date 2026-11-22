@@ -21,3 +21,10 @@ type AnchoredSessions interface {
 	// session's conversation.
 	AnchoredSessionContentAccess(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredContentAccess, error)
 }
+
+// AnchoredSearch looks for a query in what the sessions tab shows: pull
+// requests, branches, commits, conversations and notes, as far as the caller
+// may read them.
+type AnchoredSearch interface {
+	SearchAnchored(ctx context.Context, repo domain.ContentHash, query string) (domain.AnchoredSearchResult, error)
+}
