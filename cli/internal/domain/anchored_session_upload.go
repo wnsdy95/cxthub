@@ -305,6 +305,10 @@ type SegmentPushSession struct {
 	// Content is empty when this run uploads no content at all.
 	Content       SegmentContentState `json:"content,omitempty"`
 	ContentReason string              `json:"content_reason,omitempty"`
+	// Summaries counts the summaries this run stored for the session's
+	// commits. SummaryReason says why one was not stored.
+	Summaries     int    `json:"summaries,omitempty"`
+	SummaryReason string `json:"summary_reason,omitempty"`
 }
 
 // SegmentPushResult lists every session of the report with what happened to
@@ -321,8 +325,11 @@ type SegmentPushResult struct {
 	Refused         int  `json:"refused"`
 	// ContentNotUploaded counts sessions whose report went up without their
 	// conversation; each one says why.
-	ContentNotUploaded int                  `json:"content_not_uploaded"`
-	Sessions           []SegmentPushSession `json:"sessions"`
+	ContentNotUploaded int `json:"content_not_uploaded"`
+	// Summaries counts the summaries this run stored: one for a session at
+	// each commit it made. It is absent when the run writes no summaries.
+	Summaries int                  `json:"summaries,omitempty"`
+	Sessions  []SegmentPushSession `json:"sessions"`
 	// Unread records exist but were not read, so no report covers them.
 	Unread []UnreadSessionRecord `json:"unread"`
 	// AgentCallsWithoutSender were recorded by a session outside this

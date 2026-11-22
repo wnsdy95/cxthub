@@ -200,6 +200,7 @@ func TestSegmentsCommandReadsRecordsAndWritesNothing(t *testing.T) {
 type segmentsTestServer struct {
 	mu        sync.Mutex
 	puts      []segmentsTestRequest
+	summaries []segmentsTestRequest
 	chunks    map[string][]byte
 	manifests map[string]segmentsTestManifest
 	uploaded  int // chunk bodies received
@@ -288,6 +289,10 @@ func (s *segmentsTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			results = append(results, domain.BranchRegistrationResult{Name: branch.Name, LocalID: branch.LocalID, LedgerID: branch.LocalID, Outcome: "opened"})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"branches": results})
+	case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/anchored-sessions/claude/") && strings.Contains(r.URL.Path, "/summaries/"):
+		// A summary of a session at a commit, sent after the session's report.
+		s.summaries = append(s.summaries, segmentsTestRequest{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)})
+		_, _ = w.Write([]byte(`{"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`))
 	case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/anchored-sessions/claude/"):
 		s.puts = append(s.puts, segmentsTestRequest{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)})
 		status, body := s.answer(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
@@ -416,6 +421,12 @@ func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 	}
 	if len(fake.puts) != 3 {
 		t.Fatalf("reports = %+v", fake.puts)
+	}
+	// The one session that made a commit is written down at that commit,
+	// after its report, from its own conversation.
+	if result.Summaries != 1 || len(fake.summaries) != 1 || !strings.Contains(fake.summaries[0].path, "/anchored-sessions/claude/original/summaries/") ||
+		fake.summaries[0].auth != "Bearer synthetic-token" || !strings.Contains(fake.summaries[0].body, "committed") {
+		t.Fatalf("summaries = %d sent=%+v", result.Summaries, fake.summaries)
 	}
 	bodies := map[string]domain.AnchoredSessionBody{}
 	for _, sent := range fake.puts {
@@ -569,8 +580,8 @@ func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
 	// The fixture's sessions are recorded after automatic reading begins (now),
 	// so the first run sends all three, each with its conversation.
 	collect()
-	if len(fake.puts) != 3 || len(fake.manifests) != 3 || len(fake.worktrees) != 1 {
-		t.Fatalf("first run: reports=%d documents=%d worktree lists=%d", len(fake.puts), len(fake.manifests), len(fake.worktrees))
+	if len(fake.puts) != 3 || len(fake.manifests) != 3 || len(fake.worktrees) != 1 || len(fake.summaries) != 1 {
+		t.Fatalf("first run: reports=%d documents=%d worktree lists=%d summaries=%d", len(fake.puts), len(fake.manifests), len(fake.worktrees), len(fake.summaries))
 	}
 	raw, err := os.ReadFile(statePath)
 	if err != nil {

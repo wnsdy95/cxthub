@@ -28,6 +28,9 @@ type SegmentUploadService struct {
 	newBranchID  func() (string, error)
 	// worktreeRemote is set by WithWorktreeList.
 	worktreeRemote outbound.WorktreeListRemote
+	// summaryRemote and summarizer are set together by WithSummaries.
+	summaryRemote outbound.AnchoredSummaryRemote
+	summarizer    outbound.SessionSummarizer
 	// state, now and contentEpoch are set together by WithCollectorState.
 	state        outbound.CollectorStateStore
 	now          func() time.Time
@@ -45,6 +48,14 @@ func NewSegmentUploadService(reports *SegmentReportService, remote outbound.Anch
 // A tool without a source gets its report without content, and says so.
 func (s *SegmentUploadService) WithSessionContent(remote outbound.SessionContentRemote, sources map[domain.ProviderKind]outbound.SessionContentSource) *SegmentUploadService {
 	s.contentRemote, s.content = remote, sources
+	return s
+}
+
+// WithSummaries also writes each session down at the commits it made and
+// stores those summaries on the server, after the session's report. A summary
+// is made from the conversation up to the commit, so it needs WithSessionContent.
+func (s *SegmentUploadService) WithSummaries(remote outbound.AnchoredSummaryRemote, summarizer outbound.SessionSummarizer) *SegmentUploadService {
+	s.summaryRemote, s.summarizer = remote, summarizer
 	return s
 }
 
@@ -263,6 +274,11 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		}
 	}
 	report, records := domain.BuildSegmentReportWithRecords(inputs)
+	// The tool's own memory is read for the folder a session started in.
+	folders := make(map[string]string, len(inputs.Sessions))
+	for _, recorded := range inputs.Sessions {
+		folders[domain.CollectorSessionKey(recorded.Provider, recorded.ID)] = recorded.StartFolder
+	}
 	plan := domain.BuildAnchoredUploadPlan(report, inputs.Git.Commits, s.machine)
 	result.Unread = append(result.Unread, report.Unread...)
 	result.AgentCallsWithoutSender = plan.CallsWithoutSender
@@ -290,6 +306,8 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		if auto != nil {
 			remembered = auto.state.Sessions[key]
 		}
+		// The conversation as it was read in this run; nil when it was not read.
+		var conversation *domain.CIRDocument
 		if s.contentRemote != nil {
 			contentKey := ""
 			if auto != nil {
@@ -307,7 +325,7 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 			}
 			if !reused {
 				var first, count []int
-				state, reason, first, count, err = s.attachContent(ctx, string(repo.ID), inputs.Git.Root, records[index], &upload.Body)
+				state, reason, first, count, conversation, err = s.attachContent(ctx, string(repo.ID), inputs.Git.Root, records[index], &upload.Body)
 				if err != nil {
 					return result, stopped(err)
 				}
@@ -328,17 +346,17 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		if auto != nil {
 			sent = domain.Fingerprint(upload.Body)
 		}
-		if auto != nil && sent != "" && remembered.Sent == sent {
+		known := auto != nil && sent != "" && remembered.Sent == sent
+		var receipt domain.AnchoredSessionReceipt
+		if !known {
+			receipt, err = s.remote.PutAnchoredSession(ctx, string(repo.ID), upload)
+			remembered.Sent = ""
+		}
+		switch {
+		case known:
 			// The server already stored exactly this report.
 			session.State = domain.SegmentPushUnchanged
 			result.Unchanged++
-			auto.state.Sessions[key] = remembered
-			result.Sessions = append(result.Sessions, session)
-			continue
-		}
-		receipt, err := s.remote.PutAnchoredSession(ctx, string(repo.ID), upload)
-		remembered.Sent = ""
-		switch {
 		case err == nil && receipt.Changed:
 			session.State, session.Revision = domain.SegmentPushStored, receipt.Revision
 			result.Stored++
@@ -358,6 +376,23 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 			}
 			return result, stopped(err)
 		}
+		// The report is on the server: its summaries can be stored. They are
+		// made from the conversation read in this run.
+		if s.summaryRemote != nil && s.summarizer != nil && conversation != nil && session.State != domain.SegmentPushRefused {
+			folder := folders[key]
+			if folder == "" {
+				folder = inputs.Git.Root
+			}
+			written, reason, err := s.pushSummaries(ctx, string(repo.ID), folder, upload, *conversation, &remembered, auto != nil)
+			session.Summaries, session.SummaryReason = written, reason
+			result.Summaries += written
+			if err != nil {
+				if auto != nil {
+					auto.state.Sessions[key] = remembered
+				}
+				return result, stopped(err)
+			}
+		}
 		if auto != nil {
 			auto.state.Sessions[key] = remembered
 		}
@@ -370,42 +405,108 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 // names it in body. A session whose content cannot be read back or is refused
 // keeps its report without content and a reason; an error is returned only
 // for what would stop every session.
-func (s *SegmentUploadService) attachContent(ctx context.Context, repoID, repoRoot string, records domain.SessionRecordRanges, body *domain.AnchoredSessionBody) (state domain.SegmentContentState, reason string, first, count []int, err error) {
+func (s *SegmentUploadService) attachContent(ctx context.Context, repoID, repoRoot string, records domain.SessionRecordRanges, body *domain.AnchoredSessionBody) (state domain.SegmentContentState, reason string, first, count []int, conversation *domain.CIRDocument, err error) {
 	if body.Records == 0 {
-		return domain.SegmentContentNone, "", nil, nil, nil
+		return domain.SegmentContentNone, "", nil, nil, nil, nil
 	}
 	source := s.content[records.Provider]
 	if source == nil {
-		return domain.SegmentContentNotUploaded, "the conversation of this tool's records is not read yet", nil, nil, nil
+		return domain.SegmentContentNotUploaded, "the conversation of this tool's records is not read yet", nil, nil, nil, nil
 	}
 	content, err := source.ReadSessionContent(ctx, repoRoot, records)
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", "", nil, nil, ctxErr
+		return "", "", nil, nil, nil, ctxErr
 	}
 	if err != nil {
-		return domain.SegmentContentNotUploaded, err.Error(), nil, nil, nil
+		return domain.SegmentContentNotUploaded, err.Error(), nil, nil, nil, nil
 	}
 	if len(content.Missing) > 0 {
-		return domain.SegmentContentNotUploaded, fmt.Sprintf("%d records changed while they were read; the next run uploads the conversation", len(content.Missing)), nil, nil, nil
+		return domain.SegmentContentNotUploaded, fmt.Sprintf("%d records changed while they were read; the next run uploads the conversation", len(content.Missing)), nil, nil, nil, nil
 	}
 	doc, first, count := content.Document()
 	if len(doc.Events) == 0 {
-		return domain.SegmentContentNone, "", nil, nil, nil
+		return domain.SegmentContentNone, "", nil, nil, nil, nil
 	}
 	ref, err := s.contentRemote.PutSessionContent(ctx, repoID, doc)
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", "", nil, nil, ctxErr
+		return "", "", nil, nil, nil, ctxErr
 	}
 	switch {
 	case err == nil:
 	case refusedSessionReport(err), errors.Is(err, domain.ErrInvalidCIR), errors.Is(err, domain.ErrConversationManifest), errors.Is(err, domain.ErrSessionContentNotAccepted):
 		// This one document was refused or cannot be built; others can be.
-		return domain.SegmentContentNotUploaded, err.Error(), nil, nil, nil
+		return domain.SegmentContentNotUploaded, err.Error(), nil, nil, nil, nil
 	default:
-		return "", "", nil, nil, err
+		return "", "", nil, nil, nil, err
 	}
 	if !body.AttachContent(ref, len(doc.Events), first, count) {
-		return domain.SegmentContentNotUploaded, "the conversation was read in other ranges than the report has", nil, nil, nil
+		return domain.SegmentContentNotUploaded, "the conversation was read in other ranges than the report has", nil, nil, nil, nil
 	}
-	return domain.SegmentContentStored, "", first, count, nil
+	return domain.SegmentContentStored, "", first, count, &doc, nil
+}
+
+// pushSummaries writes the session down at each commit it made and stores the
+// summaries. An automatic run leaves out the commits it already summarized; a
+// run a person asked for writes every one again. A summary that could not be
+// made or stored is said in reason and tried again by the next run; an error
+// is returned only when the run was cancelled.
+func (s *SegmentUploadService) pushSummaries(ctx context.Context, repoID, folder string, upload domain.AnchoredSessionUpload, conversation domain.CIRDocument, remembered *domain.CollectorSessionState, automatic bool) (written int, reason string, err error) {
+	points := domain.AnchoredSummaryPoints(upload.Body)
+	done := map[string]struct{}{}
+	if automatic {
+		for _, commit := range remembered.Summarized {
+			done[commit] = struct{}{}
+		}
+	}
+	var wanted []domain.AnchoredSummaryPoint
+	var ends []int
+	for _, point := range points {
+		for _, commit := range point.Commits {
+			if _, ok := done[commit]; !ok {
+				wanted, ends = append(wanted, point), append(ends, point.End)
+				break
+			}
+		}
+	}
+	// What failed is read again by the next automatic run.
+	failed := func(why string) {
+		reason = why
+		remembered.ContentKey = ""
+	}
+	if len(wanted) > 0 {
+		digests, err := s.summarizer.Summarize(ctx, folder, upload.Provider, upload.SessionID, conversation, ends)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return written, reason, ctxErr
+		}
+		switch {
+		case err != nil:
+			failed(err.Error())
+		case len(digests) != len(wanted):
+			failed("the summaries do not match the commits they were asked for")
+		default:
+			for index, point := range wanted {
+				body, said := domain.AnchoredSummaryOf(digests[index])
+				for _, commit := range point.Commits {
+					if _, ok := done[commit]; ok {
+						continue
+					}
+					if said {
+						err := s.summaryRemote.PutAnchoredSummary(ctx, repoID, upload.Provider, upload.SessionID, commit, body)
+						if ctxErr := ctx.Err(); ctxErr != nil {
+							return written, reason, ctxErr
+						}
+						if err != nil {
+							failed(err.Error())
+							continue
+						}
+						written++
+					}
+					// A conversation that gives nothing to write down is not asked again.
+					done[commit] = struct{}{}
+				}
+			}
+		}
+	}
+	remembered.Summarized = domain.AnchoredSummaryRemembered(points, done)
+	return written, reason, nil
 }

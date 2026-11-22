@@ -9,6 +9,7 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/sessionrecords"
@@ -63,6 +64,13 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 	service.WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{
 		domain.ProviderClaude: sessionrecords.NewClaudeContent(),
 	})
+	// A session is written down at each commit it made, the way a capture's
+	// memory is made: by rules, from the conversation up to the commit and the
+	// tool's own memory, masked like the conversation.
+	service.WithSummaries(remote, memory.NewSessionSummarizer(map[domain.ProviderKind]outbound.MemorySource{
+		domain.ProviderClaude: memory.NewClaudeMemorySource(),
+		domain.ProviderCodex:  memory.NewCodexMemorySource(),
+	}, memory.NewRuleDistiller(), capture.ScrubNativeMemory))
 	// Branch IDs live in Git's own branch configuration. This is the one
 	// thing an upload writes on this computer.
 	// The server is told the names of this computer's worktrees, never their

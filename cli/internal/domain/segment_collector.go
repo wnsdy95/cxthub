@@ -41,6 +41,9 @@ type CollectorSessionState struct {
 	Content    *AnchoredContent `json:"content,omitempty"`
 	FirstEvent []int            `json:"first_event,omitempty"`
 	Events     []int            `json:"events,omitempty"`
+	// Summarized lists the session's commits whose summary the server
+	// stored, so that a later run does not write them down again.
+	Summarized []string `json:"summarized,omitempty"`
 }
 
 // CollectorRun records how the last automatic run ended, so that a collector

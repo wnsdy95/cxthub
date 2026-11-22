@@ -1398,6 +1398,17 @@ document that holds it is shown to nobody else. That document is still an
 ordinary repository document, so the server does not keep a member who learned
 the hash some other way from reading it.
 
+After a session's report is stored, cxt writes the session down at each commit
+it made and stores that summary on the server: what was done, what is worth
+keeping, what is left to do. It is made by the rules that make a capture's
+memory, from the conversation up to the commit and, when cxt can read it, the
+tool's own memory as it is when cxt runs. A session that made no commit has no
+summary. A summary is read like the segment that ends at its commit: by the
+uploader always, by anyone else once the commit is pushed. `summaries` in the
+result counts what this run stored, and a session says in `summary_reason` why
+one was not; the next run tries it again. The collector writes a commit's
+summary once; `cxt segments push` writes every one again.
+
 The Sessions tab searches all of this at once: pull request titles, branch
 names, commit subjects and the beginning of commit numbers, the conversations
 and the notes. Each result says which of these it is. A reader is answered

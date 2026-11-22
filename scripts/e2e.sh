@@ -284,6 +284,9 @@ PYSEG
 cxt segments push --json >"$TMP/segments-push.json" 2>"$TMP/segments-push.err"
 expect "segments push succeeds" "$?" 0
 expect "one session report stored" "$(python3 -c "import json;r=json.load(open('$TMP/segments-push.json'));print(r['stored'],r['unchanged'],r['refused'],len(r['sessions']))")" "1 0 0 1"
+# The session is written down at the commit it made, after its report.
+expect "one summary stored at the session's commit" "$(python3 -c "import json;r=json.load(open('$TMP/segments-push.json'));print(r.get('summaries'),r['sessions'][0].get('summaries'),r['sessions'][0].get('summary_reason'))")" "1 1 None"
+expect "the server holds the summary cxt wrote" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;r=json.load(sys.stdin);b=r[0]["body"];print(len(r),r[0]["session_id"],r[0]["segment_no"],bool(b["summary"].strip() or b["key_facts"] or b["open_tasks"]))')" "1 e2e-segments 1 True"
 expect "uploader lists its report" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["provider"],r[0]["session_id"],r[0]["segments"],r[0]["records"],r[0]["revision"])')" "1 claude e2e-segments 1 5 1"
 expect "commit leads to the session's segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r[0]["segment"];print(len(r),r[0]["session_id"],r[0]["segment_no"],r[0]["rule"],s["first"],s["last"],s["closes_turn"],s["commits"][0]["subject"])')" "1 e2e-segments 1 printed-number m1 m4 True e2e segment commit"
 expect "stored report names the worktree and never its path" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c "import json,sys;r=json.load(sys.stdin);u=r['body']['uncommitted'];print(u['first'],u['places'][0]['worktree'],u['places'][0]['rule'],'$TMP' in json.dumps(r))")" "m5 repo recorded-by-tool False"
