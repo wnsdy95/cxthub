@@ -207,12 +207,13 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			"projectionWorkers.Graph.Run", "memoryPreparations.Run",
 			"projectionWorkers.Qualification.Run", "prPromotionWorker.Run", "notificationWorker.Run",
 			"invitationEmailWorker.Run", "maintenanceWorkers.Runtime.Run", "maintenanceWorkers.Storage.Run",
+			"maintenanceWorkers.Chunks.Run",
 		} {
 			if registered[method] != 1 {
 				test.Error("API worker must be registered exactly once", method, registered[method])
 			}
 		}
-		if len(registered) != 18 {
+		if len(registered) != 19 {
 			test.Error("API registered an unexpected additional worker", registered)
 		}
 		for position, method := range registrationOrder {

@@ -61,6 +61,7 @@ type MaintenanceWorkersConfig struct {
 type MaintenanceWorkers struct {
 	Runtime *systemmaintenance.Runtime
 	Storage *systemmaintenance.Storage
+	Chunks  *systemmaintenance.Chunks
 }
 
 func NewMaintenanceWorkers(config MaintenanceWorkersConfig) (*MaintenanceWorkers, error) {
@@ -69,7 +70,8 @@ func NewMaintenanceWorkers(config MaintenanceWorkersConfig) (*MaintenanceWorkers
 	}
 	runtimeStore, _ := config.Repositories.(systemmaintenance.RuntimeStore)
 	storageStore, _ := config.Repositories.(systemmaintenance.StorageStore)
-	if config.Profile == systemmaintenance.Complete && (!rootAdapterPresent(runtimeStore) || !rootAdapterPresent(storageStore)) {
+	chunkStore, _ := config.Repositories.(systemmaintenance.ChunkStore)
+	if config.Profile == systemmaintenance.Complete && (!rootAdapterPresent(runtimeStore) || !rootAdapterPresent(storageStore) || !rootAdapterPresent(chunkStore)) {
 		return nil, domain.ErrCatalogUnsupported
 	}
 	runtime, err := systemmaintenance.NewRuntime(systemmaintenance.RuntimeConfig{Profile: config.Profile, Store: runtimeStore})
@@ -80,5 +82,9 @@ func NewMaintenanceWorkers(config MaintenanceWorkersConfig) (*MaintenanceWorkers
 	if err != nil {
 		return nil, err
 	}
-	return &MaintenanceWorkers{Runtime: runtime, Storage: storage}, nil
+	chunks, err := systemmaintenance.NewChunks(systemmaintenance.ChunksConfig{Profile: config.Profile, Store: chunkStore})
+	if err != nil {
+		return nil, err
+	}
+	return &MaintenanceWorkers{Runtime: runtime, Storage: storage, Chunks: chunks}, nil
 }

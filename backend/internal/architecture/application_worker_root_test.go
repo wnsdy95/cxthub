@@ -208,8 +208,8 @@ func TestWave48ApplicationWorkerRootUsesDirectCompleteOwners(test *testing.T) {
 		}
 		return true
 	})
-	if bindings != 13 {
-		test.Error("full assembly must retain twelve existing bindings and optional GitHub", bindings)
+	if bindings != 14 {
+		test.Error("full assembly must retain thirteen existing bindings and optional GitHub", bindings)
 	}
 }
 
@@ -418,7 +418,7 @@ func TestWave48APIKeepsExistingWorkersInsideExactExternalGuard(test *testing.T) 
 		}
 		return true
 	})
-	if registrations != 18 {
-		test.Error("API must keep its existing eighteen registrations directly in serve", registrations)
+	if registrations != 19 {
+		test.Error("API must keep its existing nineteen registrations directly in serve", registrations)
 	}
 }

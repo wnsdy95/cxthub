@@ -37,6 +37,16 @@ func (attempt *rawRepresentationAttempt) mapOrder(bodies map[domain.ContentHash]
 	return attempt.order(hashes)
 }
 
+// Every writer that stores a raw blob or makes a manifest name one takes the
+// transaction advisory lock (rawRepresentationLockSpace, key of the hash).
+// The orphan chunk cleanup takes the same locks, so the two cannot overlap.
+const rawRepresentationLockSpace = int32(0x43585250)
+
+func rawRepresentationLockKey(hash domain.ContentHash) int32 {
+	digest := sha256.Sum256([]byte(hash))
+	return int32(binary.BigEndian.Uint32(digest[:4]))
+}
+
 func (attempt *rawRepresentationAttempt) lock(ctx context.Context, transaction pgx.Tx, parent domain.ContentHash, hashes []domain.ContentHash) error {
 	attempt.hashes = hashes
 	modes := make(map[int32]bool, len(hashes)+1)
@@ -44,8 +54,7 @@ func (attempt *rawRepresentationAttempt) lock(ctx context.Context, transaction p
 		if err := validateHash(hash); err != nil {
 			return err
 		}
-		digest := sha256.Sum256([]byte(hash))
-		key := int32(binary.BigEndian.Uint32(digest[:4]))
+		key := rawRepresentationLockKey(hash)
 		modes[key] = modes[key] || exclusive
 		return nil
 	}
@@ -71,7 +80,7 @@ func (attempt *rawRepresentationAttempt) lock(ctx context.Context, transaction p
 			if modes[key] {
 				query = `SELECT pg_advisory_xact_lock($1,$2)`
 			}
-			batch.Queue(query, int32(0x43585250), key)
+			batch.Queue(query, rawRepresentationLockSpace, key)
 		}
 		if err := transaction.SendBatch(ctx, &batch).Close(); err != nil {
 			return err

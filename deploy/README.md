@@ -200,6 +200,13 @@ usage without gaining private repository access; only Owners can request a
 recount. Personal usage appears in account settings. Filesystem development
 servers report usage as unavailable; authoritative billing requires PostgreSQL.
 
+A second bounded worker removes conversation chunks that no stored document or
+pending upload names any more, such as the tail chunk of a capture that was
+replaced by a longer one. It waits an hour before deleting a chunk, lowers the
+namespace's usage through the same ledger, and needs no configuration. See
+[orphan chunk cleanup](../docs/CONVERSATION_MEMORY_STORAGE.md#orphan-chunk-cleanup-on-postgresql)
+for its limits and log lines.
+
 
 ### Background delivery workers
 

@@ -25,6 +25,7 @@ import (
 type PostgresStore struct {
 	docProofs                    docProofCache
 	legacyBases                  legacyBaseHints
+	chunkSweep                   docChunkSweeper
 	pool                         *pgxpool.Pool
 	legacyByteRangePublication   bool
 	legacyDerivedBytePublication bool

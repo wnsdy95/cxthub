@@ -119,6 +119,7 @@ func TestOwnersContainOnlyTheirNarrowStore(test *testing.T) {
 	}{
 		{owner: reflect.TypeOf(systemmaintenance.Runtime{}), store: reflect.TypeOf((*systemmaintenance.RuntimeStore)(nil)).Elem()},
 		{owner: reflect.TypeOf(systemmaintenance.Storage{}), store: reflect.TypeOf((*systemmaintenance.StorageStore)(nil)).Elem()},
+		{owner: reflect.TypeOf(systemmaintenance.Chunks{}), store: reflect.TypeOf((*systemmaintenance.ChunkStore)(nil)).Elem()},
 	} {
 		if fixture.owner.NumField() != 1 {
 			test.Fatal("owner retained dependencies beyond its narrow store", fixture.owner)
@@ -128,7 +129,7 @@ func TestOwnersContainOnlyTheirNarrowStore(test *testing.T) {
 			test.Fatal("owner store boundary widened", fixture.owner, field)
 		}
 	}
-	for _, config := range []reflect.Type{reflect.TypeOf(systemmaintenance.RuntimeConfig{}), reflect.TypeOf(systemmaintenance.StorageConfig{})} {
+	for _, config := range []reflect.Type{reflect.TypeOf(systemmaintenance.RuntimeConfig{}), reflect.TypeOf(systemmaintenance.StorageConfig{}), reflect.TypeOf(systemmaintenance.ChunksConfig{})} {
 		if config.NumField() != 2 || config.Field(0).Name != "Profile" || config.Field(0).Type != reflect.TypeOf(systemmaintenance.Profile("")) || config.Field(1).Name != "Store" {
 			test.Fatal("configuration acquired an additional dependency", config)
 		}

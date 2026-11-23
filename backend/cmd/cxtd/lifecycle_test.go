@@ -261,7 +261,7 @@ func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
 		test.Fatal(err)
 	}
 	maintenanceWorkers, err := app.NewMaintenanceWorkers(app.MaintenanceWorkersConfig{Profile: systemmaintenance.Compatibility, Repositories: storage})
-	if err != nil || maintenanceWorkers.Runtime == nil || maintenanceWorkers.Storage == nil {
+	if err != nil || maintenanceWorkers.Runtime == nil || maintenanceWorkers.Storage == nil || maintenanceWorkers.Chunks == nil {
 		test.Fatal("actual auxiliary maintenance owners are missing", err)
 	}
 	reader := gitevidence.NewGitHub(func() string { return "" })
@@ -296,7 +296,7 @@ func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
 		run  func(context.Context)
 	}
 	var workers []workerBinding
-	expectedWorkers := 17
+	expectedWorkers := 18
 	if withGitHub {
 		github := app.NewGitHubConnections(identity, service, storage, nil)
 		githubWorker, err := app.NewGitHubWorker(github.GitHubWorkerConfig(app.GitHubWorkerCompatibility))
@@ -324,6 +324,7 @@ func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
 		{name: "invitation email", run: invitationEmailWorker.Run},
 		{name: "runtime maintenance", run: maintenanceWorkers.Runtime.Run},
 		{name: "storage maintenance", run: maintenanceWorkers.Storage.Run},
+		{name: "chunk maintenance", run: maintenanceWorkers.Chunks.Run},
 	}...)
 	if len(workers) != expectedWorkers {
 		test.Fatalf("actual API worker count: got %d, want %d", len(workers), expectedWorkers)

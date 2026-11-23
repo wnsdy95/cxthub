@@ -15,6 +15,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   timestamps or capture labels.
 - Read conversation pages from verified range indexes, load tool details on
   demand, and share bounded resources across reads, uploads and workers.
+- Remove conversation chunks from PostgreSQL once no stored document or pending
+  upload names them, such as the tail chunk of a capture replaced by a longer
+  one. A background worker deletes them after a one-hour grace period and
+  storage usage drops with them; no migration is needed.
 
 - Keep global Codex and Claude lifecycle hooks inert in Git repositories that
   have not run `cxt init` or `cxt setup`.
