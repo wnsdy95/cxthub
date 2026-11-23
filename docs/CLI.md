@@ -1376,11 +1376,23 @@ The conversation is uploaded as one document per session:
   the conversation itself says, including paths in commands and their output,
   is uploaded as recorded, after masking.
 
-Only Claude Code sessions have their conversation uploaded for now. A Codex
-session is uploaded as its report alone and listed as without conversation.
-The same is done for a session whose records changed while they were read, or
-whose document the server did not take; each one says why. That is not a
-failure of the command: the next run uploads it.
+A Codex thread's conversation is read from the thread history database its
+records were listed from, one record per item of the thread:
+
+- An item is converted by the shape Codex publishes for it in its app-server
+  protocol: a message, a plan, reasoning (the text Codex kept of it), a command with
+  its output, a file change, a tool call with its result, a web search.
+- An item of a kind cxt has no rule for is not dropped and does not stop the
+  upload. It is carried whole as one event named after its kind, so a Codex
+  release that adds a kind of item loses nothing.
+- The folder a command ran in, a process number and a path where Codex saved
+  a file stay on this computer.
+
+A session is uploaded as its report alone, and listed as without conversation,
+when its records changed while they were read, when its document was not taken
+by the server, or when a Codex thread's items could not be read (no `sqlite3`
+program, or a database Codex laid out another way); each one says why. That is
+not a failure of the command: the next run uploads it.
 
 On the server a report belongs to the account that uploaded it. A push is what
 opens it, part by part, to whoever may view the repository: its members and

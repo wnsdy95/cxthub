@@ -61,8 +61,15 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 		}
 		return observed.CaptureIdentity()
 	})
+	// A Codex thread's conversation is read from the same directory its
+	// records were listed from.
+	codexSessions, err := providerfs.CodexSessionsDir()
+	if err != nil {
+		return nil, err
+	}
 	service.WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{
 		domain.ProviderClaude: sessionrecords.NewClaudeContent(),
+		domain.ProviderCodex:  sessionrecords.NewCodexContent(filepath.Dir(codexSessions)),
 	})
 	// A session is written down at each commit it made, the way a capture's
 	// memory is made: by rules, from the conversation up to the commit and the

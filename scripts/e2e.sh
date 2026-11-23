@@ -422,6 +422,50 @@ expect "an archived session leaves its commit's segments and summaries" "$(segco
 expect "it stays in the list as archived and is still opened" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),bool(r[0].get("archived_at")))') $(code -b "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" "1 True 200"
 expect "a report uploaded again leaves it archived" "$(segappend m9 30; segcollect; segcount "anchored-commits/$SEGSHA")" 0
 expect "the uploader restores it" "$(segarchive "$JA" false) $(segcount "anchored-commits/$SEGSHA")" "200 1"
+# A Codex thread is read from the databases Codex keeps, in the layout of its
+# release 0.171, and its conversation is uploaded like a Claude Code session's.
+# The databases are written with synthetic rows by the sqlite3 program, which is
+# also what cxt reads them with.
+if command -v sqlite3 >/dev/null 2>&1; then
+  GIT_AUTHOR_DATE=2031-01-03T03:00:05Z GIT_COMMITTER_DATE=2031-01-03T03:00:05Z git commit -q --allow-empty -m "e2e codex commit"
+  CDXSHA="$(git rev-parse HEAD)"
+  mkdir -p "$HOME/.codex"
+  python3 - "$PWD" "$CDXSHA" "$SEGBRANCH" "$HOME/.codex" <<'PYCDX'
+import json, sqlite3, sys
+cwd, sha, branch, home = sys.argv[1:5]
+at = 1925175600000  # 2031-01-03T03:00:00Z
+state = sqlite3.connect(home + "/state_5.sqlite")
+state.executescript("""CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, git_origin_url TEXT, created_at_ms INTEGER, history_mode TEXT, title TEXT);
+CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL);""")
+state.execute("INSERT INTO threads VALUES ('e2e-codex', ?, NULL, ?, 'paginated', 'synthetic')", (cwd, at))
+state.commit(); state.close()
+history = sqlite3.connect(home + "/thread_history_1.sqlite")
+history.execute("""CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL,
+ created_at_ms INTEGER NOT NULL, item_json TEXT NOT NULL, item_type TEXT NOT NULL DEFAULT '', updated_at_ordinal INTEGER NOT NULL DEFAULT 0,
+ started_at_ms INTEGER, completed_at_ms INTEGER, PRIMARY KEY (thread_id, turn_id, item_id))""")
+def item(turn, name, ordinal, offset, body, started=None, completed=None):
+    body["id"] = name
+    history.execute("INSERT INTO thread_items VALUES ('e2e-codex', ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    (turn, name, ordinal, at + offset, json.dumps(body), body["type"], started, completed))
+item("t1", "u1", 1, 1000, {"type": "userMessage", "content": [{"type": "text", "text": "commit the codex change"}]})
+item("t1", "c1", 2, 4000, {"type": "commandExecution", "command": "git commit --allow-empty -m 'e2e codex commit'", "cwd": cwd, "status": "completed",
+                           "exitCode": 0, "aggregatedOutput": "[%s %s] e2e codex commit" % (branch, sha[:7])}, at + 4000, at + 6000)
+item("t1", "a1", 3, 7000, {"type": "agentMessage", "text": "committed the codex change"})
+item("t2", "u2", 4, 40000, {"type": "userMessage", "content": [{"type": "text", "text": "and one more"}]})
+item("t2", "x1", 5, 41000, {"type": "holoDeck", "scene": "bridge"})
+history.commit(); history.close()
+PYCDX
+  cxt segments push --json >"$TMP/segments-codex.json" 2>"$TMP/segments-codex.err"
+  expect "a Codex thread is uploaded with its conversation and a summary" "$(python3 -c "import json;r=json.load(open('$TMP/segments-codex.json'));s=[x for x in r['sessions'] if x['provider']=='codex'];print(len(s),s[0]['id'],s[0]['content'],s[0].get('summaries'),s[0].get('content_reason'))")" "1 e2e-codex stored 1 None"
+  expect "its commit leads to its segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$CDXSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r[0]["segment"];print(len(r),r[0]["provider"],r[0]["session_id"],r[0]["rule"],s["first"],s["last"])')" "1 codex e2e-codex printed-number t1/u1 t1/a1"
+  CDXDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | jget "['body']['content']['doc']")"
+  expect "its report places its ranges in the content document" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];s=b["segments"][0];u=b["uncommitted"];print(b["content"]["events"],s.get("first_event",0),s["events"],u["first_event"],u["events"])')" "6 0 4 4 2"
+  # An item kind cxt has no rule for is carried whole under its own name, and the folder a command ran in stays on this computer.
+  expect "its content document holds the items as events" "$(curl -sb "$JA" "$B/repos/$CLIRID/docs/$CDXDOC" | python3 -c 'import json,sys;d=json.load(sys.stdin);e=d["cir"]["events"];print(len(e),e[0]["blocks"][0]["text"],e[1]["tool_name"],e[2]["kind"],e[3]["blocks"][0]["text"],e[5]["tool_name"],e[5]["input"]["scene"],"cwd" in e[1]["input"],d["cir"]["envelope"]["source_provider"],d["cir"]["envelope"]["session_origin_id"])')" "6 commit the codex change shell tool_result committed the codex change unknown:holoDeck bridge False codex e2e-codex"
+  expect "the same Codex thread again changes nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);s=[x for x in r["sessions"] if x["provider"]=="codex"];print(r["stored"],s[0]["content"])')" "0 stored"
+else
+  echo "  (sqlite3 is not installed: the Codex thread checks did not run)"
+fi
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"
