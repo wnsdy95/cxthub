@@ -263,3 +263,23 @@ func TestAnchoredSessionContentMustBeInTheRepository(t *testing.T) {
 		t.Fatalf("segment of the commit: %+v %v", segments, err)
 	}
 }
+
+// A report is not a change of the repository's own state: readers that follow
+// the repository revision must not be woken by an uploaded session.
+func TestAnchoredSessionDoesNotAdvanceTheRepositoryRevision(t *testing.T) {
+	service, storage, repo := anchoredSessionFixture(t)
+	before, err := storage.RepositoryRevision(systemTestContext(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PutAnchoredSession(anchoredActor("member-a"), repo, domain.ProviderClaude, "session-1", anchoredTestBody("m3")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := storage.RepositoryRevision(systemTestContext(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("a report moved the repository revision: %+v -> %+v", before, after)
+	}
+}
