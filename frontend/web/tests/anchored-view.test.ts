@@ -324,6 +324,17 @@ assert.match(render({ kind: 'commit', sha: sha('a'), base: sha('e') }, true), /T
 assert.match(render({ kind: 'commit', sha: sha('b'), base: sha('a') }), /Only commits read from the remote can be compared\./);
 assert.match(translate('ko', 'anchored.compareSet'), /\uBE44\uAD50 \uAE30\uC900/);
 
+// A commit can be forked from: the page shows the command that makes a Git branch there, and, for each session a
+// segment of which ends at the commit, the command that continues that conversation up to it.
+assert.match(commit, /<details class="anchor-fork" data-fork="b{40}"><summary class="ghost">⑂ Fork from this commit<\/summary>/);
+assert.match(commit, /<pre class="anchor-fork-command"><code>cxt segments fork --at b{40} --branch &lt;name&gt;<\/code><\/pre>/);
+assert.match(commit, /<pre class="anchor-fork-command"><code>cxt segments fork claude parent-session --at b{40}<\/code><\/pre>/);
+assert.equal(count(commit, /class="anchor-fork-command"/g), 1 + count(commit, /data-segment="/g), 'one command for the branch and one for each session at the commit');
+const bare = render({ kind: 'commit', sha: sha('e') }, true);
+assert.match(bare, /cxt segments fork --at e{40} --branch &lt;name&gt;/, 'a commit no session made can still be branched from');
+assert.equal(count(bare, /class="anchor-fork-command"/g), 1);
+assert.match(translate('ko', 'anchored.forkBranch'), /Git \uBE0C\uB79C\uCE58/);
+
 // An archived session is listed only among the archived sessions, and is opened from there. Its uploader archives and
 // restores it, and so does a reader who manages the repository.
 assert.doesNotMatch(overview, /Archived sessions/, 'the list is offered once a session is archived');

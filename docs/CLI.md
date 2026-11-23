@@ -1730,6 +1730,11 @@ Nothing is uploaded by a fork. The new session is a session of its tool like
 any other: once it is used, the collector reads it and uploads it as yours.
 Reading a long conversation takes one request for every 64 KiB of it.
 
+In the Sessions tab every commit has "Fork from this commit", which shows these
+commands filled in for that commit and for each session a segment of which
+ends there. A browser cannot make a branch or write a session file on your
+computer, so the tab shows the commands and runs nothing.
+
 ### Automatic upload
 
 In a repository cxt is set up in and connected to a server, the same upload

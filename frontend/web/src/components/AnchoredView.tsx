@@ -477,6 +477,7 @@ function CommitDetail({ repo, index, notes, sha, base, href, onHighlight }: {
           : <AppLink className="ghost" href={href({ kind: 'commit', sha, base: sha })}>{t('anchored.compareSet')}</AppLink>}
       </p>
       {base && <Compare index={index} base={base} sha={sha} href={href} />}
+      <ForkBox sha={sha} sessions={(commit?.links ?? []).map(link => ({ provider: link.provider, id: link.session_id, at: link.copyOf ?? sha }))} />
       {(commit?.links.length ?? 0) === 0 && <p className="empty-box">{t('anchored.noContext')}</p>}
       <ul className="anchor-cards">
         {(commit?.links ?? []).map(link => {
@@ -527,6 +528,35 @@ function CommitDetail({ repo, index, notes, sha, base, href, onHighlight }: {
       )}
       <Notes repo={repo} notes={notes} target={{ kind: 'commit', commit: sha }} canAdd={(commit?.links.length ?? 0) === 0} />
     </>
+  );
+}
+
+/**
+ * Starting new work from a commit. A browser cannot make a branch or write a session file on the reader's computer, so
+ * this shows the two commands that do: a Git branch at the commit, and, for each session a segment of which ends
+ * here, a new session of the tool that continues that conversation up to the commit. A session is named with the commit
+ * its own report names, which for a copy on the remote is the commit it was copied from.
+ */
+function ForkBox({ sha, sessions }: { sha: string; sessions: { provider: string; id: string; at: string }[] }) {
+  const t = useT();
+  const seen = new Set<string>();
+  const continued = sessions.filter(session => {
+    const key = `${session.provider}:${session.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return (
+    <details className="anchor-fork" data-fork={sha}>
+      <summary className="ghost">{t('anchored.fork')}</summary>
+      <p className="anchor-card-meta">{t('anchored.forkLead')}</p>
+      <p className="anchor-card-meta">{t('anchored.forkBranch')}</p>
+      <pre className="anchor-fork-command"><code>{`cxt segments fork --at ${sha} --branch <name>`}</code></pre>
+      {continued.length > 0 && <p className="anchor-card-meta">{t('anchored.forkConversation')}</p>}
+      {continued.map(session => (
+        <pre key={`${session.provider}:${session.id}`} className="anchor-fork-command"><code>{`cxt segments fork ${session.provider} ${session.id} --at ${session.at}`}</code></pre>
+      ))}
+    </details>
   );
 }
 

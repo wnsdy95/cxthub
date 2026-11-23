@@ -1380,6 +1380,9 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .anchor-hits .ref-badge { margin: 0 2px 0 0; color: var(--ink); }
 .anchor-hits .anchor-card-meta { margin: 2px 0 0; }
 .anchor-compare-bar { margin: 6px 0; }
+.anchor-fork { margin: 6px 0 10px; }
+.anchor-fork > summary { cursor: pointer; display: inline-block; }
+.anchor-fork-command { margin: 4px 0 8px; padding: 6px 8px; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12px; user-select: all; }
 .anchor-compare { margin-bottom: 10px; padding: 0 10px 8px; border: 1px solid var(--line); border-radius: 8px; }
 .anchor-archived { list-style: none; margin: 8px 0 0; padding: 0; }
 .anchor-archived li { padding: 6px 0; border-top: 1px solid var(--line); }
