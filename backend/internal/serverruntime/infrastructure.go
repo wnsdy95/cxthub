@@ -12,17 +12,14 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type InfrastructureConfig struct {
-	DSN                          string
-	DataDir                      string
-	RequirePostgres              bool
-	MigrationsDirectory          string
-	LegacyByteRangePublication   bool
-	LegacyDerivedBytePublication bool
-	execution                    *executionProfile
+	DSN                 string
+	DataDir             string
+	RequirePostgres     bool
+	MigrationsDirectory string
+	execution           *executionProfile
 }
 
 type Infrastructure struct {
@@ -81,24 +78,6 @@ func OpenInfrastructure(ctx context.Context, config InfrastructureConfig) (_ *In
 		}
 		log.Print("schema: verified")
 		infrastructure.DocumentProfile = documentquery.VerifiedRoots
-	}
-	if config.LegacyDerivedBytePublication && !config.LegacyByteRangePublication {
-		return nil, fmt.Errorf("CXT_LEGACY_DERIVED_BYTE_PUBLICATION requires CXT_LEGACY_BYTE_RANGE_PUBLICATION")
-	}
-	derivedPublication, supportsDerivedPublication := storage.(outbound.LegacyDerivedByteRangePublicationStore)
-	if config.LegacyDerivedBytePublication && !supportsDerivedPublication {
-		return nil, fmt.Errorf("legacy derived byte-range publication requires a supporting store")
-	}
-	if _, supportsAccounting := storage.(outbound.LegacyDerivedByteStorageAccounting); config.LegacyDerivedBytePublication && !supportsAccounting {
-		return nil, fmt.Errorf("legacy derived byte-range publication requires storage accounting")
-	}
-	if publication, supported := storage.(outbound.LegacyByteRangePublicationStore); supported {
-		publication.ConfigureLegacyByteRangePublication(config.LegacyByteRangePublication)
-	} else if config.LegacyByteRangePublication {
-		return nil, fmt.Errorf("legacy byte-range publication requires a supporting store")
-	}
-	if supportsDerivedPublication {
-		derivedPublication.ConfigureLegacyDerivedByteRangePublication(config.LegacyDerivedBytePublication)
 	}
 	if config.execution != nil {
 		if err = config.execution.configure(ctx, storage); err != nil {

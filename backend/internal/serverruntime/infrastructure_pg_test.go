@@ -17,7 +17,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func infrastructurePostgresDSN(test *testing.T) string {
@@ -88,22 +87,16 @@ func TestInfrastructurePostgresProfileAndPublicationPolicy(test *testing.T) {
 	for _, scenario := range []struct {
 		name     string
 		required bool
-		byte     bool
-		derived  bool
 	}{
 		{name: "DSN selects production"},
 		{name: "required production", required: true},
-		{name: "byte publication", required: true, byte: true},
-		{name: "derived publication", required: true, byte: true, derived: true},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
 			infrastructure, err := OpenInfrastructure(ctx, InfrastructureConfig{
-				DSN:                          " \t" + dsn + "\n",
-				DataDir:                      test.TempDir(),
-				RequirePostgres:              scenario.required,
-				MigrationsDirectory:          "../../../schemas/db/migrations",
-				LegacyByteRangePublication:   scenario.byte,
-				LegacyDerivedBytePublication: scenario.derived,
+				DSN:                 " \t" + dsn + "\n",
+				DataDir:             test.TempDir(),
+				RequirePostgres:     scenario.required,
+				MigrationsDirectory: "../../../schemas/db/migrations",
 			})
 			if err != nil {
 				test.Fatal(err)
@@ -115,12 +108,6 @@ func TestInfrastructurePostgresProfileAndPublicationPolicy(test *testing.T) {
 			}
 			if err := app.ValidateProductionStore(storage); err != nil {
 				test.Fatal(err)
-			}
-			if _, supported := infrastructure.Store.(outbound.LegacyDerivedByteRangePublicationStore); !supported {
-				test.Fatal("derived publication capability missing")
-			}
-			if _, supported := infrastructure.Store.(outbound.LegacyDerivedByteStorageAccounting); !supported {
-				test.Fatal("derived storage accounting missing")
 			}
 			if err := storage.VerifyMigrations(ctx, "../../../schemas/db/migrations"); err != nil {
 				test.Fatal("infrastructure accepted an unverified schema", err)
@@ -149,15 +136,13 @@ func TestInfrastructurePostgresInitializationErrorsCloseOwnedPool(test *testing.
 		want      string
 	}{
 		{name: "verification before publication", directory: filepath.Join(test.TempDir(), "missing"), want: schemaReadonlyPGStartupPrefix},
-		{name: "publication after verification", directory: "../../../schemas/db/migrations", want: "CXT_LEGACY_DERIVED_BYTE_PUBLICATION requires CXT_LEGACY_BYTE_RANGE_PUBLICATION"},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
 			name := fmt.Sprintf("cxt-infrastructure-%d", time.Now().UnixNano())
 			infrastructure, err := OpenInfrastructure(ctx, InfrastructureConfig{
-				DSN:                          infrastructureNamedPostgresDSN(test, dsn, name),
-				RequirePostgres:              true,
-				MigrationsDirectory:          scenario.directory,
-				LegacyDerivedBytePublication: true,
+				DSN:                 infrastructureNamedPostgresDSN(test, dsn, name),
+				RequirePostgres:     true,
+				MigrationsDirectory: scenario.directory,
 			})
 			if infrastructure != nil {
 				test.Cleanup(func() { _ = infrastructure.Close() })

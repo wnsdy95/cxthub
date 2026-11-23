@@ -114,23 +114,3 @@ func (s *FSStore) recoverHistoryEvent(ctx context.Context, repoID domain.Content
 	}
 	return removeFileDurable(s.historyJournal(repoID))
 }
-
-func (s *FSStore) recoverHistoryJournals() error {
-	entries, err := os.ReadDir(filepath.Join(s.dataDir, "repos"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		repoID := domain.ContentHash("sha256:" + entry.Name())
-		if err := s.recoverHistoryEvent(context.Background(), repoID); err != nil {
-			return err
-		}
-	}
-	return nil
-}

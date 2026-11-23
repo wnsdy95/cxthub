@@ -130,13 +130,11 @@ func openRuntime(ctx context.Context, addr, dataDir string, requirePostgres, que
 		return nil, err
 	}
 	infrastructure, err := OpenInfrastructure(ctx, InfrastructureConfig{
-		DSN:                          os.Getenv("CXT_POSTGRES_DSN"),
-		DataDir:                      dataDir,
-		RequirePostgres:              requirePostgres,
-		MigrationsDirectory:          os.Getenv("CXT_MIGRATIONS_DIR"),
-		LegacyByteRangePublication:   EnvBool(os.Getenv("CXT_LEGACY_BYTE_RANGE_PUBLICATION")),
-		LegacyDerivedBytePublication: EnvBool(os.Getenv("CXT_LEGACY_DERIVED_BYTE_PUBLICATION")),
-		execution:                    execution,
+		DSN:                 os.Getenv("CXT_POSTGRES_DSN"),
+		DataDir:             dataDir,
+		RequirePostgres:     requirePostgres,
+		MigrationsDirectory: os.Getenv("CXT_MIGRATIONS_DIR"),
+		execution:           execution,
 	})
 	if err != nil {
 		return nil, err

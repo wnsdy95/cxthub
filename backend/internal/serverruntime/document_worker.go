@@ -68,13 +68,11 @@ func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSource
 		return nil, fmt.Errorf("%w: document-only worker cannot consume application sources", domain.ErrValidation)
 	}
 	infrastructure, err := OpenInfrastructure(ctx, InfrastructureConfig{
-		DSN:                          os.Getenv("CXT_POSTGRES_DSN"),
-		DataDir:                      os.Getenv("CXT_DATA"),
-		RequirePostgres:              true,
-		MigrationsDirectory:          os.Getenv("CXT_MIGRATIONS_DIR"),
-		LegacyByteRangePublication:   EnvBool(os.Getenv("CXT_LEGACY_BYTE_RANGE_PUBLICATION")),
-		LegacyDerivedBytePublication: EnvBool(os.Getenv("CXT_LEGACY_DERIVED_BYTE_PUBLICATION")),
-		execution:                    execution,
+		DSN:                 os.Getenv("CXT_POSTGRES_DSN"),
+		DataDir:             os.Getenv("CXT_DATA"),
+		RequirePostgres:     true,
+		MigrationsDirectory: os.Getenv("CXT_MIGRATIONS_DIR"),
+		execution:           execution,
 	})
 	if err != nil {
 		return nil, err

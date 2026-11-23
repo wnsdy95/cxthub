@@ -122,27 +122,6 @@ type Snapshot struct {
 	CompactionCount int `json:"compaction_count,omitempty"`
 }
 
-// ReachabilityParents is the list of parent nodes in the reachability walk (Parents ∪ GraftParents, duplicates removed).
-// A single rule for ancestor/reachability determination — the engine's walk, Fsck audit, and GC guard must all use this.
-// This central rule prevents the earlier drift where hand-written walkers omitted overlay edges from dangling audits.
-func (s Snapshot) ReachabilityParents() []ContentHash {
-	if len(s.GraftParents) == 0 {
-		return s.Parents
-	}
-	out := append([]ContentHash{}, s.Parents...)
-	seen := make(map[ContentHash]bool, len(s.Parents)+len(s.GraftParents))
-	for _, p := range s.Parents {
-		seen[p] = true
-	}
-	for _, g := range s.GraftParents {
-		if !seen[g] {
-			seen[g] = true
-			out = append(out, g)
-		}
-	}
-	return out
-}
-
 // Branch is a read-only view of a ref (kind=branch) in a domain-friendly manner
 // (data model, sync protocol).
 //

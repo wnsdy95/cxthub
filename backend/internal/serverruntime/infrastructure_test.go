@@ -48,48 +48,13 @@ func TestInfrastructureUsesExplicitConfigurationWithoutRuntimeDependencies(test 
 	}
 }
 
-func TestInfrastructurePreservesLegacyPublicationErrors(test *testing.T) {
-	for _, scenario := range []struct {
-		name    string
-		byte    bool
-		derived bool
-		want    string
-	}{
-		{name: "reader only"},
-		{name: "byte requires support", byte: true, want: "legacy byte-range publication requires a supporting store"},
-		{name: "derived requires byte", derived: true, want: "CXT_LEGACY_DERIVED_BYTE_PUBLICATION requires CXT_LEGACY_BYTE_RANGE_PUBLICATION"},
-		{name: "derived requires support", byte: true, derived: true, want: "legacy derived byte-range publication requires a supporting store"},
-	} {
-		test.Run(scenario.name, func(test *testing.T) {
-			infrastructure, err := OpenInfrastructure(context.Background(), InfrastructureConfig{
-				DataDir:                      test.TempDir(),
-				LegacyByteRangePublication:   scenario.byte,
-				LegacyDerivedBytePublication: scenario.derived,
-			})
-			if infrastructure != nil {
-				test.Cleanup(func() { _ = infrastructure.Close() })
-			}
-			if scenario.want == "" {
-				if err != nil || infrastructure == nil {
-					test.Fatal("reader-only infrastructure failed", infrastructure, err)
-				}
-				return
-			}
-			if err == nil || err.Error() != scenario.want || infrastructure != nil {
-				test.Fatal("publication error changed", infrastructure, err)
-			}
-		})
-	}
-}
-
 func TestInfrastructurePreservesStoreErrorBeforePublicationValidation(test *testing.T) {
 	dataDir := filepath.Join(test.TempDir(), "not-a-directory")
 	if err := os.WriteFile(dataDir, []byte("blocked storage"), 0o600); err != nil {
 		test.Fatal(err)
 	}
 	infrastructure, err := OpenInfrastructure(context.Background(), InfrastructureConfig{
-		DataDir:                      dataDir,
-		LegacyDerivedBytePublication: true,
+		DataDir: dataDir,
 	})
 	var pathError *os.PathError
 	if infrastructure != nil || err == nil || !strings.HasPrefix(err.Error(), "open store: ") || !errors.As(err, &pathError) {
@@ -100,10 +65,9 @@ func TestInfrastructurePreservesStoreErrorBeforePublicationValidation(test *test
 func TestInfrastructureRejectsRequiredPostgresWithoutDSN(test *testing.T) {
 	dataDir := filepath.Join(test.TempDir(), "must-not-be-created")
 	infrastructure, err := OpenInfrastructure(context.Background(), InfrastructureConfig{
-		DSN:                          " \t\n",
-		DataDir:                      dataDir,
-		RequirePostgres:              true,
-		LegacyDerivedBytePublication: true,
+		DSN:             " \t\n",
+		DataDir:         dataDir,
+		RequirePostgres: true,
 	})
 	if infrastructure != nil || err == nil || !strings.HasPrefix(err.Error(), "open store: ") || !strings.Contains(err.Error(), "PostgreSQL") {
 		test.Fatal("required PostgreSQL fell back to development storage or reordered validation", infrastructure, err)
