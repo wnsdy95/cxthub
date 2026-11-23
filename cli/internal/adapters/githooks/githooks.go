@@ -1,37 +1,43 @@
-// Package githooks connects cxt to git hooks — "using git means cxt follows along".
+// Package githooks installs the Git hooks of cxt.
 //
-//	post-commit   → cxt git-hook post-commit    (git commit = context snapshot)
-//	post-checkout → cxt git-hook post-checkout  (branch switch = context fork/load)
-//	post-merge    → cxt git-hook post-merge     (git pull = context pull)
-//	pre-push      → cxt git-hook pre-push       (git push = context push)
+// Every hook runs `cxt git-hook wake`: it wakes the reading of the agent
+// tools' own session records and of Git. A hook decides nothing and carries
+// no data; what was committed, checked out or pushed is read from Git itself.
 //
 // Design principles:
-//   - cxt failures are fail-open; a pre-existing user hook's failure is preserved.
+//   - a hook of cxt cannot stop a Git command; a pre-existing user hook's result is preserved.
 //   - preserve existing hooks: user hooks are moved to <name>.pre-cxt and run first (chaining).
 //   - idempotent: reinstalling is safe, overwriting with a marker for ownership verification.
 package githooks
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
-// Marker indicates that the hook is managed by cxt.
-const Marker = "# cxt-hook v1"
+// Marker indicates that the hook is managed by cxt. Every version's marker begins with it.
+const Marker = "# cxt-hook v"
 
-// HookNames lists the Git hooks installed by cxt.
-//   - reference-transaction (Git 2.28+): the single gateway for every ref change. It observes refs/stash
-//     for stash detection and refs/heads/* for branch moves outside checkout, including reset --hard.
-//   - post-rewrite: receives old→new commit mappings after rebase/amend, remaps snapshot [git <sha>] links
-//     through .cxt/rewrites.json, and synchronizes context when rewriting completes.
-var HookNames = []string{"post-commit", "post-checkout", "post-merge", "pre-push", "reference-transaction", "post-rewrite"}
+// version is the marker of the scripts this version installs. A script with
+// another version's marker is replaced the next time cxt runs in the repository.
+const version = Marker + "2"
+
+// HookNames lists the Git hooks installed by cxt. Each one only wakes the
+// reading of the agent tools' own session records; none of them decides
+// anything, and none of them can stop a Git command.
+var HookNames = []string{"post-commit", "post-checkout", "post-merge", "post-rewrite", "pre-push"}
+
+// executable names the program the hooks run. A test puts a stand-in here:
+// the program a test runs in is the test itself, and a hook must never start it.
+var executable = os.Executable
+
+// earlierHookNames are hooks an earlier version installed and this one does not.
+var earlierHookNames = []string{"reference-transaction"}
 
 // hooksDir returns the git hooks directory of repoRoot (worktree/custom hooksPath handling).
 func hooksDir(repoRoot string) (string, error) {
@@ -52,90 +58,11 @@ func shellQuote(value string) string {
 
 // script generates the hook shell script. It embeds the absolute path to the cxt binary but
 // falls back to PATH's cxt if not available (hooks run in restricted environments).
-func script(hookName, cxtBin string) string {
-	// reference-transaction fires on every ref change (including commits), so in the shell,
-	// it quickly filters relevant refs to minimize cxt calls. stdin contains lines "<old> <new> <ref>".
-	// refs/stash → stash-sync, refs/heads/* → ref-sync (stdin re-supplied — handler determines current branch).
-	if hookName == "reference-transaction" {
-		return fmt.Sprintf(`#!/bin/sh
-%s (managed by cxt — remove with 'cxt hooks uninstall')
-input=$(cat)
-# Existing user hook chaining (stdin refilling).
-user_status=0
-if [ -x "$0.pre-cxt" ]; then
-  printf '%%s\n' "$input" | "$0.pre-cxt" "$@" || user_status=$?
-fi
-if [ "$1" = "prepared" ] && [ "$user_status" -ne 0 ]; then exit "$user_status"; fi
-CXT=%s
-[ -x "$CXT" ] || CXT=cxt
-if ! command -v "$CXT" >/dev/null 2>&1; then
-  common=$(git rev-parse --git-common-dir 2>/dev/null)
-  root=$(git rev-parse --show-toplevel 2>/dev/null)
-  if [ "$1" = "prepared" ] && { [ -e "$common/cxt/enabled" ] || [ -e "$root/.cxt/HEAD" ]; }; then
-    birth=$(printf '%%s\n' "$input" | awk '$1 ~ /^0+$/ && (length($1)==40 || length($1)==64) && $3 ~ /^refs\/heads\// && $2 !~ /^0+$/ { print "yes" }')
-    symbolic=$(printf '%%s\n' "$input" | awk '$1 ~ /^0+$/ && $3=="HEAD" && $2 ~ /^ref:refs\/heads\// { print substr($2,5) }')
-    if [ -n "$birth" ] || { [ -n "$symbolic" ] && ! git show-ref --verify --quiet "$symbolic"; }; then
-      echo "CXTHub stopped branch creation: cxt executable is unavailable; restore the installed CLI and retry." >&2
-      exit 1
-    fi
-  fi
-  exit "$user_status"
-fi
-case "$input" in
-*refs/heads/*)
-  printf '%%s\n' "$input" | "$CXT" git-hook branch-transaction "$1" "$PPID"
-  cxt_status=$?
-  if [ "$1" = "prepared" ] && [ "$cxt_status" -ne 0 ]; then exit "$cxt_status"; fi ;;
-esac
-if [ "$1" = "prepared" ]; then
-  case "$input" in
-  *' 0000000000000000000000000000000000000000 refs/heads/'*|*' 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/'*)
-    printf '%%s\n' "$input" | "$CXT" git-hook ref-prepare || true ;;
-  esac
-  exit "$user_status"
-fi
-if [ "$1" = "aborted" ]; then
-  case "$input" in
-  *' 0000000000000000000000000000000000000000 refs/heads/'*|*' 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/'*)
-    printf '%%s\n' "$input" | "$CXT" git-hook ref-abort || true ;;
-  esac
-  exit "$user_status"
-fi
-[ "$1" = "committed" ] || exit "$user_status"
-case "$input" in
-*refs/remotes/*) printf '%%s\n' "$input" | "$CXT" git-hook remote-ref-observe "$1" || true ;;
-esac
-case "$input" in
-*refs/stash*) "$CXT" git-hook stash-sync || true ;;
-esac
-case "$input" in
-*refs/heads/*) printf '%%s\n' "$input" | "$CXT" git-hook ref-sync "$PPID" || true ;;
-esac
-exit "$user_status"
-`, Marker, shellQuote(cxtBin))
-	}
-	// Both hooks supply records on stdin. Replay them to each consumer;
-	// the sentinel preserves empty input and trailing newlines in the shell.
-	if hookName == "post-rewrite" || hookName == "pre-push" {
-		return fmt.Sprintf(`#!/bin/sh
-%s (managed by cxt — 'cxt hooks uninstall' to remove)
-input=$(cat; printf '.')
-input=${input%%.}
-user_status=0
-if [ -x "$0.pre-cxt" ]; then
-  printf '%%s' "$input" | "$0.pre-cxt" "$@" || user_status=$?
-fi
-if [ "%s" = "pre-push" ] && [ "$user_status" -ne 0 ]; then exit "$user_status"; fi
-CXT=%s
-[ -x "$CXT" ] || CXT=cxt
-command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
-printf '%%s' "$input" | "$CXT" git-hook %s "$@" || true
-exit "$user_status"
-`, Marker, hookName, shellQuote(cxtBin), hookName)
-	}
+// A hook the user already had runs first, with the hook's own input, and its
+// result is the result: cxt never changes whether Git goes on.
+func script(cxtBin string) string {
 	return fmt.Sprintf(`#!/bin/sh
 %s (managed by cxt — 'cxt hooks uninstall' to remove)
-# Existing user hooks are executed first (chaining).
 user_status=0
 if [ -x "$0.pre-cxt" ]; then
   "$0.pre-cxt" "$@" || user_status=$?
@@ -143,13 +70,14 @@ fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
 command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
-"$CXT" git-hook %s "$@" || true
+"$CXT" git-hook wake </dev/null >/dev/null 2>&1 || true
 exit "$user_status"
-`, Marker, shellQuote(cxtBin), hookName)
+`, version, shellQuote(cxtBin))
 }
 
-// Install installs 4 git hooks and returns a list of installed hook names.
-// Existing user hooks are preserved as <name>.pre-cxt for chaining.
+// Install installs the Git hooks and returns a list of installed hook names.
+// Existing user hooks are preserved as <name>.pre-cxt for chaining. Hooks of
+// an earlier version that this one does not install are removed.
 func Install(repoRoot string) ([]string, error) {
 	dir, err := hooksDir(repoRoot)
 	if err != nil {
@@ -161,7 +89,7 @@ func Install(repoRoot string) ([]string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	cxtBin, err := os.Executable()
+	cxtBin, err := executable()
 	if err != nil {
 		cxtBin = "cxt"
 	}
@@ -176,23 +104,33 @@ func Install(repoRoot string) ([]string, error) {
 				}
 			}
 		}
-		if err := providerfs.WriteRegularFileAtomic(path, []byte(script(name, cxtBin)), 0o755); err != nil {
+		if err := providerfs.WriteRegularFileAtomic(path, []byte(script(cxtBin)), 0o755); err != nil {
 			return installed, err
 		}
 		installed = append(installed, name)
 	}
-	// Registration survives loss of the working replica. Do not create it for
-	// directory-only residue left by an old global hook.
-	if _, err := providerfs.ReadRepoFile(repoRoot, ".cxt/HEAD"); err == nil {
-		journal, err := branchjournal.Open(context.Background(), repoRoot)
-		if err != nil {
-			return installed, err
-		}
-		if err := journal.Enable(); err != nil {
-			return installed, err
-		}
+	if err := remove(dir, earlierHookNames); err != nil {
+		return installed, err
 	}
 	return installed, nil
+}
+
+// Upgrade replaces hook scripts an earlier version installed. It does nothing
+// in a repository where cxt installed no hook, and nothing when every script
+// is already this version's.
+func Upgrade(repoRoot string) error {
+	dir, err := hooksDir(repoRoot)
+	if err != nil {
+		return err
+	}
+	for _, name := range append(append([]string{}, HookNames...), earlierHookNames...) {
+		b, err := providerfs.ReadRegularFile(filepath.Join(dir, name))
+		if err == nil && strings.Contains(string(b), Marker) && !strings.Contains(string(b), version+" ") {
+			_, err := Install(repoRoot)
+			return err
+		}
+	}
+	return nil
 }
 
 // Uninstall removes cxt hooks and restores preserved user hooks (.pre-cxt).
@@ -201,7 +139,12 @@ func Uninstall(repoRoot string) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range HookNames {
+	return remove(dir, append(append([]string{}, HookNames...), earlierHookNames...))
+}
+
+// remove deletes the named hooks that cxt manages and puts back what the user had.
+func remove(dir string, names []string) error {
+	for _, name := range names {
 		path := filepath.Join(dir, name)
 		b, err := providerfs.ReadRegularFile(path)
 		if err != nil || !strings.Contains(string(b), Marker) {

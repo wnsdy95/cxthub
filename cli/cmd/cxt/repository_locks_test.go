@@ -17,8 +17,8 @@ func TestCommandRootLocksUseRequestedReplicaAndWorktree(test *testing.T) {
 	worktree := test.TempDir()
 	other := test.TempDir()
 	container := buildContainer(config{RepoRoot: configured}).clictr
-	if container.WithSecretsLock == nil || container.WithBackfillDaemon == nil {
-		test.Fatal("command locks not composed")
+	if container.WithSecretsLock == nil {
+		test.Fatal("the secrets lock is not composed")
 	}
 	blocked := errors.New("protected operation failed")
 	err := container.WithSecretsLock(ctx, worktree, func() error {
@@ -42,22 +42,5 @@ func TestCommandRootLocksUseRequestedReplicaAndWorktree(test *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(configured, ".cxt")); !errors.Is(err, os.ErrNotExist) {
 		test.Fatalf("secrets lock used configured/shared root: %v", err)
-	}
-	acquired, err := container.WithBackfillDaemon(ctx, worktree, func() error {
-		second, err := container.WithBackfillDaemon(ctx, worktree, func() error {
-			test.Fatal("duplicate historical daemon started")
-			return nil
-		})
-		if err != nil || second {
-			test.Fatalf("daemon exclusion changed: acquired=%t error=%v", second, err)
-		}
-		return blocked
-	})
-	if !acquired || !errors.Is(err, blocked) {
-		test.Fatalf("daemon result changed: acquired=%t error=%v", acquired, err)
-	}
-	acquired, err = container.WithBackfillDaemon(ctx, worktree, func() error { return nil })
-	if err != nil || !acquired {
-		test.Fatalf("daemon error leaked lock ownership: acquired=%t error=%v", acquired, err)
 	}
 }

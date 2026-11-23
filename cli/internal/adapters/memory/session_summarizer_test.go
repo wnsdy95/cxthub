@@ -17,8 +17,6 @@ type summarizerSourceFake struct {
 	err     error
 }
 
-func (f *summarizerSourceFake) Provider() domain.ProviderKind { return domain.ProviderClaude }
-
 func (f *summarizerSourceFake) ReadNative(_ context.Context, folder, _ string) (domain.NativeMemory, bool, error) {
 	f.folders = append(f.folders, folder)
 	return f.native, f.found, f.err

@@ -7,51 +7,6 @@ import (
 	"testing"
 )
 
-func TestEffectiveContextUsesLatestBoundaryAndPreservesArchive(t *testing.T) {
-	message := func(seq int, text string) Event {
-		return Event{Kind: EventMessage, Seq: seq, Role: "user", Blocks: []ContentBlock{{Type: "text", Text: text}}}
-	}
-	doc := CIRDocument{Events: []Event{
-		message(0, "archive-a"),
-		{Kind: EventCompaction, Seq: 1, Replacement: []Event{message(0, "replacement-one")}, ReplacementComplete: true},
-		message(2, "archive-b"),
-		{Kind: EventCompaction, Seq: 3, Replacement: []Event{message(0, "replacement-two")}, ReplacementComplete: true},
-		message(4, "after-latest"),
-	}}
-
-	active := doc.EffectiveContext()
-	if !doc.HasCompleteCompactionBoundary() {
-		t.Fatal("latest complete boundary was not reported as authoritative")
-	}
-	if len(doc.Events) != 5 || doc.Events[0].Blocks[0].Text != "archive-a" {
-		t.Fatal("effective projection mutated archival events")
-	}
-	if len(active.Events) != 2 || active.Events[0].Blocks[0].Text != "replacement-two" || active.Events[1].Blocks[0].Text != "after-latest" {
-		t.Fatalf("effective context = %+v", active.Events)
-	}
-}
-
-func TestEffectiveContextFallsBackToArchiveWhenLatestBoundaryIsIncomplete(t *testing.T) {
-	message := func(seq int, text string) Event {
-		return Event{Kind: EventMessage, Seq: seq, Role: "user", Blocks: []ContentBlock{{Type: "text", Text: text}}}
-	}
-	doc := CIRDocument{Events: []Event{
-		message(0, "archive-a"),
-		{Kind: EventCompaction, Seq: 1, Replacement: []Event{message(0, "known-old")}, ReplacementComplete: true},
-		message(2, "archive-b"),
-		{Kind: EventCompaction, Seq: 3, Replacement: []Event{message(0, "partial-new")}, ReplacementComplete: false},
-		message(4, "archive-c"),
-	}}
-
-	active := doc.EffectiveContext()
-	if doc.HasCompleteCompactionBoundary() {
-		t.Fatal("incomplete latest boundary was reported as authoritative")
-	}
-	if len(active.Events) != len(doc.Events) || active.Events[0].Blocks[0].Text != "archive-a" {
-		t.Fatalf("incomplete latest boundary did not fall back to archive: %+v", active.Events)
-	}
-}
-
 func TestCompactionEmptyReplacementSurvivesWireAndCanonicalSorting(t *testing.T) {
 	doc := CIRDocument{
 		Envelope: Envelope{CIRVersion: CIRVersionV2},

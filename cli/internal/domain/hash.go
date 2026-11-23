@@ -97,20 +97,17 @@ func canonicalEvents(events []Event) []Event {
 	return sorted
 }
 
-// ValidateSessionDocHash is the legacy-only production boundary. Dual readers
-// must explicitly use VerifySessionDocIdentity once their consumers are wired.
+// ValidateSessionDocHash verifies a document of the earlier identity. The
+// CLI itself no longer reads such documents; the fixture suite the CLI shares
+// byte for byte with the server still checks them, so the verifier stays.
 func ValidateSessionDocHash(doc SessionDoc) error {
-	return validateSessionDocHash(doc, nil)
-}
-
-func validateSessionDocHash(doc SessionDoc, observe func([]byte, int)) error {
 	if err := ValidateContentHash(doc.Hash); err != nil {
 		return err
 	}
 	if doc.Identity != DocumentIdentityLegacy {
 		return fmt.Errorf("%w: legacy document verifier requires absent identity", ErrUnsupportedDocumentIdentity)
 	}
-	canonical, err := canonicalBytes(doc.CIR, observe)
+	canonical, err := canonicalBytes(doc.CIR, nil)
 	if err != nil {
 		return err
 	}
@@ -118,13 +115,4 @@ func validateSessionDocHash(doc SessionDoc, observe func([]byte, int)) error {
 		return fmt.Errorf("%w: doc hash mismatch: got %s want %s", ErrHashMismatch, got, doc.Hash)
 	}
 	return nil
-}
-
-// MemoryDigestHash calculates the content hash of a memory object JSON shared by server/local.
-func MemoryDigestHash(digest MemoryDigest) (ContentHash, error) {
-	data, err := json.Marshal(digest)
-	if err != nil {
-		return "", err
-	}
-	return HashContent(data), nil
 }

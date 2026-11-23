@@ -94,7 +94,6 @@ type forkCodecFake struct {
 	err      error
 }
 
-func (f *forkCodecFake) Provider() domain.ProviderKind { return f.provider }
 func (f *forkCodecFake) Decode(context.Context, []byte) (domain.CIRDocument, error) {
 	return domain.CIRDocument{}, errors.New("not used")
 }
@@ -112,7 +111,6 @@ type forkMaterializerFake struct {
 	err      error
 }
 
-func (f *forkMaterializerFake) Provider() domain.ProviderKind { return f.provider }
 func (f *forkMaterializerFake) Materialize(_ context.Context, raw []byte, cwd string) (string, string, error) {
 	if f.err != nil {
 		return "", "", f.err

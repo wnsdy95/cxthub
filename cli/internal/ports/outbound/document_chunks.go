@@ -14,23 +14,3 @@ type DocumentChunks struct {
 	Representation domain.DocumentRepresentation
 	ReadChunk      func(context.Context, domain.ContentHash) ([]byte, error)
 }
-
-// ChunkedDocumentStore exposes a descriptor bound to the exact representation
-// whose complete canonical identity and CIR semantics were verified. Objects
-// remain retained throughout use. Authenticated validation receipts may be
-// reused only after checking the current stored bytes.
-//
-// False, nil means the representation is unsupported and use was not called.
-// All errors, including corruption and cancellation, must propagate without
-// fallback. The callback is synchronous and must not retain ReadChunk.
-type ChunkedDocumentStore interface {
-	WithVerifiedDocChunks(ctx context.Context, ref domain.DocumentRef, use func(DocumentChunks) error) (bool, error)
-}
-
-// ChunkedDocumentPusher negotiates and uploads missing bounded chunks before
-// finalizing one document. It never publishes snapshots, refs, or pendings.
-// False, nil means an unsupported peer, with no writes performed. Any other
-// failure must propagate; partial uploads must never trigger a legacy retry.
-type ChunkedDocumentPusher interface {
-	PushDocChunks(ctx context.Context, repoID string, doc DocumentChunks) (bool, error)
-}

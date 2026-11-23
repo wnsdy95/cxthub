@@ -1,24 +1,19 @@
-// Package cli contains the cxt CLI driver (domain model).
+// Package cli contains the cxt CLI driver.
 //
 // Registers user subcommands under the single entry point Run. Each command maps flags → DTO
 // and calls the corresponding inbound port, rendering the result to stdout.
 //
-// Implemented subcommands: setup / init(=repo) / remote / add / commit / save / list(=log) /
-// switch / checkout / fork / load / stash / push / pull / memorize(=memory) / tag /
-// config / login / logout / secrets / settings / hooks / claude·codex(agent wrapper) /
-// git-hook(internal).
-// There is no separate CLI memory-load command: `cxt memorize` writes memory,
-// while MCP memory_load reads it. CLI diff compares captured events with the frozen index.
+// Commands: setup / init(=repo) / remote / login / logout / config / secrets / settings / hooks /
+// segments and its verbs (push, log, remove, allow, doctor, refresh, archive, unarchive, resend,
+// fork), each of which is also a top-level command / git-hook (internal).
 package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -33,63 +28,21 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
-// Container is a bundle of inbound ports used by the CLI driver + author identifier.
+// Container is the bundle of ports and wiring the CLI driver uses.
 type Container struct {
-	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
-	WakeHistoricalSync      func(string)
-	WakeCommitCapture       func(string)
-	WakeFetchDiscovery      func(string)
-	CommitCapture           inbound.CommitCapture
-	SessionSelection        outbound.CommandSessionResolver
-	SessionInventory        outbound.ProviderSessionInventory
 	DeviceLoginClient       func(string) (outbound.DeviceLoginClient, error)
 	OpenLoginBrowser        func(string)
-	RequestCapture          func(context.Context, domain.ProviderKind, string, string, string, bool, bool) (bool, error)
-	ObserveLiveSession      func(context.Context, string, domain.ProviderKind, string) error
-	ProviderLaunch          ProviderLaunchHooks
-	PrepareAgent            inbound.PrepareAgentContext
-	ApplySelectedPull       func(context.Context, string) (outbound.SelectedPullReceipt, error)
-	PreviewRemoteRepair     func(context.Context, string, string, domain.ContentHash, string) (outbound.RemoteRepairPlan, error)
-	ApplyRemoteRepair       func(context.Context, string, domain.ContentHash, outbound.RemoteRepairPlan) (outbound.RemoteRepairReceipt, error)
-	CaptureRecovery         inbound.CaptureRecovery
 	ResolveConnection       func(context.Context, string) (domain.RepositoryConnection, error)
 	PrepareRemoteConnection func(context.Context, string, string, string) (PreparedRemoteConnection, error)
-	// PrepareCapturePush binds the supplied observed URL, credentials and repo; it must not reselect origin.
-	PrepareCapturePush     func(context.Context, string, CapturePushDestination, string) (inbound.SyncRepo, error)
-	ResolveSyncDestination func(context.Context, string, string) (SyncDestination, error)
-	// ResolveRepo identifies a configured replica without registering or mutating it.
+	// SetCaptureIdentity saves the identity that conversation documents are sent in, once the server confirmed it.
 	SetCaptureIdentity func(context.Context, string, domain.DocumentIdentity) error
-	SetRemoteEndpoint  func(context.Context, remotecfg.Observation, string, string, bool) error
-	ResolveRepo        func(context.Context, string) (domain.Repo, error)
-	Inspection         outbound.LocalReplicaInspector
-	WithSecretsLock    func(context.Context, string, func() error) error
-	WithBackfillDaemon func(context.Context, string, func() error) (bool, error)
-	SetHistoryPaused   func(context.Context, string, string, bool) (domain.HistoricalUploadControl, error) // retention pins untouched
-	Init               inbound.InitRepo
-	Save               inbound.SaveSession
-	Fork               inbound.ForkSession
-	Branches           inbound.BranchLifecycle
-	Checkout           inbound.CheckoutSession
-	Load               inbound.LoadSession
-	List               inbound.ListSessions
-	HistoryQuery       inbound.HistoryQuery
-	WorkingState       inbound.WorkingStateQuery
-	ContextDiff        inbound.ContextDiffQuery
-	Staging            inbound.Staging
-	IndexStash         inbound.StagingStash
-	ListIndexStashes   func(context.Context, string) ([]domain.StagingStash, error)
-	CodePosition       outbound.CodePosition
-	Memorize           inbound.Memorize
-	Sync               inbound.SyncRepo
-	Seed               inbound.SeedBranch
-	Tag                inbound.TagRef
-	Queries            inbound.LocalRefQueries
-	Stash              inbound.StashSession
-	Handoff            inbound.BranchHandoff
-	History            inbound.ContextHistory
-	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
-	// can promote the source branch context into the checked-out base timeline.
-	PRMerges outbound.PullRequestMergeResolver
+	SetRemoteEndpoint  func(context.Context, remotecfg.Observation, string, string) error
+	// ResolveRepo identifies the repository of a folder without registering or changing it.
+	ResolveRepo     func(context.Context, string) (domain.Repo, error)
+	WithSecretsLock func(context.Context, string, func() error) error
+	Init            inbound.InitRepo
+	// Connection registers the repository of a folder with its server.
+	Connection inbound.RepositoryConnector
 	// Settings is a remote client for setting bundles (outbound direct — thin utility path).
 	Settings interface {
 		PullSettings(ctx context.Context, repoID, kind string) (domain.SettingsBundle, error)
@@ -99,10 +52,6 @@ type Container struct {
 		PutSettingsObject(ctx context.Context, bundle domain.SettingsBundle) (domain.ContentHash, error)
 		GetSettingsObject(ctx context.Context, hash domain.ContentHash) (domain.SettingsBundle, error)
 	}
-	// Repack re-packs local doc storage into chunk CAS (legacy monolithic conversion + orphan chunk cleanup).
-	Repack func() (converted int, saved int64, err error)
-	// Identity is an author identifier used for snapshot author attribution (env CXT_NAME/EMAIL/TEAM).
-	Identity domain.TeamIdentity
 	// Segments reads agent session records and Git for the read-only segment report.
 	Segments inbound.SegmentReporter
 	// SegmentUpload uploads that report to the repository's server, one report per session.
@@ -126,23 +75,26 @@ type Container struct {
 	SegmentCollectorState func(ctx context.Context, cwd string) (domain.CollectorState, error)
 }
 
+// segmentVerbs are the session commands that are also top-level commands:
+// `cxt push` is `cxt segments push`.
+var segmentVerbs = map[string]bool{"push": true, "log": true, "remove": true, "allow": true, "doctor": true, "refresh": true,
+	"archive": true, "unarchive": true, "resend": true, "fork": true}
+
+// CanonicalArgs rewrites a top-level session command to its `segments` form,
+// so that both spellings are parsed and run by the same code.
+func CanonicalArgs(args []string) []string {
+	if len(args) < 2 || !segmentVerbs[args[1]] {
+		return args
+	}
+	out := append([]string{args[0], "segments"}, args[1:]...)
+	return out
+}
+
 // Run is the CLI entry point. Parses args(=os.Args) to execute the corresponding subcommand.
 func Run(c *Container, args []string) error {
+	args = CanonicalArgs(args)
 	if handled, err := PreflightArgs(args); handled || err != nil {
 		return err
-	}
-	if intent, recognized, err := ParseLaunchIntent(args[1:]); recognized {
-		if err != nil {
-			return err
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		if c == nil {
-			return fmt.Errorf("provider launch composition unavailable")
-		}
-		return RunProviderLaunch(context.Background(), cwd, intent, c.ProviderLaunch)
 	}
 	cmd := args[1]
 	parsed := parsedCommand{name: cmd}
@@ -157,26 +109,6 @@ func Run(c *Container, args []string) error {
 	ctx := context.Background()
 	rest := args[2:]
 	cwd, _ := os.Getwd()
-	var inspection outbound.LocalReplicaInspector
-	if c != nil {
-		inspection = c.Inspection
-	}
-	if cmd == "sync" && (parsed.first() == "pause-history" || parsed.first() == "resume-history") {
-		return RunHistoricalUploadsPause(ctx, c, cwd, parsed.first() == "pause-history", os.Stdout)
-	}
-	if cmd == "sync" {
-		return RunSyncStatus(ctx, inspection, cwd, parsed.has("--json"), os.Stdout)
-	}
-	if cmd == "capture" {
-		repo, err := resolveLocalRepo(ctx, c, cwd)
-		if err != nil {
-			return err
-		}
-		return RunCaptureRecovery(ctx, c, cwd, string(repo.ID), rest, os.Stdout)
-	}
-	if cmd == "doctor" || (cmd == "branch" && parsed.first() == "operations") {
-		return RunDiagnostics(ctx, inspection, cwd, args[1:], os.Stdout)
-	}
 	if cmd == "segments" {
 		var reporter inbound.SegmentReporter
 		var uploader inbound.SegmentUploader
@@ -213,25 +145,6 @@ func Run(c *Container, args []string) error {
 		}
 		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
-	if cmd == "branch" && parsed.first() == "recover" {
-		if err := confirmOrphanRecovery(ctx, c, cwd, parsed.last()); err != nil {
-			return err
-		}
-		return replayBranchCommand(ctx, c, cwd)
-	}
-	if cmd == "branch" && parsed.first() == "replay" {
-		return replayBranchCommand(ctx, c, cwd)
-	}
-	if cmd == "push" || cmd == "pull" {
-		fmt.Fprintf(os.Stderr, "%s: checking queued branch and PR operations\n", cmd)
-	}
-	// An explicit push must finish only its selected local replay before any publisher.
-	selectedPush := cmd == "push" && len(parsed.positionals) == 2
-	if !selectedPush && (parsed.effect == commandContextWrite || parsed.effect == commandSync) && c.History != nil {
-		if err := replayBranchOperations(ctx, c, cwd); err != nil {
-			hookWarn("branch operation remains queued: %v", err)
-		}
-	}
 
 	switch cmd {
 	case "init", "repo": // 'cxt repo create <url>' also routes to init
@@ -243,9 +156,9 @@ func Run(c *Container, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("initialized cxt store: %s (repo %s)\n", out.LocalStorePath, shortHash(out.RepoID))
+		fmt.Printf("cxt is set up here: %s (repo %s)\n", out.LocalStorePath, shortHash(out.RepoID))
 		if added, gerr := githooks.EnsureGitignore(cwd); gerr == nil && len(added) > 0 {
-			fmt.Printf(".gitignore adds cxt commit prohibition list: %s\n", strings.Join(added, " "))
+			fmt.Printf(".gitignore now keeps the files of cxt out of Git: %s\n", strings.Join(added, " "))
 		}
 		_ = githooks.EnsureExcluded(cwd) // .git/info/exclude local augmentation (user can remove from .gitignore and it persists)
 		if n, created := capture.GenerateFromEnv(cwd); created {
@@ -254,9 +167,9 @@ func Run(c *Container, args []string) error {
 		// git hook auto-install — "using git means cxt comes with it" (--no-hooks to opt out).
 		if !parsed.has("--no-hooks") {
 			if installed, herr := githooks.Install(cwd); herr == nil {
-				fmt.Printf("installed git hooks: %s (git commit/checkout/push automatically triggers cxt)\n", strings.Join(installed, ", "))
+				fmt.Printf("installed git hooks: %s (each only wakes the reading of your sessions)\n", strings.Join(installed, ", "))
 			} else {
-				fmt.Printf("hint: git hooks not installed (%v) — connect to cxt hooks install in git repo\n", herr)
+				fmt.Printf("hint: git hooks not installed (%v) — run cxt hooks install inside the Git repository\n", herr)
 			}
 		}
 		// --remote (or repo create <url>) continues execution to register origin —
@@ -278,165 +191,12 @@ func Run(c *Container, args []string) error {
 	case "remote":
 		return runRemote(ctx, c, cwd, rest)
 
-	case "branch":
-		if parsed.first() == "" || parsed.first() == "list" {
-			var refs []domain.Ref
-			var err error
-			if c.Queries != nil {
-				refs, err = c.Queries.Refs(ctx, cwd)
-			} else {
-				var out inbound.ListOutput
-				out, err = c.List.List(ctx, inbound.ListInput{})
-				refs = out.Refs
-			}
-			if err != nil {
-				return err
-			}
-			refs = append([]domain.Ref(nil), refs...)
-			sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
-			head := ""
-			for _, ref := range refs {
-				if ref.Kind == domain.RefHEAD {
-					head = ref.Symbolic
-				}
-			}
-			for _, ref := range refs {
-				if ref.Kind != domain.RefBranch {
-					continue
-				}
-				mark := " "
-				if ref.Name == head {
-					mark = "*"
-				}
-				fmt.Printf("%s %s\t%s\n", mark, ref.Name, shortHash(ref.Target))
-			}
-			return nil
-		}
-		action := parsed.first()
-		branch := ""
-		pos := parsed.positionals
-		if len(pos) > 1 {
-			branch = pos[1]
-		}
-		switch action {
-		case "archive":
-			if branch == "" {
-				return fmt.Errorf("usage: cxt branch archive <name>")
-			}
-			if gitOut(cwd, "show-ref", "--verify", "refs/heads/"+branch) != "" {
-				return fmt.Errorf("Git branch %q still exists — delete it first, then archive its context", branch)
-			}
-			out, err := c.Branches.Archive(ctx, inbound.BranchArchiveInput{Cwd: cwd, Branch: branch})
-			if err != nil {
-				return err
-			}
-			if out.LocalOnly {
-				fmt.Printf("detached local tracking branch %q (server branch retained)\n", out.Branch)
-			} else {
-				fmt.Printf("archived context branch %q at %s (history preserved)\n", out.Branch, shortHash(out.Target))
-			}
-			spawnBranchStateSync(cwd)
-			return nil
-		case "restore":
-			if branch == "" {
-				return fmt.Errorf("usage: cxt branch restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]")
-			}
-			out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
-				From: branch, TargetProvider: parsed.flags["--provider"], Mode: loadModeOr(cwd, parsed.flags["--mode"]), Cwd: cwd,
-			})
-			if err != nil {
-				return err
-			}
-			printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
-			if out.ActivatedBranch {
-				spawnBranchStateSync(cwd)
-			}
-			return nil
-		default:
-			return fmt.Errorf("usage: cxt branch archive|restore <name>")
-		}
-
-	case "repack":
-		// Repack large transcript and memory objects into their storage-only chunk
-		// CAS forms. Content identities and the wire protocol remain unchanged.
-		if c.Repack == nil {
-			return fmt.Errorf("repack unsupported build")
-		}
-		n, saved, err := c.Repack()
-		if err != nil {
-			return err
-		}
-		fmt.Printf("repacked %d object(s), reclaimed %.1f MB\n", n, float64(saved)/1e6)
-		return nil
-
-	case "add":
-		return runStage(ctx, c, cwd, parsed)
-
-	case "commit":
-		return runStagedCommit(ctx, c, cwd, parsed)
-
-	case "restore":
-		return runUnstage(ctx, c, cwd, parsed)
-
-	case "switch":
-		// git switch equivalent: switch <branch> = checkout, switch -c <new> = checkout -b.
-		out, err := manualCheckout(ctx, c, inbound.CheckoutInput{
-			From:      parsed.first(),
-			NewBranch: parsed.flags["-c"],
-			Mode:      loadModeOr(cwd, parsed.flags["--mode"]),
-			Cwd:       cwd,
-		})
-		if err != nil {
-			return err
-		}
-		printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
-		if out.ActivatedBranch {
-			spawnBranchStateSync(cwd)
-		}
-		return nil
-
 	case "config":
-		// cxt config <key> [value] — local preferences; root capture requires fresh confirmation.
+		// cxt config <key> [value] — local preferences; the root document identity requires fresh confirmation.
 		key := parsed.first()
 		val := parsed.last()
 		hasVal := len(parsed.positionals) == 2
 		switch key {
-		case "checkout.mode":
-			if hasVal {
-				if err := remotecfg.SetCheckoutMode(ctx, cwd, val); err != nil {
-					return err
-				}
-			}
-			fmt.Printf("checkout.mode = %s\n", remotecfg.CheckoutMode(cwd))
-			return nil
-		case "load.mode":
-			// Retained legacy preference. Managed input always uses server main.
-			if hasVal {
-				if val == "default" {
-					val = ""
-				}
-				if err := remotecfg.SetLoadMode(ctx, cwd, val); err != nil {
-					return err
-				}
-			}
-			cur := remotecfg.LoadMode(cwd)
-			if cur == "" {
-				cur = "structured memory from server main (default)"
-			}
-			fmt.Printf("load.mode = %s; archive replay requires an explicit --mode\n", cur)
-			return nil
-		case "boundary.enforce":
-			// session isolation process termination policy on switch (kill|none). "default" to disable (kill).
-			if hasVal {
-				if val == "default" {
-					val = ""
-				}
-				if err := remotecfg.SetBoundaryEnforce(ctx, cwd, val); err != nil {
-					return err
-				}
-			}
-			fmt.Printf("boundary.enforce = %s\n", remotecfg.BoundaryEnforce(cwd))
-			return nil
 		case "capture.identity":
 			if hasVal {
 				if val == "default" || val == "legacy" {
@@ -462,22 +222,6 @@ func Run(c *Container, args []string) error {
 				display = "legacy"
 			}
 			fmt.Printf("capture.identity = %s\n", display)
-			return nil
-		case "capture.debounce":
-			// hook Stop capture debounce window (seconds). "default"/0 to disable (60 seconds).
-			if hasVal {
-				if val == "default" {
-					val = "0"
-				}
-				sec := 0
-				if _, serr := fmt.Sscanf(val, "%d", &sec); serr != nil {
-					return fmt.Errorf("capture.debounce must be an integer in seconds: %q", val)
-				}
-				if err := remotecfg.SetCaptureDebounce(ctx, cwd, sec); err != nil {
-					return err
-				}
-			}
-			fmt.Printf("capture.debounce = %s\n", remotecfg.CaptureDebounce(cwd))
 			return nil
 		case "segments.auto":
 			// Whether hooks wake the session report collector (on|off). "default" returns to on.
@@ -545,7 +289,7 @@ func Run(c *Container, args []string) error {
 			}
 			return nil
 		default:
-			return fmt.Errorf("supported keys: checkout.mode | load.mode | boundary.enforce | capture.debounce | capture.identity | secrets.scrub | secrets.redact | secrets.minlen")
+			return fmt.Errorf("supported keys: segments.auto | capture.identity | secrets.scrub | secrets.redact | secrets.minlen")
 		}
 
 	case "login":
@@ -578,54 +322,6 @@ func Run(c *Container, args []string) error {
 		fmt.Printf("✓ %s logout (local token deletion)\n", host)
 		return nil
 
-	case "fsck":
-		// Reference reachability audit (read-only): The server calculates the
-		// reachability set for all refs and pending sessions, then reports
-		// unreferenced snapshots, missing parents, and roots. No changes are made.
-		if err := requireRemote(cwd); err != nil {
-			return err
-		}
-		repo, cerr := resolveLocalRepo(ctx, c, cwd)
-		if cerr != nil {
-			return cerr
-		}
-		rep, ferr := c.Settings.(interface {
-			Fsck(ctx context.Context, repoID string) (backendclient.FsckReport, error)
-		}).Fsck(ctx, string(repo.ID))
-		if ferr != nil {
-			return ferr
-		}
-		fmt.Print(formatFsckReport(rep))
-		return nil
-
-	case "reflog":
-		// Reference movement log (read-only): Each ref's movement history, newest first. Tips that became unreachable due to ref movements can be recovered from the old column.
-		if err := requireRemote(cwd); err != nil {
-			return err
-		}
-		repo, cerr := resolveLocalRepo(ctx, c, cwd)
-		if cerr != nil {
-			return cerr
-		}
-		entries, ferr := c.Settings.(interface {
-			Reflog(ctx context.Context, repoID string) ([]backendclient.RefLogEntry, error)
-		}).Reflog(ctx, string(repo.ID))
-		if ferr != nil {
-			return ferr
-		}
-		if len(entries) == 0 {
-			fmt.Println("No reference movement log")
-			return nil
-		}
-		for _, e := range entries {
-			old := e.Old
-			if old == "" {
-				old = "(new)"
-			}
-			fmt.Printf("%s %s/%s  %s → %s\n", e.CreatedAt, e.Kind, e.Name, old, e.New)
-		}
-		return nil
-
 	case "secrets":
 		// Share .cxtsecrets with end-to-end encryption: push encrypts the local file for the server;
 		// pull decrypts server ciphertext into local .cxtsecrets. The passphrase never reaches the server.
@@ -644,7 +340,7 @@ func Run(c *Container, args []string) error {
 			return err
 		}
 		cwd = roots.WorktreeRoot
-		conn, err := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd})
+		conn, err := c.Connection.Connect(ctx, cwd)
 		if err != nil {
 			return err
 		}
@@ -693,7 +389,7 @@ func Run(c *Container, args []string) error {
 			fmt.Printf("current: claude=%s agents=%s codex=%s\n", shortHash(cur1), shortHash(cur2), shortHash(cur3))
 			backups := loadBackups(cwd)
 			if len(backups) == 0 {
-				fmt.Println("(No backup — Folder is automatically replaced by branch move/rollback)")
+				fmt.Println("(No backup — one is kept each time cxt settings pull or cxt setup replaces a settings folder)")
 				return nil
 			}
 			for i, b := range backups {
@@ -715,11 +411,12 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
-		repo, err := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd})
+		repo, err := c.Connection.Connect(ctx, cwd)
 		if err != nil {
 			return err
 		}
 		applied := 0
+		keep := rememberSettings(ctx, c, cwd, "before settings pull")
 		for _, kind := range []string{"claude", "agents", "codex"} {
 			n, aerr := applySettings(ctx, c, cwd, string(repo.Repo.ID), kind)
 			if aerr != nil {
@@ -727,6 +424,7 @@ func Run(c *Container, args []string) error {
 					continue
 				}
 				if applied > 0 {
+					keep()
 					return fmt.Errorf("settings pull %s failed after applying %d file(s); earlier bundles remain applied: %w", kind, applied, aerr)
 				}
 				return fmt.Errorf("settings pull %s: %w", kind, aerr)
@@ -735,6 +433,10 @@ func Run(c *Container, args []string) error {
 				fmt.Printf("applied .%s/ — %d files overwritten\n", kind, n)
 				applied += n
 			}
+		}
+		if applied > 0 {
+			keep()
+			fmt.Println("the folders as they were are kept: cxt settings list, cxt settings restore")
 		}
 		if applied == 0 {
 			fmt.Println("no team settings to apply — upload claude/agents/codex folder to web About ⚙")
@@ -749,7 +451,7 @@ func Run(c *Container, args []string) error {
 				_ = githooks.EnsureIgnored(state.Root)
 			}
 			if !state.GitRepository || !state.Initialized {
-				return fmt.Errorf("cxt repository is not initialized — run 'cxt init' first")
+				return fmt.Errorf("cxt is not set up in this repository — run 'cxt setup' or 'cxt init' first")
 			}
 			installed, err := githooks.Install(cwd)
 			if err != nil {
@@ -761,7 +463,7 @@ func Run(c *Container, args []string) error {
 			if err := githooks.Uninstall(cwd); err != nil {
 				return err
 			}
-			fmt.Println("removed cxt git hooks (previous user hooks restored)")
+			fmt.Println("removed the git hooks of cxt (your own hooks are back in place)")
 			return nil
 		default:
 			return fmt.Errorf("usage: cxt hooks install|uninstall")
@@ -771,409 +473,9 @@ func Run(c *Container, args []string) error {
 		// git hook script entry point (fail-open) — not for direct invocation.
 		return runGitHook(ctx, c, cwd, rest)
 
-	case "save":
-		if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
-			return err
-		}
-		target, err := c.commandCapture(ctx, cwd, parsed.flags["--provider"])
-		if err != nil {
-			return err
-		}
-		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: parsed.flags["-m"], Author: c.Identity})
-		if err != nil {
-			return err
-		}
-		fmt.Printf("saved snapshot %s on branch %q\n", shortHash(out.SnapshotID), out.Branch)
-		// Automatically memorize the commit path (audit finding #5: consistency across storage paths). Best-effort.
-		if mout, merr := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: target.Provider, Ref: string(out.SnapshotID)}); merr == nil {
-			fmt.Printf("memorized → %s (included in next push)\n", shortHash(mout.MemoryHash))
-		}
-		return nil
-
-	case "status":
-		if c.WorkingState == nil {
-			return fmt.Errorf("working state query unavailable")
-		}
-		out, err := c.WorkingState.Status(ctx, cwd)
-		if err != nil {
-			return err
-		}
-		if parsed.has("--json") {
-			return json.NewEncoder(os.Stdout).Encode(out)
-		}
-		printWorkingState(out)
-		return nil
-
-	case "diff":
-		if c.ContextDiff == nil {
-			return fmt.Errorf("context diff query unavailable")
-		}
-		out, err := c.ContextDiff.Diff(ctx, inbound.ContextDiffInput{Cwd: cwd, Staged: parsed.has("--staged")})
-		if err != nil {
-			return err
-		}
-		if parsed.has("--json") {
-			return json.NewEncoder(os.Stdout).Encode(out)
-		}
-		printContextDiff(out)
-		return nil
-
-	case "list", "log":
-		if c.HistoryQuery == nil {
-			return fmt.Errorf("history query service unavailable")
-		}
-		out, err := c.HistoryQuery.QueryHistory(ctx, inbound.HistoryQueryInput{Cwd: cwd, Ref: parsed.first(), Branch: parsed.flags["--branch"], All: parsed.has("--all"), Retained: parsed.has("--retained"), Server: parsed.has("--server")})
-		if err != nil {
-			return err
-		}
-		if parsed.has("--json") {
-			return json.NewEncoder(os.Stdout).Encode(out)
-		}
-		fmt.Printf("history: %s · %s · %d snapshots\n", out.Selection.Source, out.Selection.Scope, len(out.Snapshots))
-		if !out.Complete {
-			fmt.Printf("coverage incomplete: %d missing ancestors; inspect --json for server review reasons\n", len(out.Missing))
-		}
-		if len(out.Snapshots) == 0 {
-			fmt.Println("(no snapshots in this scope)")
-			return nil
-		}
-		for _, snap := range out.Snapshots {
-			fmt.Printf("%s  %-20s  %s\n", shortHash(snap.ID), snap.Branch, snap.Message)
-		}
-		return nil
-
-	case "checkout":
-		out, err := manualCheckout(ctx, c, inbound.CheckoutInput{
-			From:           parsed.first(),
-			NewBranch:      parsed.flags["-b"],
-			TargetProvider: parsed.flags["--provider"],
-			Mode:           loadModeOr(cwd, parsed.flags["--mode"]),
-			Cwd:            cwd,
-		})
-		if err != nil {
-			return err
-		}
-		printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
-		if out.ActivatedBranch {
-			spawnBranchStateSync(cwd)
-		}
-		return nil
-
-	case "fork":
-		// fork = checkout -b (branch + restore). NewBranch is --as.
-		out, err := manualCheckout(ctx, c, inbound.CheckoutInput{
-			From:           parsed.first(),
-			NewBranch:      parsed.flags["--as"],
-			TargetProvider: parsed.flags["--provider"],
-			Mode:           loadModeOr(cwd, parsed.flags["--mode"]),
-			Cwd:            cwd,
-		})
-		if err != nil {
-			return err
-		}
-		fmt.Printf("forked → branch %q (head %s)\n", out.Branch, shortHash(out.Head))
-		printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
-		return nil
-
-	case "load":
-		if parsed.has("--output") || parsed.has("--context-budget") {
-			return runAgentArtifact(ctx, c, cwd, parsed)
-		}
-		mode := ""
-		if !parsed.has("--work-state") {
-			mode = loadModeOr(cwd, parsed.flags["--mode"])
-		}
-		out, err := c.Load.Load(ctx, inbound.LoadInput{
-			Ref:            parsed.first(),
-			TargetProvider: parsed.flags["--provider"],
-			Mode:           mode,
-			WorkStatePath:  parsed.flags["--work-state"],
-			Cwd:            cwd,
-		})
-		if err != nil {
-			return err
-		}
-		printRestore("", out.Fidelity, out.ResumeCmd, out.WrittenPath)
-		if out.TrimmedEvents > 0 {
-			fmt.Printf("  → Context window budget reduced to recent history (omitted %d old events)\n", out.TrimmedEvents)
-		}
-		return nil
-
-	case "push":
-		if c.WakeCommitCapture != nil {
-			defer c.WakeCommitCapture(cwd)
-		}
-		var finishDiagnostics func()
-		ctx, finishDiagnostics = beginPushDiagnostics(ctx)
-		defer finishDiagnostics()
-		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
-		if err != nil {
-			return err
-		}
-		c = selected
-		if selectedRef == "" {
-			replaySavedPRDiscovery(ctx, c, cwd)
-			if remoteName == "origin" {
-				replaySavedMergeDeliveries(ctx, c, cwd)
-			}
-		}
-		var publication *domain.PublicationScope
-		if selectedRef == "" {
-			if err := replayRewriteHistory(ctx, c, cwd); err != nil {
-				return fmt.Errorf("rewritten context associations remain pending: %w", err)
-			}
-		} else {
-			scope, err := prepareManualPublication(ctx, c, cwd, selectedRef)
-			if err != nil {
-				return fmt.Errorf("selected context publication remains pending: %w", err)
-			}
-			publication = &scope
-		}
-		force := parsed.has("--force") || parsed.has("-f")
-		appendDiverged := parsed.has("--append")
-		defer wakeHistoricalSync(c, cwd)
-		// A manual push is the user's retry: give exhausted deferred
-		// publications for the selected branch (or all) a fresh budget, and
-		// wake the capture worker to deliver them afterwards.
-		// Deferred publications are bound to origin.
-		if remoteName == "origin" {
-			if rearmed, rearmErr := rearmCapturePushes(ctx, cxtRepoRoot(ctx, cwd), strings.TrimPrefix(selectedRef, "refs/heads/")); rearmErr != nil {
-				hookWarn("deferred context pushes could not be re-armed: %v", rearmErr)
-			} else if rearmed > 0 {
-				fmt.Fprintf(os.Stderr, "push: re-armed %d exhausted deferred context push(es)\n", rearmed)
-				if c.WakeCommitCapture != nil {
-					defer c.WakeCommitCapture(cwd)
-				}
-			}
-		}
-		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
-		var out inbound.SyncOutput
-		err = runForegroundUpload(pushCtx, cwd, foregroundUploadStall, os.Stderr, func(uploadCtx context.Context) (err error) {
-			out, err = c.Sync.Push(uploadCtx, inbound.SyncInput{Cwd: cwd, Publication: publication, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
-			return err
-		})
-		if err != nil {
-			if uploadInterrupted(err) {
-				fmt.Fprintln(os.Stderr, "push: chunks already accepted by the server are kept; rerun the same command to resume the remaining upload")
-			}
-			if errors.Is(err, domain.ErrSyncConflict) {
-				if strings.Contains(err.Error(), "memory attachment") {
-					return fmt.Errorf("! [rejected] %w (memory fork)\nhint: Preview the specific memory pointer with 'cxt repair --preview --snapshot <hash> --reason <text> --output <file>', then apply its exact plan ID.\nhint: Then run 'cxt memorize' and 'cxt push' to project the local session again", err)
-				}
-				return fmt.Errorf("! [rejected] %w (non-fast-forward)\nhint: Remote commit not found in local. Use 'cxt push --append' to rebase (amend) onto remote head,\nor 'cxt pull' followed by push again.\nhint: To force overwrite, use 'cxt push --force' (remote history may be lost)", err)
-			}
-			return err
-		}
-		fmt.Printf("pushed %d snapshot(s), checked %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
-		if out.BackfillPending > 0 {
-			if out.BackfillPaused {
-				fmt.Printf("retained history: %d snapshot(s) queued; background upload is paused (resume with 'cxt sync resume-history', or upload now with 'cxt push --wait-history')\n", out.BackfillPending)
-			} else {
-				fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
-			}
-		}
-		if appendDiverged {
-			// Server grafted remote head onto local ancestry — pull will reflect in local history.
-			fmt.Println("appended: rebased onto remote head — 'cxt pull' will connect local history")
-		}
-		return nil
-
-	case "pull":
-		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
-		if err != nil {
-			return err
-		}
-		c = selected
-		if selectedRef == "" {
-			replaySavedPRDiscovery(ctx, c, cwd)
-			if remoteName == "origin" {
-				replaySavedMergeDeliveries(ctx, c, cwd)
-			}
-		}
-		force := parsed.has("--force") || parsed.has("-f")
-		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Progress: syncProgressPrinter(os.Stderr)})
-		if err != nil {
-			return err
-		}
-		fmt.Printf("pulled %d snapshot(s), %d ref(s) from %s\n", out.Pulled, len(out.NewRefs), remoteName)
-		if len(out.Conflicts) > 0 {
-			return fmt.Errorf("%w: ! [conflict] %s — merge canceled (local kept)\nhint: Preview a specific pointer with 'cxt repair --preview --ref <branch> --reason <text> --output <file>' before applying its exact plan ID", domain.ErrSyncConflict, strings.Join(out.Conflicts, ", "))
-		}
-		if selectedRef == "" {
-			if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
-				return err
-			}
-		}
-		if c.ApplySelectedPull == nil {
-			return fmt.Errorf("selected-code pull application unavailable")
-		}
-		receipt, err := c.ApplySelectedPull(ctx, cwd)
-		if err != nil {
-			return fmt.Errorf("remote observation updated; selected context was not applied: %w", err)
-		}
-		fmt.Printf("applied selected-code context and memory receipt %s (provider conversation unchanged)\n", receipt.Plan.ID)
-		return nil
-
-	case "fetch":
-		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
-		if err != nil {
-			return err
-		}
-		c = selected
-		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, FetchOnly: true, Progress: syncProgressPrinter(os.Stderr)})
-		if err != nil {
-			return err
-		}
-		fmt.Printf("fetched %d snapshot(s) from %s; working context, memory and branch refs unchanged\n", out.Pulled, remoteName)
-		return nil
-
-	case "repair":
-		return runRemoteRepair(ctx, c, cwd, parsed)
-
-	case "stash":
-		if parsed.has("--staged") {
-			return runIndexStash(ctx, c, cwd, parsed)
-		}
-		// git stash equivalent: save active session and return to branch head (commit chain) context.
-		switch parsed.first() {
-		case "", "push":
-			target, err := c.commandCapture(ctx, cwd, parsed.flags["--provider"])
-			if err != nil {
-				return err
-			}
-			out, err := c.Stash.Stash(ctx, inbound.StashInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: parsed.flags["-m"], Author: c.Identity})
-			if err != nil {
-				if err == domain.ErrNoActiveSession {
-					return fmt.Errorf("no active session to stash (Git equivalent: \"No local changes to save\")")
-				}
-				return err
-			}
-			fmt.Printf("Saved context stash@{0} on %s: %s\n", out.Branch, shortHash(out.StashID))
-			if out.RestoredHead {
-				fmt.Printf("cxt: returned to %q head (commit-chain) context\n", out.Branch)
-				if out.ResumeCmd != "" {
-					fmt.Printf("  → resume: %s\n", out.ResumeCmd)
-				}
-			}
-			return nil
-		case "pop":
-			out, err := c.Stash.StashPop(ctx, cwd)
-			if err != nil {
-				if err == domain.ErrNotFound {
-					return fmt.Errorf("stash is empty")
-				}
-				return err
-			}
-			fmt.Printf("Dropped stash@{0} (%s) — context restored [fidelity: %s]\n", shortHash(out.Entry.Snapshot), out.Fidelity)
-			if out.ResumeCmd != "" {
-				fmt.Printf("  → resume: %s\n", out.ResumeCmd)
-			}
-			return nil
-		case "list":
-			var entries []domain.StashEntry
-			var err error
-			if c.Queries != nil {
-				entries, err = c.Queries.StashList(ctx, cwd)
-			} else {
-				entries, err = c.Stash.StashList(ctx, cwd)
-			}
-			if err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				fmt.Println("(no stash)")
-				return nil
-			}
-			for i, e := range entries {
-				fmt.Printf("stash@{%d}: On %s: %s (%s)\n", i, e.Branch, e.Message, shortHash(e.Snapshot))
-			}
-			return nil
-		default:
-			return fmt.Errorf("usage: cxt stash [push [-m msg] [--provider claude|codex]|pop|list]")
-		}
-
-	case "memorize", "memory":
-		// Current branch head context distilled (compressed memory) → attached to snapshot.
-		// Push sends the attached memory to the server with the raw data.
-		claims, err := readMemoryClaims(parsed.flags["--claims"])
-		if err != nil {
-			return err
-		}
-		out, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: parsed.flags["--provider"], Ref: parsed.first(), Claims: claims})
-		if err != nil {
-			if err == domain.ErrNotFound {
-				return fmt.Errorf("no snapshot to distill — create a snapshot first using git commit (or cxt commit)")
-			}
-			return err
-		}
-		fmt.Printf("memorized %s → memory %s (included in next push)\n", shortHash(out.SnapshotID), shortHash(out.MemoryHash))
-		return nil
-
-	case "tag":
-		// git tag handling: cxt tag → list, cxt tag <name> [ref] → create (immutable).
-		name := parsed.first()
-		if name == "" {
-			var tags []domain.Ref
-			var err error
-			if c.Queries != nil {
-				tags, err = c.Queries.Tags(ctx, cwd)
-			} else {
-				tags, err = c.Tag.Tags(ctx, cwd)
-			}
-			if err != nil {
-				return err
-			}
-			if len(tags) == 0 {
-				fmt.Println("(No tag — cxt tag <name> [ref])")
-				return nil
-			}
-			for _, t := range tags {
-				fmt.Printf("%s\t%s\n", t.Name, shortHash(t.Target))
-			}
-			return nil
-		}
-		var ref string
-		if pos := parsed.positionals; len(pos) > 1 {
-			ref = pos[1]
-		}
-		out, err := c.Tag.Tag(ctx, inbound.TagInput{Cwd: cwd, Name: name, Ref: ref})
-		if err != nil {
-			return err
-		}
-		fmt.Printf("tag %q → %s (push to server)\n", out.Name, shortHash(out.Target))
-		return nil
-
 	default:
 		return unknownCommandError(cmd)
 	}
-}
-
-// formatFsckReport deliberately distinguishes reachability from integrity.
-// An unreachable object is still stored and may be a superseded capture or
-// intentionally detached history. A missing parent is the structural
-// corruption class that fsck must call out as an error.
-func formatFsckReport(rep backendclient.FsckReport) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Snapshots %d · Reach %d · Roots %d · Unreachable %d · Missing %d\n",
-		rep.Total, rep.Reachable, len(rep.Roots), len(rep.Unreachable), len(rep.DanglingParents))
-	for _, u := range rep.Unreachable {
-		fmt.Fprintf(&b, "  unreachable (unreferenced): %s\n", u)
-	}
-	for _, d := range rep.DanglingParents {
-		fmt.Fprintf(&b, "  corrupt (missing parent): %s → %s\n", d.Snapshot, d.Missing)
-	}
-
-	if len(rep.Unreachable) == 0 && len(rep.DanglingParents) == 0 {
-		fmt.Fprintln(&b, "  ✓ No issues — all snapshots are referenced and no parents are missing")
-		return b.String()
-	}
-	if len(rep.Unreachable) > 0 {
-		fmt.Fprintln(&b, "  note: unreachable snapshots are preserved; they may be superseded captures or intentionally detached history")
-	}
-	if len(rep.DanglingParents) == 0 {
-		fmt.Fprintln(&b, "  ✓ No missing-parent corruption")
-	}
-	return b.String()
 }
 
 // requireRemote checks if the destination is set before push/pull.
@@ -1270,17 +572,12 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 	switch sub {
 	case "set-endpoint":
 		if len(pos) != 3 || c.SetRemoteEndpoint == nil {
-			return fmt.Errorf("usage: cxt remote set-endpoint <name> <https-api-endpoint> [--migrate-pending]")
+			return fmt.Errorf("usage: cxt remote set-endpoint <name> <https-api-endpoint>")
 		}
-		if err := c.SetRemoteEndpoint(ctx, observed, pos[1], pos[2], flagPresent(rest, "--migrate-pending")); err != nil {
+		if err := c.SetRemoteEndpoint(ctx, observed, pos[1], pos[2]); err != nil {
 			return err
 		}
 		fmt.Println("Transport endpoint verified and saved; repository identity unchanged.")
-		if flagPresent(rest, "--migrate-pending") {
-			fmt.Println("Exact prior transport reauthorized for pending deliveries; job identities and proofs retained.")
-		} else {
-			fmt.Println("Historical queued deliveries are not retargeted without --migrate-pending.")
-		}
 		return nil
 	case "add":
 		if len(pos) != 3 {
@@ -1332,7 +629,7 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		if name == "origin" {
 			switch {
 			case connectErr != nil:
-				fmt.Printf("⚠ Unable to connect to server (%v)\n  settings saved — will auto-register on first push when server is up.\n", connectErr)
+				fmt.Printf("⚠ Unable to connect to server (%v)\n  settings saved — the repository is registered the next time cxt setup runs with the server up.\n", connectErr)
 			case out.Repo.RepositoryID != "":
 				fmt.Printf("✓ Connected — server registration complete, bound to repository (%s). Visible on the web.\n", out.Repo.RepositoryID)
 			default:
@@ -1397,21 +694,6 @@ func flagPresent(args []string, name string) bool {
 	return false
 }
 
-// printRestore renders the load/checkout results (fidelity, resume command, or record path).
-func printRestore(branch, fidelity, resumeCmd, writtenPath string) {
-	if branch != "" {
-		fmt.Printf("checked out branch %q  [fidelity: %s]\n", branch, fidelity)
-	} else {
-		fmt.Printf("loaded  [fidelity: %s]\n", fidelity)
-	}
-	if resumeCmd != "" {
-		fmt.Printf("  → resume:  %s\n", resumeCmd)
-	}
-	if writtenPath != "" {
-		fmt.Printf("  → written: %s\n", writtenPath)
-	}
-}
-
 // positionals returns all positional arguments in order, excluding flags.
 func positionals(args []string) []string {
 	var out []string
@@ -1441,149 +723,58 @@ func firstPositional(args []string) string {
 
 var publicCommandNames = publicCommands()
 
-const usageText = `cxt — Git-style version control for coding-agent sessions
+const usageText = `cxt — your coding-agent sessions, kept with the Git commits they produced
 usage: cxt <command> [flags]
 
-  Capture recovery:
-  capture list [--json]      inspect durable capture attempts without replay or network
-  capture show <id>          show evidence and expected fingerprint
-  capture retry <id> --expect <hash>
-                            retry publication using only frozen capture outcomes
-  capture resolve <id> --expect <hash>
-                            record a verified later successful capture
-  capture acknowledge <id> --expect <hash> --reason <text>
-                            retain an explicitly acknowledged gap, not successful capture
-
   Getting started:
-  setup [remote-url]        initialize everything: repository → Git hooks → remote → login → agent hooks → team settings
+  setup [remote-url]        set everything up in this folder: .cxt → login → repository connection → Git hooks → agent hooks → team settings
                             (safe to rerun; use --no-login to skip login)
   init [--no-hooks] [--remote <url>]
-                            initialize the local context store and install Git hooks
-  repo create <url>         initialize and connect a server repository
+                            set up .cxt in this folder and install the Git hooks
+  repo create <url>         set up .cxt and connect a server repository
   login [token] [--server url] authenticate before connecting, or with origin
   logout                    remove the saved origin credential
-
-  Agent commands:
-  claude [args...]          run Claude Code with branch context seeding
-  codex [args...]           run Codex with branch context seeding
-  mcp --local               start the offline-development MCP helper on stdio
-  hook --provider P --event E
-                            process a provider lifecycle event (integration use)
-
-  Git-integrated commands:
-  remote add origin <url>   connect the server repository URL (the context equivalent of Git origin)
-  remote set-endpoint <name> <api-url> [--migrate-pending]  verify transport; optionally authorize pending work
+  remote add origin <url>   connect the server repository URL
+  remote set-endpoint <name> <api-url>  verify and save another transport endpoint
   remote [-v]               list configured remotes
   remote remove <name>      remove a configured remote
-  branch [list]             list local context branches
-  branch archive <name>     hide a deleted Git branch pointer while preserving all context history
-  branch restore <name>     restore an archived context branch and record a new active generation
-  add [claude|codex|.]      freeze matching worktree sources in the additive index
-  commit [-m msg]           publish only the frozen index; --resume retries its operation
-  restore --staged <key>|.  unstage frozen sources without deleting their archives
-  status [--json]           inspect worktree selection, memory, index and stored captures
-  diff [--staged] [--json]   compare stored captures/index against selected history
-  checkout [<ref>] [-b new] [--provider claude|codex] [--mode full|reconstructed|memory]
-                            restore or branch context (also run automatically by Git checkout)
-  switch [<branch>] [-c new] [--mode full|reconstructed|memory]
-                            alias for checkout (equivalent to Git switch)
-  push [remote [branch]] [--force|--append] [--wait-history]
-                            publish current context; retain and retry historical uploads
-  fetch [remote [branch]]   observe remote state without applying refs or memory
-  pull [remote [branch]]    synchronize and apply the selected-code projection
-  tag [<name> [ref]]        list or create immutable tags (equivalent to Git tags)
-  stash [push|pop|list]     save or restore a session (push accepts --provider)
 
-  Context commands:
-  save [-m msg] [--provider claude|codex]
-                            create a single-provider snapshot without commit staging or remote pending sync
-  list | log [ref]          inspect HEAD/ref ancestry (--all, --retained, --server, --json)
-  fork <ref> --as <branch> [--provider claude|codex] [--mode full|reconstructed|memory]
-                            fork and restore a context branch
-  load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]
-                            restore a snapshot (current head when ref is omitted)
-  memorize | memory [<ref>] [--provider claude|codex] [--claims <json-file>]
-                            distill context into reusable memory
+  Sessions (cxt reads what Claude Code and Codex recorded, and Git; hooks only wake that reading):
+  segments [--json]         show the sessions of this folder cut at their commits, without writes
+  doctor [--json]           read this computer and the server and say what does not fit, each with the command that puts it right; changes nothing
+  push [claude|codex <session>] [--json]
+                            upload the sessions to the server now, or the one session named; a copy of what was sent is kept under .cxt/sessions
+  log [claude|codex <session>] [--json]
+                            show what .cxt/sessions keeps about the uploads: every session with its last upload, or one session's whole log
+  remove claude|codex <session> --yes [--json]
+                            remove a session from the server for every reader, with the sessions it spawned; it is not uploaded again until it is allowed again
+  allow claude|codex <session> [--json]
+                            take back the removal of a session and upload it again
+  resend claude|codex <session> [--json]
+                            send the copy kept under .cxt/sessions again, for a session the tool no longer holds
+  archive|unarchive claude|codex <session>
+                            hide a session from lists, the search and the summaries on the server, or bring it back
+  refresh                   ask the server to read the repository from GitHub again, so that a push it has not seen opens what it explains
+  fork --at <commit> --branch <name>
+                            make a Git branch at a commit; a session started on it is given the summaries along it
+  fork claude|codex <session> [--at <commit>] [--to claude|codex] [--branch <name>] [--json]
+                            continue a session's conversation, up to the commit, as a new session of a tool in this folder
+                            (every command of this group is also cxt segments <command>)
 
-  Configuration and maintenance:
+  Configuration:
   settings pull|list|restore [n]
                             apply team defaults, list backups, or restore a backup
   secrets push|pull [-p <pw>] [--remember] [--rotate] [--force (pull only)]
                             share .cxtsecrets with end-to-end encryption
   hooks install|uninstall   manage Git hooks manually
-  config <key> [value]      inspect or set checkout, load, boundary, capture, or scrub behavior
-  sync status [--json]      inspect local upload queues without reading objects
-  sync pause-history|resume-history
-                            pause or resume background retained-history uploads
-  doctor [--json]           inspect the local replica and Git journal without writes
-  segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
-  segments doctor [--json]  read this computer and the server and say what does not fit, each with the command that puts it right; changes nothing
-  segments push [claude|codex <session>] [--json]
-                            upload that report to the server, one report per session, or the one session named; a copy of what was sent is kept under .cxt/sessions
-  segments remove claude|codex <session> --yes [--json]
-                            remove a session from the server for every reader, with the sessions it spawned; it is not uploaded again until it is allowed again
-  segments allow claude|codex <session> [--json]
-                            take back the removal of a session and upload it again
-  segments resend claude|codex <session> [--json]
-                            send the copy kept under .cxt/sessions again, for a session the tool no longer holds
-  segments archive|unarchive claude|codex <session>
-                            hide a session from lists, the search and the summaries on the server, or bring it back
-  segments refresh          ask the server to read the repository from GitHub again, so that a push it has not seen opens what it explains
-  segments fork --at <commit> --branch <name>
-                            make a Git branch at a commit; a session started on it is given the summaries along it
-  segments fork claude|codex <session> [--at <commit>] [--to claude|codex] [--branch <name>] [--json]
-                            continue a session's conversation, up to the commit, as a new session of a tool in this folder
-  segments log [claude|codex <session>] [--json]
-                            show what .cxt/sessions keeps about the uploads: every session with its last upload, or one session's whole log
-  branch operations         inspect durable local operations (--json available)
-  branch replay             retry verified operations and queue server synchronization
-  branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch
-  repair --from-server       restore verified server objects, preserving local-only data
-  fsck                      audit repository integrity
-  reflog                    view the server ref-move log
-  repack                    reclaim duplicate prefix storage through chunk CAS
+  config <key> [value]      inspect or set segments.auto, capture.identity, secrets.scrub, secrets.redact, secrets.minlen
+  hook --provider P --event E
+                            what the agent hooks run (integration use)
   version | --version       print the cxt version
   help | -h | --help        show this help`
 
 func printUsage() {
 	fmt.Println(usageText)
-}
-
-// loadModeOr permits legacy archive replay only when requested on this command.
-// Stored load.mode preferences cannot override latest-main managed input.
-func loadModeOr(_ string, explicit string) string {
-	return explicit
-}
-
-// flagVal finds a value in internal argv, excluding option values and literals.
-func flagVal(args []string, name string) string {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			break
-		}
-		flagName, inlineValue, inline := splitFlagValue(args[i])
-		if flagName == name && inline {
-			return inlineValue
-		}
-		if args[i] == name {
-			if i+1 >= len(args) {
-				return ""
-			}
-			return args[i+1]
-		}
-		if flagConsumesValue(args[i]) && !inline {
-			i++
-		}
-	}
-	return ""
-}
-
-// lastPositional returns the last argument that is not a flag (e.g., repo create <url> returns url).
-func lastPositional(args []string) string {
-	if pos := positionals(args); len(pos) > 0 {
-		return pos[len(pos)-1]
-	}
-	return ""
 }
 
 // shortHash returns the short notation (first 10 hex characters) of ContentHash.

@@ -7,7 +7,6 @@ import "encoding/json"
 const (
 	MaxPortableManifestChunks = 2048
 	MaxPortableManifestBytes  = 256 << 10
-	MaxPortableDocBytes       = 512 << 20
 )
 
 // PortableManifest checks manifest admission bounds, not canonical identity or

@@ -2,7 +2,6 @@ package gitctx
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -75,70 +74,5 @@ func (a *GitContextAdapter) defaultBranch(ctx context.Context, top string) strin
 	return "main"
 }
 
-// CurrentBranch returns the current Git branch name for cwd, or an empty string outside a repository.
-func (a *GitContextAdapter) CurrentBranch(ctx context.Context, cwd string) (string, error) {
-	b, err := git(ctx, cwd, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return "", nil // Not a repo: empty value (no error; caller should fallback)
-	}
-	if b == "HEAD" {
-		return "", nil // detached
-	}
-	return b, nil
-}
-
-// LocalBranches returns authoritative local refs/heads names, one per line.
-func (a *GitContextAdapter) LocalBranches(ctx context.Context, cwd string) ([]string, error) {
-	out, err := git(ctx, cwd, "for-each-ref", "--format=%(refname:short)", "refs/heads")
-	if err != nil {
-		return nil, err
-	}
-	if out == "" {
-		return nil, nil
-	}
-	lines := strings.Split(out, "\n")
-	branches := make([]string, 0, len(lines))
-	for _, branch := range lines {
-		branch = strings.TrimSpace(branch)
-		if branch != "" {
-			branches = append(branches, branch)
-		}
-	}
-	return branches, nil
-}
-
 // Ensure GitContextAdapter implements outbound.GitContext.
 var _ outbound.GitContext = (*GitContextAdapter)(nil)
-var _ outbound.GitBranchInventory = (*GitContextAdapter)(nil)
-
-// CurrentCommit never substitutes the primary worktree or an archived CIR's SHA.
-func (a *GitContextAdapter) CurrentCommit(ctx context.Context, cwd string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--verify", "HEAD^{commit}")
-	// A hook's exported repository selector overrides -C. This port explicitly
-	// reads the requested worktree, never the calling hook's repository.
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		switch name {
-		case "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
-			continue
-		}
-		cmd.Env = append(cmd.Env, entry)
-	}
-	raw, err := cmd.Output()
-	oid := strings.TrimSpace(string(raw))
-	if ctx.Err() != nil {
-		return "", ctx.Err()
-	}
-	if err != nil {
-		return "", err
-	}
-	if !domain.ValidGitOID(oid) {
-		return "", domain.ErrHashMismatch
-	}
-	return oid, nil
-}
-
-var _ outbound.CodePosition = (*GitContextAdapter)(nil)

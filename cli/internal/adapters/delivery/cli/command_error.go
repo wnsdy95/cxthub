@@ -103,7 +103,7 @@ func WriteCommandFailure(w io.Writer, args []string, err error) int {
 	failure := ClassifyCommandFailure(err)
 	machine := false
 	if len(args) > 1 {
-		if spec, ok := commandArgSpecs[args[1]]; ok && !spec.passthrough {
+		if spec, ok := commandArgSpecs[CanonicalArgs(args)[1]]; ok {
 			if _, ok = spec.flags["--json"]; ok {
 				for _, arg := range args[2:] {
 					if arg == "--json" {

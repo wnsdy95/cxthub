@@ -5,668 +5,226 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
-type recSave struct{ calls []inbound.SaveInput }
-
-func (r *recSave) Save(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
-	r.calls = append(r.calls, in)
-	return inbound.SaveOutput{SnapshotID: "sha256:x", Branch: "main"}, nil
-}
-
-func hookTestGit(t *testing.T, cwd string, args ...string) string {
+// gitRepository makes a Git repository. With setUp it carries the mark that
+// `cxt setup` writes.
+func gitRepository(t *testing.T, setUp bool) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+	repo := t.TempDir()
+	cmd := exec.Command("git", "-C", repo, "init", "-q", "-b", "main")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	return strings.TrimSpace(string(out))
-}
-
-func initHookContext(t *testing.T, repo string) {
-	t.Helper()
-	hookTestGit(t, repo, "init", "-b", "main")
-	if err := os.MkdirAll(filepath.Join(repo, ".cxt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeHookSession(t *testing.T, cwd string, provider domain.ProviderKind, id string) string {
-	t.Helper()
-	path := filepath.Join(os.Getenv("HOME"), ".claude", "projects", providerfs.EncodeCwd(cwd), id+".jsonl")
-	data := fmt.Sprintf("{\"type\":\"user\",\"sessionId\":%q,\"cwd\":%q}\n", id, cwd)
-	if provider == domain.ProviderCodex {
-		path = filepath.Join(os.Getenv("HOME"), ".codex", "sessions", "2026", "08", "26", "rollout-test-"+id+".jsonl")
-		data = fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", id, cwd)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func TestHandlerRejectsMismatchedSessionBeforeAllSideEffects(t *testing.T) {
-	const parent = "11111111-1111-4111-8111-111111111111"
-	const child = "22222222-2222-4222-8222-222222222222"
-	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
-		for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
-			t.Run(string(provider)+"/"+event, func(t *testing.T) {
-				t.Setenv("HOME", t.TempDir())
-				cwd := t.TempDir()
-				initHookContext(t, cwd)
-				good := writeHookSession(t, cwd, provider, parent)
-				bad := writeHookSession(t, cwd, provider, child)
-				if err := capture.TrackAppSession(cwd, provider, parent, good); err != nil {
-					t.Fatal(err)
-				}
-				if err := capture.WriteSessionHandoff(cwd, []string{parent}, "parent memory"); err != nil {
-					t.Fatal(err)
-				}
-				saver := &recSave{}
-				var output bytes.Buffer
-				h := NewHandler(capture.NewCaptureCoordinator(saver, domain.TeamIdentity{}))
-				payload, _ := json.Marshal(hookPayload{SessionID: parent, TranscriptPath: bad, Cwd: cwd, Prompt: "child prompt"})
-				h.stdin, h.stdout = bytes.NewReader(payload), &output
-				if err := h.Run(provider, event); !errors.Is(err, capture.ErrSessionIdentityMismatch) {
-					t.Fatalf("mismatched hook: %v", err)
-				}
-				if len(saver.calls) != 0 || output.Len() != 0 {
-					t.Fatalf("mismatched hook captured or emitted briefing")
-				}
-				if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture")); !os.IsNotExist(err) {
-					t.Fatalf("mismatched hook changed capture state: %v", err)
-				}
-				if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 1 || sessions[0].Path != good {
-					t.Fatalf("parent pointer changed: %+v", sessions)
-				}
-				if message, ok := capture.ConsumeSessionHandoff(cwd, parent); !ok || message != "parent memory" {
-					t.Fatalf("parent briefing consumed: %q %v", message, ok)
-				}
-			})
+	if setUp {
+		if _, err := gitctx.NewSetupMarker().MarkSetUp(context.Background(), repo); err != nil {
+			t.Fatal(err)
 		}
 	}
+	return repo
 }
 
-func TestHandlerCorrectHookRepairsPoisonedPointer(t *testing.T) {
-	const parent = "11111111-1111-4111-8111-111111111111"
-	const child = "22222222-2222-4222-8222-222222222222"
-	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
-		t.Run(string(provider), func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("CODEX_THREAD_ID", parent) // inherited environment must not relabel payloads
-			cwd := t.TempDir()
-			initHookContext(t, cwd)
-			good := writeHookSession(t, cwd, provider, parent)
-			bad := writeHookSession(t, cwd, provider, child)
-			if err := capture.TrackAppSession(cwd, provider, parent, good); err != nil {
-				t.Fatal(err)
-			}
-			files, _ := filepath.Glob(filepath.Join(cwd, ".cxt", "app-sessions", "*.json"))
-			raw, err := os.ReadFile(files[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Reproduce an old client's corruption only in this disposable fixture.
-			var state map[string]any
-			if err := json.Unmarshal(raw, &state); err != nil {
-				t.Fatal(err)
-			}
-			state["path"] = bad
-			raw, _ = json.Marshal(state)
-			if err := os.WriteFile(files[0], raw, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 0 {
-				t.Fatalf("poisoned pointer exposed: %+v", sessions)
-			}
-			h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
-			// A pathless real hook discovers the exact parent and replaces the pointer.
-			payload, _ := json.Marshal(hookPayload{SessionID: parent, Cwd: cwd, Prompt: "parent prompt"})
-			h.stdin = bytes.NewReader(payload)
-			if err := h.Run(provider, "UserPromptSubmit"); err != nil {
-				t.Fatal(err)
-			}
-			if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 1 || sessions[0].Path != good {
-				t.Fatalf("correct hook did not repair pointer: %+v", sessions)
-			}
-			payload, _ = json.Marshal(hookPayload{SessionID: child, TranscriptPath: bad, Cwd: cwd, Prompt: "child prompt"})
-			h.stdin = bytes.NewReader(payload)
-			if err := h.Run(provider, "UserPromptSubmit"); err != nil {
-				t.Fatal(err)
-			}
-			if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 2 {
-				t.Fatalf("inherited environment relabeled child: %+v", sessions)
-			}
-		})
-	}
+// hookSummaries gives one text, like the service that reads the branch's
+// summary, and records what emit answered.
+type hookSummaries struct {
+	inputs   []inbound.BranchSummaryInput
+	text     string
+	err      error
+	emitted  []error
+	deadline bool
 }
 
-func TestHandlerOpaqueAliasRejectsRebindBeforePromptOrBriefing(t *testing.T) {
-	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
-		t.Run(string(provider), func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			cwd := t.TempDir()
-			initHookContext(t, cwd)
-			const alias = "opaque-hook-id"
-			good := writeHookSession(t, cwd, provider, "11111111-1111-4111-8111-111111111111")
-			bad := writeHookSession(t, cwd, provider, "22222222-2222-4222-8222-222222222222")
-			if err := capture.TrackAppSession(cwd, provider, alias, good); err != nil {
-				t.Fatal(err)
-			}
-			if err := capture.WriteSessionHandoff(cwd, []string{alias}, "opaque parent memory"); err != nil {
-				t.Fatal(err)
-			}
-			var out bytes.Buffer
-			h := NewHandler(nil) // Any prompt/baseline/capture effect would panic.
-			payload, _ := json.Marshal(hookPayload{SessionID: alias, TranscriptPath: bad, Cwd: cwd, Prompt: "wrong child"})
-			h.stdin, h.stdout = bytes.NewReader(payload), &out
-			if err := h.Run(provider, "UserPromptSubmit"); !errors.Is(err, capture.ErrSessionIdentityMismatch) {
-				t.Fatalf("alias rebind accepted: %v", err)
-			}
-			if out.Len() != 0 {
-				t.Fatal("rejected alias emitted briefing")
-			}
-			if text, ok := capture.ConsumeSessionHandoff(cwd, alias); !ok || text != "opaque parent memory" {
-				t.Fatal("rejected alias consumed briefing")
-			}
-		})
+func (f *hookSummaries) DeliverBranchSummary(ctx context.Context, in inbound.BranchSummaryInput, emit func(string) error) error {
+	f.inputs = append(f.inputs, in)
+	_, f.deadline = ctx.Deadline()
+	if f.err != nil || f.text == "" {
+		return f.err
 	}
+	err := emit(f.text)
+	f.emitted = append(f.emitted, err)
+	return err
 }
 
-func TestHandlerRejectsNativeSessionFromAnotherWorktree(t *testing.T) {
-	const id = "11111111-1111-4111-8111-111111111111"
-	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
-		t.Run(string(provider), func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			native, other := t.TempDir(), t.TempDir()
-			initHookContext(t, native)
-			initHookContext(t, other)
-			path := writeHookSession(t, native, provider, id)
-			h := NewHandler(nil)
-			payload, _ := json.Marshal(hookPayload{SessionID: id, TranscriptPath: path, Cwd: other, Prompt: "wrong repo"})
-			h.stdin = bytes.NewReader(payload)
-			if err := h.Run(provider, "UserPromptSubmit"); !errors.Is(err, capture.ErrSessionIdentityMismatch) {
-				t.Fatalf("cross-worktree hook accepted: %v", err)
-			}
-			if _, err := os.Stat(filepath.Join(other, ".cxt", "app-sessions")); !os.IsNotExist(err) {
-				t.Fatalf("foreign hook wrote registry: %v", err)
-			}
-		})
-	}
-}
+type hookWriter func([]byte) (int, error)
 
-func TestGlobalAgentHookDoesNotCreateStoreInUnconnectedGitRepository(t *testing.T) {
-	repo := t.TempDir()
-	hookTestGit(t, repo, "init", "-b", "main")
-	rs := &recSave{}
-	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(`{"session_id":"unconnected","cwd":"` + repo + `","prompt":"continue"}`)
-	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
-		t.Fatal(err)
-	}
-	if len(rs.calls) != 0 {
-		t.Fatalf("unconnected repository captured: %+v", rs.calls)
-	}
-	if _, err := os.Lstat(filepath.Join(repo, ".cxt")); !os.IsNotExist(err) {
-		t.Fatalf("global agent hook created .cxt: %v", err)
-	}
-}
+func (f hookWriter) Write(raw []byte) (int, error) { return f(raw) }
 
-func TestGlobalAgentHookQuarantinesDirectoryOnlyResidue(t *testing.T) {
-	repo := t.TempDir()
-	hookTestGit(t, repo, "init", "-b", "main")
-	residue := filepath.Join(repo, ".cxt", "capture")
-	if err := os.MkdirAll(residue, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	legacy := filepath.Join(residue, "legacy.turn")
-	if err := os.WriteFile(legacy, []byte("keep me\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	rs := &recSave{}
-	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(`{"session_id":"legacy-residue","cwd":"` + repo + `","prompt":"must not capture"}`)
-	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
-		t.Fatal(err)
-	}
-	if len(rs.calls) != 0 {
-		t.Fatalf("directory-only residue captured: %+v", rs.calls)
-	}
-	if _, err := os.Stat(filepath.Join(repo, ".cxt", "HEAD")); !os.IsNotExist(err) {
-		t.Fatalf("hook promoted residue into an initialized store: %v", err)
-	}
-	if got, err := os.ReadFile(legacy); err != nil || string(got) != "keep me\n" {
-		t.Fatalf("legacy residue was mutated: %q, %v", got, err)
-	}
-	ignore, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
-	if err != nil || !strings.Contains(string(ignore), ".cxt/") {
-		t.Fatalf(".gitignore was not repaired: %q, %v", ignore, err)
-	}
-	if got := hookTestGit(t, repo, "check-ignore", ".cxt/probe"); got == "" {
-		t.Fatal("legacy .cxt residue remains visible to git")
-	}
-}
-
-// TestHandlerStopWithPayload fixes the flow where Stop capture continues from the transcript path/cwd (capture path — detection omission path).
-func TestHandlerStopWithPayload(t *testing.T) {
-	cwd := t.TempDir()
-	initHookContext(t, cwd)
-	t.Setenv("HOME", t.TempDir())
-	const id = "11111111-1111-4111-8111-111111111111"
-	session := writeHookSession(t, cwd, domain.ProviderClaude, id)
-	rs := &recSave{}
-	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(`{"session_id":"` + id + `","transcript_path":"` + session + `","cwd":"` + cwd + `"}`)
-	if err := h.Run(domain.ProviderClaude, "Stop"); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if len(rs.calls) != 1 || rs.calls[0].SessionPath != session || rs.calls[0].Cwd != cwd {
-		t.Fatalf("payload path/cwd not used: %+v", rs.calls)
-	}
-}
-
-// TestHandlerPromptHint fixes the flow from UserPromptSubmit to the next capture message hint.
-func TestHandlerPromptHint(t *testing.T) {
-	cwd := t.TempDir()
-	initHookContext(t, cwd)
-	session := filepath.Join(t.TempDir(), "s.jsonl")
-	_ = os.WriteFile(session, []byte("{}\n"), 0o644)
-	rs := &recSave{}
-	coord := capture.NewCaptureCoordinator(rs, domain.TeamIdentity{})
-	h := NewHandler(coord)
-	h.stdin = strings.NewReader(`{"cwd":"` + cwd + `","prompt":"refactor the loader"}`)
-	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
-		t.Fatal(err)
-	}
-	h2 := NewHandler(coord)
-	h2.stdin = strings.NewReader(`{"cwd":"` + cwd + `","rollout_path":"` + session + `"}`)
-	if err := h2.Run(domain.ProviderCodex, "Stop"); err != nil {
-		t.Fatal(err)
-	}
-	if len(rs.calls) != 1 || rs.calls[0].Message != domain.HookMessagePrefix+"refactor the loader" {
-		t.Fatalf("prompt hint not propagated: %+v", rs.calls)
-	}
-}
-
-// TestHandlerUnknownEventNoop fixes the fail-open behavior for unknown events.
-func TestHandlerUnknownEventNoop(t *testing.T) {
-	rs := &recSave{}
-	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(`{}`)
-	if err := h.Run(domain.ProviderClaude, "SomeFutureEvent"); err != nil {
-		t.Fatalf("unknown event must be noop: %v", err)
-	}
-	if len(rs.calls) != 0 {
-		t.Fatal("unknown event must not capture")
-	}
-}
-
-// TestHandlerBriefingEmission fixes the one-time consumption and additionalContext emission of pull briefing:
-// The UserPromptSubmit hook consumes its scoped briefing queue and outputs hookSpecificOutput JSON to stdout (model transmission channel), and in the second utterance, nothing is output.
-func TestHandlerBriefingEmission(t *testing.T) {
-	cwd := t.TempDir()
-	initHookContext(t, cwd)
-	noticeID := domain.HashContent([]byte("handler pull briefing"))
-	if err := capture.WritePullBriefing(cwd, "main", []domain.ContentHash{noticeID}); err != nil {
-		t.Fatal(err)
-	}
-	rs := &recSave{}
-	coord := capture.NewCaptureCoordinator(rs, domain.TeamIdentity{})
-
-	var out1 bytes.Buffer
-	h := NewHandler(coord)
-	h.stdin = strings.NewReader(`{"cwd":"` + cwd + `","prompt":"continue"}`)
-	h.stdout = &out1
-	if err := h.Run(domain.ProviderClaude, "UserPromptSubmit"); err != nil {
-		t.Fatal(err)
-	}
-	var decoded struct {
+// givenContext reads what the hook wrote for the tool.
+func givenContext(t *testing.T, raw []byte, event string) string {
+	t.Helper()
+	var out struct {
 		HookSpecificOutput struct {
 			HookEventName     string `json:"hookEventName"`
 			AdditionalContext string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}
-	if err := json.Unmarshal(out1.Bytes(), &decoded); err != nil {
-		t.Fatalf("stdout is not JSON: %v (%q)", err, out1.String())
+	if err := json.Unmarshal(raw, &out); err != nil || out.HookSpecificOutput.HookEventName != event {
+		t.Fatalf("what the hook wrote for %s: %q (%v)", event, raw, err)
 	}
-	if decoded.HookSpecificOutput.HookEventName != "UserPromptSubmit" ||
-		!strings.Contains(decoded.HookSpecificOutput.AdditionalContext, string(noticeID)) ||
-		!strings.Contains(decoded.HookSpecificOutput.AdditionalContext, "identifiers only") {
-		t.Fatalf("additionalContext emission error: %+v", decoded)
-	}
-	// 1st run: the second invocation is silent.
-	var out2 bytes.Buffer
-	h2 := NewHandler(coord)
-	h2.stdin = strings.NewReader(`{"cwd":"` + cwd + `"}`)
-	h2.stdout = &out2
-	_ = h2.Run(domain.ProviderClaude, "UserPromptSubmit")
-	if out2.Len() != 0 {
-		t.Fatalf("briefing is resubscribed: %q", out2.String())
-	}
+	return out.HookSpecificOutput.AdditionalContext
 }
 
-func TestHandlerWithoutPreparerKeepsAppSessionHandoffs(t *testing.T) {
-	cwd := t.TempDir()
-	initHookContext(t, cwd)
-	const (
-		first  = "11111111-1111-4111-8111-111111111111"
-		second = "22222222-2222-4222-8222-222222222222"
-	)
-	if err := capture.WriteSessionHandoff(cwd, []string{first}, "FIRST APP BRANCH MEMORY"); err != nil {
-		t.Fatal(err)
-	}
-	if err := capture.WriteSessionHandoff(cwd, []string{second}, "SECOND APP BRANCH MEMORY"); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(`{"session_id":"` + second + `","cwd":"` + cwd + `","prompt":"continue"}`)
-	h.stdout = &out
-	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); !errors.Is(err, domain.ErrAgentContextUnavailable) {
-		t.Fatal("unconfigured handoff did not fail closed", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("unconfigured handler emitted queued text: %s", out.String())
-	}
-	if got, ok := capture.ConsumeSessionHandoff(cwd, first); !ok || got != "FIRST APP BRANCH MEMORY" {
-		t.Fatalf("other app session queue was consumed: %q, %v", got, ok)
-	}
-	if got, ok := capture.ConsumeSessionHandoff(cwd, second); !ok || got != "SECOND APP BRANCH MEMORY" {
-		t.Fatalf("failed handoff was consumed: %q, %v", got, ok)
-	}
-}
-
-func TestHandlerTracksOpaqueAppSessionUntilSessionEnd(t *testing.T) {
-	cwd := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	initHookContext(t, cwd)
-	const hookSessionID = "codex-thread-opaque-id"
-	const nativeID = "33333333-3333-4333-8333-333333333333"
-	dir := filepath.Join(home, ".codex", "sessions", "2026", "08", "31")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "rollout-2026-08-31T00-00-00-"+nativeID+".jsonl")
-	if err := os.WriteFile(path, []byte(fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", nativeID, cwd)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rawPayload, err := json.Marshal(map[string]string{
-		"session_id": hookSessionID, "transcript_path": path, "cwd": cwd, "prompt": "continue",
-	})
+func run(t *testing.T, h *Handler, provider domain.ProviderKind, event string, payload hookPayload, out *bytes.Buffer) error {
+	t.Helper()
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := string(rawPayload)
-	h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(payload)
-	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
-		t.Fatal(err)
+	h.stdin = bytes.NewReader(raw)
+	if out != nil {
+		h.stdout = out
 	}
-	if got := capture.ActiveAppSessions(cwd); len(got) != 1 || got[0].SessionID != hookSessionID || got[0].Path != path {
-		t.Fatalf("tracked app sessions = %+v", got)
-	}
-
-	end := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
-	end.stdin = strings.NewReader(payload)
-	if err := end.Run(domain.ProviderCodex, "SessionEnd"); err != nil {
-		t.Fatal(err)
-	}
-	if got := capture.ActiveAppSessions(cwd); len(got) != 0 {
-		t.Fatalf("ended app session remains tracked: %+v", got)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("SessionEnd removed provider transcript: %v", err)
-	}
+	return h.Run(provider, event)
 }
 
-// TestHandlerGarbagePayload ensures it doesn't die on non-JSON stdin ( best-effort).
-func TestHandlerGarbagePayload(t *testing.T) {
-	t.Chdir(t.TempDir())
-	rs := &recSave{}
-	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader("not json at all")
-	// cwd fallback is os.Getwd — must be a no-op silently if there's no active session.
-	if err := h.Run(domain.ProviderClaude, "SessionEnd"); err != nil {
-		t.Fatalf("garbage payload must not error: %v", err)
-	}
-}
-
-type hookSaveFunc func(context.Context, inbound.SaveInput) (inbound.SaveOutput, error)
-
-func (f hookSaveFunc) Save(ctx context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
-	return f(ctx, in)
-}
-
-func TestSessionEndCapturesTailAfterConcurrentStop(t *testing.T) {
-	for _, deadline := range []bool{false, true} {
-		name := "wait-for-writer"
-		if deadline {
-			name = "deadline-retains-retry"
-		}
-		t.Run(name, func(t *testing.T) {
-			home, cwd := t.TempDir(), t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("CXT_REMOTE", "")
-			initHookContext(t, cwd)
-			const sessionID = "opaque-final-session"
-			session := filepath.Join(home, ".codex", "sessions", "2026", "09", "16", "rollout-test-11111111-1111-4111-8111-111111111111.jsonl")
-			if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			initial := fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", "11111111-1111-4111-8111-111111111111", cwd)
-			const tail = "{\"type\":\"assistant\",\"text\":\"final answer\"}\n"
-			if err := os.WriteFile(session, []byte(initial), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			firstRead, release := make(chan struct{}), make(chan struct{})
-			var releaseOnce sync.Once
-			unblock := func() { releaseOnce.Do(func() { close(release) }) }
-			var mu sync.Mutex
-			var snapshots []string
-			saver := hookSaveFunc(func(ctx context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
-				raw, err := os.ReadFile(in.SessionPath)
-				if err != nil {
-					return inbound.SaveOutput{}, err
+// The summary along the session's branch is what a hook gives the tool, at
+// the start of a session and at each prompt.
+func TestHandlerGivesTheBranchSummary(t *testing.T) {
+	for _, provider := range []domain.ProviderKind{domain.ProviderCodex, domain.ProviderClaude} {
+		for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
+			t.Run(string(provider)+"/"+event, func(t *testing.T) {
+				cwd := gitRepository(t, true)
+				const session = "11111111-1111-4111-8111-111111111111"
+				summaries := &hookSummaries{text: "SUMMARY ALONG THE BRANCH"}
+				var output bytes.Buffer
+				h := NewHandler().WithBranchSummaries(summaries)
+				payload := hookPayload{Cwd: cwd, SessionID: session}
+				if err := run(t, h, provider, event, payload, &output); err != nil {
+					t.Fatal(err)
 				}
-				mu.Lock()
-				snapshots = append(snapshots, string(raw))
-				first := len(snapshots) == 1
-				mu.Unlock()
-				if first {
-					close(firstRead)
-					select {
-					case <-release:
-					case <-ctx.Done():
-						return inbound.SaveOutput{}, ctx.Err()
-					}
+				if text := givenContext(t, output.Bytes(), event); text != "SUMMARY ALONG THE BRANCH" {
+					t.Fatalf("what the tool was given: %s", text)
 				}
-				return inbound.SaveOutput{SnapshotID: "sha256:tail", Branch: "main"}, nil
+				want := []inbound.BranchSummaryInput{{Cwd: cwd, Provider: provider, SessionID: session}}
+				if !reflect.DeepEqual(summaries.inputs, want) || !summaries.deadline || !reflect.DeepEqual(summaries.emitted, []error{nil}) {
+					t.Fatalf("what was asked: %+v deadline=%v emitted=%v", summaries.inputs, summaries.deadline, summaries.emitted)
+				}
+
+				// Nothing to give: the hook writes nothing.
+				summaries.text = ""
+				output.Reset()
+				if err := run(t, h, provider, event, payload, &output); err != nil || output.Len() != 0 || len(summaries.inputs) != 2 {
+					t.Fatalf("nothing to give: %v %q", err, output.String())
+				}
 			})
-			newHandler := func(path string) *Handler {
-				payload, err := json.Marshal(hookPayload{SessionID: sessionID, RolloutPath: path, Cwd: cwd})
-				if err != nil {
-					t.Fatal(err)
-				}
-				// Separate coordinators model separate hook processes sharing only disk state.
-				h := NewHandler(capture.NewCaptureCoordinator(saver, domain.TeamIdentity{}))
-				h.stdin = bytes.NewReader(payload)
-				return h
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			var wg sync.WaitGroup
-			t.Cleanup(func() { cancel(); unblock(); wg.Wait() })
-			stopDone := make(chan error, 1)
-			stop := newHandler(session)
-			wg.Go(func() { stopDone <- stop.run(ctx, domain.ProviderCodex, "Stop") })
-			select {
-			case <-firstRead:
-			case <-ctx.Done():
-				t.Fatal("Stop did not read its initial snapshot")
-			}
-			// Append only after the older capture read its bytes, while it still owns the lock.
-			f, err := os.OpenFile(session, os.O_APPEND|os.O_WRONLY, 0o600)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = f.WriteString(tail)
-			closeErr := f.Close()
-			if err != nil || closeErr != nil {
-				t.Fatalf("append tail: %v, close: %v", err, closeErr)
-			}
-			endCtx := ctx
-			if deadline {
-				var endCancel context.CancelFunc
-				endCtx, endCancel = context.WithTimeout(ctx, 150*time.Millisecond)
-				defer endCancel()
-			}
-			endDone := make(chan error, 1)
-			end := newHandler("") // a pathless final hook must retain the opaque ID's exact binding
-			wg.Go(func() { endDone <- end.run(endCtx, domain.ProviderCodex, "SessionEnd") })
-			if deadline {
-				if err := <-endDone; !errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("contended final capture must report deadline, got %v", err)
-				}
-			} else {
-				select {
-				case err := <-endDone:
-					t.Fatalf("SessionEnd returned before the older writer released its lock: %v", err)
-				case <-time.After(150 * time.Millisecond):
-				}
-			}
-			if active := capture.ActiveAppSessions(cwd); len(active) != 1 || active[0].SessionID != sessionID || active[0].Path != session {
-				t.Fatalf("final capture lost its durable retry pointer: %+v", active)
-			}
-			unblock()
-			if err := <-stopDone; err != nil {
-				t.Fatalf("Stop: %v", err)
-			}
-			if deadline {
-				// A new handler/coordinator recovers the path entirely from disk.
-				if err := newHandler("").run(ctx, domain.ProviderCodex, "SessionEnd"); err != nil {
-					t.Fatalf("retry: %v", err)
-				}
-			} else if err := <-endDone; err != nil {
-				t.Fatalf("SessionEnd: %v", err)
-			}
-			mu.Lock()
-			got := append([]string(nil), snapshots...)
-			mu.Unlock()
-			if len(got) != 2 || got[0] != initial || got[1] != initial+tail {
-				t.Fatalf("final tail was not captured: %q", got)
-			}
-			if active := capture.ActiveAppSessions(cwd); len(active) != 0 {
-				t.Fatalf("successful final capture left liveness behind: %+v", active)
-			}
-			if raw, err := os.ReadFile(session); err != nil || string(raw) != initial+tail {
-				t.Fatalf("capture changed provider transcript: %q, %v", raw, err)
-			}
-		})
-	}
-}
-
-func TestSessionEndSaveFailureRetainsNewlyResolvedSession(t *testing.T) {
-	home, cwd := t.TempDir(), t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CXT_REMOTE", "")
-	initHookContext(t, cwd)
-	const sessionID = "11111111-1111-4111-8111-111111111111"
-	session := filepath.Join(home, ".codex", "sessions", "2026", "09", "16", "rollout-test-"+sessionID+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"id": sessionID, "cwd": cwd}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(session, append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(hookPayload{SessionID: sessionID, Cwd: cwd})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantErr := errors.New("save unavailable")
-	fail := hookSaveFunc(func(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
-		if in.SessionPath != session {
-			t.Fatalf("wrong final transcript: %q", in.SessionPath)
 		}
-		return inbound.SaveOutput{}, wantErr
-	})
-	h := NewHandler(capture.NewCaptureCoordinator(fail, domain.TeamIdentity{}))
-	h.stdin = bytes.NewReader(payload)
-	if err := h.Run(domain.ProviderCodex, "SessionEnd"); !errors.Is(err, wantErr) {
-		t.Fatalf("final capture error = %v, want %v", err, wantErr)
-	}
-	if active := capture.ActiveAppSessions(cwd); len(active) != 1 || active[0].SessionID != sessionID || active[0].Path != session {
-		t.Fatalf("failed final capture did not retain its resolved transcript: %+v", active)
-	}
-	saved := &recSave{}
-	retry := NewHandler(capture.NewCaptureCoordinator(saved, domain.TeamIdentity{}))
-	retry.stdin = bytes.NewReader(payload)
-	if err := retry.Run(domain.ProviderCodex, "SessionEnd"); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if len(saved.calls) != 1 || saved.calls[0].SessionPath != session {
-		t.Fatalf("retry calls = %+v", saved.calls)
-	}
-	if active := capture.ActiveAppSessions(cwd); len(active) != 0 {
-		t.Fatalf("successful retry left liveness behind: %+v", active)
 	}
 }
 
-func TestStartAndPromptRequestExactLiveObserver(t *testing.T) {
+// A summary that could not be read, or did not reach the tool, is reported
+// and left to the service to try again.
+func TestHandlerReportsABranchSummaryThatWasNotGiven(t *testing.T) {
+	offline, closed := errors.New("server unreachable"), errors.New("output closed")
+	cwd := gitRepository(t, true)
+	payload := hookPayload{Cwd: cwd, SessionID: "22222222-2222-4222-8222-222222222222"}
+
+	summaries := &hookSummaries{err: offline}
+	var output bytes.Buffer
+	h := NewHandler().WithBranchSummaries(summaries)
+	if err := run(t, h, domain.ProviderClaude, "UserPromptSubmit", payload, &output); !errors.Is(err, offline) || output.Len() != 0 {
+		t.Fatalf("an unreachable server: %v %q", err, output.String())
+	}
+
+	summaries.err, summaries.text = nil, "SUMMARY ALONG THE BRANCH"
+	h.stdout = hookWriter(func([]byte) (int, error) { return 0, closed })
+	if err := run(t, h, domain.ProviderClaude, "UserPromptSubmit", payload, nil); !errors.Is(err, closed) || len(summaries.emitted) != 1 || !errors.Is(summaries.emitted[0], closed) {
+		t.Fatalf("a text that did not reach the tool: %v %v", err, summaries.emitted)
+	}
+	// A short write is not a text that reached the tool either.
+	h.stdout = hookWriter(func(raw []byte) (int, error) { return len(raw) - 1, nil })
+	if err := run(t, h, domain.ProviderClaude, "UserPromptSubmit", payload, nil); err == nil || len(summaries.emitted) != 2 || summaries.emitted[1] == nil {
+		t.Fatalf("a short write: %v %v", err, summaries.emitted)
+	}
+	if strings.Contains(output.String(), "SUMMARY") {
+		t.Fatalf("output: %q", output.String())
+	}
+}
+
+// Every event a tool reports wakes the collector, after the hook's own work
+// and whether or not that work succeeded. A hook is only what wakes it: the
+// collector reads the tool's own records.
+func TestAgentHooksWakeTheCollector(t *testing.T) {
+	cwd := gitRepository(t, true)
 	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
-		t.Run(string(provider), func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			cwd := t.TempDir()
-			initHookContext(t, cwd)
-			const id = "11111111-1111-4111-8111-111111111111"
-			path := writeHookSession(t, cwd, provider, id)
-			for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
-				h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
-				calls := 0
-				h.observe = func(gotCwd string, gotProvider domain.ProviderKind, gotID string) {
-					calls++
-					if gotCwd != cwd || gotProvider != provider || gotID != id {
-						t.Fatal("observer identity changed")
-					}
-					if _, ok := capture.RegisteredSession(gotCwd, gotProvider, gotID); !ok {
-						t.Fatal("observer started before registration")
-					}
-				}
-				b, _ := json.Marshal(hookPayload{SessionID: id, TranscriptPath: path, Cwd: cwd, Prompt: "keep working"})
-				h.stdin = bytes.NewReader(b)
-				if err := h.Run(provider, event); err != nil {
-					t.Fatal(err)
-				}
-				if calls != 1 {
-					t.Fatalf("observer calls=%d", calls)
-				}
+		for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
+			var woken []string
+			summaries := &hookSummaries{err: errors.New("server unreachable")}
+			h := NewHandler().WithBranchSummaries(summaries).WithSegmentCollector(func(dir string) { woken = append(woken, dir) })
+			err := run(t, h, provider, event, hookPayload{Cwd: cwd, SessionID: "33333333-3333-4333-8333-333333333333"}, &bytes.Buffer{})
+			if !reflect.DeepEqual(woken, []string{cwd}) {
+				t.Fatalf("%s %s woke %v", provider, event, woken)
 			}
-		})
+			// Only the start of a session and a prompt ask for the summary.
+			asks := event == "SessionStart" || event == "UserPromptSubmit"
+			if (len(summaries.inputs) == 1) != asks || (err != nil) != asks {
+				t.Fatalf("%s %s asked %d times and returned %v", provider, event, len(summaries.inputs), err)
+			}
+		}
+	}
+	// An event cxt does not handle wakes nothing.
+	var woken []string
+	h := NewHandler().WithSegmentCollector(func(dir string) { woken = append(woken, dir) })
+	if err := run(t, h, domain.ProviderClaude, "PreToolUse", hookPayload{Cwd: cwd}, &bytes.Buffer{}); err != nil || len(woken) != 0 {
+		t.Fatalf("an unhandled event: %v %v", err, woken)
+	}
+}
+
+// The tools' hooks are registered for every folder. cxt acts only where
+// `cxt setup` or `cxt init` wrote its mark.
+func TestHandlerActsOnlyWhereCxtWasSetUp(t *testing.T) {
+	notSetUp := gitRepository(t, false)
+	residue := gitRepository(t, false)
+	if err := os.Mkdir(filepath.Join(residue, ".cxt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	for name, cwd := range map[string]string{"a repository that was not set up": notSetUp, "a bare .cxt directory": residue, "a folder outside Git": outside} {
+		var woken []string
+		summaries := &hookSummaries{text: "SUMMARY"}
+		var output bytes.Buffer
+		h := NewHandler().WithBranchSummaries(summaries).WithSegmentCollector(func(dir string) { woken = append(woken, dir) })
+		for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
+			if err := run(t, h, domain.ProviderCodex, event, hookPayload{Cwd: cwd, SessionID: "44444444-4444-4444-8444-444444444444"}, &output); err != nil {
+				t.Fatalf("%s: %s: %v", name, event, err)
+			}
+		}
+		if len(woken) != 0 || len(summaries.inputs) != 0 || output.Len() != 0 {
+			t.Fatalf("%s: woke %v, asked %d times, wrote %q", name, woken, len(summaries.inputs), output.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(notSetUp, ".cxt")); !os.IsNotExist(err) {
+		t.Fatalf("a hook created .cxt in a repository that was not set up: %v", err)
+	}
+	// A .cxt directory left behind is kept out of Git, and is still not a mark.
+	exclude, err := os.ReadFile(filepath.Join(residue, ".git", "info", "exclude"))
+	if err != nil || !strings.Contains(string(exclude), ".cxt/") {
+		t.Fatalf("a leftover .cxt directory is not ignored by Git: %v %q", err, exclude)
+	}
+}
+
+// What a tool passes that is not the expected JSON is not an error.
+func TestHandlerReadsAnUnexpectedPayloadAsEmpty(t *testing.T) {
+	cwd := gitRepository(t, true)
+	t.Chdir(cwd)
+	var woken []string
+	h := NewHandler().WithSegmentCollector(func(dir string) { woken = append(woken, dir) })
+	h.stdin, h.stdout = strings.NewReader("{not json"), &bytes.Buffer{}
+	if err := h.Run(domain.ProviderClaude, "Stop"); err != nil {
+		t.Fatal(err)
+	}
+	// Without a folder in the payload the hook's own folder is the session's.
+	if len(woken) != 1 {
+		t.Fatalf("woke %v", woken)
 	}
 }

@@ -724,6 +724,10 @@ func runSegmentCollector(ctx context.Context, c *Container, cwd string) error {
 	if c == nil || c.SegmentCollector == nil || c.WithSegmentCollectorLock == nil {
 		return nil
 	}
+	// The collector, like the hooks that wake it, acts only where cxt was set up.
+	if state := gitctx.InspectContextRoot(ctx, cwd); !state.GitRepository || !state.Initialized {
+		return nil
+	}
 	root := cxtRepoRoot(ctx, cwd)
 	if !remotecfg.SegmentsAuto(root) {
 		return nil

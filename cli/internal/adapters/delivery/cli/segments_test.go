@@ -125,20 +125,10 @@ func TestRunSegmentsReturnsReaderErrors(t *testing.T) {
 }
 
 func TestSegmentsCommandContract(t *testing.T) {
-	if !ReadOnlyInvocation([]string{"cxt", "segments", "--json"}) {
-		t.Fatal("segments must be classified as a read-only command")
-	}
-	// Uploading is not reading, even though it writes nothing on this computer.
-	if ReadOnlyInvocation([]string{"cxt", "segments", "push"}) || ReadOnlyInvocation([]string{"cxt", "segments", "push", "--json"}) {
-		t.Fatal("segments push must not be classified as a read-only command")
-	}
 	// Uploading one session, removing one and allowing one again name it by
 	// its tool and its identifier, and none of them is read-only.
 	for _, args := range [][]string{{"cxt", "segments", "push", "claude", "session-1"}, {"cxt", "segments", "remove", "claude", "session-1", "--yes"},
 		{"cxt", "segments", "remove", "codex", "thread-1"}, {"cxt", "segments", "allow", "codex", "thread-1", "--json"}} {
-		if ReadOnlyInvocation(args) {
-			t.Fatalf("%v must not be classified as a read-only command", args)
-		}
 		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
 			t.Fatalf("%v was rejected: %v", args, err)
 		}
@@ -150,16 +140,13 @@ func TestSegmentsCommandContract(t *testing.T) {
 			t.Fatalf("%v must be rejected before dispatch", args)
 		}
 	}
-	// The diagnosis reads only. Asking the server for a fresh read, archiving
-	// and sending a copy again change what the server holds.
-	if !ReadOnlyInvocation([]string{"cxt", "segments", "doctor"}) || !ReadOnlyInvocation([]string{"cxt", "segments", "doctor", "--json"}) {
-		t.Fatal("segments doctor must be classified as a read-only command")
+	for _, args := range [][]string{{"cxt", "segments", "doctor"}, {"cxt", "segments", "doctor", "--json"}} {
+		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
+			t.Fatalf("%v was rejected: %v", args, err)
+		}
 	}
 	for _, args := range [][]string{{"cxt", "segments", "refresh"}, {"cxt", "segments", "archive", "claude", "session-1"}, {"cxt", "segments", "unarchive", "codex", "thread-1"},
 		{"cxt", "segments", "resend", "claude", "session-1", "--json"}} {
-		if ReadOnlyInvocation(args) {
-			t.Fatalf("%v must not be classified as a read-only command", args)
-		}
 		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
 			t.Fatalf("%v was rejected: %v", args, err)
 		}
@@ -175,9 +162,6 @@ func TestSegmentsCommandContract(t *testing.T) {
 	// its tool and identifier; it is never read-only.
 	for _, args := range [][]string{{"cxt", "segments", "fork", "--at", "abc1234", "--branch", "topic/again"}, {"cxt", "segments", "fork", "claude", "session-1"},
 		{"cxt", "segments", "fork", "claude", "session-1", "--at=abc1234", "--to", "codex", "--branch", "topic/again", "--json"}} {
-		if ReadOnlyInvocation(args) {
-			t.Fatalf("%v must not be classified as a read-only command", args)
-		}
 		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
 			t.Fatalf("%v was rejected: %v", args, err)
 		}
@@ -191,9 +175,11 @@ func TestSegmentsCommandContract(t *testing.T) {
 			t.Fatalf("%v must be rejected before dispatch", args)
 		}
 	}
-	// Reading what .cxt keeps is reading, for every session or for one.
-	if !ReadOnlyInvocation([]string{"cxt", "segments", "log"}) || !ReadOnlyInvocation([]string{"cxt", "segments", "log", "codex", "thread-1", "--json"}) {
-		t.Fatal("segments log must be classified as a read-only command")
+	// What .cxt keeps is shown for every session or for one.
+	for _, args := range [][]string{{"cxt", "segments", "log"}, {"cxt", "segments", "log", "codex", "thread-1", "--json"}} {
+		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
+			t.Fatalf("%v was rejected: %v", args, err)
+		}
 	}
 	for _, args := range [][]string{{"cxt", "segments", "extra"}, {"cxt", "segments", "--all"}, {"cxt", "segments", "--json", "--json"},
 		{"cxt", "segments", "push", "extra"}, {"cxt", "segments", "pull"}, {"cxt", "segments", "push", "--force"},

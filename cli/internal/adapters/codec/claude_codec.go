@@ -32,9 +32,6 @@ type ClaudeCodec struct{}
 // NewClaudeCodec creates a new ClaudeCodec.
 func NewClaudeCodec() *ClaudeCodec { return &ClaudeCodec{} }
 
-// Provider returns the provider (claude) this codec is responsible for.
-func (c *ClaudeCodec) Provider() domain.ProviderKind { return domain.ProviderClaude }
-
 // claudeRecord is the structure of a Claude session JSONL line (as we use it).
 type claudeRecord struct {
 	Type      string         `json:"type"`
@@ -75,11 +72,6 @@ type claudeBlock struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage        `json:"content,omitempty"`
-}
-
-// Decode converts Claude JSONL bytes to a CIRDocument.
-func (c *ClaudeCodec) Decode(ctx context.Context, raw []byte) (domain.CIRDocument, error) {
-	return c.DecodeAppend(ctx, raw, domain.Envelope{}, 0)
 }
 
 // DecodeAppend consumes complete native records, carrying only envelope state.

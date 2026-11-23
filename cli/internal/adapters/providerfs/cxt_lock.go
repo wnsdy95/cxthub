@@ -135,18 +135,3 @@ func CaptureGateHeld(ctx context.Context, root string) bool {
 	held, _ := ctx.Value(captureGateKey{}).(string)
 	return held != "" && held == captureRoot(root)
 }
-
-// WithCaptureGate permits nested SH work on the same root through its context.
-// An EX request with that context fails rather than attempting a lock upgrade.
-func WithCaptureGate(ctx context.Context, root string, fn func(context.Context) error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if CaptureGateHeld(ctx, root) {
-		return fn(ctx)
-	}
-	_, err := WithCxtLock(ctx, root, "first-tracking", "repo", syscall.LOCK_SH, true, func() error {
-		return fn(context.WithValue(ctx, captureGateKey{}, captureRoot(root)))
-	})
-	return err
-}

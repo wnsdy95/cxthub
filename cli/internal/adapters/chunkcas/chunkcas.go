@@ -28,8 +28,6 @@ const MaxPortableChunkBytes = 2 << 20
 const (
 	FormatV1 = "cxt-doc-chunks-v1"
 	FormatV2 = "cxt-doc-chunks-v2"
-	// Format is emitted by new local storage writes.
-	Format = FormatV2
 )
 
 // Manifest is the chunk doc manifest (common form for storage and wire).
@@ -59,28 +57,6 @@ func PlanDoc(cb []byte) (Plan, bool) {
 	return buildPlan(FormatV2, env, chunkByteStream(stream)), true
 }
 
-// PlanDocV1 retains the old whole-event format for compatibility with peers without v2 capability.
-func PlanDocV1(cb []byte) (Plan, bool) {
-	env, events, err := split(cb)
-	if err != nil || len(env) == 0 || len(events) == 0 {
-		return Plan{}, false
-	}
-	raw := chunkEvents(events)
-	for _, c := range raw {
-		if len(c) > MaxPortableChunkBytes {
-			return Plan{}, false
-		}
-	}
-	flat := make([][]byte, 0, len(events))
-	for _, c := range raw {
-		flat = append(flat, SplitChunk(c)...)
-	}
-	if !bytes.Equal(Assemble(env, flat), cb) {
-		return Plan{}, false
-	}
-	return buildPlan(FormatV1, env, raw), true
-}
-
 func buildPlan(format string, env json.RawMessage, raw [][]byte) Plan {
 	p := Plan{Manifest: Manifest{Format: format, Envelope: env}, Bodies: make(map[domain.ContentHash][]byte, len(raw))}
 	for _, c := range raw {
@@ -90,22 +66,6 @@ func buildPlan(format string, env json.RawMessage, raw [][]byte) Plan {
 		p.Bodies[h] = c
 	}
 	return p
-}
-
-// ParseManifest parses data if it's a chunk manifest (otherwise ok=false — legacy fallback).
-func ParseManifest(data []byte) (Manifest, bool) {
-	limit := len(data)
-	if limit > 64 {
-		limit = 64
-	}
-	if !bytes.Contains(data[:limit], []byte("cxt-doc-chunks-v")) {
-		return Manifest{}, false
-	}
-	var man Manifest
-	if err := json.Unmarshal(data, &man); err != nil || !SupportedFormat(man.Format) || len(man.Envelope) == 0 || len(man.Chunks) == 0 {
-		return Manifest{}, false
-	}
-	return man, true
 }
 
 // Assemble recovers canonical bytes from envelope and event fragments (byte-accurate).
@@ -125,40 +85,6 @@ func Assemble(env json.RawMessage, events [][]byte) []byte {
 	return b.Bytes()
 }
 
-// AssembleChunks recovers canonical bytes from chunk bytes in manifest order and compares integrity hash (dirt detection).
-func AssembleChunks(man Manifest, chunks [][]byte, want domain.ContentHash) ([]byte, error) {
-	var cb []byte
-	switch normalizeFormat(man.Format) {
-	case FormatV1:
-		events := make([][]byte, 0, len(chunks)*8)
-		for _, c := range chunks {
-			events = append(events, SplitChunk(c)...)
-		}
-		cb = Assemble(man.Envelope, events)
-	case FormatV2:
-		size := len(man.Envelope) + 25
-		for _, chunk := range chunks {
-			size += len(chunk)
-		}
-		var body bytes.Buffer
-		body.Grow(size)
-		body.WriteString(`{"envelope":`)
-		body.Write(man.Envelope)
-		body.WriteString(`,"events":[`)
-		for _, chunk := range chunks {
-			body.Write(chunk)
-		}
-		body.WriteString(`]}`)
-		cb = body.Bytes()
-	default:
-		return nil, domain.ErrHashMismatch
-	}
-	if domain.HashContent(cb) != want {
-		return nil, domain.ErrHashMismatch
-	}
-	return cb, nil
-}
-
 func SupportedFormat(format string) bool {
 	format = normalizeFormat(format)
 	return format == FormatV1 || format == FormatV2
@@ -169,39 +95,6 @@ func normalizeFormat(format string) string {
 		return FormatV1
 	}
 	return format
-}
-
-// SplitChunk converts chunk bytes back into event fragments.
-func SplitChunk(b []byte) [][]byte { return bytes.Split(b, []byte("\n")) }
-
-func split(cb []byte) (env json.RawMessage, events []json.RawMessage, err error) {
-	var frag struct {
-		Envelope json.RawMessage   `json:"envelope"`
-		Events   []json.RawMessage `json:"events"`
-	}
-	if err := json.Unmarshal(cb, &frag); err != nil {
-		return nil, nil, err
-	}
-	return frag.Envelope, frag.Events, nil
-}
-
-func chunkEvents(events []json.RawMessage) [][]byte {
-	var chunks [][]byte
-	var cur bytes.Buffer
-	for _, e := range events {
-		if cur.Len() > 0 {
-			cur.WriteByte('\n')
-		}
-		cur.Write(e)
-		if cur.Len() >= ChunkTarget {
-			chunks = append(chunks, append([]byte(nil), cur.Bytes()...))
-			cur.Reset()
-		}
-	}
-	if cur.Len() > 0 {
-		chunks = append(chunks, append([]byte(nil), cur.Bytes()...))
-	}
-	return chunks
 }
 
 func chunkByteStream(stream []byte) [][]byte {

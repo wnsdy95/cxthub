@@ -11,8 +11,10 @@ import (
 	"testing"
 )
 
-func TestManagedHooksReplayExactInput(t *testing.T) {
-	for _, event := range []string{"pre-push", "post-rewrite"} {
+// A hook of the user's that ran before cxt was installed still gets exactly
+// what Git gives the hook. cxt gets none of it: it is only told to wake.
+func TestManagedHooksGiveTheUsersHookItsInputUnchanged(t *testing.T) {
+	for _, event := range HookNames {
 		for _, input := range []string{"", "first record\nsecond record\n", "record without newline", "record\n\n"} {
 			for _, userStatus := range []int{-1, 0, 19} {
 				t.Run(fmt.Sprintf("%s/%d/%d", event, len(input), userStatus), func(t *testing.T) {
@@ -28,7 +30,7 @@ func TestManagedHooksReplayExactInput(t *testing.T) {
 					binary := filepath.Join(dir, "cxt")
 					writeHookTestFile(t, binary, recorder(cxtInput, cxtArgs, 23))
 					hook := filepath.Join(dir, event)
-					writeHookTestFile(t, hook, script(event, binary))
+					writeHookTestFile(t, hook, script(binary))
 					if userStatus >= 0 {
 						writeHookTestFile(t, hook+".pre-cxt", recorder(userInput, userArgs, userStatus))
 					}
@@ -52,26 +54,30 @@ func TestManagedHooksReplayExactInput(t *testing.T) {
 					if status != wantStatus {
 						t.Fatalf("status=%d want=%d: %s", status, wantStatus, out)
 					}
-					check := func(inputPath, argsPath string, wantArgs []string) {
+					if len(out) != 0 {
+						t.Fatalf("the hook printed something of its own: %q", out)
+					}
+					read := func(path string) string {
 						t.Helper()
-						got, err := os.ReadFile(inputPath)
-						if err != nil || string(got) != input {
-							t.Fatalf("input changed: got=%q want=%q err=%v", got, input, err)
+						got, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
 						}
-						got, err = os.ReadFile(argsPath)
-						if err != nil || !reflect.DeepEqual(strings.Split(strings.TrimSuffix(string(got), "\x00"), "\x00"), wantArgs) {
-							t.Fatalf("arguments changed: %q %v", got, err)
-						}
+						return string(got)
 					}
 					if userStatus >= 0 {
-						check(userInput, userArgs, args)
-					}
-					if event == "pre-push" && userStatus > 0 {
-						if _, err := os.Stat(cxtInput); !os.IsNotExist(err) {
-							t.Fatal("cxt ran after user rejected push")
+						if got := read(userInput); got != input {
+							t.Fatalf("the user's hook input changed: got=%q want=%q", got, input)
 						}
-					} else {
-						check(cxtInput, cxtArgs, append([]string{"git-hook", event}, args...))
+						if got := strings.Split(strings.TrimSuffix(read(userArgs), "\x00"), "\x00"); !reflect.DeepEqual(got, args) {
+							t.Fatalf("the user's hook arguments changed: %q", got)
+						}
+					}
+					if got := read(cxtInput); got != "" {
+						t.Fatalf("cxt was given the hook's input: %q", got)
+					}
+					if got := strings.Split(strings.TrimSuffix(read(cxtArgs), "\x00"), "\x00"); !reflect.DeepEqual(got, []string{"git-hook", "wake"}) {
+						t.Fatalf("cxt was called with %q", got)
 					}
 				})
 			}

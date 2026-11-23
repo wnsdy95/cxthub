@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
@@ -17,9 +16,6 @@ type ClaudeMaterializer struct{}
 
 // NewClaudeMaterializer creates a ClaudeMaterializer.
 func NewClaudeMaterializer() *ClaudeMaterializer { return &ClaudeMaterializer{} }
-
-// Provider returns claude.
-func (m *ClaudeMaterializer) Provider() domain.ProviderKind { return domain.ProviderClaude }
 
 // Materialize records raw (encoded Claude JSONL) as a native session file.
 func (m *ClaudeMaterializer) Materialize(ctx context.Context, raw []byte, cwd string) (string, string, error) {

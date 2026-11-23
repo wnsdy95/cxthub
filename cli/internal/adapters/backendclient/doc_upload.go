@@ -12,8 +12,6 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
-var _ outbound.ChunkedDocumentPusher = (*BackendClient)(nil)
-
 // PushDocChunks uses the store's verified descriptor without assembling the
 // document. Only a capability miss can return false, nil, before any writes.
 // The store proves the complete canonical identity; requested bodies are also

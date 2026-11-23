@@ -17,9 +17,6 @@ type ClaudeMemorySource struct{}
 // NewClaudeMemorySource creates a ClaudeMemorySource.
 func NewClaudeMemorySource() *ClaudeMemorySource { return &ClaudeMemorySource{} }
 
-// Provider returns claude.
-func (s *ClaudeMemorySource) Provider() domain.ProviderKind { return domain.ProviderClaude }
-
 // ReadNative reads Claude's repository-scoped auto-memory entrypoint.
 // A missing or inaccessible file returns found=false so the caller can fall back to CIR distillation.
 func (s *ClaudeMemorySource) ReadNative(ctx context.Context, cwd, _ string) (domain.NativeMemory, bool, error) {
@@ -49,27 +46,7 @@ func (s *ClaudeMemorySource) ReadNative(ctx context.Context, cwd, _ string) (dom
 	}, true, nil
 }
 
-// ClaudeMemorySink implements MemorySink by writing a MemoryDigest to the Claude project instructions file (CLAUDE.md) (compatibility rules).
-type ClaudeMemorySink struct{}
-
-// NewClaudeMemorySink creates a ClaudeMemorySink.
-func NewClaudeMemorySink() *ClaudeMemorySink { return &ClaudeMemorySink{} }
-
-// Provider returns claude.
-func (s *ClaudeMemorySink) Provider() domain.ProviderKind { return domain.ProviderClaude }
-
-// Inject refreshes the bounded cxt-managed region in cwd/CLAUDE.md while
-// preserving user-authored content outside the markers.
-func (s *ClaudeMemorySink) Inject(_ context.Context, digest domain.MemoryDigest, cwd string) (string, error) {
-	path := filepath.Join(cwd, "CLAUDE.md")
-	if err := writeManagedMemory(path, digest); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
 // Ensure Claude adapters implement the memory ports.
 var (
 	_ outbound.MemorySource = (*ClaudeMemorySource)(nil)
-	_ outbound.MemorySink   = (*ClaudeMemorySink)(nil)
 )

@@ -4,20 +4,11 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"reflect"
 	"slices"
-	"testing"
 	"time"
-
-	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
-	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Re-exec only this test binary, with a private environment and finite lifetime.
@@ -75,86 +66,4 @@ func nativeClaudeLaunchTestHelper() int {
 		return 95
 	}
 	return 0
-}
-
-func TestNativeClaudeLaunchNamedSessionThroughAdapter(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		args   []string
-		reject bool
-	}{
-		{"short", []string{"-n", "review \ud55c\uae00 = one"}, false},
-		{"long", []string{"--name", "review \ud55c\uae00 = one"}, false},
-		{"equals", []string{"--name=review \ud55c\uae00 = one"}, false},
-		{"debug-short-rejected", []string{"-d"}, true},
-		{"debug-long-rejected", []string{"--debug"}, true},
-		{"debug-filter-rejected", []string{"--debug=api,hooks"}, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			exe, err := os.Executable()
-			if err != nil {
-				t.Fatal(err)
-			}
-			root, err := filepath.EvalSymlinks(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			recorder := filepath.Join(root, "launch.jsonl")
-			args := append(append([]string{}, tc.args...), "--", "PRIVATE_QUESTION")
-			bound, err := bindNativeClaudeLaunch(delivcli.ProviderLaunchRequest{Cwd: root, Executable: exe, Intent: delivcli.LaunchIntent{
-				Provider: domain.ProviderClaude, Pull: true, ContextBudget: 200000, ProviderArgs: args,
-			}})
-			if err != nil {
-				t.Fatal("shared binder rejected invocation:", err)
-			}
-			bound.options.Env = []string{"HOME=" + root, "TMPDIR=" + root, "CLAUDE_CONFIG_DIR=" + filepath.Join(root, "config"), "CXT_CLAUDE_LAUNCH_TEST_HELPER=1", "CXT_CLAUDE_LAUNCH_TEST_RECORD=" + recorder, "GORACE=atexit_sleep_ms=0"}
-			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-			defer cancel()
-			exchange, err := nativeclaude.StartFirstExchange(ctx, bound.options)
-			if tc.reject {
-				if exchange != nil {
-					_ = exchange.Close()
-				}
-				if !errors.Is(err, nativeclaude.ErrState) {
-					t.Fatal("debug must remain unsupported by the real adapter:", err)
-				}
-				if _, err := os.Stat(recorder); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("unsupported debug option launched a subprocess")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal("bound session name rejected by the real adapter:", err)
-			}
-			defer exchange.Close()
-			const nameArg = "--name=review \ud55c\uae00 = one"
-			resume, err := exchange.ResumeArguments()
-			if err != nil || !reflect.DeepEqual(resume, []string{nameArg, "--resume", exchange.OwnedArchivePath()}) {
-				t.Fatal("session name changed in resume arguments:", err)
-			}
-			if err := exchange.Close(); err != nil {
-				t.Fatal("synthetic initialization did not close cleanly:", err)
-			}
-			f, err := os.Open(recorder)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer f.Close()
-			var records []nativeClaudeLaunchTestRecord
-			scanner := bufio.NewScanner(f)
-			for scanner.Scan() {
-				var record nativeClaudeLaunchTestRecord
-				if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-					t.Fatal(err)
-				}
-				records = append(records, record)
-			}
-			if scanner.Err() != nil || len(records) != 3 || !slices.Equal(records[0].Args, []string{"--version"}) || !slices.Contains(records[1].Args, nameArg) || slices.Contains(records[1].Args, "PRIVATE_QUESTION") || len(records[2].Frame) == 0 {
-				t.Fatal("expected exactly one version probe, named launch, and initialization without a question")
-			}
-			if bound.prompt.Text() != "PRIVATE_QUESTION" || exchange.HostVersion() != "2.1.287" {
-				t.Fatal("binding changed the question or accepted the wrong native version")
-			}
-		})
-	}
 }

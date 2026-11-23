@@ -1,17 +1,17 @@
 // Package main is the entry point for the cxt client binary.
 //
-// It acts as a composition root, branching to mcp/hook/CLI entry points based on arguments.
+// It acts as a composition root, branching to the hook and CLI entry points based on arguments.
 // It is the sole point for creating and wiring adapters and injecting use-case services (DI).
 // (domain model Rule 5: cmd/cxt can import everything. DI is only here.)
 //
 // cxt is client-specific: the central server (serve) has its own backend module,
-// and this binary acts as a negotiator (adapters/backendclient) syncing with that server via REST (push/pull).
+// and this binary talks to that server over REST (adapters/backendclient).
 //
-// Subcommands (domain model, client-specific):
+// Entry points:
 //
-//	cxt mcp --local              → start the offline-development stdio MCP helper
-//	cxt hook --provider X --event Y → hook event handler (auto capture)
-//	cxt init|repo|save|list|fork|checkout|load|memorize|memory|push|pull → user CLI commands
+//	cxt hook --provider X --event Y → what an agent tool runs at the events of a session
+//	cxt git-hook <name>             → what a Git hook runs; it only wakes the collector
+//	cxt <command>                   → user commands (see cxt help)
 package main
 
 import (
@@ -20,23 +20,15 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/capturejournal"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/codec"
 	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
 	delivhook "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/hook"
-	delivmcp "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/mcp"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
-	adaptersession "github.com/wnsdy95/cxthub-cli/internal/adapters/session"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/sessionnotice"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/app"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
@@ -54,36 +46,15 @@ func main() {
 
 // run parses arguments and branches to the appropriate entry point.
 func run(args []string) error {
-	// Help and usage errors must return before adapter construction: some
-	// commands materialize provider sessions or contact the remote immediately.
+	// A session command is the same at the top level and under `segments`.
+	args = delivcli.CanonicalArgs(args)
+	// Help and usage errors must return before adapter construction.
 	if handled, err := delivcli.PreflightArgs(args); handled || err != nil {
 		return err
 	}
 	if args[1] == "version" || args[1] == "--version" {
 		fmt.Println("cxt", version)
 		return nil
-	}
-	if args[1] == "sync" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		// Pausing touches only local upload metadata, so it shares this early
-		// path with status instead of building the provider-capable container.
-		if pause, resume := slices.Contains(args[2:], "pause-history"), slices.Contains(args[2:], "resume-history"); pause || resume {
-			c := &delivcli.Container{Inspection: localReplicaInspector{}, SetHistoryPaused: setHistoryPaused, WakeHistoricalSync: delivcli.SpawnHistoricalSync}
-			return delivcli.RunHistoricalUploadsPause(context.Background(), c, cwd, pause, os.Stdout)
-		}
-		return delivcli.RunSyncStatus(context.Background(), localReplicaInspector{}, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
-	}
-	if args[1] == "doctor" || (args[1] == "branch" && len(args) > 2 && args[2] == "operations") {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
-		return delivcli.RunDiagnostics(ctx, localReplicaInspector{}, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
 	}
 	if args[1] == "segments" {
 		// Reading session records needs no store or provider adapter, so this
@@ -147,67 +118,23 @@ func run(args []string) error {
 		}
 		return delivcli.RunSegments(ctx, reporter, cwd, asJSON, os.Stdout)
 	}
-	if args[1] == "capture" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		ctx := context.Background()
-		state := gitctx.InspectContextRoot(ctx, cwd)
-		if !state.Initialized {
-			return fmt.Errorf("no initialized local replica; run cxt doctor")
-		}
-		store := storage.NewFileStore(state.Root)
-		repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
-		if err != nil {
-			return err
-		}
-		service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), store)
-		c := &delivcli.Container{CaptureRecovery: service, History: app.NewContextHistoryService(store, store), List: app.NewListSessionsService(store)}
-		if len(args) > 2 && args[2] == "retry" {
-			git := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter())
-			captures := map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture(), domain.ProviderCodex: capture.NewCodexCapture()}
-			codecs := map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec(), domain.ProviderCodex: codec.NewCodexCodec()}
-			c.CommitCapture = app.NewSaveSessionService(git, captures, codecs, store, capture.NewSessionCapture(store), storage.NewSyncOutbox()).WithFrozenMemory(map[domain.ProviderKind]outbound.MemorySource{domain.ProviderClaude: memory.NewClaudeMemorySource(), domain.ProviderCodex: memory.NewCodexMemorySource()}, memory.NewRuleDistiller())
-		}
-		return delivcli.RunCaptureRecovery(ctx, c, cwd, string(repo.ID), args[2:], os.Stdout)
-	}
-	if args[1] == "repair" && slices.Contains(args[2:], "--from-server") {
-		return runRepair(args[2:])
-	}
 	// Process-level configuration resolves the shared repo root and environment
 	// overrides. Persisted remotes and authentication are loaded lazily by their
 	// adapters in buildContainer.
 	cfg := loadConfig()
 
 	// composition root: creates and wires all adapters and services.
-	var ctr container
-	if delivcli.ReadOnlyInvocation(args) && args[1] != "mcp" {
-		ctr = buildReadContainer(cfg)
-	} else {
-		ctr = buildContainer(cfg)
-	}
-
-	// subcommand branching
-	if len(args) < 2 {
-		return ctr.cliHandler.Run(ctr.clictr, args)
-	}
-	switch args[1] {
-	case "mcp":
-		// PreflightArgs requires --local before adapter construction. The product
-		// MCP is the OAuth-protected independent cxt-mcp endpoint, not this process.
-		return ctr.mcpServer.Run()
-	case "hook":
-		// hook safety contract (capture path): capture failures must not block agent sessions —
-		// errors should only be reported to stderr and always exit 0.
+	ctr := buildContainer(cfg)
+	if args[1] == "hook" {
+		// Hook safety contract: a failure must not block an agent session —
+		// errors are only reported to stderr and the exit status is always 0.
 		provider, event := parseHookFlags(args[2:])
 		if err := ctr.hookHandler.Run(provider, event); err != nil {
 			fmt.Fprintf(os.Stderr, "cxt hook: %v\n", err)
 		}
 		return nil
-	default:
-		return ctr.cliHandler.Run(ctr.clictr, args)
 	}
+	return ctr.cliHandler.Run(ctr.clictr, args)
 }
 
 // config contains process-level execution settings for the cxt client.
@@ -284,7 +211,6 @@ func configGitValue(cwd string, args ...string) string {
 
 // container is the bundle of all services/handlers created in the composition root.
 type container struct {
-	mcpServer   *delivmcp.Server
 	hookHandler *delivhook.Handler
 	cliHandler  struct {
 		Run func(*delivcli.Container, []string) error
@@ -293,47 +219,12 @@ type container struct {
 }
 
 // buildRepositoryAdapters constructs passive repository readers and a lazy client.
-// No registration, capture discovery, replay or provider initialization occurs here.
+// No registration or provider initialization occurs here.
 func buildRepositoryAdapters(cfg config) (*storage.FileStore, *backendclient.BackendClient, outbound.GitContext) {
-	// --- driven adapters (outbound implementations) ---
-	// Local store: repo root .cxt/ content-addressed file store (client-only).
+	// Local store: repo root .cxt/ (client-only).
 	store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
-	if cacheDir, err := os.UserCacheDir(); err == nil {
-		store.EnableDocVerificationCache(filepath.Join(cacheDir, "cxthub", "doc-verification", "key-v1"))
-	}
 	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
-	// Pull delta: Injects local chunk store, avoiding download of existing chunks.
-	remote.SetChunkLocal(store)
 	return store, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter())
-}
-
-// buildReadContainer deliberately omits command-side services. Read-only
-// dispatch cannot reach capture, checkout, sync mutation or branch replay.
-func buildReadContainer(cfg config) container {
-	store, remote, gitCtx := buildRepositoryAdapters(cfg)
-	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
-	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
-	c := &delivcli.Container{
-		ResolveRepo:  gitCtx.CurrentRepo,
-		Inspection:   localReplicaInspector{},
-		List:         app.NewListSessionsService(store),
-		Queries:      app.NewLocalRefQueryService(gitCtx, store),
-		HistoryQuery: history,
-		WorkingState: working,
-		ContextDiff:  working,
-		CodePosition: gitctx.NewGitContextAdapter(),
-		ListIndexStashes: func(ctx context.Context, cwd string) ([]domain.StagingStash, error) {
-			repo, err := gitCtx.CurrentRepo(ctx, cwd)
-			if err != nil {
-				return nil, err
-			}
-			return store.ListIndexStashes(ctx, repo.ID)
-		},
-		Settings: remote,
-	}
-	out := container{clictr: c}
-	out.cliHandler.Run = delivcli.Run
-	return out
 }
 
 // injectScrubOptions gives capture the repository's masking policy. Capture
@@ -350,73 +241,16 @@ func injectScrubOptions() {
 }
 
 // buildContainer creates all adapters/services and injects dependencies.
-// The read-only composition above uses the same passive repository adapters.
 func buildContainer(cfg config) container {
 	store, remote, gitCtx := buildRepositoryAdapters(cfg)
-	remote.SetMetadataCheckpointStore(store)
-	remote.SetCatalogCacheStore(store)
 	injectScrubOptions()
-	// Repository identity: an origin URL reanchors the local store to its URL-derived RepoID,
-	// so clients configured with the same origin address the same repository.
-	claudeCodec := codec.NewClaudeCodec()
-	codexCodec := codec.NewCodexCodec()
-	codecs := map[domain.ProviderKind]outbound.ProviderCodec{
-		domain.ProviderClaude: claudeCodec,
-		domain.ProviderCodex:  codexCodec,
-	}
-	claudeCap := capture.NewClaudeCapture()
-	codexCap := capture.NewCodexCapture()
-	captures := map[domain.ProviderKind]outbound.CaptureSource{
-		domain.ProviderClaude: claudeCap,
-		domain.ProviderCodex:  codexCap,
-	}
-	nativeSessions := capture.NewCommandSessionResolver(claudeCap, codexCap)
-
-	// Memory adapter (compatibility rules): MemorySource/MemorySink registry + self-distillation MemoryDistiller.
-	memSources := map[domain.ProviderKind]outbound.MemorySource{
-		domain.ProviderClaude: memory.NewClaudeMemorySource(),
-		domain.ProviderCodex:  memory.NewCodexMemorySource(),
-	}
-	memSinks := map[domain.ProviderKind]outbound.MemorySink{
-		domain.ProviderClaude: memory.NewClaudeMemorySink(),
-		domain.ProviderCodex:  memory.NewCodexMemorySink(),
-	}
-	var distiller outbound.MemoryDistiller = memory.NewRuleDistiller()
-
-	// Session materializer(compatibility rules): full-context recovery native resume synthesis.
-	materializers := map[domain.ProviderKind]outbound.SessionMaterializer{
-		domain.ProviderClaude: adaptersession.NewClaudeMaterializer(),
-		domain.ProviderCodex:  adaptersession.NewCodexMaterializer(),
-	}
 
 	// --- use-case services (inbound implementation, outbound injection) ---
-	initSvc := app.NewInitRepoService(gitCtx, store)
-	saveSvc := app.NewSaveSessionService(gitCtx, captures, codecs, store, capture.NewSessionCapture(store), storage.NewSyncOutbox())
-	saveSvc.WithFrozenMemory(memSources, distiller)
-	stagingSvc := app.NewStagingService(gitCtx, gitctx.NewGitContextAdapter(), store, store, captures, codecs, capture.NewSessionCapture(store), storage.NewSyncOutbox())
-	forkSvc := app.NewForkSessionService(store)
-	branchLifecycleSvc := app.NewBranchLifecycleService(gitCtx, store)
-	prompts := app.NewMemoryPromptService(remote, gitctx.NewGitContextAdapter(), store)
-	loadSvc := app.NewLoadSessionService(store, codecs, materializers, memSources, distiller, memSinks).WithMemoryPrompts(prompts)
-	checkoutSvc := app.NewCheckoutSessionService(forkSvc, loadSvc, store).WithCodePosition(gitctx.NewGitContextAdapter())
-	listSvc := app.NewListSessionsService(store)
-	memorizeSvc := app.NewMemorizeService(gitCtx, captures, codecs, memSources, distiller, store)
-	handoffSvc := app.NewBranchHandoffService(store)
-	syncSvc := app.NewSyncRepoService(store, remote, gitCtx, storage.NewSyncOutbox())
-	seedSvc := app.NewBranchSeedService(gitCtx, store, distiller, codecs, materializers, memSources).WithMemoryPrompts(prompts)
-	tagSvc := app.NewTagService(gitCtx, store)
-	stashSvc := app.NewStashService(gitCtx, captures, codecs, store, loadSvc, capture.NewSessionCapture(store))
+	initSvc := app.NewInitRepoService(gitCtx, gitctx.NewSetupMarker())
+	connectSvc := app.NewRepositoryConnectService(remote, gitCtx)
 
-	// --- capture coordinator ---
-	coord := capture.NewCaptureCoordinator(saveSvc, cfg.Identity)
-
-	// --- driving adapters (delivery; client-specific: mcp/hook/cli) ---
-	// The explicit --local MCP helper is a read-only offline projection. The
-	// product MCP runs in the independent cxt-mcp server against shared cloud storage.
-	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
-	contextHistory := app.NewContextHistoryService(store, store)
-	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
-	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices).WithSegmentCollector(delivcli.SpawnSegmentCollector)
+	// --- driving adapters (delivery; client-specific: hook/cli) ---
+	hookHdl := delivhook.NewHandler().WithSegmentCollector(delivcli.SpawnSegmentCollector)
 	// A session is given the most recent summary along its branch, read from
 	// the server and from Git as they are when a hook wakes cxt.
 	hookHdl.WithBranchSummaries(app.NewBranchSummaryService(gitCtx.CurrentRepo, gitctx.NewBranchPlace(), remote, gitctx.NewBranchSummaryGiven()).
@@ -428,41 +262,16 @@ func buildContainer(cfg config) container {
 			_, connected := remotecfg.Origin(root)
 			return connected || os.Getenv("CXT_REMOTE") != ""
 		}))
-	hookHdl.WithCaptureAdmission(func(ctx context.Context, cwd string) error {
-		repo, err := gitCtx.CurrentRepo(ctx, cwd)
-		if err != nil {
-			return err
-		}
-		return contextHistory.EnsureCapturePosition(ctx, repo.ID)
-	})
-	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
-	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	clictr := &delivcli.Container{
 		DeviceLoginClient:  deviceLoginClient,
 		OpenLoginBrowser:   openDeviceLoginBrowser,
-		ProviderLaunch:     providerLaunchHooks(cfg, nativeSessions),
-		WakeHistoricalSync: delivcli.SpawnHistoricalSync,
 		SetCaptureIdentity: setCaptureIdentity(cfg),
 		SetRemoteEndpoint:  setRemoteEndpoint(cfg),
 		ResolveRepo:        gitCtx.CurrentRepo,
-		Inspection:         localReplicaInspector{},
 		WithSecretsLock: func(ctx context.Context, cwd string, work func() error) error {
 			return storage.NewFileStore(cwd).WithSecretsLock(ctx, work)
 		},
-		WithBackfillDaemon: func(ctx context.Context, root string, work func() error) (bool, error) {
-			return storage.NewFileStore(root).WithBackfillDaemon(ctx, work)
-		},
-		SetHistoryPaused:        setHistoryPaused,
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
-		PrepareCapturePush:      prepareCapturePush(cfg, store),
-		Queries:                 app.NewLocalRefQueryService(gitCtx, store),
-		HistoryQuery:            history,
-		WorkingState:            working,
-		ContextDiff:             working,
-		CodePosition:            gitctx.NewGitContextAdapter(),
-		Staging:                 stagingSvc,
-		IndexStash:              stagingSvc,
-		ListIndexStashes:        stagingSvc.ListIndexStashes,
 		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
 			observed, err := remotecfg.Observe(ctx, cfg.RepoRoot)
 			if err != nil {
@@ -481,34 +290,11 @@ func buildContainer(cfg config) container {
 			client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
 			return resolveEndpointConnection(ctx, client, binding)
 		},
-		Init:              initSvc,
-		Save:              saveSvc,
-		CommitCapture:     saveSvc,
-		RequestCapture:    coord.RequestCapture,
-		SessionSelection:  nativeSessions,
-		SessionInventory:  nativeSessions,
-		WakeCommitCapture: delivcli.SpawnCommitCapture,
-		Fork:              forkSvc,
-		Branches:          branchLifecycleSvc,
-		Checkout:          checkoutSvc,
-		Load:              loadSvc,
-		List:              listSvc,
-		Memorize:          memorizeSvc,
-		Sync:              syncSvc,
-		Seed:              seedSvc,
-		Tag:               tagSvc,
-		Stash:             stashSvc,
-		Handoff:           handoffSvc,
-		History:           contextHistory,
-		CaptureRecovery:   app.NewCaptureRecoveryService(capturejournal.New(cfg.RepoRoot, cfg.RepoRoot), store),
-		PRMerges:          gitctx.NewGitHubPRMergeResolver(),
-		Settings:          remote,
-		SettingsObjects:   store,
-		Repack:            store.RepackObjects,
-		Identity:          cfg.Identity,
+		Init:            initSvc,
+		Connection:      connectSvc,
+		Settings:        remote,
+		SettingsObjects: store,
 	}
-	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
-	clictr.WakeFetchDiscovery = delivcli.SpawnFetchDiscovery
 	// The session report collector a hook wakes. A hook is never what it
 	// reads: it reads what the tools and Git recorded, whatever woke it.
 	if collector, files, err := newSegmentCollector(cfg); err == nil {
@@ -518,28 +304,8 @@ func buildContainer(cfg config) container {
 		clictr.SegmentCollectorState = files.LoadCollectorState
 		clictr.WakeSegmentCollector = delivcli.SpawnSegmentCollector
 	}
-	clictr.ObserveLiveSession = func(ctx context.Context, cwd string, provider domain.ProviderKind, id string) error {
-		return capture.ObserveLiveSession(ctx, cwd, provider, id, clictr.WakeFetchDiscovery)
-	}
-	hookHdl.WithAgentContext(preparer)
-	loadSvc.WithAgentContext(preparer).WithAgentCodePosition(gitctx.NewGitContextAdapter())
-	seedSvc.WithAgentContext(preparer)
-	handoffSvc.WithAgentContext(preparer, gitctx.NewGitContextAdapter())
-	clictr.PrepareAgent = preparer
-	clictr.ApplySelectedPull = selectedPullApplication(store, remote, gitCtx)
-	clictr.ResolveSyncDestination = namedSyncDestination(cfg, store, gitCtx)
-	remoteRepair := app.NewRemoteRepairService(syncSvc, store, gitctx.NewGitContextAdapter())
-	clictr.PreviewRemoteRepair = func(ctx context.Context, cwd, ref string, snapshot domain.ContentHash, reason string) (outbound.RemoteRepairPlan, error) {
-		in := app.RemoteRepairInput{Cwd: cwd, Reason: reason, Snapshot: snapshot, RefName: ref}
-		if ref != "" {
-			in.RefKind = domain.RefBranch
-		}
-		return remoteRepair.Preview(ctx, in)
-	}
-	clictr.ApplyRemoteRepair = remoteRepair.Apply
 
 	return container{
-		mcpServer:   mcpSrv,
 		hookHandler: hookHdl,
 		cliHandler: struct {
 			Run func(*delivcli.Container, []string) error
@@ -562,31 +328,4 @@ func parseHookFlags(args []string) (domain.ProviderKind, string) {
 		}
 	}
 	return provider, event
-}
-
-func inspectCaptureRecovery(ctx context.Context, cwd string) ([]domain.CaptureRecoveryStatus, error) {
-	state := gitctx.InspectContextRoot(ctx, cwd)
-	if !state.Initialized {
-		return nil, nil
-	}
-	repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
-	if err != nil {
-		return nil, err
-	}
-	service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), storage.NewCaptureEvidenceReader(state.Root))
-	return service.Inspect(ctx, string(repo.ID))
-}
-
-// setHistoryPaused keeps the first pause time across repeated pauses and never
-// touches queue records, so retention pins are unchanged.
-func setHistoryPaused(ctx context.Context, root, repo string, paused bool) (domain.HistoricalUploadControl, error) {
-	return storage.NewFileStore(root).UpdateHistoricalUploadControl(ctx, repo, func(control domain.HistoricalUploadControl) domain.HistoricalUploadControl {
-		switch {
-		case !paused:
-			control.PausedAt = time.Time{}
-		case control.PausedAt.IsZero():
-			control.PausedAt = time.Now().UTC()
-		}
-		return control
-	})
 }

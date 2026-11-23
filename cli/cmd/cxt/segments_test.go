@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
@@ -531,6 +533,10 @@ func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 // request for sessions recorded since it began, and after that only what changed.
 func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
 	base, repo, _ := segmentsTestFixture(t)
+	// The collector runs only where cxt was set up.
+	if _, err := gitctx.NewSetupMarker().MarkSetUp(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
 	stored := `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
 	fake := &segmentsTestServer{chunks: map[string][]byte{}, manifests: map[string]segmentsTestManifest{}, token: "synthetic-token",
 		answer: func(string) (int, string) { return http.StatusOK, stored }}
@@ -561,16 +567,19 @@ func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Beside Git's own directory the collector writes one more place: the
-	// user's cache of what it made of unchanged sources.
+	// Beside Git's own directory the collector writes two more places: the
+	// user's cache of what it made of unchanged sources, and the copies of
+	// what it sent, kept under .cxt/sessions where cxt is set up.
 	cacheDir := filepath.Join(base, "home", ".cache", "cxthub", "session-records-v1")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "home", ".cache"))
 	tree := func() map[string]string {
 		t.Helper()
 		all := segmentsTestPushTree(t, base, repo)
 		for path := range all {
-			if path == filepath.Join(base, "home", ".cache") || strings.HasPrefix(path, filepath.Join(base, "home", ".cache")+string(filepath.Separator)) {
-				delete(all, path)
+			for _, own := range []string{filepath.Join(base, "home", ".cache"), filepath.Join(repo, ".cxt", "sessions")} {
+				if path == own || strings.HasPrefix(path, own+string(filepath.Separator)) {
+					delete(all, path)
+				}
 			}
 		}
 		return all
@@ -630,7 +639,7 @@ func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("the grown report: %v %+v", err, body)
 	}
 	if after := tree(); !reflect.DeepEqual(before, after) {
-		t.Fatal("the collector changed a file outside Git's own directory and its cache")
+		t.Fatal("the collector changed a file outside Git's own directory, its cache and .cxt/sessions")
 	}
 	// The cache is this user's alone and holds no conversation.
 	entries, err := os.ReadDir(cacheDir)

@@ -53,8 +53,8 @@ func resolveEndpointConnection(ctx context.Context, client *backendclient.Backen
 	return domain.RepositoryConnection{RemoteURL: binding.RemoteURL, RepoID: binding.RepoID, RepositoryID: binding.RepositoryID}, nil
 }
 
-func setRemoteEndpoint(cfg config) func(context.Context, remotecfg.Observation, string, string, bool) error {
-	return func(ctx context.Context, observed remotecfg.Observation, name, raw string, migratePending bool) error {
+func setRemoteEndpoint(cfg config) func(context.Context, remotecfg.Observation, string, string) error {
+	return func(ctx context.Context, observed remotecfg.Observation, name, raw string) error {
 		endpoint, err := remotecfg.CanonicalEndpoint(raw)
 		if err != nil {
 			return err
@@ -95,7 +95,7 @@ func setRemoteEndpoint(cfg config) func(context.Context, remotecfg.Observation, 
 			}
 			rootConfirmed = true
 		}
-		return remotecfg.SetEndpointWithPending(ctx, observed, name, binding, rootConfirmed, migratePending)
+		return remotecfg.SetEndpoint(ctx, observed, name, binding, rootConfirmed)
 	}
 }
 

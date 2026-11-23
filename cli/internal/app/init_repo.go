@@ -2,62 +2,35 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 
-	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
-// InitRepoService implements the InitRepo inbound port as per the compatibility rules.
-//
-// Dependency outbound ports: GitContext(remote/cwd → RepoID), SessionStore(.cxt/ store creation).
-//
-// Init sequence:
-//  1. If in.RemoteURL is empty, use GitContext.CurrentRepo(Cwd) to auto-detect origin (fallback to cwd if not found).
-//  2. RepoID = ContentHash(normalize(remote_url_or_cwd)) to determine.
-//  3. SessionStore initializes the .cxt/ layout at the repo root (compatibility rules) (objects/, refs/heads, refs/tags, HEAD, manifest.json, config).
-//  4. Return InitOutput{RepoID, LocalStorePath}.
+// InitRepoService sets cxt up in a Git repository: it resolves which
+// repository the folder is and writes the mark that cxt may act there.
 type InitRepoService struct {
 	gitCtx outbound.GitContext
-	store  outbound.SessionStore
+	marker outbound.SetupMarker
 }
 
-// NewInitRepoService creates and injects dependencies for InitRepoService.
-func NewInitRepoService(gitCtx outbound.GitContext, store outbound.SessionStore) *InitRepoService {
-	return &InitRepoService{gitCtx: gitCtx, store: store}
+// NewInitRepoService creates the service.
+func NewInitRepoService(gitCtx outbound.GitContext, marker outbound.SetupMarker) *InitRepoService {
+	return &InitRepoService{gitCtx: gitCtx, marker: marker}
 }
 
-// Init registers the current repo and initializes the local .cxt/ store.
-// repoID is determined by GitContext.CurrentRepo (ensures same key as save). If RemoteURL is specified,
-// it is recorded as Repo.RemoteURL, and the identifier key follows the CurrentRepo result for consistency.
+// Init writes the mark when it is absent. Running it again changes nothing.
 func (s *InitRepoService) Init(ctx context.Context, in inbound.InitInput) (inbound.InitOutput, error) {
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {
 		return inbound.InitOutput{}, err
 	}
-	branch := repo.DefaultBranch
-	if branch == "" {
-		branch = "main"
-	}
-	// .cxt/ initialization: creates store directory using HEAD symbolic ref.
-	ref := domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch}
-	var initErr error
-	if in.PreserveExisting {
-		initializer, ok := s.store.(outbound.SetupHeadInitializer)
-		if !ok {
-			return inbound.InitOutput{}, fmt.Errorf("safe setup initializer unavailable")
-		}
-		initErr = initializer.InitializeHeadIfAbsent(ctx, ref)
-	} else {
-		initErr = s.store.PutRef(ctx, ref)
-	}
-	if err := initErr; err != nil {
+	root, err := s.marker.MarkSetUp(ctx, in.Cwd)
+	if err != nil {
 		return inbound.InitOutput{}, err
 	}
-	return inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(repo.LocalPath, ".cxt")}, nil
+	return inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(root, ".cxt")}, nil
 }
 
-// Ensure InitRepoService implements inbound.InitRepo.
 var _ inbound.InitRepo = (*InitRepoService)(nil)

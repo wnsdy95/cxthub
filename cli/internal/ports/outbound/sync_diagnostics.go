@@ -107,16 +107,6 @@ type SyncDiagnosticStageTotals struct {
 	Bytes          int64               `json:"bytes"`
 }
 
-// SyncDiagnosticsReport is an independent copy, ordered by completion sequence.
-type SyncDiagnosticsReport struct {
-	OperationID   string                      `json:"operation_id"`
-	ElapsedMillis int64                       `json:"elapsed_millis"`
-	Totals        []SyncDiagnosticStageTotals `json:"totals"`
-	Events        []SyncDiagnosticEvent       `json:"events"`
-	DroppedCount  uint64                      `json:"dropped_count"`
-	HasFailures   bool                        `json:"has_failures"`
-}
-
 // SyncDiagnostics is optional process-local storage. It never performs I/O.
 // Construct it with NewSyncDiagnostics; its zero value also uses the default limit.
 type SyncDiagnostics struct {
@@ -135,19 +125,6 @@ type SyncDiagnostics struct {
 
 var syncDiagnosticOperations atomic.Uint64
 
-// NewSyncDiagnostics defaults to 64 events for nonpositive limits and caps at 128.
-func NewSyncDiagnostics(limit int) *SyncDiagnostics {
-	if limit <= 0 {
-		limit = 64
-	}
-	if limit > 128 {
-		limit = 128
-	}
-	d := &SyncDiagnostics{limit: limit}
-	d.initializeLocked()
-	return d
-}
-
 func (d *SyncDiagnostics) initializeLocked() {
 	if d.operationID != "" {
 		return
@@ -158,47 +135,6 @@ func (d *SyncDiagnostics) initializeLocked() {
 		d.limit = 64
 	}
 	d.events = make([]SyncDiagnosticEvent, 0, d.limit)
-}
-
-// HasFailures remains true even after a failed event is evicted.
-func (d *SyncDiagnostics) HasFailures() bool {
-	if d == nil {
-		return false
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.hasFailures
-}
-
-func (d *SyncDiagnostics) Snapshot() SyncDiagnosticsReport {
-	if d == nil {
-		return SyncDiagnosticsReport{Events: []SyncDiagnosticEvent{}, Totals: []SyncDiagnosticStageTotals{}}
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.initializeLocked()
-	r := SyncDiagnosticsReport{
-		OperationID: d.operationID, Events: make([]SyncDiagnosticEvent, len(d.events)),
-		DroppedCount: d.dropped, HasFailures: d.hasFailures,
-		ElapsedMillis: time.Since(d.started).Milliseconds(), Totals: make([]SyncDiagnosticStageTotals, 0, len(d.totals)),
-	}
-	for i := range r.Events {
-		r.Events[i] = d.events[(d.head+i)%len(d.events)]
-		if remaining := r.Events[i].StartRemainingMillis; remaining != nil {
-			value := *remaining
-			r.Events[i].StartRemainingMillis = &value
-		}
-		if remaining := r.Events[i].EndRemainingMillis; remaining != nil {
-			value := *remaining
-			r.Events[i].EndRemainingMillis = &value
-		}
-	}
-	for _, total := range d.totals {
-		if total.Calls > 0 {
-			r.Totals = append(r.Totals, total)
-		}
-	}
-	return r
 }
 
 type syncDiagnosticCollectorKey struct{}
@@ -219,13 +155,6 @@ type syncDiagnosticScope struct {
 type syncDiagnosticRequest struct {
 	collector *SyncDiagnostics
 	number    uint64
-}
-
-// WithSyncDiagnostics preserves cancellation and deadlines. The attached context
-// defines the original caller budget, including for subsequently derived timeouts.
-// Attaching nil disables collection in this context and its descendants.
-func WithSyncDiagnostics(ctx context.Context, collector *SyncDiagnostics) context.Context {
-	return context.WithValue(ctx, syncDiagnosticCollectorKey{}, syncDiagnosticBinding{collector: collector, caller: ctx})
 }
 
 func syncDiagnosticsBinding(ctx context.Context) syncDiagnosticBinding {
@@ -249,35 +178,6 @@ func WithSyncDiagnosticRole(ctx context.Context, role SyncDiagnosticRole) contex
 	scope, _ := ctx.Value(syncDiagnosticScopeKey{}).(syncDiagnosticScope)
 	scope.role = sanitizeSyncDiagnosticRole(role)
 	return context.WithValue(ctx, syncDiagnosticScopeKey{}, scope)
-}
-
-// WithSyncDiagnosticDocument preserves role, attempt, and request numbers.
-func WithSyncDiagnosticDocument(ctx context.Context, ordinal int) context.Context {
-	if SyncDiagnosticsFromContext(ctx) == nil {
-		return ctx
-	}
-	scope, _ := ctx.Value(syncDiagnosticScopeKey{}).(syncDiagnosticScope)
-	scope.document = max(0, ordinal)
-	return context.WithValue(ctx, syncDiagnosticScopeKey{}, scope)
-}
-
-// WithSyncDiagnosticAttempt preserves role, document, and request numbers.
-func WithSyncDiagnosticAttempt(ctx context.Context, attempt int) context.Context {
-	if SyncDiagnosticsFromContext(ctx) == nil {
-		return ctx
-	}
-	scope, _ := ctx.Value(syncDiagnosticScopeKey{}).(syncDiagnosticScope)
-	scope.attempt = max(0, attempt)
-	return context.WithValue(ctx, syncDiagnosticScopeKey{}, scope)
-}
-
-func WithSyncDiagnosticScope(ctx context.Context, role SyncDiagnosticRole, attempt, document int) context.Context {
-	if syncDiagnosticsBinding(ctx).collector == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, syncDiagnosticScopeKey{}, syncDiagnosticScope{
-		role: sanitizeSyncDiagnosticRole(role), attempt: max(0, attempt), document: max(0, document),
-	})
 }
 
 // NextSyncDiagnosticRequest returns a derived context with the next operation-wide

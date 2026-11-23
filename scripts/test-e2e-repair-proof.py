@@ -1,47 +1,63 @@
 #!/usr/bin/env python3
-import importlib.util
-import json
+"""The end-to-end suites call only commands that cxt has.
+
+The CI workflow runs this file by name. The helper it once tested proved what
+`cxt repair --from-server` restored; that command was removed with capture. A
+suite that still called a removed command would fail in a way that says little,
+so this reads the command table of the CLI and checks every `cxt <command>` the
+suites run against it.
+"""
 from pathlib import Path
-import subprocess
-import sys
-import tempfile
+import re
 import unittest
 
-SCRIPT = Path(__file__).with_name("e2e-repair-proof.py")
-spec = importlib.util.spec_from_file_location("proof", SCRIPT)
-proof = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(proof)
-REPO, BASE, LOCAL = ("sha256:" + char * 64 for char in "abc")
+ROOT = Path(__file__).resolve().parent.parent
+ARGS = (ROOT / "cli/internal/adapters/delivery/cli/args.go").read_text()
+ROOT_GO = (ROOT / "cli/internal/adapters/delivery/cli/root.go").read_text()
 
 
-class RepairProofTest(unittest.TestCase):
-    def test_requires_matching_repository_published_baseline_and_absent_local(self):
-        good = {"repo_id": REPO, "snapshot_index": [BASE]}
-        self.assertIn(LOCAL, proof.local_only(good, REPO, BASE, LOCAL))
-        for manifest in (None, {}, dict(good, repo_id=BASE), dict(good, snapshot_index={}),
-                         dict(good, snapshot_index=[]), dict(good, snapshot_index=[BASE, LOCAL]),
-                         dict(good, snapshot_index=[BASE, "not a hash"])):
-            with self.subTest(manifest=manifest), self.assertRaises(ValueError):
-                proof.local_only(manifest, REPO, BASE, LOCAL)
-        for local in ("", None, BASE, "sha256:bad"):
-            with self.subTest(local=local), self.assertRaises(ValueError):
-                proof.local_only(good, REPO, BASE, local)
+def commands():
+    specs = ARGS.split("var commandArgSpecs = map[string]commandArgSpec{", 1)[1].split("\n}\n", 1)[0]
+    names = set(re.findall(r'^\t"([a-z-]+)":', specs, flags=re.M))
+    verbs = ROOT_GO.split("var segmentVerbs = map[string]bool{", 1)[1].split("}", 1)[0]
+    names |= set(re.findall(r'"([a-z]+)": true', verbs))
+    # What a hook script runs, and help.
+    return names | {"git-hook", "help"}
 
-    def test_doctor_rejects_incomplete_or_malformed_even_under_optimization(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "doctor.json"
-            for report, code in (({"completed": True, "issues": []}, 0),
-                                 ({"completed": True, "issues": [{"kind": "corrupt"}]}, 0),
-                                 ({"completed": False, "issues": []}, 1),
-                                 ({"completed": 1, "issues": []}, 1),
-                                 ({"completed": True, "issues": None}, 1), ({}, 1)):
-                path.write_text(json.dumps(report))
-                result = subprocess.run([sys.executable, "-O", str(SCRIPT), "doctor", str(path)], capture_output=True, text=True)
-                self.assertEqual(result.returncode, code, result.stderr)
-                if not code:
-                    self.assertEqual(result.stdout.strip(), str(len(report["issues"])))
-            path.write_text('{"completed":false,"completed":true,"issues":[]}')
-            self.assertNotEqual(subprocess.run([sys.executable, "-O", str(SCRIPT), "doctor", str(path)], capture_output=True).returncode, 0)
+
+def invoked(text):
+    found = set()
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        # A command position: the start of a line, or after a shell separator.
+        for match in re.finditer(r'(?:^|[;&|(]|\$\(|\bthen |\bdo |=1 |>/dev/null 2>&1; )\s*cxt ([a-z][a-z-]*)\b', line):
+            found.add(match.group(1))
+    return found
+
+
+class SuiteCommandsTest(unittest.TestCase):
+    def test_the_command_table_is_read(self):
+        names = commands()
+        self.assertTrue({"setup", "push", "doctor", "segments", "hooks", "config", "git-hook"} <= names, names)
+        self.assertFalse({"repair", "save", "checkout", "pull"} & names, names)
+
+    def test_the_matcher_finds_commands_and_skips_prose(self):
+        text = 'cxt setup "$REMOTE" --no-login >"$TMP/out" 2>&1\nexpect "x" "$(cxt doctor --json | python3 -c 1)" 0\n# cxt save is gone\necho "run cxt repair later"\n'
+        self.assertEqual(invoked(text), {"setup", "doctor"})
+
+    def test_suites_call_only_commands_that_exist(self):
+        known = commands()
+        for name in ("e2e.sh", "e2e-sync.sh"):
+            text = (ROOT / "scripts" / name).read_text()
+            # The suite runs the removed commands once, by a loop variable, to show that they are gone.
+            self.assertEqual(invoked(text) - known, set(), name)
+
+    def test_the_removed_commands_are_checked_to_be_unknown(self):
+        suite = (ROOT / "scripts/e2e-sync.sh").read_text()
+        removed = suite.split("for removed in ", 1)[1].split(";", 1)[0].split()
+        self.assertIn("repair", removed)
+        self.assertEqual(set(removed) & commands(), set())
 
 
 if __name__ == "__main__":

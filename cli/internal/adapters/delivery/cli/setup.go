@@ -2,7 +2,7 @@
 //
 //	cxt setup [remote-url] [--no-login]
 //
-// Completes in one go after cloning: .cxt initialization → git hooks → login (device flow) → verified remote registration
+// Completes in one go after cloning: .cxt → login (device flow) → verified remote registration → git hooks
 // → agent hooks (Claude repo setup, Codex global merge) → team basic settings pull.
 // Each step reports with a checklist (✓/✗/⚠), and completed steps are not modified.
 package cli
@@ -36,7 +36,7 @@ type cxtHookEntry struct {
 	} `json:"hooks"`
 }
 
-// agentHookEvents are the target events for registration by provider (capture path).
+// agentHookEvents are the events at which a tool runs `cxt hook`.
 func agentHookEvents(_ string) map[string]string {
 	return map[string]string{
 		"SessionStart":     "startup|resume",
@@ -111,13 +111,12 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	// 1) .cxt store (git repo required — otherwise, fail here).
 	var out inbound.InitOutput
 	var err error
-	// Init writes the working HEAD; rerunning setup must not reset a selection.
 	if state := gitctx.InspectContextRoot(ctx, cwd); state.Initialized {
 		repo, rerr := resolveLocalRepo(ctx, c, cwd)
 		err = rerr
 		out = inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(state.Root, ".cxt")}
 	} else {
-		out, err = c.Init.Init(ctx, inbound.InitInput{Cwd: cwd, PreserveExisting: true})
+		out, err = c.Init.Init(ctx, inbound.InitInput{Cwd: cwd})
 	}
 	if err != nil {
 		return fmt.Errorf(".cxt initialization failed: %w", err)
@@ -188,21 +187,14 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
-	// Resolve first-connection identity before enabling automatic capture.
-	if status, err := setupFirstTracking(ctx, c, cwd); err != nil {
-		return fmt.Errorf("setup tracking stopped; local captures and queued operations are preserved. Resolve the reported conflict or use explicit cxt pull, then rerun cxt setup: %w", err)
-	} else if status != "" {
-		ok("%s", status)
-	}
-
-	// 2) git hooks — wiring for "cxt follows git".
+	// 2) Git hooks. They only wake the reading of the tools' session records.
 	if installed, herr := githooks.Install(cwd); herr == nil {
-		ok("git hooks %d (commit·checkout·merge·push·ref-tx·rewrite; stash detected as ref-tx)", len(installed))
+		ok("git hooks %d (commit·checkout·merge·rewrite·push; each only wakes the reading of your sessions)", len(installed))
 	} else {
 		bad("git hook installation failed: %v", herr)
 	}
 
-	// 5) Agent hooks — the same lifecycle capture works in Claude Code/Codex
+	// 5) Agent hooks — the same events exist in the Claude Code/Codex
 	// desktop clients as well as their CLIs. Claude settings are project-scoped;
 	// Codex performs a global merge shared by its app and CLI clients.
 	claudePath := filepath.Join(cwd, ".claude", "settings.json")
@@ -231,20 +223,22 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 
 	// 6) Team default settings pull(.claude/.agents/.codex) — only when login and origin exist.
 	if hasOrigin && authTokenPresent(cwd) {
-		if conn, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd}); cerr == nil {
+		if conn, cerr := c.Connection.Connect(ctx, cwd); cerr == nil {
 			// The server derives RepositoryID from the URL's namespace/repository
 			// prefix. A missing binding is a legacy/local state worth surfacing.
 			if conn.Repo.RepositoryID == "" {
 				warn("connection has no repository ownership record and will not appear on the web — check <owner>/<repository> in the URL: %s", origin)
 			}
 			applied := 0
+			keep := rememberSettings(ctx, c, cwd, "before cxt setup")
 			for _, kind := range []string{"claude", "agents", "codex"} {
 				if n, aerr := applySettings(ctx, c, cwd, string(conn.Repo.ID), kind); aerr == nil && n > 0 {
 					applied += n
 				}
 			}
 			if applied > 0 {
-				ok("Team default settings pulled (%d files applied)", applied)
+				keep()
+				ok("Team default settings pulled (%d files applied; the folders as they were: cxt settings list)", applied)
 			} else {
 				ok("No team default settings (upload possible in web About ⚙)")
 			}
@@ -253,7 +247,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
-	fmt.Println("Complete — use Claude Code/Codex in the CLI or supported desktop apps; commits, switches, and pushes remain ordinary git")
+	fmt.Println("Complete — use Claude Code/Codex as usual; your sessions are read from their own records and shown with your commits once you push them. Check with: cxt doctor")
 	return nil
 }
 

@@ -62,13 +62,3 @@ func storePassphrase(repoID, pass string) error {
 	b, _ := json.MarshalIndent(m, "", "  ")
 	return providerfs.WriteRegularFileAtomic(path, b, 0o600)
 }
-
-// hasFlag checks if the name flag is exactly in args.
-func hasFlag(args []string, name string) bool {
-	for _, a := range args {
-		if a == name {
-			return true
-		}
-	}
-	return false
-}

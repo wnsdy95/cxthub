@@ -51,8 +51,6 @@ func TestConfigCoordinationFrozenHTTPDestinationAndCredentials(t *testing.T) {
 				t.Errorf("unexpected requested address")
 			}
 			_ = json.NewEncoder(w).Encode(domain.RepositoryConnection{RepoID: remotecfg.RepoIDFor(stable), RemoteURL: stable, RepositoryID: "ws_fixture"})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/"+remotecfg.RepoIDFor(stable):
-			_ = json.NewEncoder(w).Encode(domain.Repo{ID: remotecfg.RepoIDFor(stable), RemoteURL: stable, DefaultBranch: "topic", ContextProtocol: 1})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos":
 			if err := json.NewDecoder(r.Body).Decode(&registered); err != nil {
 				t.Error(err)
@@ -91,8 +89,9 @@ func TestConfigCoordinationFrozenHTTPDestinationAndCredentials(t *testing.T) {
 	if out.Repo.ID != remotecfg.RepoIDFor(stable) || registered.RemoteURL != stable || registered.GitRemoteURL != "https://example.invalid/code/original.git" || registered.DefaultBranch != "topic" || registered.LocalPath != root {
 		t.Fatalf("frozen metadata changed: %+v", registered)
 	}
-	if requests.Load() != 3 {
-		t.Fatalf("wrong policy request count: %d", requests.Load())
+	// Connecting is one request: the registration of the repository as it was resolved.
+	if requests.Load() != 2 {
+		t.Fatalf("wrong request count: %d", requests.Load())
 	}
 	if err := prepared.ValidateLocal(context.Background()); err != nil {
 		t.Fatalf("config change retargeted Git evidence: %v", err)

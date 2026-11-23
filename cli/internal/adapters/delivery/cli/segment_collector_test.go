@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 type segmentCollectorFunc func(context.Context, string) (domain.SegmentPushResult, error)
@@ -66,9 +65,23 @@ func TestSegmentCollectorRunsOnceAndOnceMoreForEachRequest(t *testing.T) {
 	previous := segmentCollectorInterval
 	segmentCollectorInterval = 20 * time.Millisecond
 	defer func() { segmentCollectorInterval = previous }()
+	// The collector runs only where cxt was set up.
 	cwd := t.TempDir()
-
 	requests, runs, state := 0, 0, domain.CollectorState{}
+	if err := runSegmentCollector(context.Background(), segmentCollectorTestContainer(t, &requests, &runs, &state), cwd); err != nil || runs != 0 {
+		t.Fatalf("a folder outside Git: runs=%d err=%v", runs, err)
+	}
+	activationTestGit(t, cwd, "init", "-b", "main")
+	if err := runSegmentCollector(context.Background(), segmentCollectorTestContainer(t, &requests, &runs, &state), cwd); err != nil || runs != 0 {
+		t.Fatalf("a repository that was not set up: runs=%d err=%v", runs, err)
+	}
+	if err := os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, ".cxt", "HEAD"), []byte("cxt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	c := segmentCollectorTestContainer(t, &requests, &runs, &state)
 	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 {
 		t.Fatalf("no request: runs=%d err=%v", runs, err)
@@ -132,8 +145,7 @@ func TestGitHooksWakeTheSegmentCollector(t *testing.T) {
 	activationTestGit(t, repo, "init", "-b", "main")
 	activationTestGit(t, repo, "-c", "user.name=cxt test", "-c", "user.email=cxt@example.test", "commit", "--allow-empty", "-m", "first")
 	var woken []string
-	// The hook's own work needs a listing; here it has nothing to list.
-	c := &Container{WakeSegmentCollector: func(cwd string) { woken = append(woken, cwd) }, List: segmentCollectorNoList{}}
+	c := &Container{WakeSegmentCollector: func(cwd string) { woken = append(woken, cwd) }}
 
 	// cxt is not set up here: the hook leaves the repository alone.
 	if err := runGitHook(context.Background(), c, repo, []string{"post-merge", "0"}); err != nil || len(woken) != 0 {
@@ -154,15 +166,17 @@ func TestGitHooksWakeTheSegmentCollector(t *testing.T) {
 			t.Fatalf("%s woke %v", event, woken)
 		}
 	}
-	// An internal helper event is not a Git hook and wakes nothing.
-	woken = nil
-	if err := runGitHook(context.Background(), c, repo, []string{"pending-sync"}); err != nil || len(woken) != 0 {
-		t.Fatalf("an internal helper: %v %v", woken, err)
+	// A name this version does not know is one a hook script of an earlier
+	// version still calls. It succeeds, so that the script cannot stop Git,
+	// and it wakes the collector like any hook.
+	for _, earlier := range [][]string{{"branch-transaction", "prepared", "1234"}, {"ref-prepare"}, {"pending-sync"}, {"wake"}, {}} {
+		woken = nil
+		if err := runGitHook(context.Background(), c, repo, earlier); err != nil || len(woken) != 1 {
+			t.Fatalf("%v: %v %v", earlier, woken, err)
+		}
 	}
-}
-
-type segmentCollectorNoList struct{}
-
-func (segmentCollectorNoList) List(context.Context, inbound.ListInput) (inbound.ListOutput, error) {
-	return inbound.ListOutput{}, errors.New("nothing to list")
+	// Without the wiring of a process, a hook still succeeds.
+	if err := runGitHook(context.Background(), nil, repo, []string{"post-commit"}); err != nil {
+		t.Fatal(err)
+	}
 }
