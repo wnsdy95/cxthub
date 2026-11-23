@@ -89,6 +89,21 @@ func (attempt *rawRepresentationAttempt) lock(ctx context.Context, transaction p
 	return nil
 }
 
+// retainDocChunkGrantsPG share-locks the repository's existing grants for the
+// given chunks until the transaction ends. A writer that relies on a grant it
+// did not insert, for a chunk whose advisory lock it does not hold, needs this:
+// the orphan chunk cleanup skips a locked grant, and a grant the cleanup is
+// deleting is waited for and then absent, so the caller inserts it again.
+func retainDocChunkGrantsPG(ctx context.Context, transaction pgx.Tx, repo domain.ContentHash, chunks []domain.ContentHash) error {
+	rows, err := transaction.Query(ctx, `SELECT hash FROM repo_blobs
+ WHERE repo_id=$1 AND kind='chunk' AND hash=ANY($2::text[]) ORDER BY hash FOR SHARE`, string(repo), strs(chunks))
+	if err != nil {
+		return err
+	}
+	rows.Close()
+	return rows.Err()
+}
+
 func canonicalRawDocumentPG(data []byte, hash domain.ContentHash) ([]byte, error) {
 	if domain.HashContent(data) == hash {
 		return data, nil

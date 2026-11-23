@@ -389,6 +389,23 @@ func TestPGDocChunkSweepSkipsChunksInUseAndRestartsGraceForNewGrants(t *testing.
 	if err := reader.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// So is a writer that share-locks the grant it relies on, as job enqueue,
+	// root publication and PutDoc adopting a stored manifest do.
+	holder, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.Background())
+	if err := retainDocChunkGrantsPG(ctx, holder, repo, []domain.ContentHash{chunk}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock = fixture.clock.Add(docChunkSweepRevisit)
+	if result := fixture.sweep(t, repo); result.Removed != 0 || result.Deferred != 1 || !fixture.owned(t, repo, []domain.ContentHash{chunk})[chunk] {
+		t.Fatalf("grant held by a writer: %+v", result)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	// The grant is deleted and uploaded again: a new upload in progress.
 	if _, err := st.pool.Exec(ctx, `DELETE FROM repo_blobs WHERE repo_id=$1 AND kind='chunk' AND hash=$2`, string(repo), string(chunk)); err != nil {
@@ -431,9 +448,9 @@ func TestPGDocChunkSweepRechecksReferencesUnderItsLocks(t *testing.T) {
 	}
 	kept := func(when string, plan domain.DocChunkPlan, orphans []docChunkOrphan) {
 		t.Helper()
-		removed, bodies, _, _, err := st.removeOrphanDocChunks(ctx, repo, orphans)
-		if err != nil || len(removed) != 0 || bodies != 0 {
-			t.Fatal("stale orphan list deleted chunks", when, len(removed), bodies, err)
+		outcome, err := st.removeOrphanDocChunks(ctx, repo, orphans)
+		if err != nil || len(outcome.removed) != 0 || outcome.bodies != 0 || outcome.busy || outcome.slow {
+			t.Fatal("stale orphan list deleted chunks", when, outcome, err)
 		}
 		if owned := fixture.owned(t, repo, plan.Order); len(owned) != len(plan.Bodies) {
 			t.Fatal("chunks lost", when, len(owned))
@@ -476,9 +493,9 @@ func TestPGDocChunkSweepRechecksReferencesUnderItsLocks(t *testing.T) {
 	kept("stored again", reuploadedPlan, stale)
 
 	// The same list is deleted once it describes the current, unnamed rows.
-	removed, bodies, _, _, err := st.removeOrphanDocChunks(ctx, repo, fresh)
-	if err != nil || len(removed) != len(reuploadedPlan.Bodies) || bodies != len(reuploadedPlan.Bodies) {
-		t.Fatal("current orphans were not deleted", len(removed), bodies, err)
+	outcome, err := st.removeOrphanDocChunks(ctx, repo, fresh)
+	if err != nil || len(outcome.removed) != len(reuploadedPlan.Bodies) || outcome.bodies != len(reuploadedPlan.Bodies) {
+		t.Fatal("current orphans were not deleted", outcome, err)
 	}
 }
 
@@ -625,12 +642,282 @@ func TestPGDocChunkSweepWorksOffABacklogLargerThanItTracks(t *testing.T) {
 	}
 }
 
+// Every metered write of a namespace holds its storage account row until it
+// commits. A visit that finds the row taken gives up after one short wait and
+// leaves the rest for a later tick, instead of waiting again for every batch
+// while it holds the repository lock.
+func TestPGDocChunkSweepYieldsToABusyNamespace(t *testing.T) {
+	fixture := newChunkSweepFixture(t)
+	st, ctx, repo := fixture.store, fixture.ctx, fixture.repo
+	chunks := make(map[domain.ContentHash][]byte)
+	for index := 0; index < 6; index++ {
+		body := []byte(fmt.Sprint(t.Name(), repo, index))
+		chunks[domain.HashContent(body)] = body
+	}
+	if _, _, err := st.PutChunks(ctx, repo, chunks); err != nil {
+		t.Fatal(err)
+	}
+	fixture.sweep(t, repo)
+	fixture.clock = fixture.clock.Add(docChunkSweepGrace)
+	writer, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback(context.Background())
+	if _, err := writer.Exec(ctx, `SELECT 1 FROM storage_accounts WHERE namespace_id=$1 FOR UPDATE`, fixture.namespace); err != nil {
+		t.Fatal(err)
+	}
+	// One grant per transaction would mean six waits of half a second.
+	st.chunkSweep.batch = 1
+	started := time.Now()
+	result := fixture.sweep(t, repo)
+	if result.Removed != 0 || result.Deferred != len(chunks) {
+		t.Fatalf("busy namespace: %+v", result)
+	}
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatal("visit kept waiting for a busy namespace", waited)
+	}
+	if st.chunkSweep.batch != 1 {
+		t.Fatal("a busy namespace is not a reason to resize", st.chunkSweep.batch)
+	}
+	if state := st.chunkSweep.repos[repo]; state == nil || !state.visit.Equal(fixture.clock.Add(docChunkSweepRevisit)) {
+		t.Fatal("deferred repository was not scheduled for the next tick")
+	}
+	if err := writer.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock = fixture.clock.Add(docChunkSweepRevisit)
+	if result := fixture.sweep(t, repo); result.Removed != len(chunks) || result.Deferred != 0 {
+		t.Fatalf("after the writer finished: %+v", result)
+	}
+}
+
+// A visit cut short by its deadline says nothing about the repository: what is
+// tracked stays tracked, the visit is repeated with growing pauses, and the
+// pass gives the repository one more turn before it moves on.
+func TestPGDocChunkSweepRepeatsVisitsCutShortByTheDeadline(t *testing.T) {
+	fixture := newChunkSweepFixture(t)
+	st, ctx, repo := fixture.store, fixture.ctx, fixture.repo
+	body := []byte(t.Name() + string(repo))
+	chunk := domain.HashContent(body)
+	if _, _, err := st.PutChunks(ctx, repo, map[domain.ContentHash][]byte{chunk: body}); err != nil {
+		t.Fatal(err)
+	}
+	// The deadline passes after the visit started: the clock is read once
+	// when a repository is chosen and once when its visit begins.
+	interrupt := func(reads int) (context.Context, context.CancelFunc) {
+		interrupted, cancel := context.WithCancel(ctx)
+		st.chunkSweep.now = func() time.Time {
+			if reads--; reads == 0 {
+				cancel()
+			}
+			return fixture.clock
+		}
+		return interrupted, cancel
+	}
+	before := string(repo[:len(repo)-1])
+	st.chunkSweep.cursor = before
+	for attempt, want := range []string{before, string(repo)} {
+		interrupted, cancel := interrupt(2)
+		result, err := st.SweepNextDocChunks(interrupted)
+		cancel()
+		if !errors.Is(err, context.Canceled) || result.Repo != repo || result.Removed != 0 {
+			t.Fatal("interrupted pass visit", attempt, result, err)
+		}
+		if st.chunkSweep.cursor != want {
+			t.Fatal("pass retried the repository more or less than once", attempt, st.chunkSweep.cursor)
+		}
+		// Each call flips whose turn it is; keep the pass first.
+		st.chunkSweep.passTurn = false
+	}
+	st.chunkSweep.now = func() time.Time { return fixture.clock }
+
+	// A tracked repository keeps its sightings and backs off.
+	if result := fixture.sweep(t, repo); result.Orphans != 1 || result.Waiting != 1 {
+		t.Fatalf("first sighting: %+v", result)
+	}
+	first := st.chunkSweep.repos[repo].chunks[chunk]
+	for strike, pause := range []time.Duration{2 * docChunkSweepRevisit, 4 * docChunkSweepRevisit} {
+		interrupted, cancel := interrupt(1)
+		_, err := st.SweepOrphanDocChunks(interrupted, repo)
+		cancel()
+		state := st.chunkSweep.repos[repo]
+		if !errors.Is(err, context.Canceled) || state == nil || state.chunks[chunk] != first || st.chunkSweep.tracked != 1 {
+			t.Fatal("interrupted visit lost its sightings", strike, err)
+		}
+		if !state.visit.Equal(fixture.clock.Add(pause)) {
+			t.Fatal("interrupted visit was not rescheduled with a growing pause", strike, state.visit.Sub(fixture.clock))
+		}
+	}
+	st.chunkSweep.now = func() time.Time { return fixture.clock }
+	fixture.clock = fixture.clock.Add(docChunkSweepGrace)
+	if result := fixture.sweep(t, repo); result.Removed != 1 {
+		t.Fatalf("grace period counted from the first sighting: %+v", result)
+	}
+}
+
+// With due repositories and a pass in progress, neither waits for the other to
+// run out of work.
+func TestPGDocChunkSweepAlternatesDueRepositoriesWithThePass(t *testing.T) {
+	fixture := newChunkSweepFixture(t)
+	st, ctx, repo := fixture.store, fixture.ctx, fixture.repo
+	second, unvisited := fixture.addRepo(t, "second"), fixture.addRepo(t, "third")
+	for _, id := range []domain.ContentHash{repo, second, unvisited} {
+		body := []byte(t.Name() + string(id))
+		if _, _, err := st.PutChunks(ctx, id, map[domain.ContentHash][]byte{domain.HashContent(body): body}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two repositories are tracked and due; the pass stands right before a
+	// third one. Two calls are not enough for both due repositories.
+	fixture.sweep(t, repo)
+	fixture.sweep(t, second)
+	fixture.clock = fixture.clock.Add(docChunkSweepGrace)
+	visited := map[domain.ContentHash]int{}
+	for call := 0; call < 2; call++ {
+		st.chunkSweep.cursor = string(unvisited[:len(unvisited)-1])
+		result, err := st.SweepNextDocChunks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		visited[result.Repo]++
+	}
+	if visited[unvisited] != 1 || visited[repo]+visited[second] != 1 {
+		t.Fatal("due repositories and the pass did not take turns", visited)
+	}
+}
+
+func TestDocChunkSweepResizeFollowsTheMeasuredCost(t *testing.T) {
+	for _, fixture := range []struct {
+		name    string
+		batch   int
+		removed int
+		spent   time.Duration
+		want    int
+	}{
+		{name: "nothing deleted keeps the size", batch: 16, removed: 0, spent: 3 * time.Second, want: 16},
+		{name: "cheap deletions double", batch: 16, removed: 16, spent: 16 * time.Millisecond, want: 32},
+		{name: "free deletions double", batch: 16, removed: 16, spent: 0, want: 32},
+		{name: "growth stops at the limit", batch: 200, removed: 200, spent: 200 * time.Millisecond, want: docChunkSweepBatch},
+		{name: "costly deletions shrink to what fits", batch: 64, removed: 64, spent: 6400 * time.Millisecond, want: 10},
+		{name: "one deletion slower than the target", batch: 4, removed: 4, spent: 12 * time.Second, want: 1},
+		{name: "few deletions out of a large batch", batch: 256, removed: 2, spent: 100 * time.Millisecond, want: 20},
+	} {
+		if got := docChunkSweepResize(fixture.batch, fixture.removed, fixture.spent); got != fixture.want {
+			t.Error(fixture.name, got, fixture.want)
+		}
+	}
+}
+
 func mapKeys(chunks map[domain.ContentHash][]byte) []domain.ContentHash {
 	keys := make([]domain.ContentHash, 0, len(chunks))
 	for hash := range chunks {
 		keys = append(keys, hash)
 	}
 	return keys
+}
+
+// A stored manifest can cut a document differently from the writer's plan, for
+// example one written by another implementation. PutDoc then adopts the stored
+// manifest and relies on the repository's existing grants for its chunks, which
+// the writer's own chunk locks do not cover. It must hold those grants until
+// the document commits, or the cleanup deletes a chunk the document names.
+func TestPGDocChunkSweepKeepsChunksOfAStoredManifestBeingAdopted(t *testing.T) {
+	fixture := newChunkSweepFixture(t)
+	st, ctx := fixture.store, fixture.ctx
+	// Repositories outside any namespace: no storage account row serializes
+	// the writer and the cleanup here, so only the chunk locks can.
+	repo := domain.HashContent([]byte(t.Name() + "adopter" + string(fixture.repo)))
+	other := domain.HashContent([]byte(t.Name() + "owner" + string(fixture.repo)))
+	for _, id := range []domain.ContentHash{repo, other} {
+		if _, err := st.PutRepo(ctx, domain.Repo{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := fixture.conversation(t, "", 20)
+	plan := fixture.plan(t, doc)
+	// The same stream, cut once more inside the first chunk.
+	first := plan.Bodies[plan.Order[0]]
+	left, right := first[:len(first)/2], first[len(first)/2:]
+	halves := []domain.ContentHash{domain.HashContent(left), domain.HashContent(right)}
+	foreign := domain.DocChunkManifest{Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope,
+		Chunks: append(append([]domain.ContentHash(nil), halves...), plan.Manifest.Chunks[1:]...)}
+	bodies := map[domain.ContentHash][]byte{halves[0]: left, halves[1]: right}
+	for _, chunk := range plan.Order[1:] {
+		bodies[chunk] = plan.Bodies[chunk]
+	}
+	// Another repository owns the document in that representation.
+	if _, _, err := st.PutChunks(ctx, other, bodies); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs(hash,bytes) VALUES($1,$2)`, string(doc.Hash()), docCompress(stored)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs(repo_id,kind,hash) VALUES($1,'doc',$2)`, string(other), string(doc.Hash())); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetDoc(ctx, other, doc.Hash()); err != nil || domain.ValidateSessionDocHash(got) != nil {
+		t.Fatal("fixture: the differently cut manifest must be a readable representation", err)
+	}
+	// This repository already holds every chunk either cut needs, all of them
+	// unreferenced and past their grace period.
+	for _, upload := range []map[domain.ContentHash][]byte{bodies, plan.Bodies} {
+		if _, _, err := st.PutChunks(ctx, repo, upload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	every := append(append([]domain.ContentHash(nil), halves...), plan.Order...)
+	if result := fixture.sweep(t, repo); result.Orphans != len(every) {
+		t.Fatalf("fixture: %+v", result)
+	}
+	fixture.clock = fixture.clock.Add(docChunkSweepGrace)
+
+	// The writer has passed every chunk and inserted its document grant, and
+	// has not committed: the cleanup cannot see the document yet.
+	prepared, err := prepareVerifiedDocPG(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback(context.Background())
+	if created, err := st.putPreparedDocInRawTransaction(ctx, writer, repo, prepared, &rawRepresentationAttempt{}); err != nil || created {
+		t.Fatal("writer did not adopt the stored manifest", created, err)
+	}
+
+	// The writer's own cut is protected by its chunk locks. The halves are
+	// not: only the grants the writer holds keep them.
+	if result := fixture.sweep(t, repo); result.Removed != 0 || result.Deferred != len(every) {
+		t.Fatalf("cleanup deleted chunks an uncommitted document relies on: %+v", result)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetDoc(ctx, repo, doc.Hash())
+	if err != nil {
+		t.Fatal("document committed across the cleanup is missing chunks", err)
+	}
+	if err := domain.ValidateSessionDocHash(got); err != nil {
+		t.Fatal(err)
+	}
+	if owned := fixture.owned(t, repo, halves); len(owned) != 2 {
+		t.Fatal("repository lost chunks its document names", len(owned))
+	}
+	// The stored manifest's chunks are named now; only the first chunk of the
+	// writer's own cut is left over.
+	fixture.clock = fixture.clock.Add(docChunkSweepRevisit)
+	if result := fixture.sweep(t, repo); result.Orphans != 1 || result.Removed != 1 {
+		t.Fatalf("after the document committed: %+v", result)
+	}
+	if owned := fixture.owned(t, repo, foreign.Chunks); len(owned) != len(foreign.Chunks) {
+		t.Fatal("cleanup removed chunks of the committed document", len(owned))
+	}
 }
 
 // Chunk bodies are shared between repositories. Removing one repository's
@@ -702,11 +989,19 @@ func TestPGDocChunkSweepRefusesRepositoriesItCannotClassify(t *testing.T) {
 	if !fixture.owned(t, repo, []domain.ContentHash{chunk})[chunk] || !fixture.stored(t, chunk) {
 		t.Fatal("chunk deleted beside an unknown document representation")
 	}
-	// Once the unknown object is gone the repository is swept as usual.
+	// A repository that cannot be swept gives its tracking budget back.
+	if len(st.chunkSweep.repos) != 0 || st.chunkSweep.tracked != 0 {
+		t.Fatal("unsweepable repository kept its tracking budget", len(st.chunkSweep.repos), st.chunkSweep.tracked)
+	}
+	// Once the unknown object is gone the repository is swept as usual, with
+	// a new grace period for what it finds.
 	if _, err := st.pool.Exec(ctx, `DELETE FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2`, string(repo), string(hash)); err != nil {
 		t.Fatal(err)
 	}
-	fixture.clock = fixture.clock.Add(docChunkSweepRevisit)
+	if result := fixture.sweep(t, repo); result.Orphans != 1 || result.Removed != 0 || result.Waiting != 1 {
+		t.Fatalf("first sighting after the unknown object was removed: %+v", result)
+	}
+	fixture.clock = fixture.clock.Add(docChunkSweepGrace)
 	if result := fixture.sweep(t, repo); result.Removed != 1 {
 		t.Fatalf("after the unknown object was removed: %+v", result)
 	}

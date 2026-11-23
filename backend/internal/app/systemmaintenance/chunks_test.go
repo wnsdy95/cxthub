@@ -111,8 +111,8 @@ func TestChunksProcessVisitsUntilIdleWithinItsBounds(test *testing.T) {
 				if ctx.Value(callerKey{}) != "caller" {
 					test.Error("chunk cleanup replaced the caller's context")
 				}
-				if deadline, bounded := ctx.Deadline(); !bounded || time.Until(deadline) > 45*time.Second {
-					test.Error("chunk cleanup visit is not bounded by the tick budget")
+				if deadline, bounded := ctx.Deadline(); !bounded || time.Until(deadline) > 20*time.Second {
+					test.Error("chunk cleanup visit is not bounded by its own limit")
 				}
 				if calls > fixture.available {
 					return domain.DocChunkSweep{}, nil
@@ -168,6 +168,30 @@ func TestChunksProcessStopsWhenItsBudgetIsSpent(test *testing.T) {
 		visited, err := worker.Process(context.Background())
 		if !errors.Is(err, context.DeadlineExceeded) || visited != 2 || calls != 3 || time.Since(started) != 45*time.Second {
 			test.Fatal("tick budget", visited, calls, time.Since(started), err)
+		}
+	})
+	// One repository that never finishes costs its own limit, not the tick:
+	// the others are still visited, and its failure is reported.
+	synctest.Test(test, func(test *testing.T) {
+		calls := 0
+		started := time.Now()
+		worker := requireChunks(test, &chunkStore{sweep: func(ctx context.Context) (domain.DocChunkSweep, error) {
+			calls++
+			switch calls {
+			case 1:
+				<-ctx.Done()
+				if time.Since(started) != 20*time.Second {
+					test.Error("slow repository was not cut off at the visit limit", time.Since(started))
+				}
+				return domain.DocChunkSweep{Repo: chunkRepo(calls)}, ctx.Err()
+			case 2:
+				return domain.DocChunkSweep{Repo: chunkRepo(calls)}, nil
+			}
+			return domain.DocChunkSweep{}, nil
+		}})
+		visited, err := worker.Process(context.Background())
+		if !errors.Is(err, context.DeadlineExceeded) || visited != 2 || calls != 3 || time.Since(started) != 20*time.Second {
+			test.Fatal("slow repository used up the tick", visited, calls, time.Since(started), err)
 		}
 	})
 	synctest.Test(test, func(test *testing.T) {

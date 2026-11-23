@@ -158,11 +158,13 @@ func (worker *Storage) Run(ctx context.Context) {
 	}
 }
 
-// chunkVisits and chunkBudget bound one tick of the chunk cleanup: at most
-// this many repositories, and no visit starts or continues past the budget.
+// One tick of the chunk cleanup visits at most chunkVisits repositories and
+// ends when chunkBudget is spent. A single repository gets at most chunkVisit,
+// so one slow repository cannot use up the tick.
 const (
 	chunkVisits = 16
 	chunkBudget = 45 * time.Second
+	chunkVisit  = 20 * time.Second
 )
 
 // Process visits repositories until the store has none left for now, the
@@ -177,7 +179,9 @@ func (worker *Chunks) Process(ctx context.Context) (int, error) {
 	defer cancel()
 	var failures []error
 	for visited := 0; visited < chunkVisits; visited++ {
-		sweep, err := worker.store.SweepNextDocChunks(tick)
+		visit, done := context.WithTimeout(tick, chunkVisit)
+		sweep, err := worker.store.SweepNextDocChunks(visit)
+		done()
 		if err != nil {
 			if tick.Err() != nil {
 				return visited, errors.Join(append(failures, err)...)

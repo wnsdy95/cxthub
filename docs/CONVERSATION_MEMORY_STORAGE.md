@@ -221,12 +221,20 @@ in `cxtd` when the API runs its own workers, otherwise in the worker process.
 There is nothing to configure, no command to run and no migration.
 
 - Once a minute it visits at most 16 repositories and stops after 45 seconds.
+  One repository gets at most 20 seconds.
 - A pass over all repositories that own chunks starts at most once an hour. A
-  repository with orphans is visited again when their grace period ends.
-- One transaction deletes at most 256 chunks, and fewer when deleting chunk
-  bodies is slow, so that it holds the repository lock for about a second. The
-  worker tracks at most 16,384 orphans per repository and 65,536 per process;
-  a larger backlog is worked off over later visits.
+  repository with orphans is visited again when their grace period ends. Due
+  repositories and the pass take turns.
+- One transaction deletes at most 256 chunks. It starts with 16 and is resized
+  from the measured cost so that the delete statements take about a second; no
+  statement in it may run longer than five seconds.
+- The worker tracks at most 16,384 orphans per repository and 65,536 per
+  process; a larger backlog is worked off over later visits.
+
+While a deletion transaction runs, pushes to that repository and metered
+writes of its namespace wait for it. It waits at most 500 ms for a lock itself
+and gives the visit up if the namespace is busy, so keep PostgreSQL's
+`deadlock_timeout` above 500 ms (the default is one second).
 
 The first sighting of each orphan is kept in memory. After a restart the grace
 period starts again, so a process has to stay up for more than an hour before
@@ -236,24 +244,29 @@ became one. A restart delays the cleanup; it never makes it less safe.
 ### Why it is safe beside a live server
 
 The deletion transaction takes the repository lock that job enqueue and job
-completion take, and then the per-chunk locks that `PutDoc` and the chunk upload
-take, in the order those writers take them. It does not wait for a chunk lock or
-a row lock: a chunk another transaction is using is left for a later visit. With
-the locks held it reads the manifests and pending jobs again, so a manifest or
-job committed in the meantime keeps its chunks. A writer that names a chunk
-while it is being deleted waits for the transaction and then stores the chunk
-again.
+completion take, then the namespace's storage account row, and then the
+per-chunk locks that `PutDoc` and the chunk upload take, in the order those
+writers take them. A writer that relies on an ownership row without holding
+the per-chunk lock share-locks that row instead. The cleanup does not wait for
+a chunk lock or a row lock: a chunk another transaction is using is left for a
+later visit. With the locks held it reads the manifests and pending jobs
+again, so a manifest or job committed in the meantime keeps its chunks. A
+writer that names a chunk while it is being deleted waits for the transaction
+and then stores the chunk again.
 
-Two cases end in a failed upload that the client repeats, never in a damaged
+The grace period belongs to the ownership row, not to an upload. An upload
+that relies on a row which already existed does not restart it. Two cases
+therefore end in a failed upload that the client repeats, never in a damaged
 document:
 
 - An upload that takes more than an hour between its first chunk and its
   finalization can lose the early chunks.
-- A client that was told the server already has a chunk can find it gone if
-  that chunk was an orphan past its grace period.
+- A client that was told the server already has a chunk, or that sent a chunk
+  the server already had, can find it gone if that chunk was an orphan near
+  the end of its grace period.
 
-In both, finalization is refused with `upload repository-owned chunks before
-finalization` and the next sync uploads the missing chunks.
+In both, the upload is refused, for example with `upload repository-owned
+chunks before finalization`, and the next sync uploads the missing chunks.
 
 ### Repositories that are skipped
 
@@ -262,7 +275,8 @@ objects cannot be accounted for completely: an unknown representation, a
 corrupt object, a pending job that cannot be read, or a legacy whole-body
 document larger than 16 MiB. An object the cleanup does not understand might
 name chunks in a way it cannot see. The worker logs the repository and the
-reason on each pass and continues with the next repository.
+reason on each pass, forgets what it was tracking there, and continues with
+the next repository.
 
 ### Storage accounting
 
