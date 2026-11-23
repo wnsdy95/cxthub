@@ -2,10 +2,9 @@ import { createContext, useContext } from 'react';
 import type { DocFragmentPage, DocViewEvent } from './types';
 
 /**
- * Where a conversation's large events are read in full. Without one they are
- * read from the document by its hash. A session's conversation is read by the
- * session instead, so that the server holds every read to what the reader may
- * see; `key` then stands for the document in the cache.
+ * Where a conversation's large events are read in full. A session's
+ * conversation is read by the session, so that the server holds every read to
+ * what the reader may see; `key` stands for the document in the cache.
  */
 export interface DocumentEventReader {
   key: string;
@@ -15,6 +14,9 @@ export interface DocumentEventReader {
 
 export const DocumentEventReaderContext = createContext<DocumentEventReader | null>(null);
 
-export function useDocumentEventReader() {
-  return useContext(DocumentEventReaderContext);
+/** The reader of the conversation being shown. A conversation is only ever rendered inside one. */
+export function useDocumentEventReader(): DocumentEventReader {
+  const reader = useContext(DocumentEventReaderContext);
+  if (!reader) throw new Error('A conversation is rendered outside its reader.');
+  return reader;
 }

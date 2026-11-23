@@ -25,7 +25,7 @@ import { AppLink } from './AppLink';
 import { AnchoredSessionView } from './AnchoredSessionView';
 import { Markdown } from './Markdown';
 
-export type AnchoredHref = (selection?: AnchoredSelection) => string;
+type AnchoredHref = (selection?: AnchoredSelection) => string;
 /** Whether the reader is a member: one who has sessions and worktrees of their own and may write notes. */
 const Member = createContext(true);
 const COMMIT_STEP = 100;

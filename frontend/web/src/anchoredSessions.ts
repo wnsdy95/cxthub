@@ -24,7 +24,7 @@ export function anchoredShortSha(sha: string): string {
 }
 
 /** A segment that ends at a commit. `copyOf` is the commit the session made, when this row is a copy of it on the remote. */
-export interface AnchoredCommitLink { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; copyOf?: string }
+interface AnchoredCommitLink { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; copyOf?: string }
 export interface AnchoredCommitRow extends GitNode {
   subject: string;
   links: AnchoredCommitLink[];
@@ -37,14 +37,14 @@ export interface AnchoredCommitRow extends GitNode {
   pulls: number[];
   merged?: number;
 }
-export interface AnchoredWorktreeRow {
+interface AnchoredWorktreeRow {
   key: string; name: string; machine: string; removed: boolean; sessions: string[]; branches: string[];
   /** The branch checked out in it, as the machine's own list last said. */
   current?: string;
 }
 /** One use of a branch name: the name as it is now, or an earlier lifetime the ledger closed. */
 export interface AnchoredBranchUse { lifetime?: BranchLifetime; sessions: string[] }
-export interface AnchoredBranchRow {
+interface AnchoredBranchRow {
   name: string; current: AnchoredBranchUse; earlier: AnchoredBranchUse[];
   /** The branch's newest commit on the remote, and the pull requests opened from it. */
   head?: string;
@@ -86,7 +86,7 @@ export interface AnchoredIndex {
  * out. `uncommitted` are the caller's sessions with a part after their last
  * commit, newest first.
  */
-export interface AnchoredHeld { commits: string[]; uncommitted: string[] }
+interface AnchoredHeld { commits: string[]; uncommitted: string[] }
 
 function time(value?: string): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -306,9 +306,9 @@ export function anchoredOpenStarts(parts: AnchoredPart[]): number[] {
   return parts.filter(part => !part.hidden && part.events > 0).map(part => part.firstEvent).sort((a, b) => a - b);
 }
 
-export type AnchoredStreamItem<Event> = { kind: 'divider'; part: AnchoredPart } | { kind: 'events'; part: AnchoredPart; events: Event[] };
+type AnchoredStreamItem<Event> = { kind: 'divider'; part: AnchoredPart } | { kind: 'events'; part: AnchoredPart; events: Event[] };
 /** Events read in one request, from `offset` on, in order. */
-export interface AnchoredEventRun<Event> { offset: number; events: Event[] }
+interface AnchoredEventRun<Event> { offset: number; events: Event[] }
 /**
  * Lays out the events read so far with a divider where each part begins.
  * `runs` hold the conversation's events from the first shown part onward, in

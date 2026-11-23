@@ -40,7 +40,7 @@ code { font-family: var(--mono); }
 button.crumb-trigger { display: inline-flex; align-items: center; gap: 8px; min-width: 0; background: transparent; border: 1px solid transparent; color: var(--ink); padding: 6px 9px; font: 600 0.9rem var(--sans); border-radius: 6px; }
 button.crumb-trigger:hover, button.crumb-trigger[aria-expanded="true"] { background: var(--hover); border-color: var(--line); }
 .crumb-chevron { color: var(--muted); font-size: 0.75rem; flex: none; }
-.dropdown-backdrop { position: fixed; inset: 0; z-index: 40; }
+
 .crumb-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 41; width: 360px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 72px); overflow-y: auto;
   background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(20, 24, 29, 0.12); }
 .crumb-menu-head { padding: 16px 16px 12px; font: 600 0.94rem var(--sans); color: var(--ink); }
@@ -130,7 +130,6 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .app-side { border-right: 1px solid var(--line); padding: 28px 20px; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden;
   position: sticky; top: 52px; height: calc(100vh - 52px); align-self: start; }
 .count-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); }
-.repository-empty { color: var(--faint); font-size: 0.82rem; padding: 7px 8px; }
 
 /* Main — Section + Header without card */
 .main { padding: 40px 48px 64px; max-width: 1100px; width: 100%; min-width: 0; }
@@ -171,7 +170,7 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .members li .mini { flex: none; }
 .repos code { color: var(--muted); font-size: 0.78rem; flex: none; }
 .repos .remote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.branch-chip { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); flex: none; margin-left: auto; }
+
 /* Repo row — Click to view the context of that repo */
 .repo-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
   padding: 2px 6px; margin: -2px -6px; background: transparent; border: 0; border-radius: 6px;
@@ -181,48 +180,12 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 
 /* Context Browser — Branch dropdown · Commit log · Body viewer */
 .repo-tag { font-size: 0.85em; text-transform: none; letter-spacing: 0; color: var(--muted); }
-.ctx-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
-.ctx-bar select { max-width: 100%; min-width: 0; font-family: var(--mono); font-size: 0.8rem; color: var(--text); background: transparent;
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
-.ctx-bar select:hover { border-color: var(--faint); }
-.ctx-count { font-family: var(--mono); font-size: 0.72rem; color: var(--faint); }
-
-/* "View N at a time" pagination control */
-.page-control { display: flex; align-items: center; gap: 14px; margin: 0 0 10px; }
-.page-control select { font-family: var(--mono); font-size: 0.76rem; color: var(--text); background: transparent;
-  border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
-.page-control .pager { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
-.page-control .pager button { padding: 2px 9px; border: 1px solid var(--line); border-radius: 6px; }
-.page-control .pager button:disabled { opacity: 0.35; }
-.page-control .page-ind { min-width: 5.5em; text-align: center; }
 
 .commits { list-style: none; margin: 0 0 14px; padding: 0; }
-.commit-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
-  padding: 8px 8px; background: transparent; border: 0; border-radius: 6px;
-  font-size: 0.86rem; color: var(--text); min-width: 0; }
-.commit-row:hover { background: var(--hover); opacity: 1; }
-.commit-row.on { background: var(--hover); }
-.commit-row code { font-size: 0.76rem; color: var(--muted); flex: none; }
-.commit-row .commit-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.commit-row em { color: var(--faint); font-style: normal; font-family: var(--mono); font-size: 0.7rem;
-  margin-left: auto; white-space: nowrap; }
-.commit-scroll { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: thin; }
-.commit-scroll > * { flex-shrink: 0; }
-.commit-scroll .commit-msg { max-width: 28rem; }
-.commit-meta { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; max-width: 52%; }
-.commit-meta .ai-dots { flex: none; }
-.commit-meta em { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 7px; white-space: normal; text-align: right; }
-.commit-meta em > span { overflow-wrap: anywhere; }
-.commit-meta time { white-space: nowrap; }
-.commits li + li .commit-row { border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; }
 
 /* Viewer uses the context pane scrollport on wide screens. */
 .viewer { border: 1px solid var(--line); border-radius: 8px; }
-.viewer-head { position: sticky; top: 52px; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line);
-  padding: 9px 14px; font-size: 0.8rem; color: var(--muted);
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.viewer-head code { color: var(--text); margin-right: 6px; }
-.viewer-head em { font-style: normal; color: var(--faint); }
+
 .msg { display: flex; gap: 12px; padding: 12px 14px; }
 .msg + .msg { border-top: 1px solid var(--line); }
 .msg-role { font-family: var(--mono); font-size: 0.68rem; color: var(--faint); flex: none; width: 64px;
@@ -308,316 +271,50 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .memory-box { border-bottom: 1px solid var(--line); padding: 12px 14px; background: var(--hover); font-size: 0.84rem; }
 .memory-box .label { display: block; margin-bottom: 4px; }
 .memory-box p { margin: 0 0 6px; white-space: pre-wrap; }
-.memory-box .memory-note { margin: 6px 0 12px; color: var(--muted); font-size: 0.72rem; line-height: 1.5; white-space: normal; }
+
 .memory-section + .memory-section { margin-top: 12px; }
 .memory-section-label { margin: 0 0 4px; color: var(--faint); font-family: var(--mono); font-size: 0.68rem; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; }
 .memory-box ul { margin: 0; padding-left: 18px; color: var(--muted); }
 
-/* Graft join point — commit list boundary line "from this row up is new context" (same color as graph root). */
-.seam-divider { display: flex; align-items: center; gap: 8px; padding: 3px 12px; font-family: var(--mono);
-  font-size: 0.66rem; letter-spacing: 0.04em; color: #d29922; }
-.seam-divider::before, .seam-divider::after { content: ''; flex: 1; border-top: 1px dashed #d29922; opacity: 0.5; }
-.ref-badge.seam { border: 1px dashed #d29922; color: #d29922; background: transparent; }
-
-/* Viewer download button (raw CIR / memory JSON) — right-align in header. */
-.dl-btns { margin-left: auto; display: inline-flex; gap: 6px; flex: none; }
 .dl-btn { font-family: var(--mono); font-size: 0.66rem; padding: 1px 8px; border-radius: 99px;
   border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
 .dl-btn:hover { color: var(--ink); border-color: var(--ink); }
-
-/* Participant AI points (overlap) — commit row provider/model attribution (continuous color = task segment). */
-.ai-dots { display: inline-flex; align-items: center; flex: none; }
-.ai-dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--bg); box-sizing: content-box; }
-/* Provider logo badge — square asset to circular crop. Logo version (.ai-dot) with fallback to dot. */
-.ai-logo { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid var(--bg);
-  box-sizing: content-box; object-fit: cover; background: #fff; display: inline-block; flex: none; vertical-align: -2px; }
 
 /* Session boundary — weaker intensity (gray dotted line): continuation of thread but agent session changed. */
 .session-divider { display: flex; align-items: center; gap: 8px; padding: 2px 12px; font-family: var(--mono);
   font-size: 0.64rem; letter-spacing: 0.04em; color: var(--muted); }
 .session-divider::before, .session-divider::after { content: ''; flex: 1; border-top: 1px dashed var(--line); }
-/* Continuing conversation (pending tail) — progress semantic yellow variation. */
-.session-divider.pending-divider { color: #d29922; }
-.session-divider.pending-divider::before, .session-divider.pending-divider::after { border-top-color: rgba(210, 153, 34, 0.5); }
-/* Push truncation line — boundary between shared timeline (pushed) and push block in graph. */
-/* Graph drag-and-drop join */
-.graph-row[draggable="true"] { cursor: grab; }
-.graph-row.dragging {
-  opacity: 0.45;
-  cursor: grabbing;
-}
-.graph-row.drop-target {
-  outline: 2px dashed #d29922;
-  outline-offset: -2px;
-  border-radius: 6px;
-  background: color-mix(in srgb, #d29922 12%, transparent);
-}
-.join-error {
-  color: #b4452c;
-}
-.graph-row.droppable {
-  background: color-mix(in srgb, #2e7d5b 10%, transparent);
-}
-.join-hint {
-  position: sticky;
-  bottom: 8px;
-  margin: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border, #d0d7de);
-  border-radius: 8px;
-  background: var(--bg, #fff);
-  color: var(--muted, #57606a);
-  font-size: 12px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
-  max-width: 340px;
-}
 
-.unpushed-divider { display: flex; align-items: center; gap: 8px; padding: 1px 8px; font-family: var(--mono);
-  font-size: 0.6rem; letter-spacing: 0.04em; color: var(--muted); opacity: 0.8; }
-.unpushed-divider::before, .unpushed-divider::after { content: ''; flex: 1; border-top: 1px dashed var(--line); }
-/* Status belongs to this capture row, never a vertical range of other lanes. */
-.graph-uncommitted-badge, .graph-pr-badge { position: absolute; top: 50%; transform: translateY(-50%); padding: 1px 6px; border: 1px solid rgba(154, 106, 0, 0.35);
-  border-radius: 4px; color: #9a6a00; background: var(--bg); font-family: var(--mono); font-size: 0.62rem;
-  line-height: 1.4; white-space: nowrap; }
-.graph-pr-badge { color: var(--ink); border-color: var(--line); background: var(--hover); }
-/* Commit empty node — fill should follow background to avoid misshapen disks on hover/selection. */
-.uncommitted-node { fill: var(--bg); }
-.graph-row:hover .uncommitted-node, .graph-row.on .uncommitted-node { fill: var(--hover); }
 /* Context compression — compression points within the same session (purple variation, distinguishes session boundaries). */
 .compaction-divider { display: flex; align-items: center; gap: 8px; padding: 2px 12px; font-family: var(--mono);
   font-size: 0.64rem; letter-spacing: 0.04em; color: #8957e5; }
 .compaction-divider::before, .compaction-divider::after { content: ''; flex: 1; border-top: 1px dashed rgba(137, 87, 229, 0.5); }
 .dl-btn.danger:hover { color: #c0392b; border-color: #c0392b; }
 
-/* Context continuation collapse — prefix event like parent snapshot (email quote UX).
-   Light grey render when expanded to distinguish "new content in this commit" visually. */
-.inherited-toggle { display: block; width: 100%; border: 0; border-radius: 0; border-bottom: 1px solid var(--line);
-  text-align: left; cursor: pointer; padding: 10px 14px; font-family: var(--mono);
-  font-size: 0.74rem; color: var(--muted); background: var(--hover); }
-.inherited-toggle:hover { color: var(--ink); }
-.inherited-toggle[aria-expanded="true"] { border-bottom-style: dashed; }
 .doc-inherited .msg { opacity: 0.45; }
 .doc-inherited .msg:hover { opacity: 0.8; }
 [data-document-target] { outline: 1px solid var(--muted); outline-offset: -1px; background: var(--hover); scroll-margin-top: 12px; }
 .doc-inherited[data-document-target] .msg { opacity: 1; }
-.doc-load-trigger { min-height: 36px; display: grid; place-items: center; padding: 6px 14px;
-  color: var(--muted); font-size: .74rem; }
-.doc-load-error { padding: 10px 14px; }
-.document-find { position: sticky; top: 0; z-index: 9; padding: 6px 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
-.viewer .document-find { top: var(--document-find-top, 100px); }
-.document-find-panel { position: absolute; top: 100%; left: 0; right: 0; padding: 14px; max-height: min(70vh, var(--document-find-height, 70vh)); overflow: auto;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: 0 12px 30px #0002; font-size: .8rem; }
-.document-find-panel label { display: block; margin-bottom: 6px; }
-.document-find-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.document-find-controls input { flex: 1 1 140px; min-width: 80px; width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg); }
-.document-find-panel p { margin: 10px 0; }
-.document-find-panel .muted { color: var(--muted); }
-.document-find-preview, .document-find-source { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border-radius: 5px; background: var(--hover); }
-.document-find-source { max-height: 50vh; overflow: auto; }
-.document-find-preview mark, .document-find-source mark { background: #ffe082; color: #171717; }
-.document-find-reveal { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; }
 
-/* Search — input at top of commit list + results panel (click to select corresponding snapshot). */
-.ctx-search { margin-left: auto; min-width: min(220px, 100%); max-width: 100%; flex: 1 1 220px; }
-.search-results { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 14px; overflow: hidden; }
-.search-hit { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; padding: 8px 12px;
-  background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 0.8rem; }
-.search-hit:last-of-type { border-bottom: 0; }
-.search-hit:hover, .search-hit.on { background: var(--hover); }
-.search-hit code { flex: none; font-size: 0.72rem; color: var(--muted); }
-.search-hit .hit-kind { flex: none; font-family: var(--mono); font-size: 0.64rem; color: var(--faint);
-  border: 1px solid var(--line); border-radius: 99px; padding: 0 7px; }
-.search-hit .hit-kind.commit { color: var(--muted); }
-.search-hit .hit-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-hit em { margin-left: auto; flex: none; font-style: normal; font-family: var(--mono);
-  font-size: 0.68rem; color: var(--faint); }
 .hit-truncated { margin: 0; padding: 8px 12px; font-size: 0.74rem; color: var(--muted); background: var(--hover); }
-
-/* fork/compare action row + diff panel — inline toolbar below viewer header. */
-.action-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line);
-  font-size: 0.8rem; background: var(--hover); }
-.action-row input { flex: 1; max-width: 240px; }
-.action-row em { font-style: normal; color: var(--muted); font-size: 0.76rem; }
-.action-row .err { color: var(--danger); }
-.action-row .close { margin-left: auto; }
-.diff-panel { border-bottom: 1px solid var(--line); padding: 8px 14px; }
-.diff-panel .diff-head { margin: 0 0 6px; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
-.diff-panel .diff-line { white-space: pre-wrap; font-family: var(--mono); font-size: 0.74rem; }
 
 /* Show prompt only — keep user prompt, click to open AI event for that turn. */
 .dl-btn.on { color: var(--ink); border-color: var(--ink); background: var(--hover); }
 .turn + .turn { border-top: 1px solid var(--line); }
-.turn-head { position: relative; }
-.turn-head.has-more { cursor: pointer; }
-.turn-head.has-more:hover { background: var(--hover); }
-.turn-head + .msg { border-top: 1px solid var(--line); }
-.turn-count { position: absolute; top: 12px; right: 14px; font-family: var(--mono); font-size: 0.66rem;
-  color: var(--faint); pointer-events: none; }
-.turn-head.has-more:hover .turn-count, .turn.open .turn-count { color: var(--ink); }
-.turn-lead { display: block; width: 100%; text-align: left; padding: 10px 14px; border: 0;
-  background: var(--hover); cursor: pointer; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
-.turn-lead:hover { color: var(--ink); }
 
-/* Context 2-pane: body (logs/viewer) | right rail (graph/AI) */
-.ctx-cols { display: grid; grid-template-columns: minmax(0, 1024px) 280px; gap: 32px; align-items: start; justify-content: center; }
-.ctx-main { min-width: 0; width: 100%; max-width: 1024px; justify-self: center; }
-@media (min-width: 1001px) {
-  .ctx-main { position: sticky; top: 68px; max-height: max(240px, calc(100dvh - var(--context-top, 68px) - 16px));
-    overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding-right: 4px; }
-  .ctx-main .viewer-head { top: 0; }
-}
-.ctx-side { min-width: 0; border-left: 1px solid var(--line); padding-left: 24px; }
-.ctx-side > .label { display: block; margin-bottom: 6px; }
-.ctx-side .aibar { margin-top: 20px; }
-@media (max-width: 1000px) {
-  .ctx-cols { grid-template-columns: 1fr; }
-  .ctx-side { position: static; border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 16px; }
-}
-
-/* Commit graph (git log --graph) */
-.graph-wrap { margin: 0 0 14px; }
-.graph-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
-  margin: 10px 0; padding-top: 10px; border-top: 1px solid var(--line); }
-.graph-view-toggle, .graph-zoom { display: inline-flex; align-items: center; gap: 2px; padding: 2px;
-  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
-.graph-controls button { min-height: 28px; min-width: 28px; padding: 3px 8px; border: 0; border-radius: 4px;
-  background: transparent; color: var(--muted); font-size: .72rem; line-height: 1.4; }
-.graph-controls button:hover:not(:disabled), .graph-view-toggle button[aria-pressed="true"] { background: var(--hover); color: var(--ink); }
-.graph-view-toggle button[aria-pressed="true"] { font-weight: 600; }
-.graph-controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-.graph-controls button:disabled { opacity: .35; cursor: not-allowed; }
-.graph-zoom .graph-zoom-reset { min-width: 48px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.graph-view-hint { margin: 0 0 10px; color: var(--muted); font-size: .67rem; line-height: 1.6; }
-.graph-details { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); min-width: 0; }
-.graph-details-title { margin: 0 0 12px; font-size: .76rem; font-weight: 600; color: var(--muted); }
-.graph-details > details { margin: 0; padding: 0; border: 0; border-bottom: 1px solid var(--line);
-  border-radius: 0; background: none; color: var(--text); font-family: inherit; font-size: .74rem; overflow-wrap: anywhere; }
-.graph-details > details > summary { display: flex; align-items: center; gap: 8px; padding: 11px 0;
-  cursor: pointer; list-style: none; background: none; line-height: 1.5; }
-.graph-details > details > summary::-webkit-details-marker { display: none; }
-.graph-details > details > summary::before { content: '›'; flex: none; color: var(--faint); font-size: 1rem; transition: transform .12s; }
-.graph-details > details[open] > summary::before { transform: rotate(90deg); }
-.graph-details > details > summary:hover { color: var(--ink); }
-.graph-details > details > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 3px; }
-.graph-details > .graph-status { gap: 6px; margin-bottom: 12px; }
-.graph-details .graph-status-item { padding: 4px 6px; background: var(--hover); border-radius: 4px; }
-.graph-details .graph-history-scope { margin: 12px 0; }
-.graph-details .graph-history-list, .graph-details .graph-archive-list,
-.graph-details .pr-promotions > ul, .graph-details .reflog-list { max-height: 220px; overflow-y: auto; overscroll-behavior-y: contain; }
-.graph-details .graph-merge-records .graph-history-list li > strong,
-.graph-details .graph-merge-records .graph-history-list li > span { grid-column: 1 / -1; }
-.graph-details .graph-folded-edges, .graph-details .graph-lifecycle-legend { font-size: .67rem; line-height: 1.6; }
-.graph-status { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; margin: 0 0 6px;
-  color: var(--muted); font-family: var(--mono); font-size: 0.64rem; line-height: 1.35; }
-.graph-status-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.graph-status-item i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink); flex: none; }
-.graph-status-item.unpushed { opacity: 0.55; }
-.graph-status-item.uncommitted { color: #9a6a00; }
-.graph-status-item.uncommitted i { background: var(--bg); border: 1px dashed #d29922; }
-.graph-archive-toggle { border: 0; border-bottom: 1px dashed var(--faint); border-radius: 0; padding: 0;
-  background: transparent; color: var(--faint); font: inherit; cursor: pointer; }
-.graph-archive-toggle:hover { color: var(--ink); border-bottom-color: var(--ink); opacity: 1; }
-.graph-archive-panel { margin: 0 0 8px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
-  color: var(--muted); font-family: var(--mono); font-size: 0.64rem; }
-.graph-archive-panel > summary { padding: 5px 7px; cursor: pointer; background: var(--hover); }
-.graph-archive-panel > summary:hover { color: var(--ink); }
 .graph-archive-list { list-style: none; margin: 0; padding: 0; max-height: 156px; overflow-y: auto; }
 .graph-archive-list li + li { border-top: 1px solid var(--line); }
-.graph-archive-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%;
-  padding: 6px 7px; border: 0; border-radius: 0; background: var(--bg); color: var(--muted); text-align: left; }
-.graph-archive-entry:hover { background: var(--hover); color: var(--ink); }
-.graph-archive-entry:disabled { cursor: default; opacity: 0.5; }
-.graph-archive-entry span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.graph-archive-entry code { color: var(--faint); font-size: 0.62rem; }
-.graph-archive-entry em { grid-column: 1 / -1; color: var(--faint); font-style: normal; }
-.graph-archive-panel > .graph-archive-toggle { margin: 0 7px 7px; font-size: 0.62rem; }
-.graph-session-archive > summary { display: flex; align-items: center; gap: 6px; padding: 8px 7px; cursor: pointer; color: var(--ink); }
-.graph-session-archive > summary::-webkit-details-marker { display: none; }
-.graph-session-archive > summary::before { content: '›'; flex: none; color: var(--faint); }
-.graph-session-archive[open] > summary::before { transform: rotate(90deg); }
-.graph-session-archive > summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.graph-session-archive > summary:hover { background: var(--hover); }
-.graph-session-archive > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-.session-archive-notice { padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--hover); font-size: 0.78rem; }
-.session-archive-notice p { margin: 6px 0; }
-.session-archive-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 4px 8px; margin: 8px; font-size: 0.7rem; }
-.session-archive-details dt { color: var(--muted); }
-.session-archive-details dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.session-archive-link { padding: 0; border: 0; border-radius: 0; background: none; color: var(--ink); font-size: inherit; text-align: left; text-decoration: underline; }
-.graph-history-panel { margin: 0 0 8px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
-  overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 0.64rem; }
-.graph-history-heading { padding: 5px 7px; background: var(--hover); }
+
 .graph-history-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
 .graph-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 7px; }
 .graph-history-list li + li { border-top: 1px solid var(--line); }
-.graph-history-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.graph-history-position, .graph-history-actions { grid-column: 1 / -1; }
+
 .graph-history-list time { grid-column: 2; grid-row: 1; color: var(--faint); }
-.graph-history-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
-.graph-history-actions button { padding: 2px 0; border: 0; border-bottom: 1px dashed var(--faint); border-radius: 0;
-  background: transparent; color: var(--muted); font: inherit; }
-.graph-history-actions button:hover { color: var(--ink); border-color: var(--ink); }
-.graph-history-actions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.graph-viewport { max-height: 344px; overflow: auto; overscroll-behavior: contain; overflow-anchor: none;
-  scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
-.graph-viewport::-webkit-scrollbar { width: 6px; height: 6px; }
-.graph-viewport::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
-.graph-viewport::-webkit-scrollbar-thumb:hover { background: var(--faint); }
-.graph-canvas { min-width: 100%; }
-.graph-head { position: sticky; top: 0; z-index: 4; height: 44px; background: var(--bg); }
-.graph-lane-label { position: absolute; bottom: 2px; font-family: var(--mono); font-size: 0.68rem;
-  white-space: nowrap; transform: rotate(-35deg); transform-origin: left bottom; }
-.graph-lane-label.archived { font-style: italic; text-decoration: line-through; text-decoration-thickness: 1px; }
-/* Long branch name: the short label stays in the lane. The full name is a
-   body-level portal tooltip, so graph overflow cannot clip it. */
-.graph-lane-label.truncated { cursor: help; }
-.graph-lane-label.truncated:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-.graph-lane-tip { position: fixed; z-index: 80; transform: translateY(-100%); pointer-events: none;
-  max-width: calc(100vw - 16px); padding: 3px 7px; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 5px; box-shadow: 0 3px 10px rgba(20, 24, 29, 0.14); font-family: var(--mono);
-  font-size: 0.68rem; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
-.graph-lane-tip.below { transform: none; }
-.graph-lane-tip.archived { font-style: italic; text-decoration: line-through; text-decoration-thickness: 1px; }
+
 .graph { list-style: none; margin: 0; padding: 0; }
 .graph li { position: relative; }
-.graph-row { position: relative; display: block; padding: 0 4px; background: transparent; border: 0; border-radius: 4px;
-  height: 26px; }
-.graph-row:hover { background: var(--hover); opacity: 1; }
-.graph-row.on { background: var(--hover); }
-.graph-row.on .branch-event-node { stroke-width: 3; }
-.context-selection-notice { display: grid; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 0.8rem; overflow-wrap: anywhere; }
-.context-selection-notice span { color: var(--muted); }
-.viewer { scroll-margin-top: 68px; }
-.graph-merge-records li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; overflow-wrap: anywhere; }
-.graph-merge-records li > span { font-size: 0.75rem; color: var(--muted); }
-.graph-svg { display: block; flex: none; }
-.graph-lifecycle-legend { margin: 8px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.graph-status-divider { position: relative; height: 20px; display: flex; align-items: center; }
-.graph-status-divider > svg { position: absolute; top: 0; left: 4px; pointer-events: none; }
-.graph-status-divider > div { position: relative; width: 100%; }
-.graph-svg line, .graph-svg path { stroke-width: 1.6; }
-/* Node hover tooltip — viewport fixed coordinates (JS flips/clamps calculations) */
-.graph-tip { position: fixed; transform: translateY(-50%); z-index: 50;
-  background: var(--ink); color: #fff; border-radius: 7px; padding: 8px 12px; font-size: 0.78rem;
-  white-space: normal; overflow-wrap: break-word;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.25); pointer-events: none; }
-.graph-tip code { color: #ffd9a8; margin-right: 6px; font-size: 0.72rem; }
-.graph-tip em { display: block; font-style: normal; color: #9aa3b5; font-family: var(--mono);
-  font-size: 0.66rem; margin-top: 3px; }
-.graph-tip .tip-badges { display: block; margin-top: 5px; }
-.graph-tip .ref-badge { border-color: #3a4664; color: #cdd6e6; margin-right: 4px; }
 
-/* AI occupancy widget (GitHub Languages style) */
-.aibar { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
-.aibar .label { display: block; margin-bottom: 8px; }
-.aibar-track { display: flex; gap: 2px; height: 8px; border-radius: 99px; overflow: hidden; }
-.aibar-seg { display: block; height: 100%; min-width: 2px; }
-.aibar-legend { list-style: none; margin: 10px 0 0; padding: 0; display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px 16px; font-size: 0.8rem; }
-.aibar-legend li { display: flex; align-items: center; gap: 7px; }
-.aibar-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.aibar-legend strong { color: var(--ink); font-weight: 600; }
-.aibar-legend em { font-style: normal; color: var(--muted); }
+.viewer { scroll-margin-top: 68px; }
 
 /* Right rail graph: the 44px sticky lane header and 300px row viewport share
    one vertical/horizontal scroll surface so labels track their SVG lanes. */
@@ -684,11 +381,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .role-capabilities td { color: var(--faint); font-family: var(--mono); font-size: 0.78rem; }
 .role-capabilities td.allowed { color: var(--ok); background: color-mix(in srgb, var(--ok) 4%, var(--bg)); font-weight: 700; }
 .sync-row { display: grid; gap: 6px; margin: 2px 0 0; }
-/* repo branch settings row — repository settings tab's repo-specific default branch/protect form. */
-.repo-branch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; }
-.repo-branch-row > label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; margin: 0; }
-.repo-branch-row select { font-family: var(--mono); font-size: 0.78rem; padding: 4px 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--text); }
+
 .invite-make { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 .invite-make input { flex: 1; min-width: 180px; font-size: 0.8rem; padding: 7px 10px; }
 .invites .role { margin-left: 0; }
@@ -773,13 +466,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .organization-repository-card .repository-card:disabled { cursor: default; opacity: 0.72; }
 .organization-repository-card .repository-card:disabled:hover { border-color: var(--line); background: transparent; }
 .repository-card-access { color: #b4452c; font-size: 0.72rem; line-height: 1.35; }
-.emergency-btn { position: absolute; right: 10px; bottom: 10px; color: #b4452c; border-color: rgba(180, 69, 44, 0.35); }
-.emergency-form { display: flex; flex-direction: column; gap: 9px; margin-top: 8px; padding: 12px;
-  border: 1px solid rgba(180, 69, 44, 0.35); border-radius: 8px; background: rgba(180, 69, 44, 0.04); }
-.emergency-form strong { color: #b4452c; font-size: 0.82rem; }
-.emergency-form textarea { min-height: 72px; resize: vertical; }
-.emergency-form label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 0.78rem; }
-.emergency-form input[type="number"] { width: 92px; }
+
 .vis-chip.emergency { color: #b4452c; border-color: rgba(180, 69, 44, 0.45); background: rgba(180, 69, 44, 0.06); }
 .organization-member-list, .organization-audit-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .organization-member-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-top: 1px solid var(--line); }
@@ -796,50 +483,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .organization-audit-row code, .organization-audit-row time { color: var(--muted); font-size: 0.68rem; }
 .organization-audit-row p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--text); }
 .organization-settings-form { max-width: 560px; margin-top: 16px; }
-
-/* Contribution heatmap (commit graph) */
-.contrib { margin-top: 36px; }
-.contrib-head { font-size: 0.9rem; color: var(--text); margin-bottom: 12px; }
-.contrib-scroll { overflow-x: auto; padding-bottom: 4px; }
-.contrib-cal { display: inline-block; min-width: max-content; }
-.contrib-months { display: flex; gap: 3px; height: 14px; margin-bottom: 4px; padding-left: 32px; }
-.contrib-month { width: 11px; flex: none; font-size: 0.62rem; color: var(--muted); white-space: nowrap; overflow: visible; }
-.contrib-body { display: flex; gap: 4px; }
-.contrib-days { display: flex; flex-direction: column; gap: 3px; flex: none; width: 28px; }
-.contrib-day { height: 11px; line-height: 11px; font-size: 0.6rem; color: var(--muted); text-align: right; }
-.contrib-grid { display: flex; gap: 3px; }
-.contrib-week { display: flex; flex-direction: column; gap: 3px; }
-.grass { width: 11px; height: 11px; border-radius: 2px; display: block; background: #ebedf0; }
-.grass.l0 { background: #ebedf0; }
-.grass.l1 { background: #9be9a8; }
-.grass.l2 { background: #40c463; }
-.grass.l3 { background: #30a14e; }
-.grass.l4 { background: #216e39; }
-.grass.future { background: transparent; }
-.contrib-legend { display: flex; align-items: center; gap: 3px; justify-content: flex-end; margin-top: 8px; font-size: 0.7rem; color: var(--muted); }
-.contrib-legend span { margin: 0 4px; }
-
-/* Activity feed (Contribution activity) */
-.act { margin-top: 40px; }
-.act-head { margin-bottom: 8px; }
-.act-timeline { border-left: 1px solid var(--line); margin-left: 12px; padding-left: 0; }
-.act-month { position: relative; }
-.act-month-label { font-size: 0.78rem; font-weight: 600; color: var(--ink); padding: 18px 0 6px 20px; }
-.act-card { display: flex; gap: 12px; padding: 10px 0 10px 20px; position: relative; }
-.act-icon { position: absolute; left: -13px; top: 10px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--bg); border: 1px solid var(--line); color: var(--muted); flex: none; }
-.act-body { flex: 1; min-width: 0; }
-.act-title { font-size: 0.9rem; color: var(--text); margin-bottom: 8px; }
-.act-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.act-row { display: flex; align-items: center; gap: 10px; font-size: 0.84rem; }
-.act-link { background: none; border: 0; padding: 0; cursor: pointer; color: #3b6bd6; font-family: var(--mono); font-size: 0.82rem;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
-.act-link:hover { text-decoration: underline; }
-.act-count { color: var(--muted); font-size: 0.76rem; flex: none; }
-.act-bar { flex: 1; max-width: 180px; height: 8px; background: var(--hover); border-radius: 4px; overflow: hidden; margin-left: auto; }
-.act-bar i { display: block; height: 100%; background: #40c463; border-radius: 4px; }
-.act-vis { color: var(--muted); font-size: 0.72rem; border: 1px solid var(--line); border-radius: 99px; padding: 1px 7px; flex: none; }
-.act-date { color: var(--faint); font-size: 0.74rem; margin-left: auto; flex: none; }
 
 @media (max-width: 900px) {
   .profile-grid { grid-template-columns: 1fr; }
@@ -934,11 +577,8 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 
 /* Public read */
 .public-cols { grid-template-columns: 1fr; }
-.pub-repos { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
-.pub-repos .mini.on { color: var(--ink); border-color: var(--ink); }
-.vis-chip.cur { color: var(--ok); border-color: var(--ok); margin-left: 0; vertical-align: 0; }
 
-.name-rule { margin: 0; font-size: 0.72rem; }
+.vis-chip.cur { color: var(--ok); border-color: var(--ok); margin-left: 0; vertical-align: 0; }
 
 /* CLI pairing approval */
 .device-card { text-align: left; }
@@ -1045,59 +685,33 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   border: 1px solid var(--line); border-radius: 99px; color: var(--muted); background: var(--bg); font-size: 0.72rem; }
 .pricing-notice strong { color: var(--text); font-weight: 600; }
 .pricing-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr); gap: 22px; align-items: stretch; }
-.pricing-card, .pricing-calculator { min-width: 0; border: 1px solid var(--line); border-radius: 16px; padding: 34px;
+.pricing-card{ min-width: 0; border: 1px solid var(--line); border-radius: 16px; padding: 34px;
   background: var(--bg); }
 .pricing-card { border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); }
 .pricing-card-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
-.pricing-card h2, .pricing-calculator h2 { margin: 8px 0 0; color: var(--ink); font-size: 1.35rem; letter-spacing: -0.025em; }
-.pricing-parity { color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--line)); border-radius: 99px;
-  padding: 5px 9px; font-family: var(--mono); font-size: 0.62rem; white-space: nowrap; }
+.pricing-card h2{ margin: 8px 0 0; color: var(--ink); font-size: 1.35rem; letter-spacing: -0.025em; }
+
 .pricing-free { display: flex; align-items: flex-end; gap: 16px; margin-top: 40px; padding-bottom: 25px; border-bottom: 1px solid var(--line); }
 .pricing-free > strong { color: var(--ink); font-size: clamp(3.25rem, 6vw, 5rem); line-height: 0.85; letter-spacing: -0.07em; }
 .pricing-free > span { display: grid; gap: 3px; color: var(--muted); font-size: 0.76rem; line-height: 1.3; }
 .pricing-free b { color: var(--text); font-family: var(--mono); font-size: 0.92rem; }
-.pricing-overage { display: flex; align-items: baseline; gap: 9px; padding: 24px 0 21px; color: var(--muted); font-size: 0.76rem; }
-.pricing-overage strong { color: var(--ink); font-size: 1.75rem; letter-spacing: -0.035em; }
+
 .pricing-includes { list-style: none; display: grid; gap: 10px; margin: 0 0 28px; padding: 0; color: var(--text); font-size: 0.82rem; }
 .pricing-includes li { position: relative; padding-left: 21px; line-height: 1.5; }
 .pricing-includes li::before { content: "✓"; position: absolute; left: 0; color: var(--ok); font-family: var(--mono); font-weight: 700; }
 .pricing-card .btn-primary { width: 100%; }
-.pricing-calculator { background: color-mix(in srgb, var(--hover) 48%, var(--bg)); }
-.pricing-calc-head > p { margin: 8px 0 28px; color: var(--muted); font-size: 0.8rem; line-height: 1.55; }
-.pricing-calculator > label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 0.72rem; }
-.pricing-input { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
-.pricing-input:focus-within { border-color: var(--ink); }
-.pricing-input input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 13px 14px; color: var(--ink);
-  font-family: var(--mono); font-size: 1rem; outline: none; }
-.pricing-input span { padding: 0 14px; color: var(--muted); font-family: var(--mono); font-size: 0.72rem; }
-.pricing-calc-lines { margin: 22px 0 0; }
-.pricing-calc-lines > div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0;
-  border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.78rem; }
-.pricing-calc-lines dd { margin: 0; color: var(--text); font-family: var(--mono); }
-.pricing-calc-lines .total { align-items: baseline; border-bottom: 0; padding-top: 20px; }
-.pricing-calc-lines .total dt { color: var(--text); font-weight: 600; }
-.pricing-calc-lines .total dd { color: var(--ink); font-size: 1.8rem; font-weight: 700; letter-spacing: -0.04em; }
-.pricing-calc-lines .total small { color: var(--muted); font-size: 0.62rem; font-weight: 400; letter-spacing: 0; }
-.pricing-formula { margin: 14px 0 0; padding: 9px 11px; border-radius: 6px; background: var(--bg); color: var(--muted);
-  font-family: var(--mono); font-size: 0.68rem; text-align: right; }
+
 .pricing-explainer { padding: 112px 0 88px; }
 .pricing-section-head { max-width: 680px; }
-.pricing-section-head h2, .pricing-source-card h2 { margin: 10px 0 13px; color: var(--ink); font-size: clamp(1.9rem, 4vw, 2.75rem);
+.pricing-section-head h2{ margin: 10px 0 13px; color: var(--ink); font-size: clamp(1.9rem, 4vw, 2.75rem);
   line-height: 1.12; letter-spacing: -0.04em; }
-.pricing-section-head > p, .pricing-source-card p { margin: 0; color: var(--muted); line-height: 1.7; font-size: 0.88rem; }
+.pricing-section-head > p{ margin: 0; color: var(--muted); line-height: 1.7; font-size: 0.88rem; }
 .pricing-steps { list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 42px 0 0;
   padding: 1px; background: var(--line); border-radius: 12px; overflow: hidden; }
 .pricing-steps li { display: grid; align-content: start; gap: 8px; min-height: 210px; padding: 26px; background: var(--bg); }
 .pricing-steps b { color: var(--faint); font-family: var(--mono); font-size: 0.68rem; }
 .pricing-steps strong { margin-top: 18px; color: var(--ink); font-size: 0.92rem; }
 .pricing-steps span { color: var(--muted); font-size: 0.78rem; line-height: 1.65; }
-.pricing-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 36px; align-items: end;
-  padding: 38px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--hover) 42%, var(--bg)); }
-.pricing-source-card h2 { font-size: 1.65rem; }
-.pricing-source-links { display: grid; gap: 8px; justify-items: end; }
-.pricing-source-links a { color: var(--text); font-family: var(--mono); font-size: 0.7rem; text-decoration: none;
-  border-bottom: 1px solid var(--line); padding-bottom: 2px; white-space: nowrap; }
-.pricing-source-links a:hover { color: var(--ink); border-color: var(--ink); }
 
 @media (max-width: 960px) {
   .landing-nav { display: none; }
@@ -1108,8 +722,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   .pricing-grid { grid-template-columns: 1fr; }
   .pricing-steps { grid-template-columns: 1fr; }
   .pricing-steps li { min-height: 0; }
-  .pricing-source-card { grid-template-columns: 1fr; align-items: start; }
-  .pricing-source-links { justify-items: start; }
+
 }
 
 @media (max-width: 680px) {
@@ -1140,14 +753,14 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   .pricing-hero { margin-bottom: 36px; padding: 0 4px; }
   .pricing-hero h1 { font-size: clamp(2.35rem, 11vw, 3rem); }
   .pricing-notice { display: grid; border-radius: 10px; text-align: left; line-height: 1.45; }
-  .pricing-card, .pricing-calculator { padding: 24px 20px; border-radius: 12px; }
+  .pricing-card{ padding: 24px 20px; border-radius: 12px; }
   .pricing-card-head { display: grid; }
-  .pricing-parity { justify-self: start; }
+
   .pricing-free { margin-top: 32px; }
   .pricing-free > strong { font-size: 3.6rem; }
   .pricing-explainer { padding: 78px 0 62px; }
   .pricing-steps li { padding: 22px 20px; }
-  .pricing-source-card { padding: 26px 20px; }
+
   .role-capabilities { padding: 13px 12px 12px; }
   .role-capabilities-head { align-items: flex-start; }
   .role-ladder { white-space: normal; text-align: right; }
@@ -1163,29 +776,12 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .reflog-list em { color: var(--faint); font-style: normal; margin-right: 4px; }
 /* compression summary block — ◈ purple variant (same series as compression marker). */
 .compact-summary .tool-more summary { color: #8957e5; }
-/* hidden session list — light + show button. */
-.dismissed-pendings { margin: 8px 0 0; }
-.dismissed-pendings summary { cursor: pointer; }
-.commit-row.dismissed { opacity: 0.6; display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
-.commit-row.dismissed .commit-msg { flex: 1; }
-
-/* merge lineage — commits outside the mainline (first-parent). Graph opacity 0.6, list light. */
-.commit-row.off-mainline { opacity: 0.66; }
-.commit-row.off-mainline:hover, .commit-row.off-mainline.on { opacity: 1; }
 
 /* Saved memory opens with the selected context and remains collapsible. */
 details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: revert; }
 
-/* View mode select (viewer header) */
-.view-mode { font-family: var(--mono); font-size: 0.72rem; border: 1px solid var(--line); border-radius: 6px;
-  background: transparent; color: var(--muted); padding: 3px 6px; }
-.view-mode:hover { border-color: var(--faint); color: var(--text); }
 /* Assistant body — provider main color (viewer container's --assistant-ink). */
 .msg.assistant .msg-body p { color: var(--assistant-ink, var(--text)); }
-
-/* Assistant worker thread — grouped with expanded tasks (tools·reasoning) connected to the following answer, indicated by a vertical guide (│) and indentation. Guide color is a lighter variation of the provider ink. */
-.asst-work { margin-left: 12px; padding-left: 14px;
-  border-left: 2px solid color-mix(in srgb, var(--assistant-ink, var(--faint)) 38%, transparent); }
 
 /* Mini Markdown (compressed memory·compressed summary) — small typo in the panel. */
 .md { font-size: 0.84rem; line-height: 1.6; }
@@ -1203,41 +799,6 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .msg-body .md p { margin: 0 0 6px; word-break: break-word; }
 .msg-body .md p:last-child { margin-bottom: 0; }
 
-.graph-history-scope { display: grid; gap: 6px; margin-bottom: 10px; font-size: 12px; }
-.graph-history-scope label { display: grid; gap: 4px; }
-.graph-history-scope select { width: 100%; min-width: 0; max-width: 100%; padding: 5px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
-.graph-history-scope > span, .graph-history-error { color: var(--muted); font-size: 11px; }
-.graph-invalid code { overflow-wrap: anywhere; white-space: normal; }
-.graph-folded-edges { color: var(--muted); font-size: 11px; }
-.graph-births > summary { cursor: pointer; font-size: 12px; }
-.graph-births .graph-history-list { max-height: 260px; overflow: auto; margin-top: 6px; }
-
-.repo-history-protection { flex-basis: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
-.repo-history-protection p { margin: 6px 0; max-width: 65ch; }
-
-.pr-promotions, .git-changes, .git-scans { margin-bottom: 16px; font-size: .78rem; }
-.pr-promotions summary, .git-changes summary, .git-scans summary { cursor: pointer; }
-.pr-promotions ul, .git-changes ul, .git-scans ul { list-style: none; padding: 0; }
-.pr-promotions li, .git-changes li, .git-scans li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.pr-promotions li > span, .git-changes li > span, .git-scans li > span { display: block; color: var(--muted); }
-.pr-diagnostics, .pr-association { margin-top: 8px; }
-.pr-diagnostics ol { padding-left: 20px; }
-.pr-diagnostics time { color: var(--muted); }
-.pr-promotions button, .git-changes button, .git-scans button { font-size: .75rem; padding: 3px 6px; }
-.git-associations { margin-bottom: 16px; font-size: .78rem; min-width: 0; }
-.git-associations summary { cursor: pointer; }
-.git-associations ul { list-style: none; padding: 0; max-height: 440px; overflow-y: auto; overscroll-behavior-y: contain; }
-.git-associations li { padding: 8px 0; border-bottom: 1px solid var(--line); }
-.git-association-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
-.git-association-controls label { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
-.git-association-controls select { max-width: 100%; }
-.git-associations button, .git-associations select { font-size: .75rem; padding: 3px 6px; }
-.git-association-facts { margin: 8px 0; }
-.git-association-facts dt { color: var(--muted); margin-top: 6px; }
-.git-association-facts dd { margin: 2px 0; overflow-wrap: anywhere; }
-.git-association-facts code { white-space: normal; }
-
-.ctx-main .dl-btns { flex-wrap: wrap; max-width: 100%; }
 .storage-usage { min-width: 0; padding: 14px 0; }
 .storage-totals { display: flex; flex-wrap: wrap; gap: 24px; }
 .storage-totals dt { color: var(--muted); font-size: .78rem; }
@@ -1257,25 +818,6 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .notification-entry button { margin-top: 8px; }
 
 .ref-badge.live { color: var(--green, #23845b); border-color: currentColor; flex: none; }
-.live-capture-hint { color: var(--muted); font-size: .78rem; line-height: 1.5; margin: 4px 0 12px; }
-.live-viewer-status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .8rem; margin-bottom: 12px; }
-.pending-sessions { margin-bottom: 20px; }
-
-.code-applicability {margin-bottom:16px;font-size:.78rem;overflow-wrap:anywhere}
-.code-applicability summary {cursor:pointer}
-.code-applicability form {display:grid;gap:8px}
-.code-applicability label {display:grid;gap:4px}
-.code-applicability input {width:100%;min-width:0;box-sizing:border-box;font-family:var(--mono)}
-.code-applicability ul {padding-left:16px}
-.code-applicability button {font-size:.75rem;justify-self:start}
-
-.sync-audit-results { max-height: 32rem; overflow: auto; margin-top: 1rem; }
-.sync-audit-entry { padding: .75rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
-.sync-audit-entry code { white-space: pre-wrap; overflow-wrap: anywhere; }
-.sync-audit-entry.mismatch { border-left: 3px solid #cf4545; }
-.sync-audit-entry.incomplete, .sync-audit-entry.unavailable { border-left: 3px solid #c58b16; }
-.sync-audit label { display: flex; align-items: center; gap: .5rem; margin-top: .75rem; }
-.sync-audit label input { width: auto; }
 
 /* Organization and enterprise administration share compact, responsive forms. */
 .management-grid{display:grid;grid-template-columns:minmax(130px,220px) minmax(0,1fr);gap:24px;margin-top:24px}
@@ -1362,7 +904,7 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .anchor-nav-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .anchor-nav-item em, .anchor-card-head em, .anchor-card-meta em, .anchor-detail-title em, .anchor-call-list em { font-style: normal; color: var(--faint); font-size: 0.74rem; }
 .anchor-nav-empty { margin: 0 0 8px; padding: 0 8px; color: var(--faint); }
-.anchor-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 0.78rem; }
+.anchor-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; color: var(--muted); font-size: 0.78rem; }
 .anchor-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 .anchor-commit { display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 8px 0 4px; border-left: 2px solid transparent; color: var(--text); text-decoration: none; }
 .anchor-lanes { flex: none; }

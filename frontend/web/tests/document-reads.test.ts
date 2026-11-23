@@ -46,9 +46,10 @@ test('shared document admission bounds active reads, cancels queued work and doe
   assert.equal(started, 2);
   controller.abort();
   await rejection;
-  globalThis.fetch = async () => new Response(JSON.stringify({ graph: '1', pending: '2' }));
+  // A read that is not of a conversation does not wait behind the conversation reads.
+  globalThis.fetch = async () => new Response(JSON.stringify([]));
   try {
-    assert.deepEqual(await api.repositoryRevision('repo'), { graph: '1', pending: '2' });
+    assert.deepEqual(await api.branchLifetimes('repo'), []);
   } finally { globalThis.fetch = previousFetch; }
   releases.shift()!();
   await first;

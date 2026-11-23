@@ -18,7 +18,7 @@ export interface SecretsEnvelope {
   updated_by?: string;
 }
 
-export const ITERATIONS = 600_000;
+const ITERATIONS = 600_000;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();

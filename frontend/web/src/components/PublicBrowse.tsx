@@ -18,7 +18,6 @@ import { Logo } from './Logo';
 import { LocaleSwitcher } from './LocaleSwitcher';
 import { Breadcrumb } from './Breadcrumb';
 import { useT } from '../i18n';
-import { ContextView } from './ContextView';
 import { AnchoredView } from './AnchoredView';
 import { AccessDenied } from './AccessDenied';
 import { useMe, useRepositories } from '../hooks';
@@ -130,9 +129,6 @@ export function PublicBrowse({
           </div>
 
           <nav className="tabs" aria-label={t('dashboard.tabsAria')}>
-            <button className={`tab${tab === undefined ? ' on' : ''}`} onClick={() => navigate(repositoryPath(repositoryMetadata))}>
-              {t('dashboard.context')}
-            </button>
             <button className={`tab${tab === 'sessions' ? ' on' : ''}`} onClick={() => navigate(anchoredPath(repositoryMetadata))}>
               {t('dashboard.sessions')}
             </button>
@@ -141,13 +137,11 @@ export function PublicBrowse({
           <section className="panel">
             {tab === 'settings' ? (
               <AccessDenied message={t('dashboard.repositoryAccessDenied')} />
-            ) : tab === 'sessions' && activeRepo ? (
+            ) : activeRepo && (tab === 'sessions' || tab === undefined) ? (
               // Whoever may view the repository reads its sessions as far as they are pushed.
               <AnchoredView key={activeRepo.id} repo={activeRepo} member={false} selection={route.anchored} href={(selection) => anchoredPath(repositoryMetadata, selection)} />
-            ) : activeRepo ? (
-              <ContextView key={activeRepo.id} repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />
             ) : (
-              <div className="empty-box">{t('common.noPushedContext')}</div>
+              <div className="empty-box">{t('common.noPushedSessions')}</div>
             )}
           </section>
         </main>

@@ -62,7 +62,6 @@ function fixture(role: string, reads: string[], withRemote = false) {
     if (pathname === '/api/v1/repos') return { body: [{ id: 'repo', default_branch: 'main', remote_url: 'https://example.test/alice/app' }] };
     const resource = decodeURIComponent(pathname).match(/^\/api\/v1\/repos\/repo\/(.+)$/)?.[1];
     if (!resource) return undefined;
-    if (['refs', 'snapshots', 'pending', 'unsync', 'history', 'reflog'].includes(resource)) return { body: [] };
     if (resource.startsWith('settings/') || resource === 'secrets') return { body: null };
     if (['branch-lifetimes', 'worktrees', 'remote-git'].includes(resource) || resource.startsWith('anchored-')) reads.push(resource);
     if (resource === 'worktrees') return { body: withRemote ? reportedWorktrees : [] };

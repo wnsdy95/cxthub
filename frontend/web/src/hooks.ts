@@ -1,17 +1,11 @@
-import { graphViewRows } from './graphState';
 // React Query — Server State (Query/Mutation).
 //
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
-import { useEffect, useMemo, useRef } from 'react';
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient, skipToken, keepPreviousData } from '@tanstack/react-query';
-import { api, ApiError } from './api';
-import { isRetryableGraphRefreshError } from './graphRefresh';
-import { capacityReadRetry, documentReadRetry, pendingStateReadRetry } from './readRetry';
-import { graphReadRetry, readRepositoryGraph, readRepositoryPending, useRepositoryUpdates } from './useRepositoryUpdates';
-import { graphPositionMatches, graphReadState, validateGraphPosition } from './graphReadState';
-import type { GraphReadGeneration, RepositoryRevision, User } from './types';
-import { pendingStateRows } from './pendingState';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { api } from './api';
+import { documentReadRetry } from './readRetry';
+import type { User } from './types';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseSocialIdToken, firebaseVerification, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 import { useDocumentReadScope } from './documentReadScope';
@@ -246,79 +240,12 @@ export function useRepos(repositoryId: string | null) {
     enabled: authed && Boolean(repositoryId),
   });
 }
-// Context Browser: Branch List → Commit Log → Body(CIR). Immutable data(doc) is infinite cache.
-export function useRefs(repoId: string | null) {
-  const qc = useQueryClient();
-  const q = useQuery({
-    queryKey: ['refs', repoId],
-    queryFn: () => api.listRefs(repoId as string),
-    enabled: Boolean(repoId),
-    refetchInterval: 15_000,
-  });
-  const signature = (q.data ?? [])
-    .map((ref) => `${ref.kind}:${ref.name}@${ref.target}`)
-    .sort()
-    .join(',');
-  const previous = useRef(signature);
-  useEffect(() => {
-    if (previous.current === signature) return;
-    previous.current = signature;
-    void qc.invalidateQueries({ queryKey: ['snapshots', repoId, '*'] });
-    void qc.invalidateQueries({ queryKey: ['reflog', repoId] });
-  }, [signature, qc, repoId]);
-  return q;
-}
-export function useAllSnapshots(repoId: string | null, enabled: boolean) {
-  return useQuery({
-    queryKey: ['snapshots', repoId, '*'],
-    queryFn: () => api.listSnapshots(repoId as string, ''),
-    enabled: enabled && Boolean(repoId),
-  });
-}
-// fork/diff — fork creates new branch ref from snapshot (invalidates refs on success),
-// diff is CIR event delta between two doc hashes (read query — same pair is cached).
-export function useFork() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { repoId: string; from: string; newBranch: string; author: { name: string; email: string } }) =>
-      api.fork(v.repoId, v.from, v.newBranch, v.author),
-    onSuccess: (_r, v) => {
-      void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
-    },
-  });
-}
-export function useSnapDiff(repoId: string | null, left: string | null, right: string | null) {
-  return useQuery({
-    queryKey: ['diff', repoId, left, right],
-    queryFn: () => api.diff(repoId as string, left as string, right as string),
-    enabled: Boolean(repoId && left && right && left !== right),
-  });
-}
-// Search — Queries less than 2 characters are 422 by server, so disabled on client. Same (repo,q) is cached.
-export function useSearch(repoId: string | null, q: string) {
-  return useQuery({
-    queryKey: ['search', repoId, q],
-    queryFn: ({ signal }) => api.search(repoId as string, q, signal),
-    enabled: Boolean(repoId) && q.trim().length >= 2,
-  });
-}
-export function useMemory(repoId: string | null, memoryHash: string | null, enabled: boolean) {
-  return useQuery({
-    queryKey: ['memory-object', repoId, memoryHash],
-    queryFn: () => api.getMemoryObject(repoId as string, memoryHash as string),
-    enabled: enabled && Boolean(repoId && memoryHash),
-    retry: false,
-    staleTime: Infinity,
-  });
-}
 export function useDocEvent(repoId: string, hash: string, index: number) {
   const owner = useDocumentReadScope();
   const reader = useDocumentEventReader();
   return useQuery({
     queryKey: owner ? documentBodyKey(owner, 'event', repoId, hash, index) : ['doc-event-detail', repoId, hash, index],
-    queryFn: ({ signal }) => (reader ? reader.event(index, signal) : api.getDocEvent(repoId, hash, index, signal)),
+    queryFn: ({ signal }) => reader.event(index, signal),
     enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
     gcTime: owner ? Infinity : 0,
@@ -336,7 +263,7 @@ export function useDocEventFragment(repoId: string, hash: string, index: number,
   const reader = useDocumentEventReader();
   return useQuery({
     queryKey: owner ? documentBodyKey(owner, 'fragment', repoId, hash, index, offset) : ['doc-event-fragment', repoId, hash, index, offset],
-    queryFn: ({ signal }) => (reader ? reader.fragment(index, offset, signal) : api.getDocEventFragment(repoId, hash, index, offset, signal)),
+    queryFn: ({ signal }) => reader.fragment(index, offset, signal),
     enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
     gcTime: owner ? Infinity : 0,
@@ -347,192 +274,6 @@ export function useDocEventFragment(repoId: string, hash: string, index: number,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-}
-
-// Pointer(pending/unsync) response change invalidates refs/snapshots — pointer only 15s.
-// Polling and commits/refs are static cache, preventing mismatch window when "On Hold" disappears but not in Context tab (review front #3).
-function useInvalidateOnChange(repoId: string | null, signature: string) {
-  const qc = useQueryClient();
-  const prev = useRef(signature);
-  useEffect(() => {
-    if (prev.current === signature) return;
-    prev.current = signature;
-    void qc.invalidateQueries({ queryKey: ['refs', repoId] });
-    void qc.invalidateQueries({ queryKey: ['snapshots', repoId, '*'] });
-  }, [signature, qc, repoId]);
-}
-
-// In-progress context pointer — live state updated by hook capture, refetches every 15s.
-export function usePendings(repoId: string | null) {
-  const q = useQuery({
-    queryKey: ['pending', repoId],
-    queryFn: () => api.listPending(repoId as string),
-    enabled: Boolean(repoId),
-    refetchInterval: 15_000,
-  });
-  useInvalidateOnChange(
-    repoId,
-    'p:' + ((q.data ?? []).map((p) => p.session_id + '@' + p.target).sort().join(',')),
-  );
-  return q;
-}
-// Mutable push-wait pointer; refetch every 15s. It does not prove process liveness.
-export function useUnsyncs(repoId: string | null) {
-  const q = useQuery({
-    queryKey: ['unsync', repoId],
-    queryFn: () => api.listUnsync(repoId as string),
-    enabled: Boolean(repoId),
-    refetchInterval: 15_000,
-  });
-  useInvalidateOnChange(
-    repoId,
-    'u:' + ((q.data ?? []).map((u) => u.user + '/' + u.branch + '@' + u.target).sort().join(',')),
-  );
-  return q;
-}
-
-// useUndismissPending — re-add dismissed pending sessions to the list (undo dismiss).
-export function useUndismissPending() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { repoId: string; sessionId: string }) => api.undismissPending(v.repoId, v.sessionId),
-    onSuccess: (_d, v) => {
-      void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
-    },
-  });
-}
-
-// Ref movements supply graph history evidence as well as the reflog panel.
-export function useReflog(repoId: string | null, enabled: boolean) {
-  return useQuery({
-    queryKey: ['reflog', repoId],
-    queryFn: () => api.reflog(repoId as string),
-    enabled: enabled && Boolean(repoId),
-  });
-}
-
-// useJoinSnapshot — reorder session branches of the same git branch behind the head (graph drag/drop).
-// On success, refresh snapshots (graft_parents update), refs (head movement/remaining session ref).
-export function useJoinPreview(repoId: string | null | undefined, snapshot: string | null, branch?: string) {
-  return useQuery({
-    queryKey: ['join-preview', repoId, snapshot, branch ?? ''],
-    enabled: Boolean(repoId && snapshot),
-    queryFn: ({signal}) => api.joinPreview(repoId!, snapshot!, branch, signal),
-    staleTime: 0,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
-}
-export function useJoinSnapshot() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: {repoId: string; preview: import('./types').JoinPreview; includeDescendants: boolean}) =>
-      api.joinSnapshot(v.repoId, {
-        branch: v.preview.branch,
-        branch_id: v.preview.branch_id,
-        snapshot: v.preview.snapshot,
-        include_descendants: v.includeDescendants,
-        expected_head: v.preview.expected_head!,
-        plan_revision: (v.includeDescendants ? v.preview.all_revision : v.preview.only_revision)!,
-      }),
-    onSuccess: (_d, v) => {
-      void qc.invalidateQueries({ queryKey: ['snapshots', v.repoId, '*'] });
-      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['join-preview', v.repoId] });
-    },
-  });
-}
-
-// useDismissPending — hide pending sessions from the list (data deletion is not performed, sticky).
-export function useDismissPending() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { repoId: string; sessionId: string }) => api.dismissPending(v.repoId, v.sessionId),
-    onSuccess: (_d, v) => {
-      void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
-      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
-    },
-  });
-}
-
-// One server generation shared by the context and On Hold views.
-export function useRepoView(repoId: string | null, _primaryBranch?: string, deferHeavy = false) {
-  const t = useT();
-  const qc = useQueryClient();
-  const refreshRepository = useRepositoryUpdates(repoId, deferHeavy);
-  const noticeQuery = useQuery<RepositoryRevision>({queryKey:['repository-notice',repoId],queryFn:skipToken});
-  const projection = noticeQuery.data?.pending_projection;
-  const graphProjection = noticeQuery.data?.graph_projection;
-  const graphEnabled = !graphProjection || graphProjection.state === 'disabled' ||
-    (graphProjection.complete && graphProjection.state !== 'needs_attention');
-  const pendingEnabled = !projection || projection.state === 'ready' || projection.state === 'disabled';
-  const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>readRepositoryPending(repoId!,qc,signal),
-    ...(projection?.state === 'ready' ? capacityReadRetry : pendingStateReadRetry),
-    enabled:Boolean(repoId && !deferHeavy && !noticeQuery.error && pendingEnabled),staleTime:projection?.state === 'ready' ? Infinity : 0,refetchOnWindowFocus:false});
-  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>readRepositoryGraph(repoId!,qc,signal),...graphReadRetry,
-    enabled:Boolean(repoId && !deferHeavy && !noticeQuery.error && graphEnabled),staleTime:Infinity,refetchOnMount:'always',refetchOnWindowFocus:false});
-  const retryable = isRetryableGraphRefreshError(viewQuery.error);
-  const fullReadState = useMemo(()=>graphReadState(viewQuery.data,graphProjection,viewQuery.error,noticeQuery.error),
-    [viewQuery.data,graphProjection,viewQuery.error,noticeQuery.error]);
-  const pendingFallback = fullReadState.showGraph ? viewQuery.data : undefined;
-  const pendingRows = useMemo(()=>pendingStateRows(pendingFallback,pendingQuery.data,{
-    fetching:pendingQuery.isFetching,error:pendingQuery.error,failureReason:pendingQuery.failureReason,fullError:viewQuery.error,
-    projection:noticeQuery.data?.pending_projection,noticeError:noticeQuery.error,
-  }),[pendingFallback,viewQuery.error,pendingQuery.data,pendingQuery.isFetching,pendingQuery.error,pendingQuery.failureReason,noticeQuery.data,noticeQuery.error]);
-  const noticeError = noticeQuery.error ?? (pendingRows.inaccessible ? pendingRows.error : undefined);
-  const readState = pendingRows.inaccessible ? { state: 'denied' as const, showGraph: false } : fullReadState;
-  const view = readState.showGraph ? viewQuery.data : undefined;
-  const stale = Boolean(view && viewQuery.error && (retryable || readState.state !== 'legacy'));
-  const rows = useMemo(()=>graphViewRows(view),[view]);
-  return {...rows,pendingRows,
-    graphReadStatus:readState,
-    graphReadNotice:{view:viewQuery.data,projection:graphProjection,error:viewQuery.error,noticeError},
-    pendingLoading:!pendingRows.ready && !pendingRows.inaccessible && !pendingRows.needsAttention && pendingQuery.isPending,
-    pendingError:pendingRows.needsAttention ? t('onhold.needsAttention') : pendingRows.error,
-    retryPending:()=>{if (noticeQuery.error) refreshRepository(); else void pendingQuery.refetch();},
-    refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
-    unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError && !stale,
-    graphLoading:readState.state === 'pending' || (viewQuery.isPending && readState.state === 'legacy'),
-    graphError:noticeQuery.error?.message ?? (pendingRows.inaccessible ? pendingRows.error : stale ? undefined : viewQuery.error?.message),
-    graphRefreshError:stale ? viewQuery.error?.message : undefined,
-    retryGraph:()=>{if (noticeQuery.error) refreshRepository(); else void viewQuery.refetch();}};
-}
-
-export function useSessionArchive() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (value: {repoId: string; snapshotId: string; archived: boolean}) => api.setSessionArchived(value.repoId, value.snapshotId, value.archived),
-    onSuccess: (_result, value) => Promise.all([
-      qc.invalidateQueries({queryKey: ['repo-view', value.repoId]}),
-      qc.invalidateQueries({queryKey: ['pending-state', value.repoId]}),
-    ]),
-  });
-}
-
-export function useGraphPosition(repoId: string | null | undefined, position: string, revision?: RepositoryRevision, generation?: GraphReadGeneration) {
-  const qc = useQueryClient();
-  const refreshed = useRef<{ identity: string; attempted: boolean }>();
-  const identity = JSON.stringify([repoId,revision?.graph,revision?.pending,revision?.evidence ?? '0',
-    generation?.generation,generation?.applied_epoch,generation?.rules]);
-  const query = useQuery({queryKey:['graph-position',repoId,position,identity],
-    queryFn:async ({signal})=>validateGraphPosition(await api.graphState(repoId!,position,signal)),
-    enabled:Boolean(repoId && position && revision),...graphReadRetry,refetchOnWindowFocus:false});
-  const matches = graphPositionMatches(query.data,revision,generation);
-  const denied = query.error instanceof ApiError && [401,403,404].includes(query.error.status);
-  const mismatch = Boolean(query.data && !matches);
-  useEffect(()=>{
-    if (refreshed.current?.identity !== identity) refreshed.current = {identity,attempted:false};
-    if ((!mismatch && !denied) || refreshed.current.attempted) return;
-    refreshed.current.attempted = true;
-    void qc.invalidateQueries({queryKey:['repo-view',repoId]});
-  },[mismatch,denied,identity,qc,repoId]);
-  return {...query,data:matches && !denied ? query.data : undefined,
-    error:query.error ?? (mismatch ? new Error('Historical graph generation changed. Refresh the graph.') : null)};
 }
 
 // ── Mutation ──────────────────────────────────────────
@@ -727,18 +468,6 @@ export function useAcceptInvite() {
   });
 }
 
-export function useEnableContextProtocol() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (repoId: string) => api.enableContextProtocol(repoId),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['repos'] });
-      void qc.invalidateQueries({ queryKey: ['refs'] });
-      void qc.invalidateQueries({ queryKey: ['repo-view'] });
-    },
-  });
-}
-
 export function useUpdateAbout() {
   const qc = useQueryClient();
   return useMutation({
@@ -748,15 +477,11 @@ export function useUpdateAbout() {
       description?: string;
       website?: string;
       topics?: string[];
-      default_branch?: string;
-      protect_default?: boolean;
     }) =>
       api.updateAbout(v.repoId, {
         description: v.description,
         website: v.website,
         topics: v.topics,
-        default_branch: v.default_branch,
-        protect_default: v.protect_default,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['repos'] }),
   });
@@ -788,7 +513,7 @@ export function usePutSettings() {
 }
 
 // ── Login/Logout ───────────────────────────────────
-export type LoginInput =
+type LoginInput =
   | { mode: 'dev'; email: string; name: string }
   | { mode: 'email'; email: string; password: string }
   | { mode: 'google' }

@@ -132,25 +132,6 @@ export interface BreakGlassGrant {
   expires_at: string;
 }
 
-/** User profile activity feed — monthly commit bundles + repository creation */
-export interface ActivityRepo {
-  name: string;
-  path: string;
-  count: number;
-}
-export interface ActivityCreated {
-  name: string;
-  path: string;
-  visibility: string;
-  date: string;
-}
-export interface ActivityMonth {
-  month: string; // YYYY-MM
-  commit_total: number;
-  commit_repos: ActivityRepo[];
-  created: ActivityCreated[];
-}
-
 /** Update repository settings (owner only) */
 export interface RepositoryPatch {
   visibility?: 'private' | 'public';
@@ -179,18 +160,9 @@ export interface Invite {
   expires_at?: string;
 }
 
-export type DocumentIdentity = '' | 'cxt-manifest-sha256-v1';
-
 export interface Repo {
-  required_doc_identity?: DocumentIdentity;
-  doc_identities_supported?: DocumentIdentity[];
-  root_publication_enabled?: boolean;
-  context_protocol?: number;
   id: string;
   remote_url: string;
-  default_branch: string;
-/** Default branch --force move forbidden (protected branch) */
-  protect_default?: boolean;
 /** Code repo git origin (GitHub etc.) — Linked tab link */
   git_remote_url?: string;
   description?: string;
@@ -213,37 +185,6 @@ export interface Ref {
   symbolic?: string;
 }
 
-/** Context snapshot (= git commit) */
-export interface Snapshot {
-  id: string;
-  repo_id: string;
-  branch: string;
-/** branch reflog projection of git branch membership */
-  branches?: string[];
-  parents: string[] | null;
-  doc_hash: string;
-  doc_identity?: DocumentIdentity;
-/** Attached compressed memory (MemoryDigest) hash — if present, provides memory view */
-  memory_hash?: string;
-  provider: string;
-  author?: { name: string; email: string; team: string };
-  fidelity: string;
-  message: string;
-  created_at: string;
-/** Graft (diverged append) overlay snapshot — join point for new context session */
-  grafted?: boolean;
-  /** Reachability-overlay parents attached by a server graft. Natural parents remain immutable. */
-  graft_parents?: string[];
-/** Graft LWW register version (owned by server, not used for display) */
-  graft_seq?: number;
-/** Original agent session identifier — if different from parent, marks session boundary (new session start) */
-  session_id?: string;
-/** List of models that appeared in the session (in order) — for participant AI icons. No legacy snapshots. */
-  models?: string[];
-/** Number of context compression (compact_boundary) operations in the session — compress at this point (◈) if greater than parent. */
-  compaction_count?: number;
-}
-
 /** Uncommitted context pointer for each session — latest captured snapshot outside branch refs. This is durable capture state, not proof that a provider process is currently alive. */
 export interface Pending {
   repo_id: string;
@@ -260,44 +201,12 @@ export interface Pending {
   dismissed?: boolean;
 }
 
-/** Pending-push pointer keyed by (user, branch): the tip of a local commit chain not yet pushed to Git.
- *  Object reaches server first via shadow push, resolved by deletion on git push. Rendered on the "On Hold" tab. */
-export interface Unsync {
-  repo_id: string;
-  user: string;
-  branch: string;
-  target: string;
-  author?: { name: string; email: string; team: string };
-  updated_at: string;
-}
-
-/** Search result item (similar to backend inbound.SearchHit) */
-export interface SearchHit {
-  snapshot_id: string;
-  branch: string;
-  kind: 'commit' | 'event';
-  role?: string;
-  seq?: number;
-  event_index?: number;
-  snippet: string;
-  created_at: string;
-}
-
-/** Single event change in two snapshot diffs (similar to backend inbound.DiffEntry) */
-export interface DiffEntry {
-  op: 'add' | 'remove';
-  seq: number;
-  summary: string;
-}
-
 /** CIR event block (text / tool_use / tool_result / thinking, etc.) */
-export interface CIRBlock {
+interface CIRBlock {
   type: string;
   text?: string;
   name?: string;
 }
-
-export type DocViewMode = 'all' | 'chat' | 'prompts';
 
 export interface DocViewEvent extends CIREvent {
   deferred?: boolean;
@@ -372,137 +281,6 @@ export interface MemoryDigest {
   };
 }
 
-/** Content-addressed session body (CIR) */
-export interface SessionDoc {
-  hash: string;
-  identity?: DocumentIdentity;
-  cir: {
-    envelope: {
-      cir_version?: '1' | '2';
-      source_provider?: string;
-      source_model?: string;
-      captured_at?: string;
-      git_branch?: string;
-/** Context window size (tokens) at session end — if none, fallback to old capture (unobserved) */
-      context_tokens?: number;
-/** Total number of assistant output tokens in session */
-      output_tokens?: number;
-/** All models that appeared in the session (in order of appearance) — source_model is the last used representative value */
-      source_models?: string[];
-    };
-    events: CIREvent[];
-  };
-}
-
-/** ref log entry 1 (git reflog — GET /repos/{id}/reflog). */
-export interface RefLogEntry {
-  kind: string;
-  name: string;
-  old: string;
-  new: string;
-  created_at: string;
-}
-
-/** Immutable server-confirmed context operations, independent of conversation events. */
-export interface HistoryEvent {
- creation?: GitCreation;
-  pr_completed?: boolean;
-  shared_target?: string;
-  local_branch?: string;
-  previous_branch?: string;
-  binding_parent?: string;
-  memory_selection_parent?: string;
-  name_parent?: string;
-  id: string;
-  repo_id: string;
-  branch_id: string;
-  branch: string;
-  kind: 'birth' | 'attach' | 'orphan' | 'position' | 'publish' | 'advance' | 'rename' | 'archive' | 'pr-merge';
-  pr?: {number: number; base_branch: string; head_branch: string; head_sha: string; merge_sha: string};
-  source_branch_id?: string;
-  recovery_evidence?: 'user-confirmed-unborn-head';
-  source?: string;
-  target?: string;
-  memory_source?: string;
-  memory_hash?: string;
-  memory_pinned?: boolean;
-  git_before?: string;
-  git_after?: string;
-  worktree_id?: string;
-  created_at: string;
-}
-
-export type GitAssociationKind = 'publication' | 'integration' | 'memory';
-export type GitAssociationFilter = 'pending' | 'all';
-
-export interface GitAssociationStatus {
-  id: string;
-  kind: string;
-  state: string;
-  reason?: string;
-  source_branch: string;
-  source_branch_id: string;
-  destination_branch?: string;
-  destination_branch_id?: string;
-  capture: string;
-  original_head: string;
-  publication_id: string;
-  admission_id?: string;
-  contribution_id?: string;
-  attempts: number;
-  next_attempt?: string;
-}
-
-export interface GitAssociationStatusPage {
-  repo_id: string;
-  kind: GitAssociationKind;
-  filter: GitAssociationFilter;
-  items: GitAssociationStatus[];
-  next_cursor?: string;
-  discovery: { state: string; version: string };
-  reconciliation: { state: string; page: number; reason?: string };
-  current_applicability: string;
-}
-
-export interface PRJobAssociation {
- provider_history: 'unknown' | 'unavailable' | 'recorded_partial' | 'recorded_complete';
- provider_checkpoint_count?: number;
- participation: 'unknown' | 'unavailable' | 'not_recorded' | 'recorded';
- participation_count?: number;
- publication_count?: number;
- contribution: 'unknown' | 'unavailable' | 'not_recorded' | 'recorded';
- contribution_count?: number;
- current_applicability: 'not_evaluated';
-}
-
-export interface PRPromotionJob {
- id: string;
- repo_id: string;
- pr: { number: number; base_branch: string; head_branch: string; head_sha: string; merge_sha: string };
- state: 'waiting' | 'retrying' | 'running' | 'completed' | 'attention';
- attempts: number;
- reason?: string;
- failure_class?: 'deadline_exceeded' | 'canceled' | 'unspecified';
- association?: PRJobAssociation;
- diagnostics?: {
-  since: string;
-  total_claims: number;
-  dropped: number;
-  events: {
-   kind: 'queued' | 'claimed' | 'finished' | 'retry_requested' | 'source_available';
-   at: string;
-   version: number;
-   attempt: number;
-   state: PRPromotionJob['state'];
-   reason?: string;
-   failure_class?: PRPromotionJob['failure_class'];
-   elapsed_ms?: number;
-  }[];
- };
- updated_at: string;
- next_attempt: string;
-}
-
 export interface StorageUsageReport {
   namespace_id: string;
   policy: { plan: '' | 'free' | 'team' | 'enterprise'; included_bytes: number; pay_as_you_go: boolean; max_bytes: number | null; grace_bytes: number; grace_until: string | null };
@@ -515,99 +293,6 @@ export interface StorageUsageReport {
   period_end: string;
   overage_byte_hours: string;
   entries: { sequence: number; delta_bytes: number; bytes_after: number; reason: string; occurred_at: string }[];
-}
-
-/** A complete graph generation, read in one backend transaction. */
-export interface RepositoryRevision { graph: string; pending: string; evidence?: string; pending_projection?: PendingProjectionStatus; graph_projection?: GraphProjectionStatus }
-export interface GraphReadGeneration {
-  generation: string;
-  source_epoch: string;
-  applied_epoch: string;
-  rules: 2;
-  complete: true;
-  current: boolean;
-}
-export interface GraphProjectionStatus {
-  state: 'disabled' | 'needs_attention' | 'catching_up' | 'ready';
-  source_epoch: string;
-  applied_epoch?: string;
-  rules: 2;
-  generation?: string;
-  complete: boolean;
-  current: boolean;
-}
-export type PendingProjectionStatus = { source_epoch: string; rules: 1 } & (
-  { state: 'ready'; generation: string } |
-  { state: 'disabled' | 'catching_up' | 'needs_attention'; generation?: never }
-);
-/** Raw capture patch: branch memberships belong to the full graph generation. */
-export type PendingSnapshot = Omit<Snapshot, 'branches'>;
-export interface SessionArchiveView {
-  repo_id: string;
-  key: string;
-  snapshot_id: string;
-  provider: string;
-  session_id: string;
-  archived_at: string;
-  archived_by: string;
-  latest_snapshot_id: string;
-  snapshot_ids: string[];
-  message: string;
-  branch: string;
-  author: Snapshot['author'];
-  updated_at: string;
-  origin: {
-    parent_snapshot_id?: string;
-    parent_session_id?: string;
-    parent_provider?: string;
-    main_snapshot_id?: string;
-    main_git_commit?: string;
-    main_branch: string;
-  };
-}
-export interface PendingView { read_generation?: GraphReadGeneration; graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[]; archived_sessions?: SessionArchiveView[] }
-export interface PendingStateView {
-	read_generation?: { generation: string; source_epoch: string; applied_epoch: string; rules: 1; complete: true };
-  projection: 'on-hold-v1';
-  revision: RepositoryRevision;
-  default_branch: string;
-  refs: Ref[];
-  pending: Pending[];
-  snapshots: PendingSnapshot[];
-  archived_sessions: SessionArchiveView[];
-  hold: GraphState['hold'];
-  orphan_sessions: string[];
-  hold_counts: Record<string, number>;
-}
-export type BranchLineage = 'natural' | 'unchanged' | 'graft' | 'disconnected' | 'missing' | 'unknown' | 'orphan';
-export interface ContextSemantics {
-  version: 1;
-  merges: { event_id: string; birth_id?: string; completed: boolean; placement_intact: boolean; source_available: boolean; lineage: BranchLineage }[];
-}
-export interface RepositoryBootstrap {
-  revision: RepositoryRevision;
-  default_branch: string;
-  branch: string;
-  ref?: Ref;
-  snapshot?: Snapshot;
-  parent?: Snapshot;
-  archived: boolean;
-}
-
-export interface RepositoryView {
-  read_generation?: GraphReadGeneration;
-  graph: GraphState;
-  default_branch: string;
-  /** Absent only during rolling upgrades from pre-projection servers. */
-  semantics?: ContextSemantics;
-  revision?: RepositoryRevision;
-  refs: Ref[];
-  snapshots: Snapshot[];
-  reflog: RefLogEntry[];
-  history: HistoryEvent[];
-  pending: Pending[];
-  unsync: Unsync[];
-  archived_sessions?: SessionArchiveView[];
 }
 
 export interface NotificationJob {
@@ -624,127 +309,6 @@ export interface NotificationJob {
   updated_at: string;
   next_attempt: string;
   lease_until: string;
-}
-
-export interface GitChangeSummary {
- id: string;
- request: {target: string; commit: string; parent?: string; target_parent?: string};
- state: 'waiting' | 'running' | 'retrying' | 'completed' | 'attention';
- version: string;
- reason?: string;
- updated_at: string;
- coverage?: 'full' | 'partial' | 'unverified';
- verified_paths: number;
- unverified_paths: number;
-}
-export interface GitChangePage {items: GitChangeSummary[]; next_cursor?: string}
-
-export interface GitScanJob {
- id: string; commit: string; state: GitChangeSummary['state']; indexed: boolean; tree_indexed?: boolean;
- version: string; reason?: string; updated_at: string;
-}
-export interface GitScanPage {items: GitScanJob[]; next_cursor?: string; reconciliation?: {state: 'waiting' | 'running' | 'retrying' | 'completed'; page: number; reason?: string}}
-
-export interface CodeSelection {code_commit: string; source_commit: string; source_parent?: string; paths: string[]}
-export interface CodeApplicabilityResult {
- selection: CodeSelection; revision: RepositoryRevision; state_hash: string;
- relation: 'ancestor' | 'not_ancestor' | 'unknown'; reason?: string;
- paths: {path: string; state: 'applied' | 'before' | 'changed' | 'equivalent' | 'not_in_history' | 'unknown'; reason?: string; before: {oid?: string; mode?: string}; after: {oid?: string; mode?: string}; selected: {oid?: string; mode?: string}}[];
-}
-
-export interface EffectiveMemorySelection {snapshot_id: string; code_commit: string; memory_hash?: string; branch?: string}
-export interface MemoryPositions {
- snapshot_id: string;
- event_id?: string;
- code_commit?: string;
- reason: 'selected_event' | 'unique' | 'ambiguous' | 'unavailable';
- options: {event_id: string; code_commit: string; branch: string; kind: string; pr_number?: number; created_at: string}[];
-}
-export interface EffectiveMemoryItem {
- id: string;
- source_snapshot: string;
- kind: 'code' | 'decision' | 'rationale' | 'legacy_summary' | 'legacy_fact' | 'legacy_task';
- text: string;
- text_hash?: string;
- part?: number;
- code?: {commit: string; parent?: string; paths: string[]};
- state: 'applied' | 'inactive' | 'retained' | 'review';
- reason: string;
- publication_ids?: string[];
- integration_receipt?: string;
- paths?: CodeApplicabilityResult['paths'];
-}
-export interface EffectiveMemoryPage {
-	 inclusion?: BranchContext;
- selection: EffectiveMemorySelection;
- revision: RepositoryRevision;
- state_hash: string;
- lineage_hash: string;
- items: EffectiveMemoryItem[];
- total: number;
- next_cursor: string;
-}
-
-export interface JoinPreview {
- snapshot: string;
- branch: string;
- branch_id: string;
- branches: Array<{branch:string; branch_id:string}>;
- reason?: 'branch_required' | 'no_branch' | 'already_head' | 'unpushed' | 'uncommitted' | 'natural_history' | 'cross_branch' | 'branched';
- expected_head?: string;
- tip?: string;
- descendants: number;
- drop_targets: string[];
- only_revision?: string;
- all_revision?: string;
-}
-
-/** Server-owned business facts. UI owns only filtering, folding and coordinates. */
-export interface GraphState {
-  read_generation?: GraphReadGeneration;
-	integrations?: {branch: string; scope: string; target: string; head: string; parents: Record<string,string[]>; extra_parents: string[]}[];
-	branch_contexts?: Record<string, BranchContext>;
-  version: 1; revision: RepositoryRevision; position_event?: string; primary_branch: string;
-  snapshot_ids: string[]; graph_ids: string[]; committed_ids: string[]; historical_ids: string[];
-  shared_ids: string[]; pushed_ids: string[]; unpushed_ids: string[]; uncommitted_ids: string[];
-  tagged_ids: string[]; archived_only_ids: string[]; ahead_ids: string[]; ahead_tips: string[];
-  markers: {branch: string; target: string; kind: 'joined' | 'archived'; unique_count: number; target_available: boolean}[];
-  branch_heads: Record<string, {branch: string; event_id: string; archived: boolean}>;
-  ref_scopes: Record<string,string>; snapshot_scopes: Record<string,string>; scope_labels: Record<string,string>;
-  hold: {tips: Unsync[]; ids: string[]}[]; orphan_sessions: string[]; hold_counts: Record<string,number>;
-  positions: {event_id: string; branch: string; branch_id: string; snapshot: string; archived: boolean; created_at: string}[];
-  previous: {key: string; branch: string; before: string; after: string; created_at: string; snapshot_ids: string[]; collapsible_ids: string[]}[];
-  branch_snapshots: Record<string,string[]>;
-  continuations: Record<string,string>;
-  operations: {births: GraphBirth[]; merges: GraphMerge[]};
-}
-export interface BranchContext {
-  branch_id: string; snapshot_id: string; code_commit?: string; reason: string;
-  roots: string[]; snapshot_ids: string[];
-  merges: {event_id: string; destination_branch_id?: string; delivery_acknowledged?: boolean; source: string; before?: string; merge_sha: string; pr_number: number; state: 'included' | 'not_selected' | 'review'; reason: string; order: number}[];
-}
-export interface GraphBirth {
-  id: string; event_id: string; branch: string; source: string; orphan: boolean; created_at: string; children: string[];
-}
-export interface GraphMerge {
-  id: string; event_id: string; before: string; after: string; source: string; branch: string; scope: string; from: string;
-  created_at: string; pr_number?: number; historical_only: boolean; withdrawn: boolean;
-  represented_grafts: string[]; redirect_children: string[]; source_birth?: string; lifecycle_birth?: string; source_arms?: string[];
-}
-
-export interface GitCreation {
- evidence: 'process-argv' | 'unavailable'; command?: string[]; start_ref?: string;
- start_commit?: string; origin_branch?: string; origin_branch_id?: string;
-}
-export interface SyncAuditCheck {
- id: string; event_id?: string; snapshot?: string; branch?: string;
- state: 'verified' | 'mismatch' | 'incomplete' | 'unavailable'; code: string;
- expected?: string; actual?: string; creation?: GitCreation;
-}
-export interface SyncAuditPage {
- phase?: string;
- version: number; revision: string; checked_at: string; checks: SyncAuditCheck[];
- next_cursor?: string; processed: number; total: number;
 }
 
 export interface Team {
@@ -783,8 +347,8 @@ export interface AccountAuditEvent { grant_id?:string; id:string; user_id:string
 // uploader's CLI read it from the records the tools and Git left behind.
 export type AnchoredProvider = 'claude' | 'codex';
 export type AnchoredLinkRule = 'printed-number' | 'same-folder-and-time';
-export type AnchoredSpawnRule = 'tool-call' | 'start-time';
-export type AnchoredPlaceRule = 'recorded-by-tool' | 'head-log' | 'current-branch' | 'folder-no-longer-a-worktree';
+type AnchoredSpawnRule = 'tool-call' | 'start-time';
+type AnchoredPlaceRule = 'recorded-by-tool' | 'head-log' | 'current-branch' | 'folder-no-longer-a-worktree';
 /** A part of one session. `first_event` and `events` are absent when zero. */
 export interface AnchoredRange {
   first: string; last: string; first_ordinal: number; last_ordinal: number; commands: number;
@@ -792,14 +356,14 @@ export interface AnchoredRange {
 }
 export interface AnchoredCommit { sha: string; rule: AnchoredLinkRule; created_at?: string; authored_at?: string; author_email?: string; subject?: string }
 /** `hidden` is set in what another member reads of a session: the segment is not open and keeps only its place. */
-export interface AnchoredSegment extends AnchoredRange { closes_turn: boolean; commits: AnchoredCommit[]; hidden?: boolean }
+interface AnchoredSegment extends AnchoredRange { closes_turn: boolean; commits: AnchoredCommit[]; hidden?: boolean }
 export interface AnchoredPlace { worktree: string; branch?: string; removed?: boolean; rule: AnchoredPlaceRule }
 /** `partial` is set in what another member reads of a session: the part is open up to here and goes on. */
-export interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; unplaced: boolean; partial?: boolean }
-export interface AnchoredSpawn { at_record: string; at_ordinal: number; rule: AnchoredSpawnRule }
+interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; unplaced: boolean; partial?: boolean }
+interface AnchoredSpawn { at_record: string; at_ordinal: number; rule: AnchoredSpawnRule }
 export interface AnchoredAgentCall { tool: string; from: string; to: string[]; status?: string; at?: string; record?: string }
 /** The conversation of a session. `doc` is given to the uploader only; everyone reads the conversation through the session. */
-export interface AnchoredContent { doc?: string; identity?: string; events: number }
+interface AnchoredContent { doc?: string; identity?: string; events: number }
 export interface AnchoredSessionBody {
   rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url'; machine?: string;
   started_at?: string; ended_at?: string; records: number; commands: number; copied_records: number; copied_from?: string[]; file_copies?: number;
@@ -813,13 +377,13 @@ export interface AnchoredSession {
 }
 /** Whether a session is archived after a request to archive or restore it. */
 export interface AnchoredSessionArchive { archived: boolean; archived_at?: string }
-export interface AnchoredSummaryCommit {
+interface AnchoredSummaryCommit {
   sha: string; segment_no: number; rule: AnchoredLinkRule; subject?: string; created_at?: string; authored_at?: string;
   /** True when the remote holds the commit; otherwise `copies` names the remote commits that are copies of it. */
   on_remote?: boolean; copies?: string[];
 }
-export interface AnchoredSummaryUncommitted { commands: number; started_at?: string; ended_at?: string; places: AnchoredPlace[]; unplaced: boolean }
-export interface AnchoredSummarySpawn { segment_no?: number; uncommitted?: boolean; rule: AnchoredSpawnRule }
+interface AnchoredSummaryUncommitted { commands: number; started_at?: string; ended_at?: string; places: AnchoredPlace[]; unplaced: boolean }
+interface AnchoredSummarySpawn { segment_no?: number; uncommitted?: boolean; rule: AnchoredSpawnRule }
 export interface AnchoredSessionSummary {
   provider: AnchoredProvider; session_id: string; parent?: string; sub: boolean; revision: number; body_hash: string;
   records: number; commands: number; segments: number; machine?: string; started_at?: string; ended_at?: string; content: boolean;
@@ -855,7 +419,7 @@ export interface AnchoredSearchHit {
 /** `truncated` is true when more was found than is listed. */
 export interface AnchoredSearchResult { hits: AnchoredSearchHit[]; truncated: boolean }
 export interface AnchoredCommitSegment { provider: AnchoredProvider; session_id: string; segment_no: number; rule: AnchoredLinkRule; segment: AnchoredSegment }
-export interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }
+interface BranchEvidence { kind: 'registered' | 'hosting-push'; account?: string; source?: string }
 export interface BranchLifetime {
   repo_id: string; ledger_id: string; name: string; opened_at: string; opened_by: BranchEvidence; closed_at?: string; closed_by?: BranchEvidence;
   linked: { id: string; linked_at: string; by: BranchEvidence }[];

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { anchoredPath, parseRoute, type AnchoredSelection } from '../src/route';
+import { anchoredPath, parseRoute, resolvedRepositoryTab, type AnchoredSelection } from '../src/route';
 
 const repository = { id: 'repository-1', owner_username: 'alice', slug: 'cxthub' };
 const sha = 'a'.repeat(40);
@@ -41,6 +41,18 @@ assert.deepEqual(parseRoute('/alice/cxthub', '?tab=sessions&session=claude:abc&s
 assert.deepEqual(parseRoute('/alice/cxthub', `?tab=sessions&commit=${sha}&base=abc`),
   { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions', anchored: { kind: 'commit', sha } }, 'a compare base that is not a commit number is dropped');
 assert.deepEqual(parseRoute('/alice/cxthub', `?tab=sessions&base=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions' }, 'a base alone selects nothing');
-assert.deepEqual(parseRoute('/alice/cxthub', `?tab=onhold&commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'onhold' }, 'only the sessions tab holds a selection');
-assert.deepEqual(parseRoute('/alice/cxthub', `?commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub' });
-console.log('sessions tab routes: one selection in the address, read back exactly, malformed values dropped');
+assert.deepEqual(parseRoute('/alice/cxthub', `?tab=members&commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'members' }, 'only the sessions tab holds a selection');
+// The sessions tab is where an address without a tab leads, with its selection.
+assert.deepEqual(parseRoute('/alice/cxthub', ''), { kind: 'repository', username: 'alice', slug: 'cxthub' });
+assert.deepEqual(parseRoute('/alice/cxthub', `?commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', anchored: { kind: 'commit', sha } });
+assert.equal(resolvedRepositoryTab(parseRoute('/alice/cxthub', ''), []), 'sessions');
+assert.equal(resolvedRepositoryTab(parseRoute('/w/repository-1', ''), []), 'sessions');
+assert.equal(resolvedRepositoryTab(parseRoute('/alice/cxthub', '?tab=settings'), []), 'settings');
+assert.equal(resolvedRepositoryTab(parseRoute('/alice', ''), []), undefined);
+// Addresses of the two tabs that no longer exist still lead somewhere: the earlier On Hold tab to the list of the
+// same name inside the sessions tab, the earlier Context tab (and any tab name that is not known) to the sessions tab.
+assert.deepEqual(parseRoute('/alice/cxthub', `?tab=onhold&commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', tab: 'sessions', anchored: { kind: 'held' } });
+assert.deepEqual(parseRoute('/alice/cxthub', '?tab=context'), { kind: 'repository', username: 'alice', slug: 'cxthub' });
+assert.deepEqual(parseRoute('/alice/cxthub', `?tab=context&commit=${sha}`), { kind: 'repository', username: 'alice', slug: 'cxthub', anchored: { kind: 'commit', sha } });
+assert.deepEqual(parseRoute('/alice/cxthub', '?tab=unknown'), { kind: 'repository', username: 'alice', slug: 'cxthub' });
+console.log('sessions tab routes: one selection in the address, read back exactly, malformed values dropped, earlier tab addresses still lead somewhere');

@@ -4,7 +4,7 @@ import type { Membership, Repository } from './types';
 
 export type Role = 'viewer' | 'puller' | 'member' | 'maintainer' | 'owner';
 
-export const ROLE_RANK: Record<string, number> = { viewer: 1, puller: 2, member: 3, maintainer: 4, owner: 5 };
+const ROLE_RANK: Record<string, number> = { viewer: 1, puller: 2, member: 3, maintainer: 4, owner: 5 };
 
 // Role labels (including descriptions) are moved to i18n — roles.ts should only contain pure logic.
 // UI labels are rendered using t('roles.viewer' …) (e.g., Dashboard InvitePanel).

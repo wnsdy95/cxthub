@@ -18,7 +18,7 @@ type Leaves<T> = {
 export type MsgKey = Leaves<Messages>;
 export type Vars = Record<string, string | number>;
 
-export function detectLocale(): Locale {
+function detectLocale(): Locale {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved === 'ko' || saved === 'en') return saved;

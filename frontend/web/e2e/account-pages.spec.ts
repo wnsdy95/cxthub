@@ -24,8 +24,6 @@ async function accountFixture(page: Page, options: { empty?: boolean; anonymous?
       if (pathname === '/api/v1/me/mcp-applications') return { body: [{ client_id: 'test-client-' + 'a'.repeat(80), name: 'Coding assistant', scope: 'mcp:read', created_at: user.created_at, expires_at: credential.expires_at }] };
     }
     if (pathname === `/api/v1/public/users/${user.username}`) return { body: { user, repositories: [] } };
-    if (pathname.endsWith('/contributions')) return { body: { total: 0, days: [] } };
-    if (pathname.endsWith('/activity')) return { body: [] };
     if (pathname.startsWith('/api/v1/public/users/')) return { status: 404, body: { error: { message: 'Not found' } } };
     if (pathname === `/api/v1/public/organizations/${organization.slug}`) return { body: { ...organization, repositories: [] } };
     if (pathname.startsWith('/api/v1/public/organizations/')) return { status: 404, body: { error: { message: 'Not found' } } };
