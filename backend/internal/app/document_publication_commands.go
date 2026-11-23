@@ -17,7 +17,6 @@ const (
 
 type DocumentPublicationStore interface {
 	GetRepo(context.Context, domain.ContentHash) (domain.Repo, error)
-	GetSnapshot(context.Context, domain.ContentHash, domain.ContentHash) (domain.Snapshot, error)
 }
 
 type DocumentPublicationChunkStore interface {

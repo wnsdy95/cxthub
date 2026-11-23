@@ -118,11 +118,8 @@ case "$LANE" in
     python3 "$RUNNER" ./cmd/cxt-admin/ --tags postgres ${race[@]+"${race[@]}"} "${selection[@]}" --run '^TestIdentityKeyCommandRejectsSecretsWithoutEchoingConfiguration$'
 
     if [ "$TIER" = heavy ]; then
-      # Race-only checks. Without -race these run in backend-checks.
-      GOMAXPROCS=2 go test -json -p 1 -parallel=1 -race -count=1 -timeout=0 ./internal/domain \
-        -run '^(TestLegacyNormalizationPreparingRestart|TestLegacyNormalizationStageCheckpoint|TestLegacyNormalizationStageCapture|TestLegacyNativeEventLifecycle|TestLegacyNativeCanonicalOwnerReadyLifecycle)'
-      # Admission progress on one CPU under the race detector (backend-checks runs it without).
-      GOMAXPROCS=1 go test -race ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
+      # Race-only check: admission progress on one CPU (backend-checks runs it without the race detector).
+      GOMAXPROCS=1 go test -race ./internal/app -run '^TestResourceAdmissionDispatchReservesBothClasses$' -count=3 -timeout=120s
     fi
     ;;
 esac

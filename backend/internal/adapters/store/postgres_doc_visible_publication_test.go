@@ -5,7 +5,6 @@ package store
 import (
 	"bytes"
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -56,47 +55,4 @@ func docVisiblePGImage(t *testing.T, storage *PostgresStore, ctx context.Context
 		t.Fatal(err)
 	}
 	return image
-}
-
-func TestDocVisiblePGPublicationUsesBoundProof(t *testing.T) {
-	storage, ctx, repo, fixture := docVisiblePGFixture(t, 129)
-	index, err := domain.BuildDocRangeIndex(ctx, rootPublicationProof(t, fixture))
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof, _, err := domain.BuildVerifiedDocRangeGeneration(ctx, index)
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor, err := proof.Descriptor().Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreign := domain.HashContent([]byte("foreign generation"))
-	changed := proof.Descriptor()
-	changed.Hash = foreign
-	changed.Envelope[0] = '!'
-	changed.EventPages.Hash = foreign
-	if err := storage.WithinRepository(ctx, repo, func(bound context.Context) error {
-		return storage.putVisibleGeneration(bound, repo, proof)
-	}); err != nil {
-		t.Fatal("descriptor copy changed publication proof", err)
-	}
-	generation, err := storage.readVisibleGeneration(ctx, repo, fixture.hash)
-	if err != nil || generation.Hash != fixture.hash || generation.RangeGeneration != domain.HashContent(descriptor) {
-		t.Fatal("publication lost verified descriptor binding", generation, err)
-	}
-	before := docVisiblePGImage(t, storage, ctx, fixture.hash)
-	err = storage.WithinRepository(ctx, repo, func(bound context.Context) error {
-		if _, err := storage.db(bound).Exec(bound, `UPDATE doc_range_generations_v2 SET generation_hash=$2 WHERE doc_hash=$1`, fixture.hash, foreign); err != nil {
-			return err
-		}
-		return storage.putVisibleGeneration(bound, repo, proof)
-	})
-	if !errors.Is(err, domain.ErrDocRangeIndexUnavailable) {
-		t.Fatal("visible proof rebound to another stored range generation", err)
-	}
-	if after := docVisiblePGImage(t, storage, ctx, fixture.hash); after != before {
-		t.Fatal("rejected binding changed published generation")
-	}
 }

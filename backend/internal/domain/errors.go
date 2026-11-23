@@ -38,8 +38,6 @@ var ErrBreakGlassAuditUnavailable = errors.New("break-glass audit unavailable")
 // ErrConflict indicates a duplicate creation/state conflict (409). Example: already used invite, occupied username.
 var ErrConflict = errors.New("conflict")
 
-var ErrDocDisplayIncarnationChanged = fmt.Errorf("%w: document display source incarnation changed", ErrConflict)
-
 // ErrEffectiveMemoryCursorStale means an effective-memory continuation cursor no longer
 // matches the current query state. It does not establish unchanged content.
 var ErrEffectiveMemoryCursorStale = fmt.Errorf("%w: effective memory changed; restart without cursor", ErrConflict)

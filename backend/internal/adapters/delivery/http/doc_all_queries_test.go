@@ -40,7 +40,9 @@ func (queries *docAllHTTPQueries) SearchDocEvents(ctx context.Context, repo, has
 	return page, queries.record(ctx, repo, hash, "search", []any{query, after, limit})
 }
 
-func (queries *docAllHTTPQueries) ReadDocViewEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+func (queries *docAllHTTPQueries) ReadDocViewEvents(ctx context.Context, repo, hash domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+	var base domain.ContentHash
+	_ = base
 	page, _ := queries.output.(domain.DocViewPage)
 	return page, queries.record(ctx, repo, hash, "view", []any{base, offset, limit, view})
 }

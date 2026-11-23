@@ -197,9 +197,6 @@ func TestRootProjectionPGOldStageRecovery(t *testing.T) {
 				if n := rootProjectionSearchCount(t, s, ctx, doc); n != 0 {
 					t.Fatal("legacy last-owner cleanup", n)
 				}
-				if _, err = s.ReadVerifiedDoc(ctx, j.RepoID, doc.Hash()); err != nil {
-					t.Fatal("root depended on deleted projection", err)
-				}
 			}
 		})
 	}
@@ -295,11 +292,8 @@ func TestRootProjectionPGConcurrentOldStages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for i, d := range []domain.VerifiedSessionDoc{doc, doc2} {
+	for _, d := range []domain.VerifiedSessionDoc{doc, doc2} {
 		rootProjectionNoIndex(t, s, ctx, d.Hash())
-		if _, err := s.ReadVerifiedDoc(ctx, []domain.ContentHash{j.RepoID, j2.RepoID}[i], d.Hash()); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if n := rootProjectionSearchCount(t, s, ctx, doc); n != 0 {
 		t.Fatal("concurrent retirement orphaned text", n)

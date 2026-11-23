@@ -36,8 +36,8 @@ func (queries documentResponsePGQueries) responseContext(ctx context.Context) co
 	})
 }
 
-func (queries documentResponsePGQueries) ReadDocViewEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
-	return queries.DocumentQueries.ReadDocViewEvents(queries.responseContext(ctx), repo, hash, base, offset, limit, view)
+func (queries documentResponsePGQueries) ReadDocViewEvents(ctx context.Context, repo, hash domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+	return queries.DocumentQueries.ReadDocViewEvents(queries.responseContext(ctx), repo, hash, offset, limit, view)
 }
 
 func (queries documentResponsePGQueries) ReadDocViewFragment(ctx context.Context, repo, hash domain.ContentHash, index, offset, budget int) (domain.DocViewFragment, error) {

@@ -100,32 +100,6 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 	return proof, nil
 }
 
-func (s *PostgresStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (doc domain.VerifiedSessionDoc, err error) {
-	err = s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
-		raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
-		if err != nil {
-			return err
-		}
-		manifest, root, err := storedConversationManifest(ctx, raw)
-		if err != nil {
-			return err
-		}
-		if root {
-			doc, err = s.docProofs.verifyConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
-		} else {
-			// Legacy representations retain their existing byte/semantic rules.
-			doc, err = verifyLegacyStoredDoc(ctx, hash, raw, func(ctx context.Context, h domain.ContentHash) ([]byte, error) {
-				return s.readOwnedDocObject(ctx, repo, "chunk", h)
-			})
-		}
-		return err
-	})
-	if err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	return doc, nil
-}
-
 func conversationChunkOrder(manifest domain.ConversationManifest) []domain.ContentHash {
 	order := make([]domain.ContentHash, len(manifest.Chunks))
 	for i, chunk := range manifest.Chunks {

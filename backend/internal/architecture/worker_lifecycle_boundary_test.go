@@ -63,46 +63,6 @@ func TestMinimumInfrastructureDoesNotConstructApplicationRuntime(test *testing.T
 	}
 }
 
-func TestDisplayMaintenanceOwnerDoesNotDependOnCommandRuntime(test *testing.T) {
-	module, err := readGoModule(filepath.Join("..", ".."))
-	if err != nil {
-		test.Fatal(err)
-	}
-	paths, err := filepath.Glob(filepath.Join(module.directory, "internal", "app", "displaymaintenance", "*.go"))
-	if err != nil || len(paths) == 0 {
-		test.Fatal("actual display maintenance owner is missing", err)
-	}
-	for _, path := range paths {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if err != nil {
-			test.Fatal(err)
-		}
-		for _, dependency := range file.Imports {
-			name, err := strconv.Unquote(dependency.Path.Value)
-			if err != nil {
-				test.Fatal(err)
-			}
-			if name == module.path+"/internal/app" || strings.Contains(name, "/internal/adapters/") || strings.Contains(name, "/internal/serverruntime") {
-				test.Error(filepath.Base(path), "depends on command/infrastructure composition", name)
-			}
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			if pointer, ok := node.(*ast.StarExpr); ok {
-				if name, ok := pointer.X.(*ast.Ident); ok && name.Name == "Service" {
-					test.Error(filepath.Base(path), "retains command Service")
-				}
-				if selector, ok := pointer.X.(*ast.SelectorExpr); ok && selector.Sel.Name == "Service" {
-					test.Error(filepath.Base(path), "retains qualified command Service")
-				}
-			}
-			return true
-		})
-	}
-}
-
 func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 	module, err := readGoModule(filepath.Join("..", ".."))
 	if err != nil {
@@ -119,7 +79,6 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 		}
 		registered := make(map[string]int)
 		var registrationOrder []string
-		maintenanceOwner := false
 		deferredClose := false
 		documentOwners := 0
 		notificationOwners := 0
@@ -150,7 +109,6 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			if !ok {
 				return true
 			}
-			maintenanceOwner = maintenanceOwner || owner.Name == "app" && selector.Sel.Name == "NewDisplayMaintenanceWorker"
 			if owner.Name == "svc" && selector.Sel.Name == "DocumentWorkersForProfile" {
 				documentOwners++
 			}
@@ -185,15 +143,14 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			return true
 		})
 		for _, method := range []string{
-			"githubWorker.Run", "remoteGitSync.Run", "documentWorkers.Finalization.Run", "documentWorkers.Range.Run",
-			"documentWorkers.FindFields.Run", "documentWorkers.Display.Run", "worker.Run", "notificationWorker.Run",
+			"githubWorker.Run", "remoteGitSync.Run", "documentWorkers.Finalization.Run", "notificationWorker.Run",
 			"invitationEmailWorker.Run", "maintenanceWorkers.Runtime.Run", "maintenanceWorkers.Storage.Run",
 		} {
 			if registered[method] != 1 {
 				test.Error("API worker must be registered exactly once", method, registered[method])
 			}
 		}
-		if len(registered) != 11 {
+		if len(registered) != 7 {
 			test.Error("API registered an unexpected additional worker", registered)
 		}
 		for position, method := range registrationOrder {
@@ -204,8 +161,8 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 				test.Error("API invitation email owner moved from its original lifecycle slot", registrationOrder)
 			}
 		}
-		if !maintenanceOwner || !deferredClose || documentOwners != 1 || notificationOwners != 1 || systemMaintenanceOwners != 1 || remoteGitOwners != 1 || invitationEmailOwners != 1 || githubOwners != 1 {
-			test.Error("API does not own concrete worker construction and deferred worker drain", maintenanceOwner, documentOwners, notificationOwners, systemMaintenanceOwners, remoteGitOwners, invitationEmailOwners, githubOwners, deferredClose)
+		if !deferredClose || documentOwners != 1 || notificationOwners != 1 || systemMaintenanceOwners != 1 || remoteGitOwners != 1 || invitationEmailOwners != 1 || githubOwners != 1 {
+			test.Error("API does not own concrete worker construction and deferred worker drain", documentOwners, notificationOwners, systemMaintenanceOwners, remoteGitOwners, invitationEmailOwners, githubOwners, deferredClose)
 		}
 		return
 	}

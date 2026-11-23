@@ -10,7 +10,7 @@ import (
 const docViewBytes = 128 << 10
 const docViewScanEvents = 512
 
-func (queries *Queries) ReadDocViewEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+func (queries *Queries) ReadDocViewEvents(ctx context.Context, repo, hash domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
 	ctx = queries.readContext(ctx)
 	if offset < -1 || limit < 0 || limit > 100 || (view != "chat" && view != "prompts" && view != "all" && view != "raw") {
 		return domain.DocViewPage{}, domain.ErrValidation
@@ -18,12 +18,10 @@ func (queries *Queries) ReadDocViewEvents(ctx context.Context, repo, hash, base 
 	if limit == 0 {
 		limit = 20
 	}
-	return preparedDocViewRead(ctx, queries, repo, hash, base, func() (domain.DocViewPage, error) {
-		return queries.readDocViewEvents(ctx, repo, hash, base, offset, limit, view)
-	})
+	return queries.readDocViewEvents(ctx, repo, hash, offset, limit, view)
 }
 
-func (queries *Queries) readDocViewEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int, view string) (response domain.DocViewPage, resultErr error) {
+func (queries *Queries) readDocViewEvents(ctx context.Context, repo, hash domain.ContentHash, offset, limit int, view string) (response domain.DocViewPage, resultErr error) {
 	ctx, release, err := queries.acquireViewInteractive(ctx)
 	if err != nil {
 		return domain.DocViewPage{}, err
@@ -35,26 +33,13 @@ func (queries *Queries) readDocViewEvents(ctx context.Context, repo, hash, base 
 	}
 	return repositoryReadForRepo(ctx, queries, repo, func(read context.Context) (domain.DocViewPage, error) {
 		out := domain.DocViewPage{Hash: hash, Next: -1, Events: []domain.DocViewEvent{}}
-		source, err := queries.docViewSource(read, repo, hash, false)
+		source, err := queries.docViewSource(read, repo, hash)
 		if err != nil {
 			return out, err
 		}
 		out.Envelope, out.Total = source.envelope, source.total
-		if source.root {
-			out.DocIdentity = domain.DocumentIdentityRootV1
-		}
-		if base != "" {
-			previous, err := queries.openDocViewBase(read, repo, base)
-			if err != nil {
-				return out, err
-			}
-			out.Inherited, err = queries.docViewBoundary(read, repo, hash, base, source, previous)
-			if err != nil {
-				return out, err
-			}
-		}
 		if offset == -1 {
-			offset = out.Inherited
+			offset = 0
 		}
 		if offset > source.total {
 			return out, domain.ErrValidation

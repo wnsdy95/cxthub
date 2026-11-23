@@ -87,21 +87,6 @@ type docRangeHeaderHeapEstimate struct {
 	err   error
 }
 
-func (estimate *docRangeHeaderHeapEstimate) include(other docRangeHeaderHeapEstimate) {
-	if estimate.err != nil {
-		return
-	}
-	if other.err != nil {
-		estimate.err = other.err
-		return
-	}
-	if estimate.bytes < 0 || other.bytes < 0 || estimate.bytes > math.MaxInt64-other.bytes {
-		estimate.err = ErrIntegrity
-		return
-	}
-	estimate.bytes += other.bytes
-}
-
 func (estimate *docRangeHeaderHeapEstimate) allocation(count, width int64) {
 	if estimate.err != nil {
 		return

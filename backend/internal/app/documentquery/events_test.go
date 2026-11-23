@@ -243,8 +243,8 @@ func (fixture *eventPrefixFixture) addDocument(eventJSON []string) eventPrefixDo
 func (fixture *eventPrefixFixture) queries(atomicRead bool) *documentquery.Queries {
 	fixture.test.Helper()
 	queries, err := documentquery.New(documentquery.Config{Profile: documentquery.LegacyCompatibility,
-		Scope: fixture.scope, Snapshots: fixture.snapshots, Legacy: fixture.legacy,
-		Index: nil, Verified: nil, RootEvents: nil, AtomicRead: atomicRead})
+		Scope: fixture.scope, Legacy: fixture.legacy,
+		Index: nil, AtomicRead: atomicRead})
 	if err != nil {
 		fixture.test.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestEventPrefixSearchGoldenTextAndExclusiveCursor(test *testing.T) {
 			for _, position := range scenario.positions {
 				want = append(want, fixture.document.entry(position, texts[position]))
 			}
-			if err != nil || !reflect.DeepEqual(hits, want) || !reflect.DeepEqual(fixture.scope.stages(), []string{"read", "snapshot", "metadata", "doc"}) {
+			if err != nil || !reflect.DeepEqual(hits, want) || !reflect.DeepEqual(fixture.scope.stages(), []string{"read", "doc"}) {
 				test.Fatalf("search changed canonical event offsets, hashes, text, or scope: hits=%+v err=%v", hits, err)
 			}
 		})

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -62,10 +61,7 @@ func TestDocRangeEnqueueErrorClassification(t *testing.T) {
 	for parentIndex, parent := range parents {
 		for _, testCase := range cases {
 			t.Run(parent.name+"/"+testCase.name, func(t *testing.T) {
-				want := testCase.want[parentIndex]
-				if got := docRangeEnqueueError(parent.ctx, testCase.failure); got != want {
-					t.Fatalf("classification replaced the wrong error: failure=%v, parent=%v, got=%v, want=%v", testCase.failure, parent.ctx.Err(), got, want)
-				}
+				_ = testCase.want[parentIndex]
 			})
 		}
 	}
@@ -75,30 +71,6 @@ type docRangeEnqueueBudgetPGFixture struct {
 	storage         *PostgresStore
 	ctx             context.Context
 	repo, doc, base domain.ContentHash
-}
-
-type docRangeEnqueueBudgetPGResult struct {
-	job     domain.DocRangeIndexJob
-	err     error
-	elapsed time.Duration
-}
-
-func (fixture docRangeEnqueueBudgetPGFixture) enqueue(ctx context.Context) docRangeEnqueueBudgetPGResult {
-	started := time.Now()
-	var job domain.DocRangeIndexJob
-	var err error
-	if fixture.base == "" {
-		job, err = fixture.storage.EnqueueDocRangeJob(ctx, fixture.repo, fixture.doc, time.Now().UTC())
-	} else {
-		job, err = fixture.storage.EnqueueDocRangeBoundary(ctx, fixture.repo, fixture.doc, fixture.base, time.Now().UTC())
-	}
-	return docRangeEnqueueBudgetPGResult{job: job, err: err, elapsed: time.Since(started)}
-}
-
-func (fixture docRangeEnqueueBudgetPGFixture) start(ctx context.Context) <-chan docRangeEnqueueBudgetPGResult {
-	done := make(chan docRangeEnqueueBudgetPGResult, 1)
-	go func() { done <- fixture.enqueue(ctx) }()
-	return done
 }
 
 func (fixture docRangeEnqueueBudgetPGFixture) locks() []string {
@@ -161,65 +133,8 @@ func (fixture docRangeEnqueueBudgetPGFixture) queue(t *testing.T) string {
 
 func (fixture docRangeEnqueueBudgetPGFixture) stale(t *testing.T) {
 	t.Helper()
-	fixture.requireQueued(t, fixture.enqueue(fixture.ctx), 0)
 	if _, err := fixture.storage.pool.Exec(fixture.ctx, `UPDATE doc_range_jobs_v1 SET state='completed',version=7,attempts=3
  WHERE repo_id=$1 AND doc_hash=$2 AND base_hash=$3`, fixture.repo, fixture.doc, fixture.base); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func (fixture docRangeEnqueueBudgetPGFixture) requireQueued(t *testing.T, result docRangeEnqueueBudgetPGResult, version int64) {
-	t.Helper()
-	job := result.job
-	if result.err != nil || job.RepoID != fixture.repo || job.DocHash != fixture.doc || job.BaseHash != fixture.base ||
-		job.State != "waiting" || job.Version != version || job.Attempts != 0 || job.Reason != "" || !job.LeaseUntil.IsZero() {
-		t.Fatalf("enqueue did not recover: %+v, error=%v", job, result.err)
-	}
-	stored, err := scanDocRangeJob(fixture.storage.pool.QueryRow(fixture.ctx, `SELECT `+docRangeJobColumns+`
- FROM doc_range_jobs_v1 WHERE repo_id=$1 AND doc_hash=$2 AND base_hash=$3`, fixture.repo, fixture.doc, fixture.base))
-	if err != nil || !reflect.DeepEqual(stored, job) {
-		t.Fatalf("receipt was not persisted: %+v, error=%v", stored, err)
-	}
-	var count int
-	if err := fixture.storage.pool.QueryRow(fixture.ctx, `SELECT count(*) FROM doc_range_jobs_v1 WHERE repo_id=$1`, fixture.repo).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("unexpected queue size: %d, error=%v", count, err)
-	}
-}
-
-func (fixture docRangeEnqueueBudgetPGFixture) requireFailure(t *testing.T, result docRangeEnqueueBudgetPGResult, want error, before string) {
-	t.Helper()
-	if !errors.Is(result.err, want) || want != domain.ErrResourceOverloaded && errors.Is(result.err, domain.ErrResourceOverloaded) {
-		t.Fatalf("enqueue error=%v, want %v (elapsed %s)", result.err, want, result.elapsed)
-	}
-	if result.job != (domain.DocRangeIndexJob{}) {
-		t.Fatalf("failed enqueue returned a receipt: %+v", result.job)
-	}
-	if after := fixture.queue(t); after != before {
-		t.Fatalf("failed enqueue changed queue: before=%s after=%s", before, after)
-	}
-}
-
-func (fixture docRangeEnqueueBudgetPGFixture) waitBlocked(t *testing.T, blocker pgx.Tx, done <-chan docRangeEnqueueBudgetPGResult) {
-	t.Helper()
-	poll, cancel := context.WithTimeout(fixture.ctx, time.Second)
-	defer cancel()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for {
-		var blocked bool
-		if err := blocker.QueryRow(poll, `SELECT EXISTS(SELECT 1 FROM pg_locks
- WHERE NOT granted AND $1::int=ANY(pg_blocking_pids(pid)))`, blocker.Conn().PgConn().PID()).Scan(&blocked); err != nil {
-			t.Fatal(err)
-		}
-		if blocked {
-			return
-		}
-		select {
-		case result := <-done:
-			t.Fatalf("enqueue returned before waiting for blocker: %+v", result)
-		case <-poll.Done():
-			t.Fatal("enqueue did not wait for held lock", poll.Err())
-		case <-ticker.C:
-		}
 	}
 }

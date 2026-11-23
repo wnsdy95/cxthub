@@ -11,7 +11,7 @@ type docViewAuthorizationBackend struct {
 	read func(context.Context) error
 }
 
-func (backend *docViewAuthorizationBackend) ReadDocViewEvents(ctx context.Context, _, _, _ domain.ContentHash, _, _ int, _ string) (domain.DocViewPage, error) {
+func (backend *docViewAuthorizationBackend) ReadDocViewEvents(ctx context.Context, _, _ domain.ContentHash, _, _ int, _ string) (domain.DocViewPage, error) {
 	return domain.DocViewPage{Next: -1}, backend.read(ctx)
 }
 

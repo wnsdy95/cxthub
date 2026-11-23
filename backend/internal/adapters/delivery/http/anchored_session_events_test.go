@@ -25,8 +25,8 @@ func (backend *anchoredEventsHTTPBackend) AnchoredSessionContentAccess(context.C
 	return backend.access, backend.accessErr
 }
 
-func (backend *anchoredEventsHTTPBackend) ReadDocViewEvents(_ context.Context, _, hash, base domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
-	backend.reads = append(backend.reads, strings.Join([]string{"events", string(hash), string(base), view, itoa(offset), itoa(limit)}, " "))
+func (backend *anchoredEventsHTTPBackend) ReadDocViewEvents(_ context.Context, _, hash domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+	backend.reads = append(backend.reads, strings.Join([]string{"events", string(hash), view, itoa(offset), itoa(limit)}, " "))
 	page := domain.DocViewPage{Hash: hash, Offset: offset, Total: backend.access.Events}
 	// A reader that returns more than it was asked for must not widen what is answered.
 	for index := offset; index < offset+limit+backend.extra && index < backend.access.Events; index++ {
@@ -66,11 +66,11 @@ func TestAnchoredSessionEventsStayInsideWhatTheCallerMayRead(t *testing.T) {
 		first, last int
 		next        int
 	}{
-		{"a page inside an open span", "?offset=0&limit=4", 200, "events " + doc + "  all 0 4", 0, 3, 4},
-		{"the default page is cut at the end of the span", "?offset=3", 200, "events " + doc + "  all 3 7", 3, 9, -1},
-		{"the last event of a span", "?offset=9&limit=20", 200, "events " + doc + "  all 9 1", 9, 9, -1},
-		{"the second open span", "?offset=30", 200, "events " + doc + "  all 30 5", 30, 34, -1},
-		{"one event in full", "?offset=31&view=raw", 200, "events " + doc + "  raw 31 1", 31, 31, 32},
+		{"a page inside an open span", "?offset=0&limit=4", 200, "events " + doc + " all 0 4", 0, 3, 4},
+		{"the default page is cut at the end of the span", "?offset=3", 200, "events " + doc + " all 3 7", 3, 9, -1},
+		{"the last event of a span", "?offset=9&limit=20", 200, "events " + doc + " all 9 1", 9, 9, -1},
+		{"the second open span", "?offset=30", 200, "events " + doc + " all 30 5", 30, 34, -1},
+		{"one event in full", "?offset=31&view=raw", 200, "events " + doc + " raw 31 1", 31, 31, 32},
 		{"an event that is not open", "?offset=10", 404, "", 0, 0, 0},
 		{"between the spans", "?offset=20&limit=1", 404, "", 0, 0, 0},
 		{"beyond the conversation", "?offset=40", 404, "", 0, 0, 0},

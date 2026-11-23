@@ -10,7 +10,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type rangeLoadVisibleCost struct {
@@ -36,24 +35,6 @@ func rangeLoadDenyGather(ctx context.Context) error {
 }
 
 type rangeLoadVisibleStore struct{ *store.PostgresStore }
-type rangeLoadGenerationRead struct {
-	outbound.DocRangeGenerationRead
-}
-
-func (storage *rangeLoadVisibleStore) OpenDocRangeGeneration(ctx context.Context, repo, hash domain.ContentHash) (outbound.DocRangeGenerationRead, error) {
-	read, err := storage.PostgresStore.OpenDocRangeGeneration(ctx, repo, hash)
-	return &rangeLoadGenerationRead{read}, err
-}
-
-func (read *rangeLoadGenerationRead) ReadPage(ctx context.Context, position int) ([]domain.DocRangeEntry, error) {
-	if cost := rangeLoadCost(ctx); cost != nil {
-		cost.Pages++
-		if cost.Pages > 20 {
-			return nil, domain.ErrDocumentResourceLimit
-		}
-	}
-	return read.DocRangeGenerationRead.ReadPage(ctx, position)
-}
 
 func (storage *rangeLoadVisibleStore) ReadConversationChunk(ctx context.Context, repo, hash domain.ContentHash, length int64) ([]byte, error) {
 	if cost := rangeLoadCost(ctx); cost != nil {
@@ -71,13 +52,6 @@ func (storage *rangeLoadVisibleStore) GetDoc(ctx context.Context, repo, hash dom
 		return domain.SessionDoc{}, err
 	}
 	return storage.PostgresStore.GetDoc(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedSessionDoc, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	return storage.PostgresStore.ReadVerifiedDoc(ctx, repo, hash)
 }
 
 func (storage *rangeLoadVisibleStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedDocReference, error) {
@@ -106,27 +80,6 @@ func (storage *rangeLoadVisibleStore) DocReadIndex(ctx context.Context, repo, ha
 		return domain.DocReadIndex{}, err
 	}
 	return storage.PostgresStore.DocReadIndex(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) DocRangeIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocRangeIndex, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return domain.DocRangeIndex{}, err
-	}
-	return storage.PostgresStore.DocRangeIndex(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) DocRangePage(ctx context.Context, repo domain.ContentHash, header domain.DocRangeIndex, position int) ([]domain.DocRangeEntry, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return nil, err
-	}
-	return storage.PostgresStore.DocRangePage(ctx, repo, header, position)
-}
-
-func (storage *rangeLoadVisibleStore) OpenDocRange(ctx context.Context, repo, hash domain.ContentHash) (outbound.DocRangeRead, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return nil, err
-	}
-	return storage.PostgresStore.OpenDocRange(ctx, repo, hash)
 }
 
 func rangeLoadVisibleExpected(doc rangeLoadDocument, view string, start, limit int) ([]domain.DocVisibleUnit, int) {
@@ -204,31 +157,5 @@ func TestDocVisibleLoadFixtureOracle(t *testing.T) {
 		if unit.From != test.from || unit.To != test.to || unit.EventIndex != test.event || unit.TurnIndex != test.turn || unit.FoldRows != test.rows {
 			t.Fatalf("%+v unit=%+v", test, unit)
 		}
-	}
-}
-
-func TestDocVisibleLoadGatherGuards(t *testing.T) {
-	storage := &rangeLoadVisibleStore{}
-	cost := &rangeLoadVisibleCost{}
-	ctx := context.WithValue(context.Background(), rangeLoadVisibleCostKey{}, cost)
-	repo, hash := domain.HashContent([]byte("repo")), domain.HashContent([]byte("doc"))
-	checks := []func() error{
-		func() error { _, err := storage.GetDoc(ctx, repo, hash); return err },
-		func() error { _, err := storage.ReadVerifiedDoc(ctx, repo, hash); return err },
-		func() error { _, err := storage.VerifyStoredDoc(ctx, repo, hash); return err },
-		func() error { _, err := storage.GetChunk(ctx, repo, hash); return err },
-		func() error { _, err := storage.GetDocManifest(ctx, repo, hash); return err },
-		func() error { _, err := storage.DocReadIndex(ctx, repo, hash); return err },
-		func() error { _, err := storage.DocRangeIndex(ctx, repo, hash); return err },
-		func() error { _, err := storage.DocRangePage(ctx, repo, domain.DocRangeIndex{}, 0); return err },
-		func() error { _, err := storage.OpenDocRange(ctx, repo, hash); return err },
-	}
-	for _, check := range checks {
-		if check() == nil {
-			t.Fatal("whole-document gather was allowed")
-		}
-	}
-	if cost.Forbidden != len(checks) {
-		t.Fatal("gather counters missing", cost)
 	}
 }

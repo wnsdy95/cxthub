@@ -90,15 +90,3 @@ func TestDocVisiblePublicationRejectsUnverified(t *testing.T) {
 		t.Fatal("unbound publication admitted", err)
 	}
 }
-
-func docVisiblePGFixture(t *testing.T, events int) (*PostgresStore, context.Context, domain.ContentHash, rootReaderFixture) {
-	t.Helper()
-	storage, ctx := chunkReusePG(t)
-	repo, _ := rootPGRepo(t, ctx, storage)
-	fixture := rangeFixture(t, events)
-	seedRootPG(t, ctx, storage, repo, fixture)
-	if err := storage.EnsureDocRangeIndex(ctx, repo, fixture.hash); err != nil {
-		t.Fatal(err)
-	}
-	return storage, ctx, repo, fixture
-}

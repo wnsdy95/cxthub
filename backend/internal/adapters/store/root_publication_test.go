@@ -100,11 +100,9 @@ func TestRootPublicationFSCurrentClosure(t *testing.T) {
 				t.Fatal("root representation changed", err)
 			}
 			reopened := NewFSStore(s.dataDir)
-			got, err := reopened.ReadVerifiedDoc(ctx, j.RepoID, f.hash)
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertRootProof(t, got, f)
 			done, err := reopened.GetDocJob(ctx, j.RepoID, j.ID)
 			if err != nil || done.State != "completed" || done.DocumentRef() != doc.DocumentRef() {
 				t.Fatal(done, err)
@@ -230,9 +228,6 @@ func TestRootPublicationFSPendingRetentionAndQueueReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := reopened.RepackDocs(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := reopened.ReadVerifiedDoc(ctx, j.RepoID, f.hash); err != nil {
 		t.Fatal(err)
 	}
 }

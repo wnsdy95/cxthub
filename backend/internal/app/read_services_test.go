@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -93,54 +92,4 @@ func (storage *readServicesColdDocuments) GetDoc(ctx context.Context, repo, hash
 func (storage *readServicesColdDocuments) EnsureDocRangeIndex(context.Context, domain.ContentHash, domain.ContentHash) error {
 	storage.demands++
 	return domain.ErrIntegrity
-}
-
-func (storage *readServicesColdDocuments) EnqueueDocRangeJob(context.Context, domain.ContentHash, domain.ContentHash, time.Time) (domain.DocRangeIndexJob, error) {
-	storage.demands++
-	return domain.DocRangeIndexJob{}, domain.ErrIntegrity
-}
-
-func (storage *readServicesColdDocuments) EnqueueDocVisibleIndex(context.Context, domain.ContentHash, domain.ContentHash, time.Time) (domain.DocRangeIndexJob, error) {
-	storage.demands++
-	return domain.DocRangeIndexJob{}, domain.ErrIntegrity
-}
-
-func (storage *readServicesColdDocuments) EnqueueDocByteRangeJob(context.Context, domain.ContentHash, domain.ContentHash, time.Time) (domain.DocRangeIndexJob, error) {
-	storage.demands++
-	return domain.DocRangeIndexJob{}, domain.ErrIntegrity
-}
-
-func (storage *readServicesColdDocuments) EnqueueDocRangeBoundary(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, time.Time) (domain.DocRangeIndexJob, error) {
-	storage.demands++
-	return domain.DocRangeIndexJob{}, domain.ErrIntegrity
-}
-
-func (storage *readServicesColdDocuments) ReadDocFindFields(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int) (domain.DocFindFields, error) {
-	return domain.DocFindFields{}, domain.ErrDocFindFieldsUnavailable
-}
-
-func (storage *readServicesColdDocuments) EnqueueDocFindFields(context.Context, domain.ContentHash, domain.ContentHash, time.Time) (domain.DocRangeIndexJob, error) {
-	storage.demands++
-	return domain.DocRangeIndexJob{}, domain.ErrIntegrity
-}
-
-func (*readServicesColdDocuments) ReadDocDisplayGeneration(context.Context, domain.DocDisplayTarget) (domain.DocDisplayStringGeneration, error) {
-	return domain.DocDisplayStringGeneration{}, domain.ErrNotFound
-}
-
-func (*readServicesColdDocuments) ReadDocDisplayPage(context.Context, domain.DocDisplayTarget, int) (domain.DocDisplayPage, error) {
-	return domain.DocDisplayPage{}, domain.ErrNotFound
-}
-
-func (*readServicesColdDocuments) ReadDocEventDisplayGeneration(context.Context, domain.DocDisplayTarget) (domain.DocDisplayProjectionGeneration, error) {
-	return domain.DocDisplayProjectionGeneration{}, domain.ErrNotFound
-}
-
-func (*readServicesColdDocuments) ReadDocEventDisplayPage(context.Context, domain.DocDisplayTarget, int) (domain.DocDisplayPage, error) {
-	return domain.DocDisplayPage{}, domain.ErrNotFound
-}
-
-func (storage *readServicesColdDocuments) EnqueueDocDisplay(context.Context, domain.DocDisplayTarget, time.Time) (domain.DocDisplayJob, error) {
-	storage.demands++
-	return domain.DocDisplayJob{}, domain.ErrIntegrity
 }

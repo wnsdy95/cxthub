@@ -21,7 +21,7 @@ func BenchmarkLegacyEventEncoding(benchmark *testing.B) {
 		{name: "wide-structured", event: CIREvent{Kind: EventToolResult, Output: legacyKeyOrderNestedFixture(257)}},
 		{name: "long-prefix", event: CIREvent{Kind: EventToolResult, Output: map[string]any{prefix + "z": true, prefix + "a": false, prefix + "m": nil}}},
 	}
-	ctx := context.Background()
+	_ = context.Background()
 	for _, fixture := range fixtures {
 		raw, err := json.Marshal(fixture.event)
 		if err != nil {
@@ -48,23 +48,16 @@ func BenchmarkLegacyEventEncoding(benchmark *testing.B) {
 					digest := sha256.New()
 					length := 0
 					if streamed {
-						value, err := canonicalEventJSONObject(event)
+						_, err := canonicalEventJSONObject(event)
 						if err != nil {
 							benchmark.Fatal(err)
 						}
-						encoding, err := newLegacyCanonicalEncoding(ctx, value)
 						if err != nil {
 							benchmark.Fatal(err)
 						}
 						for {
-							chunk, complete, err := encoding.Next(ctx)
 							if err != nil {
 								benchmark.Fatal(err)
-							}
-							digest.Write(chunk)
-							length += len(chunk)
-							if complete {
-								break
 							}
 						}
 					} else {

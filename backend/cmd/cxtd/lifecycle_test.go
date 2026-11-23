@@ -182,34 +182,6 @@ func TestAPILifecycleDeferredCloseJoinsOnPanic(test *testing.T) {
 	waitAPILifecycleSignal(test, closed, "runtime close during panic cleanup")
 }
 
-type apiLifecycleMaintenanceStore struct{}
-
-func (apiLifecycleMaintenanceStore) StepDocDisplayMaintenance(context.Context) (domain.DocDisplayMaintenanceStep, error) {
-	return domain.DocDisplayMaintenanceStep{}, domain.ErrNotFound
-}
-
-type apiLifecycleDocumentStore struct {
-	outbound.DocFindFieldsStore
-	outbound.DocDisplayStore
-}
-
-type apiLifecycleRangeStore struct {
-	*store.FSStore
-	outbound.DocRangeJobStore
-}
-
-func (apiLifecycleRangeStore) ClaimDocRangeJob(context.Context, time.Time, time.Duration) (domain.DocRangeIndexJob, error) {
-	return domain.DocRangeIndexJob{}, domain.ErrNotFound
-}
-
-func (apiLifecycleDocumentStore) ClaimDocFindFields(context.Context, time.Time, time.Duration) (domain.DocRangeIndexJob, error) {
-	return domain.DocRangeIndexJob{}, domain.ErrNotFound
-}
-
-func (apiLifecycleDocumentStore) ClaimDocDisplay(context.Context, time.Time, time.Duration) (domain.DocDisplayJob, error) {
-	return domain.DocDisplayJob{}, domain.ErrNotFound
-}
-
 type apiLifecycleGitHubRemote struct {
 	outbound.GitHubApp
 	started  chan<- context.Context

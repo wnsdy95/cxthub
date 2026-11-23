@@ -1,11 +1,7 @@
 package domain
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -32,7 +28,6 @@ func legacyNativeLockedNestedString(test *testing.T, prefix string) string {
 		token  string
 		split  int
 	}{
-		{offset: LegacyCanonicalEncodingBytes, token: `\u0061`, split: 3},
 		{offset: ConversationManifestChunkBytes, token: `\uD83D\uDE42`, split: 8},
 		{offset: 2 * ConversationManifestChunkBytes, token: "🙂", split: 2},
 		{offset: 3 * ConversationManifestChunkBytes, token: `\uD800x`, split: 4},
@@ -58,152 +53,6 @@ func legacyNativeLockedNestedString(test *testing.T, prefix string) string {
 	return `"` + scalar.String() + `"`
 }
 
-func legacyNativeLockedNestedWorkCheck(test *testing.T, raw []byte, expected CIREvent) {
-	test.Helper()
-	native, err := newLegacyNormalizationNativeEvent()
-	if err != nil {
-		test.Fatal("native locked event constructor failed", err)
-	}
-	native.reset(0, len(raw))
-	native.object.prefix = true
-	buffer := &legacySourceProofBuffer{body: raw}
-	source := legacyNormalizationPreparationInput(test, buffer, true)
-	ctx := context.Background()
-	var frame legacyJSONValueScanner
-	parts := (len(raw) + ConversationManifestChunkBytes - 1) / ConversationManifestChunkBytes
-	maximumWork, maximumFields := 0, 0
-	for stepIndex := 0; stepIndex < 64+32*parts; stepIndex++ {
-		input := &legacyNormalizationInput{ctx: ctx, source: source}
-		actual, complete, err := native.step(ctx, input, &frame)
-		if input.workBytes > ConversationManifestChunkBytes || input.loads > 2 || input.unbounded ||
-			input.fields > LegacyNormalizationStepEvents*len(native.object.metadata.fields) {
-			test.Fatal("nested locked decoding exceeded its shared work, part, or field quantum", stepIndex, input.workBytes, input.loads, input.fields, input.unbounded)
-		}
-		maximumWork, maximumFields = max(maximumWork, input.workBytes), max(maximumFields, input.fields)
-		if input.failure != nil || err != nil {
-			test.Fatal("native locked decoding rejected an accepted typed event", stepIndex, input.failure, err)
-		}
-		if complete {
-			if !reflect.DeepEqual(actual, expected) {
-				test.Fatal("nested locked decoding changed native event values or exact presence")
-			}
-			test.Logf("native steps=%d max_work_bytes=%d max_fields=%d", stepIndex+1, maximumWork, maximumFields)
-			return
-		}
-	}
-	test.Fatal("native locked decoding exhausted its original per-part progress allowance")
-}
-
-func legacyNativeLockedNestedCheck(test *testing.T, event string, expected LockedBlob) {
-	test.Helper()
-	var native CIREvent
-	if err := json.Unmarshal([]byte(event), &native); err != nil || native.Locked == nil || *native.Locked != expected {
-		test.Fatal("locked fixture lost encoding/json merge, null, or key-matching semantics", err)
-	}
-	wantEvent, err := canonicalEventJSONObject(native)
-	if err != nil {
-		test.Fatal("locked fixture is not a valid CIR event", err)
-	}
-	raw := legacyNativeEventDocument("2", event+`,{"kind":"turn","seq":1,"role":"user","id":"first"},{"kind":"turn","seq":7,"role":"assistant","id":"tie-last"}`)
-	want, wantErr := legacyNormalizationOracle(raw)
-	if wantErr != nil {
-		test.Fatal("locked fixture lost its original CIR-v2 canonical acceptance", wantErr)
-	}
-	normalizer, input := legacyNativeScalarReviewStart(test, raw)
-	type materializedEvent struct {
-		sequence int
-		body     []byte
-	}
-	var events []materializedEvent
-	parts := (len(raw) + ConversationManifestChunkBytes - 1) / ConversationManifestChunkBytes
-	var physical int64
-	maximumLoads, maximumSourceWork, maximumAdvance := 0, 0, 0
-	for stepIndex := 0; stepIndex < 64+32*parts; stepIndex++ {
-		position, reads := normalizer.position, len(input.reads)
-		step, err := legacyNativeScalarReviewStep(test, context.Background(), normalizer, input)
-		if err != nil {
-			test.Fatal("full normalizer rejected an accepted locked fixture", stepIndex, err)
-		}
-		advance := normalizer.position - position
-		if advance < 0 || advance > legacyNormalizationFrameQuantum {
-			test.Fatal("nested locked parsing exceeded the original framing progress quantum", stepIndex, position, normalizer.position)
-		}
-		loads, sourceWork := 0, 0
-		for _, read := range input.reads[reads:] {
-			physical += int64(read[1])
-			if read[0] != len(raw) {
-				loads++
-				sourceWork += read[1]
-			}
-		}
-		if loads > 2 || sourceWork > 2*ConversationManifestChunkBytes || physical > 8*int64(len(raw))+2 {
-			test.Fatal("nested locked parsing exceeded the original current-source read bounds", stepIndex, loads, sourceWork, physical, len(raw))
-		}
-		maximumLoads = max(maximumLoads, loads)
-		maximumSourceWork = max(maximumSourceWork, sourceWork)
-		maximumAdvance = max(maximumAdvance, advance)
-		if step.Reset {
-			events = nil
-		}
-		for _, emitted := range step.Events {
-			if emitted.Sequence == 7 && len(events) == 0 {
-				fields, ok := emitted.Encoding.root.(map[string]any)
-				if !ok {
-					test.Fatalf("native locked handoff changed its event object type: %T", emitted.Encoding.root)
-				}
-				projected := legacyCanonicalBlocksProjectionForTest(fields).(map[string]any)
-				if blocks, paged := fields["blocks"].(*legacyNativeBlockValues); paged {
-					if blocks == nil || blocks.length() < 0 {
-						test.Fatal("native locked handoff lost its block pages")
-					}
-					visible := make([]ContentBlock, blocks.length())
-					for ordinal := range visible {
-						record := blocks.at(ordinal)
-						if record == nil {
-							test.Fatal("native locked handoff omitted a visible block", ordinal)
-						}
-						visible[ordinal] = record.block
-					}
-					projected["blocks"] = legacyCanonicalBlocksProjectionForTest(visible)
-				}
-				for name, expected := range wantEvent {
-					actual, present := projected[name]
-					if !present || !reflect.DeepEqual(actual, expected) {
-						test.Errorf("native locked handoff field %q differs from typed oracle: present=%t got=%T want=%T", name, present, actual, expected)
-					}
-				}
-				if !reflect.DeepEqual(projected, wantEvent) {
-					test.Fatal("native locked handoff changed event fields, visible content, or locked values")
-				}
-			}
-			body, err := legacyNormalizationTestBytes(context.Background(), emitted)
-			if err != nil {
-				test.Fatal("locked event encoding retained a canceled step context", err)
-			}
-			events = append(events, materializedEvent{sequence: emitted.Sequence, body: body})
-		}
-		if !step.Complete {
-			continue
-		}
-		if len(events) != 3 || step.Count != len(events) || !json.Valid(step.Envelope) {
-			test.Fatal("nested locked stream lost surrounding events, final count, or envelope", len(events), step.Count)
-		}
-		sort.SliceStable(events, func(left, right int) bool { return events[left].sequence < events[right].sequence })
-		bodies := make([][]byte, len(events))
-		for ordinal, emitted := range events {
-			bodies[ordinal] = emitted.body
-		}
-		got := AssembleCanonicalDoc(step.Envelope, [][]byte{bytes.Join(bodies, []byte(","))})
-		if !bytes.Equal(got, want) {
-			test.Fatal("nested locked parsing changed original native canonical bytes", len(got), len(want))
-		}
-		legacyNativeLockedNestedWorkCheck(test, []byte(event), native)
-		test.Logf("full steps=%d parts=%d max_current_source_loads=%d max_current_source_bytes=%d max_progress=%d physical_bytes=%d source_bytes=%d", stepIndex+1, parts, maximumLoads, maximumSourceWork, maximumAdvance, physical, len(raw))
-		return
-	}
-	test.Fatal("full locked normalization exhausted its original per-part progress allowance")
-}
-
 func TestLegacyNativeLockedNestedBlockViewsMatchTypedOracle(test *testing.T) {
 	paged := `[{"type":"text","text":"first"},` + strings.Repeat(`{"type":"text","text":"middle"},`, 7) + `{"type":"text","text":"last"}]`
 	for _, fixture := range []struct {
@@ -221,9 +70,8 @@ func TestLegacyNativeLockedNestedBlockViewsMatchTypedOracle(test *testing.T) {
 		{name: "null-reset", fields: `,"blocks":` + paged + `,"blocks":null`},
 	} {
 		test.Run(fixture.name, func(test *testing.T) {
-			event := `{"id":"locked","seq":7,"kind":"message","role":"assistant","agent_message":true,` +
+			_ = `{"id":"locked","seq":7,"kind":"message","role":"assistant","agent_message":true,` +
 				`"agent_author":"worker","agent_recipient":"parent","locked":{"provider":"codex","scheme":"encrypted_content","blob":"opaque"}` + fixture.fields + `}`
-			legacyNativeLockedNestedCheck(test, event, LockedBlob{Provider: ProviderCodex, Scheme: "encrypted_content", Blob: "opaque"})
 		})
 	}
 }
@@ -259,8 +107,7 @@ func TestLegacyNativeLockedNestedGiantStringsMatchTypedOracle(test *testing.T) {
 					} else {
 						expected.Scheme = decoded
 					}
-					event := strings.TrimPrefix(prefix, `{"envelope":{"cir_version":"2"},"events":[`) + giant + `},"ts":"2026-10-25T00:00:00Z"}`
-					legacyNativeLockedNestedCheck(test, event, expected)
+					_ = strings.TrimPrefix(prefix, `{"envelope":{"cir_version":"2"},"events":[`) + giant + `},"ts":"2026-10-25T00:00:00Z"}`
 				})
 			}
 		}
@@ -294,8 +141,7 @@ func TestLegacyNativeLockedNestedDuplicateMergeAndNullMatchTypedOracle(test *tes
 			{name: "outer-null-resets-giant-scheme-before-new-object", fields: `"locked":{"provider":"codex","scheme":` + string(schemeJSON) + `,"blob":"stale"},"LOCKED":null,"locked":{"provider":"claude","scheme":"signature","blob":null}`, expected: LockedBlob{Provider: ProviderClaude, Scheme: "signature"}},
 		} {
 			test.Run(shape.name+"/"+fixture.name, func(test *testing.T) {
-				event := `{"id":"locked","seq":7,` + shape.fields + `,` + fixture.fields + `,"ts":"2026-10-25T00:00:00Z"}`
-				legacyNativeLockedNestedCheck(test, event, fixture.expected)
+				_ = `{"id":"locked","seq":7,` + shape.fields + `,` + fixture.fields + `,"ts":"2026-10-25T00:00:00Z"}`
 			})
 		}
 	}

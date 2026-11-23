@@ -2,101 +2,22 @@ package documentquery
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
+// docViewSource is a conversation document opened for paged reading: its
+// envelope, how many events it holds, and each event's place and bytes.
 type docViewSource struct {
-	binding     domain.DocReadGenerationBinding
-	envelope    domain.CIREnvelope
-	total       int
-	root        bool
-	streamBytes int64
-	byteStorage domain.DocRangeByteStorage
-	chunk       func(int) (domain.ConversationManifestChunk, error)
-	block       func(int) (domain.ContentHash, error)
-	entry       func(int) (domain.DocRangeEntry, error)
-	location    func(int) (domain.DocEventIndex, error)
-	read        func(int, int) ([]byte, error)
+	envelope domain.CIREnvelope
+	total    int
+	entry    func(int) (domain.DocRangeEntry, error)
+	location func(int) (domain.DocEventIndex, error)
+	read     func(int, int) ([]byte, error)
 }
 
-func (queries *Queries) docViewSource(ctx context.Context, repo, hash domain.ContentHash, legacyCompatibility bool) (docViewSource, error) {
-	snapshot, err := queries.metadata.GetSnapshot(ctx, repo, hash)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return docViewSource{}, err
-	}
-	if err != nil {
-		return queries.docViewSnapshotSource(ctx, repo, hash, nil, legacyCompatibility)
-	}
-	return queries.docViewSnapshotSource(ctx, repo, hash, &snapshot, legacyCompatibility)
-}
-
-func (queries *Queries) docViewSnapshotSource(ctx context.Context, repo, hash domain.ContentHash, snapshot *domain.Snapshot, legacyCompatibility bool) (docViewSource, error) {
-	if snapshot != nil {
-		if err := matchReadSnapshot(domain.DocumentRef{Hash: hash, Identity: snapshot.DocIdentity}, *snapshot); err != nil {
-			return docViewSource{}, err
-		}
-	}
-	if snapshot != nil && snapshot.DocIdentity == domain.DocumentIdentityRootV1 {
-		storage := queries.view.Range
-		if storage == nil {
-			return docViewSource{}, domain.ErrDocRangeIndexUnavailable
-		}
-		chunks := queries.view.Chunks
-		if chunks == nil {
-			return docViewSource{}, domain.ErrUnsupportedDocumentIdentity
-		}
-		index, err := openDocViewRange(ctx, storage, queries.view.RangeSnapshots, queries.view.RangeGenerations, repo, hash)
-		if err != nil {
-			return docViewSource{}, err
-		}
-		var envelope domain.CIREnvelope
-		if json.Unmarshal(index.envelope, &envelope) != nil {
-			return docViewSource{}, domain.ErrIntegrity
-		}
-		cachedPage := -1
-		var entries []domain.DocRangeEntry
-		entry := func(position int) (domain.DocRangeEntry, error) {
-			if position < 0 || position >= index.total {
-				return domain.DocRangeEntry{}, domain.ErrValidation
-			}
-			page := position / domain.DocRangePageEvents
-			if page != cachedPage {
-				var err error
-				entries, err = index.readPage(page)
-				if err != nil {
-					return domain.DocRangeEntry{}, err
-				}
-				cachedPage = page
-			}
-			if len(entries) <= position%domain.DocRangePageEvents {
-				return domain.DocRangeEntry{}, domain.ErrIntegrity
-			}
-			return entries[position%domain.DocRangePageEvents], nil
-		}
-		read := docChunkRangeReader(ctx, index.streamBytes, index.chunk, func(read context.Context, _ int, descriptor domain.ConversationManifestChunk) ([]byte, error) {
-			return chunks.ReadConversationChunk(read, repo, descriptor.Hash, descriptor.Bytes)
-		})
-		location := func(position int) (domain.DocEventIndex, error) {
-			item, err := entry(position)
-			return item.DocEventIndex, err
-		}
-		return docViewSource{binding: index.binding, envelope: envelope, total: index.total, root: true, block: index.block, entry: entry, location: location, read: read}, nil
-	}
-	if storage := queries.view.RangeGenerations; storage != nil && storage.InReadOnlyTransaction(ctx) {
-		if source, ready, err := queries.legacySnapshotGenerationSource(ctx, repo, hash, snapshot); ready || err != nil {
-			if _, enabled := queries.docBytePreparation(); err == nil && ready && enabled && !legacyCompatibility && source.chunk == nil && source.streamBytes > 0 {
-				return docViewSource{}, errDocViewGenerationNeedsPreparation
-			}
-			return source, err
-		}
-		if queries.usesLegacyRangeReadiness() && snapshot != nil && !legacyCompatibility {
-			return docViewSource{}, errDocViewGenerationNeedsPreparation
-		}
-	}
+// docViewSource opens a document through its stored read index.
+func (queries *Queries) docViewSource(ctx context.Context, repo, hash domain.ContentHash) (docViewSource, error) {
 	ctx, release, err := queries.acquireViewBulk(ctx)
 	if err != nil {
 		return docViewSource{}, err
@@ -145,69 +66,4 @@ func legacyDocViewSource(source docReadSource) docViewSource {
 		return source.read(offset, length)
 	}
 	return docViewSource{envelope: source.index.Envelope, total: len(source.index.Events), entry: entry, location: location, read: read}
-}
-
-func (queries *Queries) legacySnapshotGenerationSource(ctx context.Context, repo, hash domain.ContentHash, snapshot *domain.Snapshot) (docViewSource, bool, error) {
-	storage := queries.view.RangeGenerations
-	if storage == nil {
-		return docViewSource{}, false, nil
-	}
-	if snapshot != nil {
-		if err := matchReadSnapshot(domain.DocumentRef{Hash: hash, Identity: snapshot.DocIdentity}, *snapshot); err != nil {
-			return docViewSource{}, false, err
-		}
-		if snapshot.RepoID != repo {
-			return docViewSource{}, false, domain.ErrIntegrity
-		}
-		if snapshot.DocIdentity != domain.DocumentIdentityLegacy {
-			return docViewSource{}, false, nil
-		}
-	}
-	if !storage.InReadOnlyTransaction(ctx) {
-		return docViewSource{}, false, domain.ErrConflict
-	}
-	source, err := openLegacyDocRangeMetadataSource(ctx, storage, repo, hash)
-	if errors.Is(err, errDocViewGenerationNeedsPreparation) {
-		return docViewSource{}, false, nil
-	}
-	if err != nil {
-		return docViewSource{}, false, err
-	}
-	var read func(int, int) ([]byte, error)
-	source.read = func(offset, length int) ([]byte, error) {
-		bound, release, err := queries.acquireViewBulk(ctx)
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-		if read == nil {
-			switch source.byteStorage {
-			case domain.DocRangeByteStorageOriginal:
-				chunks := queries.view.Chunks
-				if chunks == nil {
-					return nil, domain.ErrUnsupportedDocumentIdentity
-				}
-				read = docChunkRangeReader(outbound.WithDocReadOnly(bound), source.streamBytes, source.chunk, func(current context.Context, _ int, descriptor domain.ConversationManifestChunk) ([]byte, error) {
-					return chunks.ReadConversationChunk(current, repo, descriptor.Hash, descriptor.Bytes)
-				})
-			case domain.DocRangeByteStorageDerived:
-				chunks := queries.view.DerivedChunks
-				if chunks == nil {
-					return nil, domain.ErrUnsupportedDocumentIdentity
-				}
-				read = docChunkRangeReader(outbound.WithDocReadOnly(bound), source.streamBytes, source.chunk, func(current context.Context, ordinal int, descriptor domain.ConversationManifestChunk) ([]byte, error) {
-					return chunks.ReadLegacyDerivedByteChunk(current, repo, hash, source.binding, ordinal, descriptor)
-				})
-			case domain.DocRangeByteStorageNone:
-				read, err = queries.eventRangeReader(outbound.WithDocReadOnly(bound), repo, hash)
-				if err != nil {
-					return nil, err
-				}
-			default:
-				return nil, domain.ErrIntegrity
-			}
-		}
-		return read(offset, length)
-	}
-	return source, true, nil
 }

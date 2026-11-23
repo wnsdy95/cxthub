@@ -35,7 +35,6 @@ type Backend interface {
 	EnsureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
-	GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error)
 	// About + team default settings bundle (web editing).
 	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
 	PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error)

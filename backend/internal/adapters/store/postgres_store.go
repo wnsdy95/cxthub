@@ -23,11 +23,9 @@ import (
 
 // PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
 type PostgresStore struct {
-	docProofs                    docProofCache
-	legacyBases                  legacyBaseHints
-	pool                         *pgxpool.Pool
-	legacyByteRangePublication   bool
-	legacyDerivedBytePublication bool
+	docProofs   docProofCache
+	legacyBases legacyBaseHints
+	pool        *pgxpool.Pool
 }
 
 // NewPostgresStore connects to a pgx pool using a dsn.
@@ -209,48 +207,6 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 
 // --- Snapshot Metadata ---
 
-func scanSnapshot(row pgx.Row) (domain.Snapshot, error) {
-	var snap domain.Snapshot
-	var parents []string
-	var graftParents []string
-	var models []string
-	var memHash *string
-	if err := row.Scan(&snap.ID, &snap.RepoID, &snap.Branch, &parents, &snap.DocHash, &memHash,
-		&snap.ClaudeSettings, &snap.AgentsSettings, &snap.CodexSettings,
-		&snap.Provider, &snap.Fidelity, &snap.Message,
-		&snap.Author.Name, &snap.Author.Email, &snap.Author.Team, &snap.CreatedAt, &snap.Grafted, &snap.SessionID, &models, &snap.CompactionCount, &graftParents, &snap.GraftSeq, &snap.DocIdentity); err != nil {
-		return domain.Snapshot{}, err
-	}
-	snap.Parents = hashes(parents)
-	if len(graftParents) > 0 {
-		snap.GraftParents = hashes(graftParents)
-	}
-	if len(models) > 0 {
-		snap.Models = models
-	}
-	if memHash != nil {
-		snap.MemoryHash = domain.ContentHash(*memHash)
-	}
-	if err := validateSnapshotRefs(snap); err != nil {
-		return domain.Snapshot{}, err
-	}
-	return snap, nil
-}
-
-const snapCols = `id, repo_id, branch, parents, doc_hash, memory_hash, COALESCE(claude_settings,''), COALESCE(agents_settings,''), COALESCE(codex_settings,''), provider, fidelity, message, author_name, author_email, author_team, created_at, grafted, COALESCE(session_id,''), COALESCE(models,'{}'), COALESCE(compaction_count,0), COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0), doc_identity`
-
-func (s *PostgresStore) GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
-	if err := validateHashes(repoID, id); err != nil {
-		return domain.Snapshot{}, err
-	}
-	row := s.db(ctx).QueryRow(ctx, `SELECT `+snapCols+` FROM snapshots WHERE repo_id=$1 AND id=$2`, string(repoID), string(id))
-	snap, err := scanSnapshot(row)
-	if err != nil {
-		return domain.Snapshot{}, mapNoRows(err)
-	}
-	return snap, nil
-}
-
 func lockRepoGraph(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash) error {
 	// Graft requires serializing the entire Add/Join read-check-write for each repo using advisory xact locks.
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), 1735289201)`, string(repoID))
@@ -260,26 +216,6 @@ func lockRepoGraph(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash) er
 // --- Ref / manifest ---
 
 // --- Memory Meta ---
-
-func (s *PostgresStore) PutMemoryMeta(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) error {
-	if err := validateHashes(repoID, digest.SnapshotID); err != nil {
-		return err
-	}
-	// A nil slice is bound as SQL NULL, violating the NOT NULL constraint (0001) — normalized to an empty array.
-	// (PG retest empirical verification: SQLSTATE 23502).
-	keyFacts, openTasks := digest.KeyFacts, digest.OpenTasks
-	if keyFacts == nil {
-		keyFacts = []string{}
-	}
-	if openTasks == nil {
-		openTasks = []string{}
-	}
-	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO memories (repo_id, snapshot_id, summary, key_facts, open_tasks, provider) VALUES ($1,$2,$3,$4,$5,$6)
-		 ON CONFLICT (repo_id, snapshot_id) DO UPDATE SET summary=EXCLUDED.summary, key_facts=EXCLUDED.key_facts, open_tasks=EXCLUDED.open_tasks`,
-		string(repoID), string(digest.SnapshotID), digest.Summary, keyFacts, openTasks, string(digest.Provider))
-	return err
-}
 
 // --- BlobStore ---
 
@@ -819,8 +755,7 @@ func (s *PostgresStore) DeleteDoc(ctx context.Context, repoID domain.ContentHash
 	}
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM blobs b WHERE b.hash=$1
-		   AND NOT EXISTS (SELECT 1 FROM repo_blobs rb WHERE rb.hash=b.hash)
-		   AND NOT EXISTS (SELECT 1 FROM snapshots s WHERE s.doc_hash=b.hash OR s.memory_hash=b.hash)`,
+		   AND NOT EXISTS (SELECT 1 FROM repo_blobs rb WHERE rb.hash=b.hash)`,
 		string(hash)); err != nil {
 		return err
 	}

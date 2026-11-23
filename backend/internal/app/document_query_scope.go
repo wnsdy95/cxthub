@@ -77,29 +77,6 @@ func (scope *documentQueryScope) AuthorizeDocumentRead(ctx context.Context, repo
 	return ctx, nil
 }
 
-func (scope *documentQueryScope) AuthorizeDocumentPreparation(ctx context.Context, repo domain.ContentHash) (context.Context, error) {
-	if err := ctx.Err(); err != nil {
-		return ctx, err
-	}
-	if scope.presence != nil && scope.presence.InTransaction(ctx) {
-		return ctx, domain.ErrConflict
-	}
-	if outbound.DocReadOnly(ctx) {
-		return ctx, domain.ErrForbidden
-	}
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return ctx, err
-	}
-	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), scope.supported)
-	if inbound.DocumentReadAuthorizer(ctx) != nil {
-		return reauthorizeDocumentRead(ctx, repo)
-	}
-	if _, system := inbound.RepositoryActor(ctx); system {
-		return ctx, nil
-	}
-	return ctx, domain.ErrUnauthorized
-}
-
 func (scope *documentQueryScope) AcquireInteractive(ctx context.Context) (context.Context, func(), error) {
 	return AcquireResources(ctx, ResourceInteractive)
 }
@@ -189,30 +166,9 @@ func (service *Service) newDocumentQueries(profile documentquery.Profile, full b
 		supported:            append([]domain.DocumentIdentity(nil), service.DocumentIdentitiesSupported()...),
 		requireAuthorization: profile == documentquery.VerifiedRoots}
 	indexed, _ := service.blobs.(outbound.DocReadStore)
-	verified, _ := service.blobs.(outbound.VerifiedDocReader)
-	events, _ := service.blobs.(outbound.VerifiedRootEventReader)
-	config := documentquery.Config{Profile: profile,
-		Scope: scope, Snapshots: service.meta, Legacy: service.blobs, Index: indexed,
-		Verified: verified, RootEvents: events, AtomicRead: transactions != nil}
+	config := documentquery.Config{Profile: profile, Scope: scope, Legacy: service.blobs, Index: indexed, AtomicRead: transactions != nil}
 	if full {
-		ranges, _ := service.blobs.(outbound.DocRangeStore)
-		rangeSnapshots, _ := service.blobs.(outbound.DocRangeSnapshotStore)
-		rangeGenerations, _ := service.blobs.(outbound.DocRangeGenerationStore)
-		readiness, _ := service.blobs.(outbound.DocRangeReadinessStore)
-		jobs, _ := service.blobs.(outbound.DocRangeJobStore)
-		visiblePreparation, _ := service.blobs.(outbound.DocVisiblePreparationStore)
-		boundaries, _ := service.blobs.(outbound.DocRangeBoundaryStore)
-		chunks, _ := service.blobs.(outbound.ConversationChunkReader)
-		derived, _ := service.blobs.(outbound.LegacyDerivedByteRangeReader)
-		bytes, _ := service.blobs.(outbound.DocByteRangePreparationStore)
-		view := &documentquery.ViewDependencies{Range: ranges, RangeSnapshots: rangeSnapshots,
-			RangeGenerations: rangeGenerations, RangeReadiness: readiness, RangeJobs: jobs,
-			VisiblePreparation: visiblePreparation, Boundaries: boundaries,
-			Chunks: chunks, DerivedChunks: derived, Bytes: bytes, Resources: scope}
-		if profile == documentquery.LegacyCompatibility {
-			view.LegacyPreparation = ranges
-		}
-		config.View = view
+		config.Resources = scope
 	}
 	return documentquery.New(config)
 }

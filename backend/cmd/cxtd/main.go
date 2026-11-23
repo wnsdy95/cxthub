@@ -47,8 +47,8 @@ func main() {
 		return
 	}
 	if len(os.Args) >= 2 && os.Args[1] == "repack" {
-		// Maintenance: repack legacy FS-store transcript and memory objects into
-		// their chunk CAS forms (lossless and idempotent).
+		// Maintenance: repack legacy FS-store conversation documents into
+		// their chunk CAS form (lossless and idempotent).
 		// It is safe alongside a live server because replacement is atomic and newly created chunks receive a sweep grace period.
 		dataDir := flagOr(os.Args[2:], "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 		fs, err := store.OpenFSStore(dataDir)
@@ -56,7 +56,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "cxtd repack:", err)
 			os.Exit(1)
 		}
-		n, saved, err := fs.RepackObjects()
+		n, saved, err := fs.RepackDocs()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "cxtd repack:", err)
 			os.Exit(1)
@@ -91,9 +91,6 @@ func serve(ctx context.Context, args []string) error {
 	defer lifecycle.close()
 	ctx = lifecycle.ctx
 	st, svc, idSvc, publicURL := runtime.Store, runtime.Context, runtime.Identity, runtime.PublicURL
-	if display, ok := st.(outbound.DocDisplayStore); ok {
-		svc.ConfigureDocumentDisplay(display)
-	}
 	vault, err := federation.ConfiguredVault(os.Getenv("CXT_IDENTITY_ENCRYPTION_KEY"), os.Getenv("CXT_IDENTITY_ENCRYPTION_KEYRING"))
 	if err != nil {
 		return fmt.Errorf("invalid identity encryption key configuration")
@@ -200,22 +197,6 @@ func serve(ctx context.Context, args []string) error {
 				return err
 			}
 			lifecycle.start(documentWorkers.Finalization.Run)
-			if documentWorkers.Range != nil {
-				lifecycle.start(documentWorkers.Range.Run)
-			}
-			if documentWorkers.FindFields != nil {
-				lifecycle.start(documentWorkers.FindFields.Run)
-			}
-			if documentWorkers.Display != nil {
-				lifecycle.start(documentWorkers.Display.Run)
-			}
-			if maintenance, ok := st.(outbound.DocDisplayMaintenanceStore); ok {
-				worker, err := app.NewDisplayMaintenanceWorker(maintenance)
-				if err != nil {
-					return err
-				}
-				lifecycle.start(worker.Run)
-			}
 		}
 		lifecycle.start(notificationWorker.Run)
 		lifecycle.start(invitationEmailWorker.Run)

@@ -13,9 +13,7 @@ func (queries *Queries) ReadDocViewFragment(ctx context.Context, repo, hash doma
 	if index < 0 || offset < 0 || budget < 4 || budget > 64<<10 {
 		return domain.DocViewFragment{}, domain.ErrValidation
 	}
-	return preparedDocViewRead(ctx, queries, repo, hash, "", func() (domain.DocViewFragment, error) {
-		return queries.readDocViewFragment(ctx, repo, hash, index, offset, budget)
-	})
+	return queries.readDocViewFragment(ctx, repo, hash, index, offset, budget)
 }
 
 func (queries *Queries) readDocViewFragment(ctx context.Context, repo, hash domain.ContentHash, index, offset, budget int) (response domain.DocViewFragment, resultErr error) {
@@ -29,7 +27,7 @@ func (queries *Queries) readDocViewFragment(ctx context.Context, repo, hash doma
 		return domain.DocViewFragment{}, err
 	}
 	return repositoryReadForRepo(ctx, queries, repo, func(read context.Context) (domain.DocViewFragment, error) {
-		source, err := queries.docViewSource(read, repo, hash, false)
+		source, err := queries.docViewSource(read, repo, hash)
 		if err != nil {
 			return domain.DocViewFragment{}, err
 		}

@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const MemoryChunkTarget = 64 << 10
-
 const (
 	MemoryChunkFormatV1 = "cxt-memory-chunks-v1"
 	MemoryChunkFormatV2 = "cxt-memory-chunks-v2"
@@ -31,91 +29,8 @@ type MemoryChunkManifest struct {
 	GraftCoverage      *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
 }
 
-type MemoryChunkPlan struct {
-	Manifest MemoryChunkManifest
-	Bodies   map[ContentHash][]byte
-	Order    []ContentHash
-}
-
-func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error) {
-	if err := d.ValidateMemoryClaims(); err != nil {
-		return MemoryChunkPlan{}, false, err
-	}
-	var fragments []byte
-	if len(d.Fragments) > 0 {
-		fragments, err = json.Marshal(d.Fragments)
-		if err != nil {
-			return MemoryChunkPlan{}, false, err
-		}
-	}
-	if len([]byte(d.Summary))+len(fragments) <= MemoryChunkTarget {
-		return MemoryChunkPlan{}, false, nil
-	}
-	plan = MemoryChunkPlan{
-		Manifest: MemoryChunkManifest{
-			ClaimsVersion:      d.ClaimsVersion,
-			Format:             memoryChunkFormatFor(d),
-			SnapshotID:         d.SnapshotID,
-			PreviousMemoryHash: d.PreviousMemoryHash,
-			KeyFacts:           d.KeyFacts,
-			OpenTasks:          d.OpenTasks,
-			Provider:           d.Provider,
-			GraftCoverage:      d.GraftCoverage,
-		},
-		Bodies: map[ContentHash][]byte{},
-	}
-	plan.Manifest.SummaryChunks = plan.addComponent([]byte(d.Summary))
-	plan.Manifest.FragmentChunks = plan.addComponent(fragments)
-	reassembled, err := AssembleMemoryChunks(plan.Manifest, plan.Bodies)
-	if err != nil {
-		return MemoryChunkPlan{}, false, err
-	}
-	want, err := MemoryDigestHash(d)
-	if err != nil {
-		return MemoryChunkPlan{}, false, err
-	}
-	got, err := MemoryDigestHash(reassembled)
-	if err != nil || got != want {
-		return MemoryChunkPlan{}, false, ErrIntegrity
-	}
-	return plan, true, nil
-}
-
-func memoryChunkFormatFor(d MemoryDigest) string {
-	if d.ClaimsVersion != 0 {
-		return MemoryChunkFormatV4
-	}
-	if d.PreviousMemoryHash != "" {
-		return MemoryChunkFormatV3
-	}
-	if d.GraftCoverage != nil {
-		return MemoryChunkFormatV2
-	}
-	return MemoryChunkFormatV1
-}
-
 func SupportedMemoryChunkFormat(format string) bool {
 	return format == MemoryChunkFormatV1 || format == MemoryChunkFormatV2 || format == MemoryChunkFormatV3 || format == MemoryChunkFormatV4
-}
-
-func (p *MemoryChunkPlan) addComponent(data []byte) []ContentHash {
-	if len(data) == 0 {
-		return nil
-	}
-	hashes := make([]ContentHash, 0, (len(data)+MemoryChunkTarget-1)/MemoryChunkTarget)
-	for len(data) > 0 {
-		n := MemoryChunkTarget
-		if len(data) < n {
-			n = len(data)
-		}
-		body := append([]byte(nil), data[:n]...)
-		hash := HashContent(body)
-		p.Bodies[hash] = body
-		p.Order = append(p.Order, hash)
-		hashes = append(hashes, hash)
-		data = data[n:]
-	}
-	return hashes
 }
 
 func ParseMemoryChunkManifest(data []byte) (MemoryChunkManifest, bool, error) {

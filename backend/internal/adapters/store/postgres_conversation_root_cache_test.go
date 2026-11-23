@@ -20,13 +20,6 @@ func TestRootPGWarmCacheRejectsUnusedTailWithoutWrites(t *testing.T) {
 			f := rootCacheTailFixture(t, string(repo))
 			seedRootPG(t, ctx, st, repo, f)
 			before := rootPGImage(t, ctx, st, repo, ns)
-			for i := 0; i < 2; i++ {
-				doc, err := st.ReadVerifiedDoc(ctx, repo, f.hash)
-				if err != nil {
-					t.Fatal(err)
-				}
-				assertRootCacheFirstEvent(t, doc, f)
-			}
 			if before != rootPGImage(t, ctx, st, repo, ns) {
 				t.Fatal("warm read changed grants/bytes/usage/index/job state")
 			}
@@ -62,9 +55,6 @@ func TestRootPGWarmCacheRejectsUnusedTailWithoutWrites(t *testing.T) {
 			}
 			defer peer.Close()
 			for _, reader := range []*PostgresStore{st, peer} {
-				if doc, err := reader.ReadVerifiedDoc(ctx, repo, f.hash); !errors.Is(err, want) || doc.Valid() {
-					t.Fatal("invalid tail returned body proof", err)
-				}
 				if ref, err := reader.VerifyStoredDoc(ctx, repo, f.hash); !errors.Is(err, want) || ref.Valid() {
 					t.Fatal("invalid tail returned reference proof", err)
 				}

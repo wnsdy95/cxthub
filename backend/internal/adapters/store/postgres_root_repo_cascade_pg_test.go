@@ -290,7 +290,6 @@ func TestRootRepoCascadePGRecreatedVersionOneRejectsStalePublication(test *testi
 				if err := fresh.Complete(fixture.ctx, current, time.Now()); err != nil {
 					test.Fatal("stale attempt consumed the current claim's ability to complete", err)
 				}
-				assertRootSourceWitnessPublishedPG(test, fixture.storage, fixture.ctx, current, fixture.root)
 				assertRootRepoCascadeSurvivorPG(test, fixture)
 			})
 		}

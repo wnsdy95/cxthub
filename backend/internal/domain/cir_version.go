@@ -11,15 +11,6 @@ func SupportedCIRVersions() []string {
 	return []string{CIRVersionV1, CIRVersionV2}
 }
 
-func SupportsCIRVersion(versions []string, version string) bool {
-	for _, candidate := range versions {
-		if candidate == version {
-			return true
-		}
-	}
-	return false
-}
-
 // ValidateCIRVersion keeps the content-addressed object honest: v2-only event
 // fields cannot travel under a v1 envelope during a rolling upgrade.
 func ValidateCIRVersion(doc CIRDocument) error {

@@ -9,7 +9,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/app/displaymaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -17,7 +16,6 @@ import (
 type WorkerRuntime struct {
 	Store          store.Store
 	workers        *app.DocumentWorkers
-	maintenance    *displaymaintenance.Worker
 	additional     []workerBinding
 	infrastructure *Infrastructure
 	execution      *executionProfile
@@ -87,21 +85,10 @@ func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSource
 			_ = worker.Close()
 		}
 	}()
-	fields, supportsFields := worker.Store.(outbound.DocFindFieldsStore)
-	display, supportsDisplay := worker.Store.(outbound.DocDisplayStore)
-	maintenance, supportsMaintenance := worker.Store.(outbound.DocDisplayMaintenanceStore)
-	if !supportsFields || !supportsDisplay || !supportsMaintenance {
-		return nil, fmt.Errorf("%w: document worker storage capabilities are required", domain.ErrCatalogUnsupported)
-	}
 	verifier := &domain.CanonicalDocVerifier{}
 	worker.workers, err = app.NewDocumentWorkers(app.DocumentWorkersConfig{
-		Metadata: worker.Store, Blobs: worker.Store, FindFields: fields, Display: display,
-		Verifier: verifier, Profile: infrastructure.DocumentProfile,
+		Metadata: worker.Store, Blobs: worker.Store, Verifier: verifier, Profile: infrastructure.DocumentProfile,
 	})
-	if err != nil {
-		return nil, err
-	}
-	worker.maintenance, err = app.NewDisplayMaintenanceWorker(maintenance)
 	if err != nil {
 		return nil, err
 	}
@@ -121,10 +108,6 @@ func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSource
 func (worker *WorkerRuntime) bindings() []workerBinding {
 	bindings := []workerBinding{
 		{name: "document-finalization", run: worker.workers.Finalization.Run},
-		{name: "document-range", run: worker.workers.Range.Run},
-		{name: "document-find-fields", run: worker.workers.FindFields.Run},
-		{name: "document-display", run: worker.workers.Display.Run},
-		{name: "display-maintenance", run: worker.maintenance.Run},
 	}
 	return append(bindings, worker.additional...)
 }
@@ -138,7 +121,7 @@ func (worker *WorkerRuntime) Ready() bool {
 }
 
 func (worker *WorkerRuntime) Run(ctx context.Context) error {
-	if worker == nil || ctx == nil || worker.workers == nil || worker.maintenance == nil {
+	if worker == nil || ctx == nil || worker.workers == nil {
 		return domain.ErrValidation
 	}
 	worker.mu.Lock()

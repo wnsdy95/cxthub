@@ -30,7 +30,7 @@ func (admissionReadBackend) GetDoc(ctx context.Context, _, _ domain.ContentHash)
 	return admissionReadResult[domain.SessionDoc](ctx)
 }
 
-func (admissionReadBackend) ReadDocViewEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int, int, string) (domain.DocViewPage, error) {
+func (admissionReadBackend) ReadDocViewEvents(context.Context, domain.ContentHash, domain.ContentHash, int, int, string) (domain.DocViewPage, error) {
 	return domain.DocViewPage{Next: -1}, nil
 }
 

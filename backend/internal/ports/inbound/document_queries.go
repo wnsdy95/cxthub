@@ -19,15 +19,11 @@ type DocumentEventQueries interface {
 }
 
 type DocumentViewQueries interface {
-	ReadDocViewEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, int, int, string) (domain.DocViewPage, error)
+	ReadDocViewEvents(context.Context, domain.ContentHash, domain.ContentHash, int, int, string) (domain.DocViewPage, error)
 	ReadDocViewFragment(context.Context, domain.ContentHash, domain.ContentHash, int, int, int) (domain.DocViewFragment, error)
-}
-
-type DocumentFindQueries interface {
 }
 
 type DocumentQueries interface {
 	DocumentEventQueries
 	DocumentViewQueries
-	DocumentFindQueries
 }

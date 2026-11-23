@@ -17,7 +17,9 @@ type docVisibleLegacyBackend struct {
 	view       string
 }
 
-func (backend *docVisibleLegacyBackend) ReadDocViewEvents(_ context.Context, _, _, base domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+func (backend *docVisibleLegacyBackend) ReadDocViewEvents(_ context.Context, _, _ domain.ContentHash, offset, limit int, view string) (domain.DocViewPage, error) {
+	var base domain.ContentHash
+	_ = base
 	backend.viewCalls++
 	backend.base, backend.offset, backend.limit, backend.view = base, offset, limit, view
 	return domain.DocViewPage{Next: -1}, nil

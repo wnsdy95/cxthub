@@ -49,30 +49,6 @@ func (storage *documentWorkersPGPorts) ClaimDocJob(ctx context.Context, repo dom
 	return storage.PostgresStore.ClaimDocJob(ctx, repo, now, lease)
 }
 
-func (storage *documentWorkersPGPorts) ClaimDocRangeJob(ctx context.Context, now time.Time, lease time.Duration) (domain.DocRangeIndexJob, error) {
-	storage.claims[1]++
-	if err := storage.observe(ctx); err != nil {
-		return domain.DocRangeIndexJob{}, err
-	}
-	return storage.PostgresStore.ClaimDocRangeJob(ctx, now, lease)
-}
-
-func (storage *documentWorkersPGPorts) ClaimDocFindFields(ctx context.Context, now time.Time, lease time.Duration) (domain.DocRangeIndexJob, error) {
-	storage.claims[2]++
-	if err := storage.observe(ctx); err != nil {
-		return domain.DocRangeIndexJob{}, err
-	}
-	return storage.PostgresStore.ClaimDocFindFields(ctx, now, lease)
-}
-
-func (storage *documentWorkersPGPorts) ClaimDocDisplay(ctx context.Context, now time.Time, lease time.Duration) (domain.DocDisplayJob, error) {
-	storage.claims[3]++
-	if err := storage.observe(ctx); err != nil {
-		return domain.DocDisplayJob{}, err
-	}
-	return storage.PostgresStore.ClaimDocDisplay(ctx, now, lease)
-}
-
 func (storage *documentWorkersPGPorts) WithinReadSnapshot(ctx context.Context, read func(context.Context) error) error {
 	if err := storage.observe(ctx); err != nil {
 		return err

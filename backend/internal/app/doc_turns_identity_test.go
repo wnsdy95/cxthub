@@ -43,17 +43,6 @@ func (s *agentPageReadStore) GetSnapshot(ctx context.Context, repo, hash domain.
 	}
 	return snap, err
 }
-func (s *agentPageReadStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedSessionDoc, error) {
-	if err := s.bound(ctx); err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	s.proofs[hash]++
-	doc, err := s.FSStore.ReadVerifiedDoc(ctx, repo, hash)
-	if err == nil && s.after != nil {
-		s.after(hash)
-	}
-	return doc, err
-}
 func (s *agentPageReadStore) DocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
 	if err := s.bound(ctx); err != nil {
 		return domain.DocReadIndex{}, err

@@ -116,9 +116,6 @@ func TestInfrastructurePostgresProfileAndPublicationPolicy(test *testing.T) {
 			if err := app.ValidateProductionStore(storage); err != nil {
 				test.Fatal(err)
 			}
-			if storage.LegacyByteRangePublicationEnabled() != scenario.byte {
-				test.Fatal("byte publication policy changed")
-			}
 			if _, supported := infrastructure.Store.(outbound.LegacyDerivedByteRangePublicationStore); !supported {
 				test.Fatal("derived publication capability missing")
 			}

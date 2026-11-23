@@ -51,27 +51,6 @@ func (reader *rootFixtureReader) GetSnapshot(ctx context.Context, repo, hash dom
 	return snapshot, reader.snapshotFailures[hash]
 }
 
-func (reader *rootFixtureReader) ReadVerifiedRootEvents(ctx context.Context, repo, hash domain.ContentHash, selection domain.RootEventSelection) (domain.VerifiedRootEvents, error) {
-	reader.projectionCalls = append(reader.projectionCalls, rootFixtureProjectionCall{hash: hash, hashesOnly: selection.HashesOnly})
-	requested := hash
-	if replacement, exists := reader.projectionReplacements[hash]; exists {
-		if replacement == "" {
-			return domain.VerifiedRootEvents{}, nil
-		}
-		hash = replacement
-	}
-	projection, err := reader.FSStore.ReadVerifiedRootEvents(ctx, repo, hash, selection)
-	if err != nil {
-		return projection, err
-	}
-	return projection, reader.projectionFailures[requested]
-}
-
-func (reader *rootFixtureReader) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedSessionDoc, error) {
-	reader.verifiedCalls = append(reader.verifiedCalls, hash)
-	return reader.FSStore.ReadVerifiedDoc(ctx, repo, hash)
-}
-
 func (reader *rootFixtureReader) rejectFallback(method string) error {
 	reader.fallbackCalls = append(reader.fallbackCalls, method)
 	return fmt.Errorf("root query attempted legacy fallback: %s", method)

@@ -121,7 +121,6 @@ func TestStreamingRootFSSuccess(t *testing.T) {
 				t.Fatal("streaming publication retained an owned document proof")
 			}
 			reopened := NewFSStore(storage.dataDir)
-			assertRangePages(t, ctx, reopened, repo, fixture)
 			done, err := reopened.GetDocJob(ctx, repo, job.ID)
 			if err != nil || done.State != "completed" || done.DocumentRef() != job.DocumentRef() || !done.LeaseUntil.IsZero() || done.Version != job.Version {
 				t.Fatal("completed receipt", done, err)
@@ -323,7 +322,6 @@ func TestStreamingRootFSCurrentPublicationPolicy(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertRangePages(t, ctx, storage, job.RepoID, fixture)
 			} else {
 				if !errors.Is(err, domain.ErrRootPublicationDisabled) && !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
 					t.Fatal("publication bypassed policy", err)
@@ -411,5 +409,4 @@ func TestStreamingRootFSHeaderFailureRecovery(t *testing.T) {
 		t.Fatal("reprepared completion did not recover", err)
 	}
 	streamingRootCloseFS(t, retry, spoolDirectory)
-	assertRangePages(t, ctx, reopened, job.RepoID, fixture)
 }

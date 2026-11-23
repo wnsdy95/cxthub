@@ -22,13 +22,6 @@ func (s *p9RootPullStore) WithinReadSnapshot(ctx context.Context, fn func(contex
 func (s *p9RootPullStore) WithinRepository(context.Context, domain.ContentHash, func(context.Context) error) error {
 	panic("root pull attempted write")
 }
-func (s *p9RootPullStore) ReadVerifiedDoc(ctx context.Context, r, h domain.ContentHash) (domain.VerifiedSessionDoc, error) {
-	if ctx.Value(p9ReadBoundaryKey{}) != true {
-		panic("proof escaped snapshot")
-	}
-	s.reads++
-	return s.FSStore.ReadVerifiedDoc(ctx, r, h)
-}
 func (s *p9RootPullStore) GetDocManifest(context.Context, domain.ContentHash, domain.ContentHash) (domain.DocChunkManifest, error) {
 	s.legacy++
 	return domain.DocChunkManifest{}, errors.New("legacy fallback")

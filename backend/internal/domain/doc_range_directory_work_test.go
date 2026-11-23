@@ -37,57 +37,6 @@ func frozenRangeDirectory(test testing.TB, hashes []ContentHash) (DocRangeDirect
 	}
 }
 
-func TestDocRangeDirectoryWorkPreservesLevelOrderAndBounds(test *testing.T) {
-	for _, count := range []int{0, 1, 127, 128, 129, 16384, 16385} {
-		test.Run(fmt.Sprint(count), func(test *testing.T) {
-			hashes := make([]ContentHash, count)
-			for ordinal := range hashes {
-				hashes[ordinal] = HashContent([]byte(fmt.Sprint(ordinal)))
-			}
-			want, expected := frozenRangeDirectory(test, hashes)
-			work, err := newDocRangeDirectoryWork(hashes)
-			if err != nil {
-				test.Fatal(err)
-			}
-			var actual []DocRangeObject
-			for step := 0; step < len(expected)+1; step++ {
-				calls := 0
-				complete, err := work.step(context.Background(), func(object DocRangeObject) error {
-					calls++
-					if len(object.Bytes) > MaxDocRangeDirectoryBytes || HashContent(object.Bytes) != object.Hash {
-						test.Fatal("directory quantum exceeds its authenticated object bound")
-					}
-					actual = append(actual, DocRangeObject{Hash: object.Hash, Bytes: bytes.Clone(object.Bytes)})
-					object.Bytes[0] ^= 1
-					return nil
-				})
-				if err != nil || calls > 1 {
-					test.Fatal("directory step emitted more than one object or failed", calls, err)
-				}
-				estimate := docRangeHeaderHeapEstimate{}
-				work.retained(&estimate)
-				if estimate.err != nil || estimate.bytes <= 0 {
-					test.Fatal("directory state omitted its retained storage", estimate)
-				}
-				if complete {
-					if !reflect.DeepEqual(actual, expected) || work.root != want || work.hashes != nil || len(work.parents) != 0 {
-						test.Fatal("directory changed ordered bytes/root or retained finished input")
-					}
-					complete, err = work.step(context.Background(), func(DocRangeObject) error {
-						test.Fatal("completed directory called its sink again")
-						return nil
-					})
-					if !complete || err != nil {
-						test.Fatal("completed directory is not idempotent", err)
-					}
-					return
-				}
-			}
-			test.Fatal("directory state did not terminate")
-		})
-	}
-}
-
 func TestDocRangeChunkDirectoryWorkPreservesOrderedPages(test *testing.T) {
 	for _, count := range []int{0, 1, 128, 129, 16385} {
 		test.Run(fmt.Sprint(count), func(test *testing.T) {

@@ -121,10 +121,6 @@ func TestLegacyStreamRetainsMetadataNotTranscript(t *testing.T) {
 		if proof.size != input.size || spool.size != input.size || spool.maxAppend > canonicalCheckBytes {
 			t.Fatal("streaming size/append contract violated")
 		}
-		index, err := plan.BuildMetadataContext(ctx)
-		if err != nil || len(index.Events) != eventCount || index.Events[eventCount-1].Seq != eventCount-1 {
-			t.Fatal("large spooled read plan failed", err)
-		}
 		runtime.GC()
 		var after runtime.MemStats
 		runtime.ReadMemStats(&after)
@@ -135,7 +131,6 @@ func TestLegacyStreamRetainsMetadataNotTranscript(t *testing.T) {
 		t.Logf("scan=%d transcript=%d retained_heap_delta=%d append_max=%d events=%d", scan, input.size, retained, spool.maxAppend, plan.EventCount())
 		runtime.KeepAlive(proof)
 		runtime.KeepAlive(plan)
-		runtime.KeepAlive(index)
 		runtime.KeepAlive(&verifier)
 	}
 }

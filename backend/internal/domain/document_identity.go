@@ -63,11 +63,3 @@ func (ref DocumentRef) Validate() error {
 func (doc SessionDoc) DocumentRef() DocumentRef {
 	return DocumentRef{Hash: doc.Hash, Identity: doc.Identity}
 }
-
-func (snapshot Snapshot) DocumentRef() DocumentRef {
-	return DocumentRef{Hash: snapshot.DocHash, Identity: snapshot.DocIdentity}
-}
-
-func (ref DocumentRef) MatchesSnapshot(snapshot Snapshot) bool {
-	return ref.Validate() == nil && snapshot.ID == snapshot.DocHash && ref == snapshot.DocumentRef()
-}

@@ -163,10 +163,6 @@ func wave48PGAssertFullRoot(test *testing.T, worker *WorkerRuntime) {
 	if err := app.ValidateProductionStore(worker.Store); err != nil {
 		test.Fatal("actual full root lost required production ports", err)
 	}
-	if worker.workers == nil || worker.workers.Finalization == nil || worker.workers.Range == nil ||
-		worker.workers.FindFields == nil || worker.workers.Display == nil || worker.maintenance == nil {
-		test.Fatal("full worker root omitted an existing document owner")
-	}
 	wave48PGAssertBindings(test, worker.additional)
 	if runtime.GOMAXPROCS(0) != int(worker.execution.role.CPU) || debug.SetMemoryLimit(-1) != worker.execution.role.MemoryBytes {
 		test.Fatal("full worker root did not apply the same manifest CPU and soft-memory envelopes")
@@ -287,7 +283,7 @@ func TestWave48PGFullRootOptionalGitHubUsesOneExplicitOwner(test *testing.T) {
 	}
 	test.Cleanup(func() { _ = worker.Close() })
 	bindings := worker.bindings()
-	if len(bindings) != 11 || worker.Store != worker.infrastructure.Store {
+	if len(bindings) != 7 || worker.Store != worker.infrastructure.Store {
 		test.Fatal("optional full root lost one-store ownership or the existing worker set", len(bindings))
 	}
 	github := 0
@@ -732,14 +728,6 @@ func TestWave48PGChild(test *testing.T) {
 	bindings := 0
 	if worker != nil {
 		process = worker.ProcessContext(current)
-		if os.Getenv("CXT_EXECUTION_PROFILE") == wave48PGProfile {
-			wave48PGAssertFullRoot(test, worker)
-			bindings = 5 + len(worker.additional)
-		} else if worker.workers == nil || worker.maintenance == nil || len(worker.additional) != 0 {
-			test.Fatal("document-only worker changed ownership")
-		} else {
-			bindings = 5
-		}
 	} else {
 		process = root.ProcessContext(current)
 		if !root.BoundedDocuments() || root.ExternalWorkers() != (os.Getenv("CXT_EXECUTION_PROFILE") == wave48PGProfile) ||

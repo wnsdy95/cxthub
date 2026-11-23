@@ -36,14 +36,3 @@ func (s *inheritedSelectionTxProbe) GetSnapshot(ctx context.Context, repo, id do
 	}
 	return s.FSStore.GetSnapshot(ctx, repo, id)
 }
-func (s *inheritedSelectionTxProbe) GetMemory(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryDigest, error) {
-	if ctx.Value(inheritedSelectionTxKey{}) != repo {
-		return domain.MemoryDigest{}, domain.ErrConflict
-	}
-	s.reads[id]++
-	d, err := s.FSStore.GetMemory(ctx, repo, id)
-	if id == s.corrupt {
-		d.Summary += " corrupt"
-	}
-	return d, err
-}

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -94,9 +93,6 @@ func TestPGSearchReadsWhatTheReaderMayRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The hits the repository itself holds are found at once; the
-	// conversation once the document worker prepared it.
-	workers, err := service.DocumentWorkersForProfile(documentquery.LegacyCompatibility)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,9 +103,6 @@ func TestPGSearchReadsWhatTheReaderMayRead(t *testing.T) {
 		}
 		if !own.Truncated {
 			break
-		}
-		if err := workers.Range.Process(ctx, 10); err != nil {
-			t.Fatal(err)
 		}
 	}
 	want := []string{"branch:parser-work", "commit:Add the Parser", "commit:Parser rework", "note:The parser was reviewed.",

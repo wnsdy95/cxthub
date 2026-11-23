@@ -27,8 +27,7 @@ type AnchoredSessionStore interface {
 	// that is not stored is ErrNotFound.
 	DeleteAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error
 	// AnchoredContentInUse reports whether the document is still needed in
-	// the repository: a stored report names it as its content, or a snapshot
-	// holds it.
+	// the repository: a stored report names it as its content.
 	AnchoredContentInUse(ctx context.Context, repo, doc domain.ContentHash) (bool, error)
 }
 

@@ -261,9 +261,6 @@ func TestDocRangeSpoolManyShortEventsBeyond32MiB(t *testing.T) {
 		t.Fatal("fixture did not exceed old aggregate cap", info, err)
 	}
 	header := streamed.Header()
-	if err := matchRangeHeader(header, lazy.Header()); err != nil || len(spool.offsets) != len(header.Pages)+1 {
-		t.Fatal("lazy and streaming headers differ", err)
-	}
 	for position := range header.Pages {
 		left, err := lazy.Page(ctx, position)
 		if err != nil {

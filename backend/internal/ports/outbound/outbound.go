@@ -28,9 +28,6 @@ type MetadataStore interface {
 	PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) // idempotent (same id returns existing)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 
-	// Snapshot metadata (immutable). ID is CIR body hash (S-ID). Duplicate ID re-save is dedup.
-	GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error)
-
 	// Ref / manifest (mutable). Progress is CAS (immutable REF4/C1). UpdateRepoAbout updates About(description/website/topics).
 	UpdateRepoAbout(ctx context.Context, id domain.ContentHash, description, website string, topics []string) error
 	// UpdateRepoConfig updates repo structure settings (default branch, protected branch). nil = no change.
@@ -41,8 +38,6 @@ type MetadataStore interface {
 	// Secret ciphertext envelope (E2E — server cannot decrypt, stored as opaque bytes only).
 	PutSecretsEnvelope(ctx context.Context, repoID domain.ContentHash, raw []byte) error
 	GetSecretsEnvelope(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
-
-	PutMemoryMeta(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) error
 }
 
 // BlobStore stores content-addressed immutable bodies (data model).

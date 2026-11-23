@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type docVisibleLegacyBasePGStore struct {
@@ -16,30 +15,6 @@ type docVisibleLegacyBasePGStore struct {
 	base        domain.ContentHash
 	parentOpens int
 	parentPages int
-}
-
-type docVisibleLegacyBasePGRead struct {
-	outbound.DocRangeGenerationRead
-	storage *docVisibleLegacyBasePGStore
-	hash    domain.ContentHash
-}
-
-func (storage *docVisibleLegacyBasePGStore) OpenDocRangeGeneration(ctx context.Context, repo, hash domain.ContentHash) (outbound.DocRangeGenerationRead, error) {
-	read, err := storage.docViewPGStore.OpenDocRangeGeneration(ctx, repo, hash)
-	if err != nil {
-		return nil, err
-	}
-	if hash == storage.base {
-		storage.parentOpens++
-	}
-	return &docVisibleLegacyBasePGRead{DocRangeGenerationRead: read, storage: storage, hash: hash}, nil
-}
-
-func (read *docVisibleLegacyBasePGRead) ReadPage(ctx context.Context, position int) ([]domain.DocRangeEntry, error) {
-	if read.hash == read.storage.base {
-		read.storage.parentPages++
-	}
-	return read.DocRangeGenerationRead.ReadPage(ctx, position)
 }
 
 func (storage *docVisibleLegacyBasePGStore) GetDoc(_ context.Context, _, hash domain.ContentHash) (domain.SessionDoc, error) {

@@ -13,7 +13,7 @@ type deadlineDocBackend struct {
 	read func(context.Context)
 }
 
-func (backend deadlineDocBackend) ReadDocViewEvents(ctx context.Context, _, _, _ domain.ContentHash, _, _ int, _ string) (domain.DocViewPage, error) {
+func (backend deadlineDocBackend) ReadDocViewEvents(ctx context.Context, _, _ domain.ContentHash, _, _ int, _ string) (domain.DocViewPage, error) {
 	backend.read(ctx)
 	return domain.DocViewPage{Next: -1}, nil
 }

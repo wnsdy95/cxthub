@@ -20,5 +20,4 @@ type StoredDocVerifier interface {
 // snapshot must also compare its DocumentRef. This proof permits reading, not
 // publication or reuse in a later request.
 type VerifiedDocReader interface {
-	ReadVerifiedDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.VerifiedSessionDoc, error)
 }

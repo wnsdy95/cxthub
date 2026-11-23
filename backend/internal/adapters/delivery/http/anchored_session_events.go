@@ -79,7 +79,7 @@ func (s *Server) getAnchoredSessionEvents(w http.ResponseWriter, r *http.Request
 	defer release()
 	repo := s.repoID(r)
 	ctx := inbound.WithDocumentReadAuthorizer(request.Context(), s.documentReadAuthorizer(r, repo))
-	page, err := viewer.ReadDocViewEvents(ctx, repo, access.Doc, "", offset, limit, view)
+	page, err := viewer.ReadDocViewEvents(ctx, repo, access.Doc, offset, limit, view)
 	if err != nil {
 		s.respond(w, nil, err)
 		return

@@ -244,6 +244,10 @@ quiet
 git commit -q --allow-empty -m "second with cxt"
 expect "a session recorded after setup is uploaded without being asked" "$(until_true 30 on_server sync-one && on_server sync-one | python3 -c 'import json,sys;r=json.load(sys.stdin);b=r["body"];print(r["revision"],len(b["segments"]),b["segments"][0]["commits"][0]["rule"],bool(b.get("content")))')" "1 1 printed-number True"
 expect "the commit leads to the session" "$(curl -fsSb "$J" "$B/repos/$RID/anchored-commits/$SHA1" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["session_id"])')" "1 sync-one"
+# The conversation that was uploaded is read back and searched through the
+# server, with nothing but the worker that finishes an upload running.
+expect "the uploaded conversation is read back through the session" "$(curl -fsSb "$J" "$B/repos/$RID/anchored-sessions/claude/sync-one/events?offset=0" | python3 -c 'import json,sys;r=json.load(sys.stdin);t=json.dumps(r["events"]);print(len(r["events"])>0, "commit it" in t, "committed" in t)')" "True True True"
+expect "a word of the conversation is found by the search" "$(until_true 20 sh -c 'curl -fsSb "$0" "$1/repos/$2/anchored-search?q=committed" | grep -q "\"segment\"" ' "$J" "$B" "$RID"; curl -fsSb "$J" "$B/repos/$RID/anchored-search?q=committed" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len([h for h in r["hits"] if h["kind"]=="segment"])>0)')" "True"
 quiet
 expect "a copy of what was sent is kept under .cxt/sessions, marked automatic" "$(cxt log claude sync-one --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["sessions"][0]["log"];print(len(l)>0, all(e.get("automatic") for e in l))')" "True True"
 expect "the diagnosis finds nothing that does not fit" "$(cxt doctor --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin).get("findings") or []))')" 0

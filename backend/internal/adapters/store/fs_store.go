@@ -265,75 +265,6 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 	return r, nil
 }
 
-// PutRepo is idempotent: if it already exists, it returns the existing record (sync protocol). Exception: for unowned (repository_id="") records, it fills in a delayed binding if a new binding arrives.
-func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
-	if repo.RequiredDocIdentity != domain.DocumentIdentityLegacy {
-		return domain.Repo{}, domain.ErrValidation
-	}
-	if repo.RepositoryID != "" {
-		if err := domain.ValidateRepositoryID(repo.RepositoryID); err != nil {
-			return domain.Repo{}, err
-		}
-		binding := s.repositoryBindingLock(repo.RepositoryID)
-		binding.Lock()
-		defer binding.Unlock()
-		if bound, err := s.GetBoundRepo(ctx, repo.RepositoryID); err == nil && bound.ID != repo.ID {
-			return domain.Repo{}, domain.ErrConflict
-		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
-			return domain.Repo{}, err
-		}
-	}
-	lock := s.refLock(repo.ID, domain.RefBranch, "")
-	lock.Lock()
-	defer lock.Unlock()
-	if err := validateHash(repo.ID); err != nil {
-		return domain.Repo{}, err
-	}
-	if repo.DefaultBranch != "" {
-		if err := domain.ValidateBranchName(repo.DefaultBranch); err != nil {
-			return domain.Repo{}, err
-		}
-	}
-	repo.ContextProtocol = 0
-	repo.LocalPath = ""
-	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
-	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)
-	if existing, err := s.GetRepo(ctx, repo.ID); err == nil {
-		if existing.RepositoryID != "" && repo.RepositoryID != "" && existing.RepositoryID != repo.RepositoryID {
-			return domain.Repo{}, domain.ErrConflict
-		}
-		changed := false
-		if existing.RepositoryID == "" && repo.RepositoryID != "" {
-			existing.RepositoryID = repo.RepositoryID
-			changed = true
-		}
-		// Registration may fill an unknown origin, but cannot replace established
-		// identity or reset an owner-configured default branch.
-		if repo.DefaultBranch != "" && existing.DefaultBranch == "" {
-			existing.DefaultBranch = repo.DefaultBranch
-			changed = true
-		}
-		if repo.GitRemoteURL != "" && existing.GitRemoteURL == "" {
-			existing.GitRemoteURL = repo.GitRemoteURL
-			changed = true
-		}
-		if changed {
-			data, _ := json.Marshal(existing)
-			if werr := writeAtomic(filepath.Join(s.repoDir(existing.ID), "repo.json"), data); werr != nil {
-				return domain.Repo{}, werr
-			}
-		}
-		return existing, nil
-	} else if !errors.Is(err, domain.ErrNotFound) {
-		return domain.Repo{}, err
-	}
-	data, _ := json.Marshal(repo)
-	if err := writeAtomic(filepath.Join(s.repoDir(repo.ID), "repo.json"), data); err != nil {
-		return domain.Repo{}, err
-	}
-	return repo, nil
-}
-
 // UpdateRepoAbout updates the About(description/website/topics).
 func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, description, website string, topics []string) error {
 	if err := validateHash(id); err != nil {
@@ -403,31 +334,6 @@ func (s *FSStore) DeleteDoc(_ context.Context, repoID, hash domain.ContentHash) 
 		}
 	}
 	return os.RemoveAll(filepath.Dir(s.rangeIndexPath(repoID, hash)))
-}
-
-// GetSettingsBundle retrieves the settings bundle. Returns ErrNotFound if not found.
-func (s *FSStore) GetSettingsBundle(_ context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error) {
-	if err := validateHash(repoID); err != nil {
-		return domain.SettingsBundle{}, err
-	}
-	if err := validateSettingsKind(kind); err != nil {
-		return domain.SettingsBundle{}, err
-	}
-	data, err := os.ReadFile(filepath.Join(s.repoDir(repoID), "settings", kind+".json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return domain.SettingsBundle{}, domain.ErrNotFound
-		}
-		return domain.SettingsBundle{}, err
-	}
-	var b domain.SettingsBundle
-	if err := json.Unmarshal(data, &b); err != nil {
-		return domain.SettingsBundle{}, err
-	}
-	if err := domain.ValidateSettingsBundle(kind, "", b); err != nil {
-		return domain.SettingsBundle{}, err
-	}
-	return b, nil
 }
 
 // PutSecretsEnvelope stores a secret envelope (opaque bytes — E2E).
@@ -1183,50 +1089,10 @@ func (s *FSStore) ReadReflog(_ context.Context, repoID domain.ContentHash) ([]do
 
 // --- Memory Meta ---
 
-func (s *FSStore) memMetaPath(repoID, snapshotID domain.ContentHash) string {
-	return filepath.Join(s.repoDir(repoID), "memmeta", hexOf(snapshotID)+".json")
-}
-
-func (s *FSStore) GetMemoryMeta(_ context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error) {
-	if err := validateHashes(repoID, snapshotID); err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	data, err := os.ReadFile(s.memMetaPath(repoID, snapshotID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return domain.MemoryDigest{}, domain.ErrNotFound
-		}
-		return domain.MemoryDigest{}, err
-	}
-	var d domain.MemoryDigest
-	if err := json.Unmarshal(data, &d); err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	if d.SnapshotID != snapshotID {
-		return domain.MemoryDigest{}, domain.ErrIntegrity
-	}
-	return d, nil
-}
-
-func (s *FSStore) PutMemoryMeta(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) error {
-	if err := validateHashes(repoID, digest.SnapshotID); err != nil {
-		return err
-	}
-	// Target snapshot preexistence required (sync protocol).
-	if !exists(s.snapshotPath(repoID, digest.SnapshotID)) {
-		return domain.ErrNotFound
-	}
-	data, _ := json.Marshal(digest)
-	return writeAtomic(s.memMetaPath(repoID, digest.SnapshotID), data)
-}
-
 // --- BlobStore ---
 
 func (s *FSStore) docPath(repoID, hash domain.ContentHash) string {
 	return filepath.Join(s.repoDir(repoID), "objects", "docs", hexOf(hash))
-}
-func (s *FSStore) memPath(repoID, hash domain.ContentHash) string {
-	return filepath.Join(s.repoDir(repoID), "objects", "memories", hexOf(hash))
 }
 
 // PutDoc stores the SessionDoc.CIR body under the client-provided doc.Hash key (content-hash dedup).
@@ -1323,36 +1189,96 @@ func (s *FSStore) HasDocs(ctx context.Context, repoID domain.ContentHash, hashes
 	return have, nil
 }
 
-func (s *FSStore) GetMemory(_ context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	if err := validateHashes(repoID, hash); err != nil {
-		return domain.MemoryDigest{}, err
+// PutRepo is idempotent: if it already exists, it returns the existing record (sync protocol). Exception: for unowned (repository_id="") records, it fills in a delayed binding if a new binding arrives.
+func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
+	if repo.RequiredDocIdentity != domain.DocumentIdentityLegacy {
+		return domain.Repo{}, domain.ErrValidation
 	}
-	data, err := os.ReadFile(s.memPath(repoID, hash))
+	if repo.RepositoryID != "" {
+		if err := domain.ValidateRepositoryID(repo.RepositoryID); err != nil {
+			return domain.Repo{}, err
+		}
+		binding := s.repositoryBindingLock(repo.RepositoryID)
+		binding.Lock()
+		defer binding.Unlock()
+		if bound, err := s.GetBoundRepo(ctx, repo.RepositoryID); err == nil && bound.ID != repo.ID {
+			return domain.Repo{}, domain.ErrConflict
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return domain.Repo{}, err
+		}
+	}
+	lock := s.refLock(repo.ID, domain.RefBranch, "")
+	lock.Lock()
+	defer lock.Unlock()
+	if err := validateHash(repo.ID); err != nil {
+		return domain.Repo{}, err
+	}
+	if repo.DefaultBranch != "" {
+		if err := domain.ValidateBranchName(repo.DefaultBranch); err != nil {
+			return domain.Repo{}, err
+		}
+	}
+	repo.ContextProtocol = 0
+	repo.LocalPath = ""
+	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
+	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)
+	if existing, err := s.GetRepo(ctx, repo.ID); err == nil {
+		if existing.RepositoryID != "" && repo.RepositoryID != "" && existing.RepositoryID != repo.RepositoryID {
+			return domain.Repo{}, domain.ErrConflict
+		}
+		changed := false
+		if existing.RepositoryID == "" && repo.RepositoryID != "" {
+			existing.RepositoryID = repo.RepositoryID
+			changed = true
+		}
+		// Registration may fill an unknown origin, but cannot replace established
+		// identity or reset an owner-configured default branch.
+		if repo.DefaultBranch != "" && existing.DefaultBranch == "" {
+			existing.DefaultBranch = repo.DefaultBranch
+			changed = true
+		}
+		if repo.GitRemoteURL != "" && existing.GitRemoteURL == "" {
+			existing.GitRemoteURL = repo.GitRemoteURL
+			changed = true
+		}
+		if changed {
+			data, _ := json.Marshal(existing)
+			if werr := writeAtomic(filepath.Join(s.repoDir(existing.ID), "repo.json"), data); werr != nil {
+				return domain.Repo{}, werr
+			}
+		}
+		return existing, nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return domain.Repo{}, err
+	}
+	data, _ := json.Marshal(repo)
+	if err := writeAtomic(filepath.Join(s.repoDir(repo.ID), "repo.json"), data); err != nil {
+		return domain.Repo{}, err
+	}
+	return repo, nil
+}
+
+// GetSettingsBundle retrieves the settings bundle. Returns ErrNotFound if not found.
+func (s *FSStore) GetSettingsBundle(_ context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error) {
+	if err := validateHash(repoID); err != nil {
+		return domain.SettingsBundle{}, err
+	}
+	if err := validateSettingsKind(kind); err != nil {
+		return domain.SettingsBundle{}, err
+	}
+	data, err := os.ReadFile(filepath.Join(s.repoDir(repoID), "settings", kind+".json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return domain.MemoryDigest{}, domain.ErrNotFound
+			return domain.SettingsBundle{}, domain.ErrNotFound
 		}
-		return domain.MemoryDigest{}, err
+		return domain.SettingsBundle{}, err
 	}
-	if chunked, isManifest, chunkErr := s.getMemoryChunked(repoID, hash, data); isManifest {
-		if chunkErr != nil {
-			return domain.MemoryDigest{}, chunkErr
-		}
-		return chunked, nil
+	var b domain.SettingsBundle
+	if err := json.Unmarshal(data, &b); err != nil {
+		return domain.SettingsBundle{}, err
 	}
-	var d domain.MemoryDigest
-	if err := json.Unmarshal(data, &d); err != nil {
-		return domain.MemoryDigest{}, err
+	if err := domain.ValidateSettingsBundle(kind, "", b); err != nil {
+		return domain.SettingsBundle{}, err
 	}
-	got, err := domain.MemoryDigestHash(d)
-	if err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	if got != hash {
-		return domain.MemoryDigest{}, domain.ErrIntegrity
-	}
-	if err := validateMemoryDigestRefs(d); err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	return d, nil
+	return b, nil
 }

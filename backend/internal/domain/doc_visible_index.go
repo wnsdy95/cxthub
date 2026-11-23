@@ -1,9 +1,7 @@
 package domain
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 )
 
 const DocVisibleAlgorithm = 1
@@ -97,18 +95,6 @@ func (generation DocVisibleGeneration) Encode() ([]byte, error) {
 		return nil, ErrIntegrity
 	}
 	return raw, nil
-}
-
-func DecodeDocVisibleGeneration(hash, ranges, expected ContentHash, raw []byte) (DocVisibleGeneration, error) {
-	var generation DocVisibleGeneration
-	if len(raw) == 0 || len(raw) > MaxDocVisibleGenerationBytes || HashContent(raw) != expected || json.Unmarshal(raw, &generation) != nil || generation.Validate(hash, ranges) != nil {
-		return DocVisibleGeneration{}, ErrIntegrity
-	}
-	canonical, err := generation.Encode()
-	if err != nil || !bytes.Equal(raw, canonical) {
-		return DocVisibleGeneration{}, ErrIntegrity
-	}
-	return generation, nil
 }
 
 type docVisibleSpan struct {

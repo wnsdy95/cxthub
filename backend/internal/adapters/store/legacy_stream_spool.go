@@ -57,19 +57,6 @@ func (spool *legacyDocSpool) Append(ctx context.Context, body []byte) error {
 	return ctx.Err()
 }
 
-func (spool *legacyDocSpool) Truncate(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := spool.file.Truncate(0); err != nil {
-		return err
-	}
-	spool.quota.Release(spool.reservedBytes)
-	spool.reservedBytes = 0
-	spool.size = 0
-	return ctx.Err()
-}
-
 func (spool *legacyDocSpool) Read(ctx context.Context, offset, length int) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

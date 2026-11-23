@@ -5,8 +5,6 @@ package store
 import (
 	"strings"
 	"testing"
-
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 func TestDocRangeBoundaryPGActiveQueueIndexAndBound(t *testing.T) {
@@ -35,9 +33,5 @@ func TestDocRangeBoundaryPGActiveQueueIndexAndBound(t *testing.T) {
  CASE WHEN ordinal<=64 THEN 'waiting' ELSE 'completed' END,clock_timestamp(),clock_timestamp()
  FROM generate_series(1,10000) ordinal`, repo); err != nil {
 		t.Fatal(err)
-	}
-	var count int
-	if err := transaction.QueryRow(ctx, docRangeJobActiveCountSQL, repo, domain.MaxPendingDocRangeJobs).Scan(&count); err != nil || count != domain.MaxPendingDocRangeJobs {
-		t.Fatal("admission scanned beyond cap", count, err)
 	}
 }

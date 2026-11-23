@@ -71,25 +71,6 @@ func (p a11PreparedRootCompletion) Complete(ctx context.Context, job domain.DocF
 	return p.PreparedRootDocPublication.Complete(ctx, job, now)
 }
 
-func a11RootRepresentation(t *testing.T, text string) (domain.DocumentRepresentation, map[domain.ContentHash][]byte) {
-	t.Helper()
-	unique := t.Name() + text + time.Now().UTC().String()
-	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1", SessionOriginID: unique, SourceProvider: domain.ProviderClaude, Fidelity: domain.FidelityFull}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: unique}}}}}
-	manifest, bodies, err := domain.ConversationManifestForCIR(cir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash, err := domain.ConversationManifestHash(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := domain.CanonicalConversationManifest(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return domain.DocumentRepresentation{Hash: hash, Identity: domain.DocumentIdentityRootV1, RootManifest: raw}, bodies
-}
-
 // Each case exercises the real global claim against only its own durable queue.
 // The configured database may contain other suites' pending jobs; never process
 // or delete them. Match the existing catalog-upgrade disposable database pattern.

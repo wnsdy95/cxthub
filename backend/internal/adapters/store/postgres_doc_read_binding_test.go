@@ -4,63 +4,10 @@ package store
 
 import (
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"os"
 	"testing"
-
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
-
-func TestDocReadBindingDefensiveValues(test *testing.T) {
-	for _, version := range []int64{0, 1, 1<<63 - 1} {
-		test.Run(fmt.Sprint(version), func(test *testing.T) {
-			want := domain.DocReadGenerationBinding{SourceID: "4b94be7c-fae7-4c49-8ee5-bd944755d1ce", SourceVersion: version, RangeGeneration: domain.HashContent([]byte(test.Name()))}
-			if err := want.Validate(); err != nil {
-				test.Fatal("valid source binding rejected", want, err)
-			}
-			ranges := &postgresDocRangeGenerationRead{binding: want}
-			for _, reader := range []interface {
-				Binding() domain.DocReadGenerationBinding
-			}{ranges} {
-				changed := reader.Binding()
-				if changed != want {
-					test.Fatal("binding changed source version or generation", changed, want)
-				}
-				changed.SourceID = "changed"
-				changed.SourceVersion = -1
-				changed.RangeGeneration = "changed"
-				if reader.Binding() != want {
-					test.Fatal("binding exposed private state", reader.Binding(), changed)
-				}
-			}
-		})
-	}
-}
-
-func TestDocReadBindingValidation(test *testing.T) {
-	valid := domain.DocReadGenerationBinding{
-		SourceID:        "4b94be7c-fae7-4c49-8ee5-bd944755d1ce",
-		RangeGeneration: domain.HashContent([]byte(test.Name())),
-	}
-	for _, sourceID := range []string{"", "not-a-uuid", "00000000-0000-0000-0000-000000000000", "4b94be7cfae74c498ee5bd944755d1ce", "4b94be7c-fae7-4c49-8ee5-bd944755d1cg"} {
-		binding := valid
-		binding.SourceID = sourceID
-		if err := binding.Validate(); !errors.Is(err, domain.ErrIntegrity) {
-			test.Fatal("invalid source ID accepted", sourceID, err)
-		}
-	}
-	for _, binding := range []domain.DocReadGenerationBinding{
-		{},
-		{SourceID: valid.SourceID, SourceVersion: -1, RangeGeneration: valid.RangeGeneration},
-		{SourceID: valid.SourceID},
-		{SourceID: valid.SourceID, RangeGeneration: "invalid"},
-	} {
-		if err := binding.Validate(); !errors.Is(err, domain.ErrIntegrity) {
-			test.Fatal("invalid binding accepted", binding, err)
-		}
-	}
-}
 
 func TestDocReadBindingPGMigrationAudit(test *testing.T) {
 	storage, ctx := chunkReusePG(test)

@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 type docCaptureWorkPGSpan struct{ from, bytes int }
@@ -19,8 +18,6 @@ type docCaptureWorkPGSpan struct{ from, bytes int }
 type docCaptureCommitTraceKey struct{}
 
 type docCaptureCommitHook struct{ run func() }
-
-const docCaptureWorkPGPreparationStepLimit = 6*maxLegacyReadBytes/domain.ConversationManifestChunkBytes + 8
 
 type docCaptureWorkPGTrace struct {
 	bodyReads      atomic.Int64

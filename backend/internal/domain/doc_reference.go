@@ -15,9 +15,6 @@ func (v VerifiedDocReference) Hash() ContentHash { return v.hash }
 func (v VerifiedDocReference) DocumentRef() DocumentRef {
 	return DocumentRef{Hash: v.hash, Identity: v.identity}
 }
-func (v VerifiedDocReference) Matches(s Snapshot) bool {
-	return v.Valid() && v.DocumentRef().MatchesSnapshot(s)
-}
 func (d VerifiedSessionDoc) Reference() VerifiedDocReference {
 	if !d.Valid() {
 		return VerifiedDocReference{}

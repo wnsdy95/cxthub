@@ -14,15 +14,12 @@ import (
 
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
-	memoryReadRepos       []domain.ContentHash
-	rootPublication       bool // configured before serving; cannot override release readiness
-	docVerifier           domain.CanonicalDocVerifier
-	docFindFields         outbound.DocFindFieldsStore
-	docDisplay            outbound.DocDisplayStore
-	docDisplayMaintenance outbound.DocDisplayMaintenanceStore
-	meta                  outbound.MetadataStore
-	blobs                 outbound.BlobStore
-	auth                  outbound.AuthProvider
+	memoryReadRepos []domain.ContentHash
+	rootPublication bool // configured before serving; cannot override release readiness
+	docVerifier     domain.CanonicalDocVerifier
+	meta            outbound.MetadataStore
+	blobs           outbound.BlobStore
+	auth            outbound.AuthProvider
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
 	repositories       outbound.RepositoryStore
@@ -365,12 +362,4 @@ func (s *Service) GetRepo(ctx context.Context, id domain.ContentHash) (domain.Re
 		return domain.Repo{}, err
 	}
 	return s.meta.GetRepo(ctx, id)
-}
-func (s *Service) GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
-	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.Snapshot, error) {
-		if err := validateHashes(repoID, id); err != nil {
-			return domain.Snapshot{}, err
-		}
-		return s.meta.GetSnapshot(ctx, repoID, id)
-	})
 }

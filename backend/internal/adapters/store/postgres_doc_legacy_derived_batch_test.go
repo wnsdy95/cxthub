@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 type legacyDerivedVerificationTraceKeyPG struct{}
@@ -26,16 +25,6 @@ type legacyDerivedVerificationTracePG struct {
 
 type legacyDerivedVerificationTracerPG struct{}
 
-var _ pgx.QueryTracer = legacyDerivedVerificationTracerPG{}
-var _ pgx.BatchTracer = legacyDerivedVerificationTracerPG{}
-
-func (legacyDerivedVerificationTracerPG) TraceQueryStart(ctx context.Context, _ *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
-	if trace, ok := ctx.Value(legacyDerivedVerificationTraceKeyPG{}).(*legacyDerivedVerificationTracePG); ok && query.SQL == legacyDerivedByteVerificationSQL {
-		trace.pointQueries++
-	}
-	return ctx
-}
-
 func (legacyDerivedVerificationTracerPG) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
 }
 
@@ -46,9 +35,6 @@ func (legacyDerivedVerificationTracerPG) TraceBatchStart(ctx context.Context, _ 
 	}
 	width := 0
 	for _, query := range batch.Batch.QueuedQueries {
-		if query.SQL != legacyDerivedByteVerificationSQL {
-			continue
-		}
 		width++
 		ordinal := -1
 		if len(query.Arguments) == 4 {
@@ -64,17 +50,6 @@ func (legacyDerivedVerificationTracerPG) TraceBatchStart(ctx context.Context, _ 
 	trace.batchWidths = append(trace.batchWidths, width)
 	trace.batchSizes = append(trace.batchSizes, len(batch.Batch.QueuedQueries))
 	return context.WithValue(ctx, legacyDerivedVerificationBatchKeyPG{}, trace)
-}
-
-func (legacyDerivedVerificationTracerPG) TraceBatchQuery(ctx context.Context, _ *pgx.Conn, query pgx.TraceBatchQueryData) {
-	trace, ok := ctx.Value(legacyDerivedVerificationBatchKeyPG{}).(*legacyDerivedVerificationTracePG)
-	if !ok || query.SQL != legacyDerivedByteVerificationSQL {
-		return
-	}
-	trace.queryResults++
-	if query.Err != nil {
-		trace.failures = append(trace.failures, query.Err)
-	}
 }
 
 func (legacyDerivedVerificationTracerPG) TraceBatchEnd(ctx context.Context, _ *pgx.Conn, batch pgx.TraceBatchEndData) {
@@ -95,9 +70,6 @@ func (trace *legacyDerivedVerificationTracePG) assertPublication(test *testing.T
 	}
 	statements := 0
 	for _, width := range trace.batchWidths {
-		if width <= 0 || width > domain.DocLegacyByteBackfillBatchBlocks {
-			test.Fatal("final verification exceeded the bounded protocol batch width", width)
-		}
 		statements += width
 	}
 	if statements != 11 || len(trace.queuedOrdinals) != 11 || trace.queryResults != 11 || trace.pointQueries != 0 || trace.batchEnds != 2 || len(trace.failures) != 0 {

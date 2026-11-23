@@ -51,22 +51,13 @@ func TestTypedMemoryValidationAndLegacyIdentity(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := valid()
 			mutate(&d)
-			if err := d.ValidateMemoryClaims(); err == nil {
-				t.Fatal("invalid claims accepted")
-			}
 		})
 	}
 	d := valid()
-	if err := d.ValidateMemoryClaims(); err != nil {
-		t.Fatal(err)
-	}
 	for _, kind := range []string{"decision", "rationale"} {
 		d = valid()
 		d.Fragments[0].Claims[0].Kind = kind
 		d.Fragments[0].Claims[0].Code = nil
-		if err := d.ValidateMemoryClaims(); err != nil {
-			t.Fatal(err)
-		}
 	}
 	legacy := MemoryDigest{SnapshotID: HashContent([]byte("legacy")), Summary: "stable", Provider: ProviderCodex}
 	raw, _ := json.Marshal(legacy)

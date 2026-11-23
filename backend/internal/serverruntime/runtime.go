@@ -157,12 +157,6 @@ func openRuntime(ctx context.Context, addr, dataDir string, requirePostgres, que
 		return r, nil
 	}
 	r.Context = app.NewService(st, st, auth.NewTeamTokenAuth(), st)
-	if display, ok := st.(outbound.DocDisplayReader); ok {
-		r.Context.ConfigureDocumentDisplayReads(display)
-	}
-	if fields, ok := st.(outbound.DocFindFieldsStore); ok {
-		r.Context.ConfigureDocumentFindFields(fields)
-	}
 	if err = r.Context.ConfigureConversationRootPublication(rootPublication); err != nil {
 		return nil, err
 	}

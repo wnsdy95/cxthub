@@ -212,14 +212,13 @@ func (s *PostgresStore) DeleteAnchoredSession(ctx context.Context, repo domain.C
 }
 
 // AnchoredContentInUse reports whether a stored report names the document as
-// its content, or a snapshot of the repository holds it.
+// its content.
 func (s *PostgresStore) AnchoredContentInUse(ctx context.Context, repo, doc domain.ContentHash) (bool, error) {
 	if err := validateHashes(repo, doc); err != nil {
 		return false, err
 	}
 	var used bool
-	err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM anchored_sessions WHERE repo_id=$1 AND body->'content'->>'doc'=$2)
- OR EXISTS (SELECT 1 FROM snapshots WHERE repo_id=$1 AND doc_hash=$2)`, repo, doc).Scan(&used)
+	err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM anchored_sessions WHERE repo_id=$1 AND body->'content'->>'doc'=$2)`, repo, doc).Scan(&used)
 	return used, err
 }
 
