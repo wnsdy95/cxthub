@@ -29,18 +29,8 @@ type fakeContextBackend struct {
 	memories  map[domain.ContentHash]domain.MemoryDigest
 }
 
-func (f fakeContextBackend) QueryContext(_ context.Context, repo domain.ContentHash, in domain.ContextSelection) (domain.ContextQueryView, error) {
-	return domain.SelectContext(domain.RepositoryView{Snapshots: f.snapshots[repo]}, in, "main")
-}
-
 func (f fakeContextBackend) ListRepos(context.Context, string) ([]domain.Repo, error) {
 	return f.repos, nil
-}
-func (f fakeContextBackend) List(_ context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error) {
-	return f.snapshots[in.RepoID], nil
-}
-func (fakeContextBackend) Search(context.Context, inbound.SearchInput) (inbound.SearchOutput, error) {
-	return inbound.SearchOutput{}, nil
 }
 func (f fakeContextBackend) GetSnapshot(_ context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
 	for _, snapshot := range f.snapshots[repoID] {
@@ -524,8 +514,14 @@ func webSessionCookie(token string) string { return sessionCookieName + "=" + to
 
 func TestRemoteMCPToolsAreReadOnly(t *testing.T) {
 	tools := toolDefinitions()
-	if len(tools) != 16 {
-		t.Fatalf("tool count = %d, want 16 read-only tools", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("tool count = %d, want 6 read-only tools", len(tools))
+	}
+	// The list of repositories and the five session tools, and nothing that read captures.
+	for position, name := range []string{"repository_list", "session_list", "session_read", "session_commit", "session_summaries", "session_search"} {
+		if tools[position]["name"] != name {
+			t.Fatalf("tool %d = %v, want %s", position, tools[position]["name"], name)
+		}
 	}
 	for _, tool := range tools {
 		annotations := tool["annotations"].(map[string]any)
@@ -566,33 +562,6 @@ func TestRequestGateAndProtocolSpecificRateLimitResponses(t *testing.T) {
 	assertLimited(t, s.mcpRateLimit(newRequestGate(1, time.Minute), next), `"code":-32002`)
 }
 
-func TestRemoteMemoryOutputIsBounded(t *testing.T) {
-	repoID := domain.HashContent([]byte("bounded-memory-repo"))
-	snapshotID := domain.HashContent([]byte("bounded-memory-snapshot"))
-	memoryHash := domain.HashContent([]byte("bounded-memory-object"))
-	facts := make([]string, 45)
-	for i := range facts {
-		facts[i] = fmt.Sprintf("project fact %02d", i)
-	}
-	memoryHash, _ = domain.MemoryDigestHash(domain.MemoryDigest{SnapshotID: snapshotID, Summary: "bounded", KeyFacts: facts})
-	backend := fakeContextBackend{
-		snapshots: map[domain.ContentHash][]domain.Snapshot{
-			repoID: {{ID: snapshotID, RepoID: repoID, DocHash: snapshotID, MemoryHash: memoryHash}},
-		},
-		memories: map[domain.ContentHash]domain.MemoryDigest{
-			memoryHash: {SnapshotID: snapshotID, Summary: "bounded", KeyFacts: facts},
-		},
-	}
-	s := &Server{context: backend, memorySnapshots: backend}
-	got, err := s.toolMemoryLoad(systemTestContext(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(got, facts[40]) || !strings.Contains(got, "5 additional facts omitted") {
-		t.Fatalf("memory output was not bounded:\n%s", got)
-	}
-}
-
 func TestRemoteRepositoryListOutputIsBoundedAndFilterable(t *testing.T) {
 	repositories := make([]listedRepository, 105)
 	for i := range repositories {
@@ -627,10 +596,6 @@ func (f fakeProjectionSource) ListSnapshots(ctx context.Context, repo domain.Con
 func (f fakeProjectionSource) GetMemory(ctx context.Context, repo, hash domain.ContentHash) (domain.MemoryDigest, error) {
 	return f.GetMemoryObject(ctx, repo, hash)
 }
-func (f fakeContextBackend) GetMemoryProjection(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryProjection, error) {
-	return app.ProjectMemory(ctx, fakeProjectionSource{f}, repo, id)
-}
-
 func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
 	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())

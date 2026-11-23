@@ -13,15 +13,11 @@ func (connections *GitHubConnections) GitHubWorkerConfig(profile GitHubWorkerPro
 	if connections.core != nil {
 		config.Metadata = connections.core.meta
 		config.Blobs = connections.core.blobs
-		config.Evidence = connections.core.graphEvidenceReader()
-		config.Memory = connections.core.memoryProjectionReader()
-		config.RequireCompleteMemory = connections.core.requireCompleteMemory
 	}
 	return config
 }
 
 func (connections *GitHubConnections) worker() *GitHubWorker {
 	config := connections.GitHubWorkerConfig(GitHubWorkerCompatibility)
-	revisions, revisionError := connections.core.RepositoryStateQueries()
-	return assembleGitHubWorker(config, connections.core.repositoryWork(), revisions, revisionError)
+	return assembleGitHubWorker(config, connections.core.repositoryWork())
 }

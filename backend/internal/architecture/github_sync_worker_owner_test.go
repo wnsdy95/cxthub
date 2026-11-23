@@ -2,7 +2,6 @@ package architecture
 
 import (
 	"go/ast"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,89 +90,6 @@ func wave47GitHubOwnerViolations(set wave42LegacyGitSourceSet) []string {
 		}
 	}
 	return violations
-}
-
-func TestWave47GitHubActualOwnerExactPortsAndScopeAwareNoReverseDependency(test *testing.T) {
-	set, err := wave42LegacyGitParseSources(wave42LegacyGitReadSources(test, filepath.Join("..", "app")))
-	if err != nil {
-		test.Fatal(err)
-	}
-	for _, violation := range wave47GitHubOwnerViolations(set) {
-		test.Error(violation)
-	}
-	for entry, operations := range map[string][]string{
-		"GitHubWorker.Run":  {"NewTicker", "WithTimeout", "Tick"},
-		"GitHubWorker.Tick": {"ListGitHubConnections", "reconcile", "ListGitHubDeliveries", "deliver", "reconcilePRHistories"},
-		"GitHubWorker.reconcile": {"withIdentity", "GetGitHubConnection", "checkConnectionWorkerPolicy", "PutGitHubConnection", "Installation",
-			"Repositories", "Teams", "TeamMembers", "ListGitHubIdentities", "GetNamespace", "organizationRoleOf", "GetTeam", "ReplaceGitHubTeamMembers", "MergedPullRequests", "enqueuePR"},
-		"GitHubWorker.binding":              {"GetGitHubConnection", "GetRepository", "GetRepo", "normalizeGitURL"},
-		"GitHubWorker.enqueuePR":            {"WithValue", "repositoryWriteErrorWithWork", "binding", "submitPRPromotion"},
-		"GitHubWorker.deliver":              {"withIdentity", "GetGitHubDelivery", "PutGitHubDelivery", "checkDeliveryWorkerPolicy", "applyDelivery"},
-		"GitHubWorker.applyDelivery":        {"Unmarshal", "ListGitHubConnections", "repositoryWriteErrorWithWork", "binding", "RecordGitRefObservation", "submitPRPromotion"},
-		"GitHubWorker.reconcilePRHistories": {"ListGitHubConnections", "checkDocumentIdentity", "binding", "ListPRHistoryJobs", "GetPRHistoryCheckpoint", "reconcilePRHistory"},
-		"GitHubWorker.reconcilePRHistory": {"workerDocumentIdentityContext", "repositoryWriteErrorWithWork", "binding", "SavePRHistoryCheckpoint",
-			"PullRequestHeadHistory", "preparePRParticipations", "repositoryReadForContributionWithPublications", "applyPreparedPRContributions"},
-		"GitHubWorker.preparePRParticipations":     {"RepositoryRevision", "ListHistory", "ListPRRefObservations", "repositoryReadForRepoWithWork"},
-		"GitHubWorker.checkConnectionWorkerPolicy": {"checkDocumentIdentity", "checkTeamDocumentIdentities"},
-		"GitHubWorker.checkDeliveryWorkerPolicy":   {"githubHash", "Unmarshal", "ListGitHubConnections", "checkDocumentIdentity"},
-		"prPublicationCommands.submitPRPromotion":  {"Validate", "GetRepo", "GetPRJob", "ListHistory", "ProjectContextBranches", "queuePRGitScans", "EnqueuePRJob"},
-		"prPublicationCommands.preparePRContributions": {"GetPRJob", "contributionDestination", "newCodeEvidence", "resolvedBranchCode", "contributionInCode",
-			"verifyContributionClosure", "contributionPublicationMemorySource"},
-		"prPublicationCommands.applyPreparedPRContributions": {"PutPRContribution", "PutPRContributionMemory", "GetPRJob", "RetryPRJob", "ClaimPRJob", "FinishPRJob"},
-		"repositoryReadForContributionWithPublications":      {"repositoryReadForRepoWithWork", "RepositoryRevision", "preparePRContributions"},
-	} {
-		function := set.methods[entry]
-		if function == nil {
-			test.Error("missing actual GitHub synchronization algorithm", entry)
-			continue
-		}
-		calls := wave42LegacyGitCalls(function.Body)
-		for _, operation := range operations {
-			if !calls[operation] {
-				test.Error("GitHub algorithm remained outside its actual owner", entry, operation)
-			}
-		}
-	}
-	for entry, dependencies := range map[string][]string{
-		"GitHubWorker.Run": {"GitHubWorker.Tick", "GitHubWorker.reconcile", "GitHubWorker.deliver", "GitHubWorker.reconcilePRHistories",
-			"GitHubWorker.reconcilePRHistory", "prPublicationCommands.submitPRPromotion", "prPublicationCommands.preparePRContributions", "prPublicationCommands.applyPreparedPRContributions"},
-		"GitHubWorker.withIdentity":                {"withIdentityTransactions"},
-		"GitHubWorker.organizationRoleOf":          {"organizationRoleFromReader"},
-		"GitHubWorker.checkTeamDocumentIdentities": {"checkTeamDocumentIdentitiesFromStores"},
-		"Service.submitPRPromotion":                {"prPublicationCommands.submitPRPromotion"},
-		"Service.preparePRContributions":           {"prPublicationCommands.preparePRContributions"},
-		"Service.applyPreparedPRContributions":     {"prPublicationCommands.applyPreparedPRContributions"},
-		"repositoryReadForContribution":            {"repositoryReadForContributionWithPublications"},
-	} {
-		if set.methods[entry] == nil {
-			test.Error("missing original GitHub execution or common policy entry", entry)
-		}
-		reachable := wave45PRReachable(set, entry)
-		for _, dependency := range dependencies {
-			if reachable[dependency] == nil {
-				test.Error("GitHub entry bypasses actual execution or common policy owner", entry, dependency)
-			}
-		}
-	}
-	for _, method := range []string{"Run", "Tick", "reconcile", "binding", "enqueuePR", "deliver", "applyDelivery", "reconcilePRHistories", "reconcilePRHistory",
-		"preparePRParticipations", "checkConnectionWorkerPolicy", "checkDeliveryWorkerPolicy"} {
-		entry := "GitHubConnections." + method
-		function := set.methods[entry]
-		if function == nil || function.Body == nil || len(function.Body.List) > 2 {
-			test.Error("legacy GitHub synchronization entry is not a thin compatibility facade", entry)
-		}
-		if wave45PRReachable(set, entry)["GitHubWorker."+method] == nil {
-			test.Error("legacy GitHub entry does not reach actual owner", entry)
-		}
-	}
-	for _, entry := range []string{"Service.submitPRPromotion", "Service.preparePRContributions", "Service.applyPreparedPRContributions", "repositoryReadForContribution"} {
-		if function := set.methods[entry]; function == nil || function.Body == nil || len(function.Body.List) > 2 {
-			test.Error("legacy PR publication entry is not a thin shared-command facade", entry)
-		}
-	}
-	if function := set.methods["GitHubConnections.Receive"]; function == nil || !wave42LegacyGitCalls(function.Body)["PutGitHubDelivery"] {
-		test.Error("verified webhook admission moved out of the original command owner")
-	}
 }
 
 func TestWave47GitHubOwnerGuardRejectsAliasesCallbackShellsAndHiddenStarts(test *testing.T) {

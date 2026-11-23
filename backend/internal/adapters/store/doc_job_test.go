@@ -123,9 +123,6 @@ func checkDocJobs(t *testing.T, st docJobTestStore) {
 	if _, err := st.GetDoc(ctx, repo, doc.Hash()); err != nil {
 		t.Fatal(err)
 	}
-	if snaps, err := st.ListSnapshots(ctx, repo, ""); err != nil || len(snaps) != 0 {
-		t.Fatalf("document job created snapshots: %v %v", snaps, err)
-	}
 	if err := st.DeleteDoc(ctx, repo, doc.Hash()); err != nil {
 		t.Fatal(err)
 	}

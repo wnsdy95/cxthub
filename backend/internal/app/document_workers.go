@@ -119,7 +119,6 @@ func NewDocumentWorkers(config DocumentWorkersConfig) (*DocumentWorkers, error) 
 func newDocumentWorkerSources(config DocumentWorkersConfig, scope *documentWorkerScope) (*documentquery.Queries, error) {
 	return newReadServicesDocuments(ReadServicesConfig{
 		Metadata: config.Metadata, Blobs: config.Blobs, DocumentProfile: config.Profile,
-		DocumentFindFields: config.FindFields, DocumentDisplayReads: config.Display,
 	}, scope.documents)
 }
 

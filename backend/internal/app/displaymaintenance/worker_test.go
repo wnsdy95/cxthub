@@ -100,7 +100,7 @@ func TestProcessReadOnlyPrecedesLimitAndLegacyNoop(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	service := app.NewService(nil, nil, nil, nil, nil)
+	service := app.NewService(nil, nil, nil, nil)
 	for _, limit := range []int{-1, 0, 1} {
 		readonly := outbound.WithDocReadOnly(context.Background())
 		if processed, err := worker.Process(readonly, limit); processed != 0 || err != domain.ErrForbidden {

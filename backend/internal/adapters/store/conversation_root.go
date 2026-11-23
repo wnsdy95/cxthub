@@ -208,12 +208,6 @@ func rootChunkBytes(ctx context.Context, raw []byte, length int64) ([]byte, erro
 	return body[:n:n], ctx.Err()
 }
 
-func verifyStoredConversation(ctx context.Context, hash domain.ContentHash, manifest domain.ConversationManifest, read storedChunkReader) (domain.VerifiedSessionDoc, error) {
-	// Frozen transfers keep an independent, disposable verifier.
-	var verifier domain.CanonicalDocVerifier
-	return verifyStoredConversationWithVerifier(ctx, &verifier, hash, manifest, read)
-}
-
 func (c *docProofCache) verifyConversation(ctx context.Context, hash domain.ContentHash, manifest domain.ConversationManifest, read storedChunkReader) (domain.VerifiedSessionDoc, error) {
 	return verifyStoredConversationWithVerifier(ctx, &c.rootVerifier, hash, manifest, read)
 }

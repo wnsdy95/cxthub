@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -24,7 +23,7 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken := failedInvitationAuditStore{st}
-	svc := NewService(broken, broken, nil, gitengine.NewEngine(broken), broken)
+	svc := NewService(broken, broken, nil, broken)
 	actor := inbound.WithCorrelation(inbound.WithRepositoryActor(context.Background(), f.owner.ID), "req_write")
 	next := "next"
 	if err := svc.UpdateRepoConfig(actor, repo.ID, &next, nil); err == nil {
@@ -46,7 +45,7 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 	if err != nil || currentRepo.OwnerNamespaceID != f.repository.OwnerNamespaceID {
 		t.Fatal("transfer escaped rollback")
 	}
-	svc = NewService(st, st, nil, gitengine.NewEngine(st), st)
+	svc = NewService(st, st, nil, st)
 	if err = svc.UpdateRepoConfig(actor, repo.ID, &next, nil); err != nil {
 		t.Fatal(err)
 	}

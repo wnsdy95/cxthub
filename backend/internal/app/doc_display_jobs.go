@@ -13,11 +13,9 @@ const docDisplayJobSteps = documentworker.DisplayJobSteps
 
 func (service *Service) ConfigureDocumentDisplay(storage outbound.DocDisplayStore) {
 	service.docDisplay = storage
-	service.docDisplayRead = storage
 }
 
 func (service *Service) ConfigureDocumentDisplayReads(storage outbound.DocDisplayReader) {
-	service.docDisplayRead = storage
 }
 
 func (service *Service) docDisplaySource(ctx context.Context, target domain.DocDisplayTarget) (docViewSource, error) {

@@ -69,14 +69,3 @@ func TestValidateRef(t *testing.T) {
 		t.Fatalf("expected ErrIntegrity for bad target hash, got %v", err)
 	}
 }
-
-func TestSessionRefPrefixSeparatesNestedGitBranches(t *testing.T) {
-	feature := SessionRefPrefix("feature")
-	nested := SessionRefPrefix("feature/foo")
-	if strings.HasPrefix(nested, feature) || strings.HasPrefix(feature, nested) {
-		t.Fatalf("session ref scopes overlap: feature=%q nested=%q", feature, nested)
-	}
-	if got, want := SessionRefPrefix("ééé"), "fork/v1/6/ééé/"; got != want {
-		t.Fatalf("UTF-8 byte length prefix = %q, want %q", got, want)
-	}
-}

@@ -5,7 +5,6 @@ package app
 import (
 	"context"
 	"errors"
-	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -100,97 +99,4 @@ func (probe *docDisplayIncarnationProbePG) SaveDocEventDisplay(ctx context.Conte
 		probe.changed = true
 	}
 	return probe.PostgresStore.SaveDocEventDisplay(ctx, job, step)
-}
-
-func TestPGDocDisplayIncarnationChangeRetriesAutomatically(test *testing.T) {
-	for _, epoch := range []bool{false, true} {
-		name := "source_incarnation"
-		if epoch {
-			name = "catalog_epoch"
-		}
-		test.Run(name, func(test *testing.T) {
-			runDocDisplayIncarnationRecoveryPG(test, epoch)
-		})
-	}
-}
-
-func runDocDisplayIncarnationRecoveryPG(test *testing.T, epoch bool) {
-	test.Helper()
-	test.Setenv("CXT_TEST_DSN", a11IsolatedPGDSN(test, context.Background()))
-	fixture := newDocDisplayPGFixture(test)
-	probe := &docDisplayIncarnationProbePG{PostgresStore: fixture.storage, pool: fixture.pool, catalogEpoch: epoch, database: fixture.pool.Config().ConnConfig.Database}
-	fixture.service.ConfigureDocumentDisplay(probe)
-	document := domain.CIRDocument{Envelope: fixture.cir.Envelope, Events: []domain.CIREvent{{
-		Kind: domain.EventToolResult, CallID: test.Name(), Output: map[string]any{"result": "recovered", "valid": true},
-	}}}
-	hash := seedDocViewBoundaryPG(test, fixture, document)
-	target := docDisplayTargetPG(test, fixture, hash, 0)
-	target.Profile = domain.DocDisplayProjectionProfile
-	if _, err := fixture.storage.EnqueueDocDisplay(fixture.ctx, target, time.Now().UTC()); err != nil {
-		test.Fatal(err)
-	}
-	if err := fixture.service.ProcessDocDisplayJobs(fixture.ctx, 1); !errors.Is(err, domain.ErrDocDisplayIncarnationChanged) || !errors.Is(err, domain.ErrConflict) {
-		test.Fatal("actual worker did not report the stale calculated incarnation", err)
-	}
-	if !probe.changed || probe.before == probe.after {
-		test.Fatal("actual Source ABA was not committed")
-	}
-	var state, reason string
-	var attempts int
-	var released bool
-	var delay int64
-	if err := fixture.pool.QueryRow(fixture.ctx, `SELECT state,reason,attempts,lease_until IS NULL,
- GREATEST(ceil(extract(epoch FROM next_attempt-clock_timestamp())*1000000000),0)::bigint
- FROM doc_display_jobs_v1 WHERE repo_id=$1 AND doc_hash=$2 AND event_index=$3 AND profile=$4`,
-		target.RepoID, target.DocHash, target.Event.Index, target.DisplayProfile()).Scan(&state, &reason, &attempts, &released, &delay); err != nil {
-		test.Fatal(err)
-	}
-	if state != "retrying" || reason != "source_incarnation_changed" || attempts != 1 || !released || delay < 0 || delay > int64(3*time.Second) {
-		test.Fatal("incarnation change became permanent rejection or bypassed bounded backoff", state, reason, attempts, released, time.Duration(delay))
-	}
-	if _, err := readDocEventDisplayGenerationPG(fixture, target); !errors.Is(err, domain.ErrNotFound) {
-		test.Fatal("failed incarnation published a partial generation", err)
-	}
-	worker, stop := context.WithTimeout(fixture.ctx, 10*time.Second)
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		fixture.service.RunDocDisplayWorker(worker)
-	}()
-	defer func() {
-		stop()
-		timer := time.NewTimer(5 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-finished:
-		case <-timer.C:
-			test.Error("owned background worker did not stop after cancellation")
-		}
-	}()
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		generation, err := repositoryReadForRepo(worker, fixture.service, fixture.repo, func(read context.Context) (domain.DocDisplayProjectionGeneration, error) {
-			return fixture.storage.ReadDocEventDisplayGeneration(read, target)
-		})
-		if err == nil {
-			if generation.Validate() != nil || generation.Pages.Count == 0 || generation.Source.TextBytes == 0 {
-				test.Fatal("automatic recovery published an invalid generation")
-			}
-			if err := fixture.pool.QueryRow(fixture.ctx, `SELECT state,reason,attempts FROM doc_display_jobs_v1
- WHERE repo_id=$1 AND doc_hash=$2 AND event_index=$3 AND profile=$4`,
-				target.RepoID, target.DocHash, target.Event.Index, target.DisplayProfile()).Scan(&state, &reason, &attempts); err != nil || state != "completed" || reason != "" || attempts < 2 {
-				test.Fatal("recovered generation lost its successful receipt", state, reason, attempts, err)
-			}
-			return
-		}
-		if !errors.Is(err, domain.ErrNotFound) {
-			test.Fatal(err)
-		}
-		select {
-		case <-worker.Done():
-			test.Fatal("background retry never completed without administrative data repair", worker.Err())
-		case <-ticker.C:
-		}
-	}
 }

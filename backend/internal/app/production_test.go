@@ -29,10 +29,6 @@ type noRevision struct {
 	productionFixture
 	AdvanceEvidenceRevision int
 }
-type noFence struct {
-	productionFixture
-	FencePRJob int
-}
 type noAnchoredSessions struct {
 	productionFixture
 	PutAnchoredSession int
@@ -78,7 +74,7 @@ func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 		{nil, "nil"}, {(*productionFixture)(nil), "nil"},
 		{noTransactions{}, "repository write/read transactions"}, {noSharedRuntime{}, "shared authentication/rate limits"},
 		{noAccessLock{}, "repository access locks"}, {noOutbox{}, "notification outbox"},
-		{noRevision{}, "evidence revisions"}, {noFence{}, "PR lease fencing"},
+		{noRevision{}, "evidence revisions"},
 		{noAnchoredSessions{}, "anchored session reports"}, {noBranchLedger{}, "branch ledger"},
 		{noAnchoredNotes{}, "manual notes"}, {noReportedWorktrees{}, "reported worktrees"},
 		{noRemoteGit{}, "remote Git cache"}, {noRemotePushes{}, "remote push record"}, {noAnchoredPublications{}, "session publications"},

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 )
@@ -26,7 +25,7 @@ func TestProductionProxySessionBoundary(t *testing.T) {
 	t.Setenv("CXT_COOKIE_SAMESITE", "")
 	t.Setenv("CXT_COOKIE_DOMAIN", "")
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
 	identity := app.NewIdentityService(auth.NewDevVerifier(), st)
 	handler := NewServer(svc, identity).Handler()
 

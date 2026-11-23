@@ -288,66 +288,6 @@ func TestBoundedExecutionProcessPGChild(test *testing.T) {
 	}
 }
 
-func TestBoundedExecutionProcessesPGAdmissionAndWorker(test *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	fixture := newExecutionProcessFixture(test, ctx)
-	api := fixture.start(test, ctx, outbound.ProcessAPI)
-	api.expect(test, ctx, "opened", "")
-	api.assertReady(test, ctx, false)
-	api.reject(test, ctx, "incomplete-roster", false)
-	mcp := fixture.start(test, ctx, outbound.ProcessMCP)
-	mcp.expect(test, ctx, "opened", "")
-	mcp.assertReady(test, ctx, false)
-	worker := fixture.start(test, ctx, outbound.ProcessWorker)
-	worker.expect(test, ctx, "opened", "")
-	for _, child := range []*executionProcessChild{api, mcp, worker} {
-		child.waitReady(test, ctx, true)
-	}
-	fixture.assertSessions(test, ctx, 3, 0)
-	for _, role := range []outbound.ProcessRole{outbound.ProcessAPI, outbound.ProcessMCP, outbound.ProcessWorker} {
-		duplicate := fixture.start(test, ctx, role)
-		if event := duplicate.expect(test, ctx, "refused", ""); event.Code != "conflict" {
-			test.Fatal("duplicate real root was not refused as a role conflict", role, event.Code)
-		}
-		duplicate.join(test, ctx, false)
-	}
-	api.hold(test, ctx, "api-bulk", true)
-	mcp.reject(test, ctx, "mcp-shared-busy", true)
-	worker.hold(test, ctx, "worker-reserved-bulk", true)
-	api.hold(test, ctx, "api-interactive", false)
-	mcp.hold(test, ctx, "mcp-interactive", false)
-	fixture.assertSessions(test, ctx, 3, 2)
-	for _, child := range []*executionProcessChild{api, mcp, worker} {
-		child.reject(test, ctx, "active-limit", false)
-	}
-	test.Log("four held admissions observed in three real runtime processes: API2 + MCP1 + worker1; two granted session bulk locks")
-	api.release(test, ctx, "api-bulk")
-	mcp.release(test, ctx, "mcp-interactive")
-	mcp.hold(test, ctx, "mcp-bulk", true)
-	api.reject(test, ctx, "api-shared-busy", true)
-	fixture.waitRejectedBulkConnectionClosed(test, ctx, outbound.ProcessAPI)
-	fixture.assertSessions(test, ctx, 3, 2)
-	mcp.release(test, ctx, "mcp-bulk")
-	worker.release(test, ctx, "worker-reserved-bulk")
-	api.release(test, ctx, "api-interactive")
-	fixture.assertSessions(test, ctx, 3, 0)
-	worker.send(test, executionProcessCommand{Operation: "run"})
-	worker.expect(test, ctx, "running", "")
-	fixture.waitDocumentJob(test, ctx)
-	fixture.publishSnapshot(test, ctx)
-	fixture.assertDocumentReads(test, ctx, api, mcp)
-	worker.terminateAndAcknowledge(test, ctx, fixture)
-	api.waitReady(test, ctx, false)
-	mcp.waitReady(test, ctx, false)
-	api.reject(test, ctx, "worker-role-lost", false)
-	mcp.reject(test, ctx, "worker-role-lost", true)
-	fixture.assertSessions(test, ctx, 2, 0)
-	api.terminateAndAcknowledge(test, ctx, fixture)
-	mcp.terminateAndAcknowledge(test, ctx, fixture)
-	fixture.assertSessions(test, ctx, 0, 0)
-}
-
 func (fixture *executionProcessFixture) waitRejectedBulkConnectionClosed(test *testing.T, ctx context.Context, role outbound.ProcessRole) {
 	test.Helper()
 	deadline, cancel := context.WithTimeout(ctx, time.Second)

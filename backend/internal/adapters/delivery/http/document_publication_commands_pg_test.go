@@ -5,7 +5,6 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -42,9 +40,7 @@ func wave58DocumentPublicationPGBody(test *testing.T, route string, repo domain.
 		if forged {
 			document.CIR = identityIngressDoc(test, label+" different body").CIR
 		}
-		value = objectsBody{Docs: []domain.SessionDoc{document}, Snapshots: []domain.Snapshot{{
-			ID: hash, RepoID: repo, DocHash: hash, Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull,
-		}}}
+		value = objectsBody{Docs: []domain.SessionDoc{document}}
 	} else {
 		data := []byte(string(repo) + " " + label)
 		hash = domain.HashContent(data)
@@ -82,7 +78,7 @@ func TestPGDocumentPublicationHTTPUsesActualCompleteOwner(test *testing.T) {
 	}
 	identity := app.NewIdentityService(auth.NewDevVerifier(), storage)
 	revoker := app.NewIdentityService(auth.NewDevVerifier(), peer)
-	service := app.NewService(storage, storage, nil, gitengine.NewEngine(storage), storage)
+	service := app.NewService(storage, storage, nil, storage)
 	commands, err := service.DocumentPublicationCommands()
 	if err != nil {
 		test.Fatal("actual Complete document publication factory failed", err)
@@ -100,7 +96,7 @@ func TestPGDocumentPublicationHTTPUsesActualCompleteOwner(test *testing.T) {
 		stored    string
 		duplicate string
 	}{
-		{name: "objects", stored: `{"StoredSnapshots":1,"StoredDocs":1,"DedupedSnapshots":0,"DedupedDocs":0}`, duplicate: `{"StoredSnapshots":0,"StoredDocs":0,"DedupedSnapshots":1,"DedupedDocs":1}`},
+		{name: "objects", stored: `{"StoredSnapshots":0,"StoredDocs":1,"DedupedSnapshots":0,"DedupedDocs":0}`, duplicate: `{"StoredSnapshots":0,"StoredDocs":0,"DedupedSnapshots":0,"DedupedDocs":1}`},
 		{name: "chunks", stored: `{"stored":1,"deduped":0}`, duplicate: `{"stored":0,"deduped":1}`},
 	} {
 		test.Run(route.name, func(test *testing.T) {
@@ -145,10 +141,6 @@ func TestPGDocumentPublicationHTTPUsesActualCompleteOwner(test *testing.T) {
 				var failure error
 				if route.name == "objects" {
 					present, failure = storage.HasDocs(ctx, repo, []domain.ContentHash{hash})
-					snapshot, snapshotErr := storage.GetSnapshot(ctx, repo, hash)
-					if expected && (snapshotErr != nil || snapshot.DocHash != hash) || !expected && !errors.Is(snapshotErr, domain.ErrNotFound) {
-						test.Fatal("actual owner snapshot persistence changed", snapshot, snapshotErr, expected)
-					}
 				} else {
 					present, failure = storage.HasChunks(ctx, repo, []domain.ContentHash{hash})
 				}

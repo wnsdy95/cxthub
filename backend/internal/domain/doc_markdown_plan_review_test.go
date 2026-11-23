@@ -9,11 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type markdownReviewCompilation struct {
@@ -91,94 +89,6 @@ func markdownReviewCompile(test *testing.T, source string, maxSteps int) markdow
 	}
 	compiled.plan, compiled.state = plan, state
 	return compiled
-}
-
-func markdownReviewReplay(test *testing.T, source string, compiled markdownReviewCompilation) (string, DocDisplayPage) {
-	test.Helper()
-	var text strings.Builder
-	var runs []DocDisplayRun
-	operations, sourceEnd := 0, 0
-	for index := 0; index < compiled.plan.Pages.Count; index++ {
-		page, err := ReadDocMarkdownPlanPage(context.Background(), compiled.plan, index, func(_ context.Context, hash ContentHash) ([]byte, error) {
-			return compiled.objects[hash], nil
-		})
-		if err != nil || page.From != text.Len() {
-			test.Fatal("invalid page sequence", index, err)
-		}
-		for _, operation := range page.Operations {
-			if operation.From < sourceEnd || operation.From >= operation.To || operation.To > len(source) || !utf8.RuneStart(source[operation.From]) || operation.To < len(source) && !utf8.RuneStart(source[operation.To]) {
-				test.Fatal("invalid decoded source cover", operation, sourceEnd)
-			}
-			if operation.Text == "" {
-				text.WriteString(source[operation.From:operation.To])
-			} else {
-				text.WriteString(operation.Text)
-			}
-			runs = append(runs, DocDisplayRun{To: text.Len(), SourceFrom: operation.From, SourceTo: operation.To, Linear: operation.TextBytes() == operation.To-operation.From})
-			sourceEnd = operation.To
-			operations++
-		}
-	}
-	if operations != compiled.plan.OperationCount || text.Len() != compiled.plan.TextBytes {
-		test.Fatal("plan counts disagree with replay", operations, text.Len(), compiled.plan)
-	}
-	return text.String(), DocDisplayPage{Version: 2, Text: text.String(), Runs: runs}
-}
-
-func TestDocMarkdownPlanReviewPathologicalDelimiterPasses(test *testing.T) {
-	for _, scenario := range []struct{ name, source, want string }{
-		{"unmatched brackets", "prefix " + strings.Repeat("[", 150000), "prefix " + strings.Repeat("[", 150000)},
-		{"rejected strong delimiters", "prefix " + strings.Repeat("*", 150000), "prefix " + strings.Repeat("*", 150000)},
-		{"empty code delimiters", "prefix " + strings.Repeat("`", 150000), "prefix " + strings.Repeat("`", 150000)},
-		{"shared unterminated URL", "prefix " + strings.Repeat("[", 70000) + "](https://" + strings.Repeat("x", 90000), "prefix " + strings.Repeat("[", 70000) + "](https://" + strings.Repeat("x", 90000)},
-		{"nonrecursive large label", "[" + strings.Repeat("[`**🙂", 20000) + "](https://hidden.test)", strings.Repeat("[`**🙂", 20000)},
-		{"trailing paragraph newline", strings.Repeat("line 🙂\n", 20000), strings.TrimSuffix(strings.Repeat("line 🙂\n", 20000), "\n")},
-	} {
-		test.Run(scenario.name, func(test *testing.T) {
-			if len(scenario.source) <= MaxDocMarkdownDisplayBytes {
-				test.Fatal("fixture does not exercise the actual large compiler")
-			}
-			compiled := markdownReviewCompile(test, scenario.source, 96)
-			got, _ := markdownReviewReplay(test, scenario.source, compiled)
-			if got != scenario.want || compiled.readBytes > 6*len(scenario.source)+DocDisplayStepSourceBytes {
-				test.Fatal("large pathological input changed text or rescanned unbounded suffixes", len(got), len(scenario.want), compiled.readBytes)
-			}
-			test.Logf("input=%d output=%d steps=%d read=%d", len(scenario.source), len(got), compiled.steps, compiled.readBytes)
-		})
-	}
-}
-
-func TestDocMarkdownPlanReviewDeterministicGrammarParity(test *testing.T) {
-	fixtures := []string{"first\n\nsecond", "# \r\u2028\u2029", "- ** a **\t` b `", "# a\n```\n```\n# b", "[a[b](https://x)", "**a***b**", "before\n\n\n\n", "\u0085\n\ufeff\nend"}
-	fragments := []string{"a", "\ud55c\uae00🙂", "# ", "###\u00a0", "#### ", "- ", "* ", "01) ", "1.\t", "```", "``", "**", "*", "`", "[", "](https://", "](http://", "](HTTPS://", "](javascript:", "x)", " ", "\t", "\r", "\n", "\n\n", "\u2028", "\u2029", "\ufeff", "\u0085", "\v\f"}
-	random := rand.New(rand.NewSource(20261021))
-	for count := 0; count < 600; count++ {
-		var source strings.Builder
-		for fragment := 0; fragment < 1+random.Intn(40); fragment++ {
-			source.WriteString(fragments[random.Intn(len(fragments))])
-		}
-		fixtures = append(fixtures, source.String())
-	}
-	for index, source := range fixtures {
-		test.Run(fmt.Sprint(index), func(test *testing.T) {
-			baseline, err := BuildDocMarkdownDisplay(context.Background(), source)
-			if err != nil {
-				test.Fatal(err)
-			}
-			compiled := markdownReviewCompile(test, source, 32)
-			got, mapped := markdownReviewReplay(test, source, compiled)
-			if got != baseline.Text() || compiled.plan.LeadingBreaks != baseline.leadingBreaks || compiled.plan.TrailingBreaks != baseline.trailingBreaks {
-				test.Fatalf("source=%q got=%q want=%q breaks=%d/%d want=%d/%d", source, got, baseline.Text(), compiled.plan.LeadingBreaks, compiled.plan.TrailingBreaks, baseline.leadingBreaks, baseline.trailingBreaks)
-			}
-			for offset, character := range got {
-				span, err := mapped.SourceRange(offset, utf8.RuneLen(character))
-				want, failure := baseline.SourceRange(offset, utf8.RuneLen(character))
-				if err != nil || failure != nil || span != want {
-					test.Fatalf("source=%q output=%q offset=%d cover=%+v want=%+v errors=%v/%v", source, got, offset, span, want, err, failure)
-				}
-			}
-		})
-	}
 }
 
 func TestDocMarkdownPlanReviewHashCheckpointPrivacyAndIntegrity(test *testing.T) {
@@ -426,65 +336,5 @@ func TestDocMarkdownPlanReviewLateCancellationAndRetry(test *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(page, DocMarkdownPlanPage{}) {
 		test.Fatal("cancelled selected read exposed a page", err)
-	}
-}
-
-func TestDocMarkdownPlanReviewRejectFutureDelimiterCache(test *testing.T) {
-	source := strings.Repeat("**x** ", 80) + "\n# tail"
-	state, err := NewDocMarkdownPlanState(DocMarkdownPlanInput{Hash: HashContent([]byte(source)), Bytes: len(source)})
-	if err != nil {
-		test.Fatal(err)
-	}
-	step, err := StepDocMarkdownPlan(context.Background(), state, func(_ context.Context, from, length int) ([]byte, error) {
-		return []byte(source[from : from+length]), nil
-	})
-	if err != nil || step.State.Phase != docMarkdownPlanInline || step.State.Block.To >= len(source) {
-		test.Fatal("fixture did not yield inside a block preceding another block", step.State.Phase, err)
-	}
-	step.State.NextDelimiter[0] = len(source)
-	if !errors.Is(step.State.Validate(), ErrIntegrity) {
-		continued, failure := StepDocMarkdownPlan(context.Background(), step.State, func(_ context.Context, from, length int) ([]byte, error) {
-			return []byte(source[from : from+length]), nil
-		})
-		baseline, err := BuildDocMarkdownDisplay(context.Background(), source)
-		if err != nil {
-			test.Fatal(err)
-		}
-		test.Fatalf("accepted future cached star outside block %d..%d: cache=%d cursor=%d; continuation bytes=%d want=%d phase=%d error=%v", step.State.Block.From, step.State.Block.To, step.State.NextDelimiter[0], step.State.InlineCursor, continued.State.TextBytes, len(baseline.Text()), continued.State.Phase, failure)
-	}
-	raw, err := canonicalJSON(step.State)
-	if err != nil {
-		test.Fatal(err)
-	}
-	if _, err := DecodeDocMarkdownPlanState(HashContent(raw), raw); !errors.Is(err, ErrIntegrity) {
-		test.Fatal("rehashed future delimiter cache accepted", err)
-	}
-}
-
-func TestDocMarkdownPlanReviewFragmentEqualWidthSyntheticCover(test *testing.T) {
-	source := "a\n\nb"
-	compiled := markdownReviewCompile(test, source, 8)
-	cursor, err := NewDocMarkdownPlanCursor(compiled.plan)
-	if err != nil {
-		test.Fatal(err)
-	}
-	fragment, err := ReadDocMarkdownPlanFragment(context.Background(), compiled.plan, cursor,
-		func(_ context.Context, hash ContentHash) ([]byte, error) { return compiled.objects[hash], nil },
-		func(_ context.Context, from, length int) ([]byte, error) {
-			return []byte(source[from : from+length]), nil
-		})
-	if err != nil || fragment.Text() != source {
-		test.Fatal("fragment changed paragraph text", fragment.Text(), err)
-	}
-	baseline, err := BuildDocMarkdownDisplay(context.Background(), source)
-	if err != nil {
-		test.Fatal(err)
-	}
-	for offset := range source {
-		got, err := fragment.SourceRange(offset, 1)
-		want, failure := baseline.SourceRange(offset, 1)
-		if err != nil || failure != nil || got != want {
-			test.Fatalf("source=%q offset=%d decoded cover=%+v want=%+v errors=%v/%v", source, offset, got, want, err, failure)
-		}
 	}
 }

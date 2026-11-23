@@ -193,12 +193,10 @@ roll out backward-compatible schema changes before removing old application
 versions. To roll back, restore the old combined API and then revert the proxy.
 
 A local development FS store is not a shared production database. This change
-neither migrates nor deletes existing FS data. Export/import and verify it before
-moving that dataset to PostgreSQL. Never run two processes against the same FS
-store. A standalone MCP server refuses startup without PostgreSQL even locally.
-
-For an existing personal-repository FS dataset, use the offline
-[FS transfer rehearsal](FS_TRANSFER.md) before planning the production cutover.
+neither migrates nor deletes existing FS data, and no tool moves that dataset to
+PostgreSQL: sessions are uploaded again by the CLI with `cxt segments push`.
+Never run two processes against the same FS store. A standalone MCP server
+refuses startup without PostgreSQL even locally.
 
 ## Local verification
 

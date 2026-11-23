@@ -209,24 +209,6 @@ func TestAnchoredSessionRejectsWhatItCannotStoreTruthfully(t *testing.T) {
 	}
 }
 
-func TestAnchoredSessionDoesNotAdvanceTheRepositoryRevision(t *testing.T) {
-	service, _, repo := anchoredSessionFixture(t)
-	before, err := service.GetRepositoryView(systemTestContext(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.PutAnchoredSession(anchoredActor("member-a"), repo, domain.ProviderClaude, "session-1", anchoredTestBody("m3")); err != nil {
-		t.Fatal(err)
-	}
-	after, err := service.GetRepositoryView(systemTestContext(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before.Revision != after.Revision {
-		t.Fatalf("a report moved the repository revision: %+v -> %+v", before.Revision, after.Revision)
-	}
-}
-
 // A report may only name content this repository holds: the document goes up
 // first through the path that verifies and counts it.
 func TestAnchoredSessionContentMustBeInTheRepository(t *testing.T) {

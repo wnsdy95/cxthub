@@ -22,15 +22,6 @@ type MemoryCodeScope struct {
 	Paths  []string `json:"paths"`
 }
 
-func (d MemoryDigest) HasMemoryClaims() bool {
-	for _, f := range d.Fragments {
-		if len(f.Claims) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // ValidateMemoryClaims checks the wire declaration only. Publication bindings,
 // ancestry and current applicability belong to the repository application query.
 func (d MemoryDigest) ValidateMemoryClaims() error {

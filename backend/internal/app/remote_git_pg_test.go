@@ -122,11 +122,7 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 		t.Fatalf("state after a request: %+v %v", state, err)
 	}
 	requested := *state.RequestedAt
-	scans, err := NewGitScans(service, &scanReader{deltas: map[string]domain.GitCommitDelta{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := scans.ObservePush(ctx, origin, "refs/heads/main", "", strings.Repeat("1", 40), false, "remote-git-delivery"); err != nil {
+	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/main", "", strings.Repeat("1", 40), false, "remote-git-delivery"); err != nil {
 		t.Fatal(err)
 	}
 	if state, err = storage.GetRemoteGitState(ctx, repo); err != nil || !state.RequestedAt.After(requested) {

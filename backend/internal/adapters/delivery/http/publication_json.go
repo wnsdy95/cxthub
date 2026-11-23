@@ -41,23 +41,3 @@ func (body *objectsBody) UnmarshalJSON(raw []byte) error {
 	body.ChunkedDocs, body.ChunkObjects = input.ChunkedDocs.value, input.ChunkObjects.value
 	return nil
 }
-
-type memoryPublicationBody struct {
-	Objects objectsBody         `json:"objects"`
-	Memory  domain.MemoryDigest `json:"memory"`
-}
-
-func (body *memoryPublicationBody) UnmarshalJSON(raw []byte) error {
-	input := struct {
-		Objects publicationField[objectsBody]         `json:"objects"`
-		Memory  publicationField[domain.MemoryDigest] `json:"memory"`
-	}{
-		Objects: publicationField[objectsBody]{value: body.Objects},
-		Memory:  publicationField[domain.MemoryDigest]{value: body.Memory},
-	}
-	if err := json.Unmarshal(raw, &input); err != nil {
-		return err
-	}
-	body.Objects, body.Memory = input.Objects.value, input.Memory.value
-	return nil
-}

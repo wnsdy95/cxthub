@@ -3,97 +3,12 @@ package domain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
-
-func assertMappedAssemblyReplay(test *testing.T, input DocDisplayAssemblyInput, objects map[ContentHash][]byte, baseline DocFindDisplayText) {
-	test.Helper()
-	cursor := bytes.Clone(input.initial)
-	var output strings.Builder
-	for output.Len() < input.source.TextBytes {
-		loads := 0
-		page, next, err := input.read(context.Background(), cursor, DocDisplayPageTextBytes, DocDisplayPageRuns, func(_ context.Context, hash ContentHash) ([]byte, error) {
-			loads++
-			body, found := objects[hash]
-			if !found {
-				return nil, ErrNotFound
-			}
-			return body, nil
-		})
-		position, positionErr := input.cursor(next)
-		if err != nil || positionErr != nil || position != output.Len()+len(page.Text) || page.From != output.Len() || len(page.Text) == 0 || len(page.Text) > DocDisplayPageTextBytes || len(page.Runs) > DocDisplayPageRuns || loads > DocDisplayMappedReplayObjects {
-			test.Fatal("mapped replay failed to make bounded progress", position, len(page.Text), loads, err, positionErr)
-		}
-		for offset, character := range page.Text {
-			got, err := page.SourceRange(offset, utf8.RuneLen(character))
-			want, failure := baseline.SourceRange(page.From+offset, utf8.RuneLen(character))
-			if err != nil || failure != nil || got != want {
-				test.Fatal("mapped replay changed original JSON coordinates", offset, got, want, err, failure)
-			}
-		}
-		output.WriteString(page.Text)
-		cursor = next
-	}
-	if output.String() != baseline.Text() {
-		test.Fatal("mapped replay changed displayed text", output.String(), baseline.Text())
-	}
-}
-
-func TestDocDisplayAssemblyFactoriesPreserveRealTextAndOriginalCoordinates(test *testing.T) {
-	for _, token := range []string{
-		"\"# A  **\ud55c\uae00\\uD83D\\uDE42** [label](https://hidden.test)\"",
-		`"a\n\nb\n\n- \uD800\t**X**"`,
-		"\"```\\nraw\\r\\n**literal**\\n```\"",
-		`" \t\n\r "`,
-	} {
-		raw := []byte(`{"kind":"reasoning","opaque":"locked","redacted_summary":` + token + `}`)
-		fixture := buildDecodedMarkdownFixture(test, raw)
-		input, err := NewDocDecodedMarkdownAssemblyInput(fixture.plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		baseline, err := BuildDocEventDisplay(context.Background(), raw)
-		if err != nil {
-			test.Fatal(err)
-		}
-		assertMappedAssemblyReplay(test, input, fixture.decoded.objects, baseline)
-	}
-	for _, blocks := range []string{
-		`[{"text":"**first"},{},{"text":"last**"}]`,
-		"[{\"text\":\"```\"},{\"text\":\"**literal**\"},{},{\"text\":\"```\"}]",
-		"[{\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42**\"},{\"text\":\"a\\r\\nb\"}]",
-		`[{"text":"[label](https://hidden"},{"text":".test)"}]`,
-		`[]`,
-	} {
-		raw := []byte(`{"kind":"message","compact_summary":true,"blocks":` + blocks + `}`)
-		fixture := buildSummaryMarkdownFixture(test, raw)
-		input, err := NewDocSummaryMarkdownAssemblyInput(fixture.plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		baseline, err := BuildDocEventDisplay(context.Background(), raw)
-		if err != nil {
-			test.Fatal(err)
-		}
-		assertMappedAssemblyReplay(test, input, fixture.input.objects, baseline)
-	}
-	raw := []byte("{\"kind\":\"message\",\"blocks\":[{\"type\":\"image\",\"name\":\"**\ud55c\uae00🙂**\",\"text\":\"not displayed\"}]}")
-	plan, objects := messagePlaceholderFixture(test, raw)
-	input, err := NewDocMessagePlaceholderAssemblyInput(plan)
-	if err != nil {
-		test.Fatal(err)
-	}
-	baseline, err := BuildDocEventDisplay(context.Background(), raw)
-	if err != nil {
-		test.Fatal(err)
-	}
-	assertMappedAssemblyReplay(test, input, objects, baseline)
-}
 
 func TestDocDisplayMappedReplayEscapedInputUsesBoundedObjectLoads(test *testing.T) {
 	const count = 10000
@@ -182,29 +97,4 @@ func TestDocDisplayAssemblyFactoryRejectsForeignCursorAndCancelledMapping(test *
 	if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(page, DocDisplayPage{}) || next != nil {
 		test.Fatal("cancelled mapped replay exposed partial output", err)
 	}
-}
-
-func FuzzDocDisplayMappedReplaySourceParity(fuzz *testing.F) {
-	for _, source := range []string{"", "# **\ud55c\uae00🙂**", "a\n\nb", "[label](https://hidden)", "\u0000\r\t"} {
-		fuzz.Add(source)
-	}
-	fuzz.Fuzz(func(test *testing.T, source string) {
-		if len(source) > 2048 || !utf8.ValidString(source) {
-			test.Skip()
-		}
-		raw, err := json.Marshal(map[string]any{"kind": "reasoning", "redacted_summary": source, "opaque": "private"})
-		if err != nil {
-			test.Fatal(err)
-		}
-		fixture := buildDecodedMarkdownFixture(test, raw)
-		input, err := NewDocDecodedMarkdownAssemblyInput(fixture.plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		baseline, err := BuildDocEventDisplay(context.Background(), raw)
-		if err != nil {
-			test.Fatal(err)
-		}
-		assertMappedAssemblyReplay(test, input, fixture.decoded.objects, baseline)
-	})
 }

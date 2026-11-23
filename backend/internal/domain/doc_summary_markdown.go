@@ -89,21 +89,9 @@ type DocSummaryMarkdownFragment struct {
 	next    DocSummaryMarkdownCursor
 }
 
-func (fragment DocSummaryMarkdownFragment) Text() string { return fragment.display.Text() }
-func (fragment DocSummaryMarkdownFragment) From() int    { return fragment.display.From() }
+func (fragment DocSummaryMarkdownFragment) From() int { return fragment.display.From() }
 func (fragment DocSummaryMarkdownFragment) Next() DocSummaryMarkdownCursor {
 	return fragment.next
-}
-
-func (fragment DocSummaryMarkdownFragment) LocateSource(ctx context.Context, offset, length int, load func(context.Context, ContentHash) ([]byte, error)) (DocFindSpan, error) {
-	if err := ctx.Err(); err != nil {
-		return DocFindSpan{}, err
-	}
-	span, err := fragment.display.SourceRange(offset, length)
-	if err != nil {
-		return DocFindSpan{}, err
-	}
-	return LocateDocSummaryTextSource(ctx, fragment.input, span.From, span.To-span.From, load)
 }
 
 func ReadDocSummaryMarkdownFragment(ctx context.Context, plan DocSummaryMarkdownPlan, cursor DocSummaryMarkdownCursor, load func(context.Context, ContentHash) ([]byte, error)) (result DocSummaryMarkdownFragment, failure error) {

@@ -98,6 +98,10 @@ func NewAnchoredReadService(meta outbound.MetadataStore, blobs outbound.BlobStor
 
 var _ inbound.AnchoredQueries = (*AnchoredReadService)(nil)
 
+func (q *AnchoredReadService) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
+	return q.service.ListRepos(ctx, team)
+}
+
 func (q *AnchoredReadService) GetAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredSession, error) {
 	return q.service.GetAnchoredSession(ctx, repo, provider, sessionID)
 }

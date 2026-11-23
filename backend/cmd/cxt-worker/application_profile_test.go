@@ -126,17 +126,13 @@ func TestWave48WorkerArgvBothProfilesRequirePostgres(test *testing.T) {
 	}
 }
 
-func TestWave48WorkerArgvValidatesApplicationSelectionsAndProvidersBeforePostgres(test *testing.T) {
+func TestWave48WorkerArgvValidatesProvidersBeforePostgres(test *testing.T) {
 	for _, scenario := range []struct {
 		name     string
 		variable string
 		value    string
 		want     string
 	}{
-		{name: "pending projection", variable: "CXT_PENDING_PROJECTION_REPOS", value: "wave48-secret-not-a-hash", want: "CXT_PENDING_PROJECTION_REPOS"},
-		{name: "graph projection", variable: "CXT_GRAPH_PROJECTION_REPOS", value: "wave48-secret-not-a-hash", want: "CXT_GRAPH_PROJECTION_REPOS"},
-		{name: "graph qualification", variable: "CXT_GRAPH_SHADOW_REPOS", value: "wave48-secret-not-a-hash", want: "CXT_GRAPH_SHADOW_REPOS"},
-		{name: "memory preparation", variable: "CXT_MEMORY_PREPARATION_REPOS", value: "wave48-secret-not-a-hash", want: "CXT_MEMORY_PREPARATION_REPOS"},
 		{name: "partial GitHub", variable: "CXT_GITHUB_APP_CLIENT_SECRET", value: "wave48-secret-client", want: "GitHub"},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {

@@ -50,17 +50,13 @@ func TestCommitCancellationStopsChunkValidationBeforePublication(t *testing.T) {
 	spy := &cancelChunkRead{BlobStore: st, cancel: cancel}
 	svc.blobs = spy
 	out, err := svc.Commit(ctx, inbound.CommitInput{RepoID: repo,
-		Snapshots:   []domain.Snapshot{{ID: hash, RepoID: repo, DocHash: hash, Branch: "main"}},
 		ChunkedDocs: []inbound.ChunkedDoc{{Hash: hash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},
 	})
-	if !errors.Is(err, context.Canceled) || spy.reads != 1 || out.StoredDocs != 0 || out.StoredSnapshots != 0 {
+	if !errors.Is(err, context.Canceled) || spy.reads != 1 || out.StoredDocs != 0 {
 		t.Fatalf("canceled finalization: reads=%d out=%+v err=%v", spy.reads, out, err)
 	}
 	if _, err := st.GetDoc(systemTestContext(), repo, hash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("document published: %v", err)
-	}
-	if _, err := st.GetSnapshot(systemTestContext(), repo, hash); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("snapshot published: %v", err)
 	}
 }
 
@@ -77,112 +73,6 @@ func TestCommitAlreadyCanceledHasNoSuccessfulReceipt(t *testing.T) {
 
 func wireChunk(body []byte) inbound.ChunkObject {
 	return inbound.ChunkObject{Hash: domain.HashContent(body), Data: body}
-}
-
-func TestBoundedChunkStorePullAndRepoScope(t *testing.T) {
-	svc, st := newFsckSvc(t)
-	ctx := systemTestContext()
-	repo := hh("bounded-chunks-repo")
-	otherRepo := hh("bounded-chunks-other-repo")
-	bindCommitTestRepo(t, st, repo)
-	bindCommitTestRepo(t, st, otherRepo)
-
-	// Five 700 KiB chunks force the pull response to stop at the 2 MiB raw limit.
-	chunks := make([]inbound.ChunkObject, 0, 5)
-	for i := byte(1); i <= 5; i++ {
-		chunks = append(chunks, wireChunk(bytes.Repeat([]byte{i}, 700<<10)))
-	}
-	first, err := svc.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: chunks[:2]})
-	if err != nil || first.Stored != 2 || first.Deduped != 0 {
-		t.Fatalf("first StoreChunks = %+v, err=%v", first, err)
-	}
-	second, err := svc.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: chunks[2:4]})
-	if err != nil || second.Stored != 2 || second.Deduped != 0 {
-		t.Fatalf("second StoreChunks = %+v, err=%v", second, err)
-	}
-	third, err := svc.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: chunks[4:]})
-	if err != nil || third.Stored != 1 || third.Deduped != 0 {
-		t.Fatalf("third StoreChunks = %+v, err=%v", third, err)
-	}
-	dedup, err := svc.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: chunks[:2]})
-	if err != nil || dedup.Stored != 0 || dedup.Deduped != 2 {
-		t.Fatalf("dedup StoreChunks = %+v, err=%v", dedup, err)
-	}
-
-	wants := make([]domain.ContentHash, 0, len(chunks))
-	for _, chunk := range chunks {
-		wants = append(wants, chunk.Hash)
-	}
-	pulled, err := svc.PullChunks(ctx, inbound.PullChunksInput{RepoID: repo, Wants: wants})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pulled.ChunkObjects) != 2 {
-		t.Fatalf("bounded prefix count = %d, want 2", len(pulled.ChunkObjects))
-	}
-	for i, got := range pulled.ChunkObjects {
-		if got.Hash != wants[i] || !bytes.Equal(got.Data, chunks[i].Data) {
-			t.Fatalf("chunk[%d] did not preserve requested prefix/order", i)
-		}
-	}
-	if _, err := svc.PullChunks(ctx, inbound.PullChunksInput{RepoID: otherRepo, Wants: wants[:1]}); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("cross-repo PullChunks err=%v, want ErrNotFound", err)
-	}
-
-	neg, err := svc.Negotiate(ctx, inbound.PushNegotiateInput{RepoID: repo, ChunkHaves: wants})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !neg.ChunksSupported || !neg.BoundedChunksSupported || len(neg.ChunkWants) != 0 ||
-		!containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV1) || !containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV2) ||
-		!containsString(neg.CIRVersionsSupported, domain.CIRVersionV1) || !containsString(neg.CIRVersionsSupported, domain.CIRVersionV2) {
-		t.Fatalf("negotiate after staging = %+v", neg)
-	}
-}
-
-func TestPullCIRV2RequiresExplicitClientCapability(t *testing.T) {
-	svc, st := newFsckSvc(t)
-	ctx := systemTestContext()
-	repo := hh("cir-v2-pull-capability")
-	bindCommitTestRepo(t, st, repo)
-	cir := domain.CIRDocument{
-		Envelope: domain.CIREnvelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex},
-		Events:   []domain.CIREvent{{Kind: domain.EventCompaction, Replacement: []domain.CIREvent{}, ReplacementComplete: true}},
-	}
-	canonical, err := domain.CanonicalBytes(cir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash := domain.HashContent(canonical)
-	if _, err := st.PutDoc(ctx, repo, domain.SessionDoc{Hash: hash, CIR: cir}); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, input := range []inbound.PullSendInput{
-		{RepoID: repo, DocWants: []domain.ContentHash{hash}},
-		{RepoID: repo, DocManifestWants: []domain.ContentHash{hash}},
-	} {
-		if _, err := svc.Send(ctx, input); !errors.Is(err, domain.ErrUnsupportedCIRVersion) {
-			t.Fatalf("legacy pull input=%+v error=%v", input, err)
-		}
-	}
-	out, err := svc.Send(ctx, inbound.PullSendInput{
-		RepoID: repo, DocManifestWants: []domain.ContentHash{hash},
-		ChunkFormatsSupported: []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
-		CIRVersionsSupported:  domain.SupportedCIRVersions(),
-	})
-	if err != nil || len(out.DocManifests)+len(out.Docs) != 1 {
-		t.Fatalf("capable CIR v2 pull = %+v, err=%v", out, err)
-	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestBoundedChunkStoreRejectsInvalidBatchBeforeWriting(t *testing.T) {
@@ -207,87 +97,5 @@ func TestBoundedChunkStoreRejectsInvalidBatchBeforeWriting(t *testing.T) {
 	oversizedBody := bytes.Repeat([]byte{'x'}, inbound.MaxChunkWireRawBytes+1)
 	if _, err := svc.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: []inbound.ChunkObject{wireChunk(oversizedBody)}}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("oversized chunk err=%v, want ErrValidation", err)
-	}
-}
-
-func TestCommitUsesPreviouslyStagedChunks(t *testing.T) {
-	svc, st := newFsckSvc(t)
-	ctx := systemTestContext()
-	repo := hh("bounded-chunks-commit-repo")
-	bindCommitTestRepo(t, st, repo)
-
-	cir := domain.CIRDocument{
-		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, Fidelity: domain.FidelityFull, GitBranch: "main"},
-	}
-	for i := 0; i < 3; i++ {
-		cir.Events = append(cir.Events, domain.CIREvent{
-			Kind: domain.EventMessage, Seq: i, Role: domain.RoleUser,
-			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat(string(rune('a'+i)), 600<<10)}},
-		})
-	}
-	canonical, err := domain.CanonicalBytes(cir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	docHash := domain.HashContent(canonical)
-	plan, ok := domain.PlanDocChunks(canonical)
-	if !ok || len(plan.Order) < 2 {
-		t.Fatalf("expected multi-chunk plan, ok=%v chunks=%d", ok, len(plan.Order))
-	}
-	objects := make([]inbound.ChunkObject, 0, len(plan.Order))
-	for _, hash := range plan.Order {
-		objects = append(objects, inbound.ChunkObject{Hash: hash, Data: plan.Bodies[hash]})
-	}
-	if _, err := svc.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: objects}); err != nil {
-		t.Fatalf("stage chunks: %v", err)
-	}
-
-	out, err := svc.Commit(ctx, inbound.CommitInput{
-		RepoID: repo,
-		Snapshots: []domain.Snapshot{{
-			ID: docHash, RepoID: repo, Branch: "main", DocHash: docHash,
-			Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull,
-		}},
-		ChunkedDocs: []inbound.ChunkedDoc{{Hash: docHash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},
-	})
-	if err != nil {
-		t.Fatalf("commit staged manifest: %v", err)
-	}
-	if out.StoredDocs != 1 || out.StoredSnapshots != 1 {
-		t.Fatalf("commit result = %+v", out)
-	}
-	got, err := st.GetDoc(ctx, repo, docHash)
-	if err != nil || len(got.CIR.Events) != len(cir.Events) {
-		t.Fatalf("staged doc roundtrip events=%d err=%v", len(got.CIR.Events), err)
-	}
-	legacyPull, err := svc.Send(ctx, inbound.PullSendInput{RepoID: repo, DocManifestWants: []domain.ContentHash{docHash}})
-	if err != nil || len(legacyPull.Docs) != 1 || len(legacyPull.DocManifests) != 0 {
-		t.Fatalf("legacy pull projection=%+v err=%v", legacyPull, err)
-	}
-}
-
-func TestPullOversizedEventRequiresExplicitV2Capability(t *testing.T) {
-	svc, st := newFsckSvc(t)
-	ctx := systemTestContext()
-	repo := hh("v2-capability-repo")
-	bindCommitTestRepo(t, st, repo)
-	cir := domain.CIRDocument{
-		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex},
-		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser,
-			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", domain.MaxPortableChunkBytes+1)}}}},
-	}
-	canonical, _ := domain.CanonicalBytes(cir)
-	hash := domain.HashContent(canonical)
-	if _, err := st.PutDoc(ctx, repo, domain.SessionDoc{Hash: hash, CIR: cir}); err != nil {
-		t.Fatal(err)
-	}
-
-	legacy, err := svc.Send(ctx, inbound.PullSendInput{RepoID: repo, DocManifestWants: []domain.ContentHash{hash}})
-	if err != nil || len(legacy.Docs) != 1 || len(legacy.DocManifests) != 0 {
-		t.Fatalf("legacy oversized response docs=%d manifests=%d err=%v", len(legacy.Docs), len(legacy.DocManifests), err)
-	}
-	v2, err := svc.Send(ctx, inbound.PullSendInput{RepoID: repo, DocManifestWants: []domain.ContentHash{hash}, ChunkFormatsSupported: []string{domain.ChunkFormatV1, domain.ChunkFormatV2}})
-	if err != nil || len(v2.DocManifests) != 1 || v2.DocManifests[0].Format != domain.ChunkFormatV2 || len(v2.Docs) != 0 {
-		t.Fatalf("v2 oversized response=%+v err=%v", v2, err)
 	}
 }

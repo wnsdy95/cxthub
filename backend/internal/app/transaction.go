@@ -15,12 +15,6 @@ func (service *Service) repositoryWork() *repositoryWork {
 func evidenceWriteContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, revisionScopeKey{}, "evidence")
 }
-func pendingWriteContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, revisionScopeKey{}, "pending")
-}
-func revisionWrite(ctx context.Context, service *Service, repo domain.ContentHash) error {
-	return service.repositoryWork().revisionWrite(ctx, repo)
-}
 
 type afterCommitKey struct{}
 type afterCommitActions struct{ actions []func() }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -534,49 +533,5 @@ func TestDocToolTextAssemblyCancellationFaultsAndAliases(test *testing.T) {
 	again, cursor, err := input.read(context.Background(), initial, 4, 1, load)
 	if err != nil || !reflect.DeepEqual(again, wantPage) || !bytes.Equal(cursor, wantNext) {
 		test.Fatal("assembly retained a mutable input, page, or cursor alias", err)
-	}
-}
-
-func TestDocToolTextAssemblyIntegratesWithSharedAssembler(test *testing.T) {
-	for _, token := range []string{`""`, `"abc"`, `"a🙂"`, `"` + strings.Repeat(`\u0061\ud83d\ude42\n`, 400) + `"`} {
-		fixture := newDocToolTextAssemblyFixture(test, token)
-		for _, skip := range []int{0, fixture.generation.TextBytes} {
-			test.Run(fmt.Sprintf("bytes-%d-skip-%d", fixture.generation.TextBytes, skip), func(test *testing.T) {
-				input, err := newDocToolDecodedAssemblyInput(fixture.generation, skip)
-				if err != nil {
-					test.Fatal(err)
-				}
-				assembled := assembleDisplayFixture(test, input, fixture.objects)
-				actual := assembledFixturePages(test, assembled, func(page DocDisplayPage) {
-					for offset, character := range page.Text {
-						span, err := page.SourceRange(offset, utf8.RuneLen(character))
-						want := docToolTextAssemblyOriginalSpan(test, fixture, skip+page.From+offset, utf8.RuneLen(character))
-						if err != nil || span != want {
-							test.Fatal("shared assembler changed original spans", span, want, err)
-						}
-					}
-				})
-				var expected string
-				if json.Unmarshal([]byte(token), &expected) != nil || actual != expected[skip:] {
-					test.Fatal("shared assembler changed decoded text")
-				}
-			})
-		}
-	}
-	event := HashContent([]byte("literal assembly"))
-	anchor := DocFindSpan{From: 3, To: 6}
-	input, err := newDocToolLiteralAssemblyInput(event, 10, " / ", anchor)
-	if err != nil {
-		test.Fatal(err)
-	}
-	assembled := assembleDisplayFixture(test, input, make(map[ContentHash][]byte))
-	actual := assembledFixturePages(test, assembled, func(page DocDisplayPage) {
-		span, err := page.SourceRange(0, len(page.Text))
-		if err != nil || span != anchor {
-			test.Fatal("shared assembler changed literal anchor", span, err)
-		}
-	})
-	if actual != " / " {
-		test.Fatal("shared assembler changed literal")
 	}
 }

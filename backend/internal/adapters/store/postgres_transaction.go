@@ -74,7 +74,6 @@ func (foreignTransactionDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, err
 var _ outbound.RepositoryTransactions = (*PostgresStore)(nil)
 var _ outbound.RepositoryTransactionState = (*PostgresStore)(nil)
 var _ outbound.RepositoryTransactionPresence = (*PostgresStore)(nil)
-var _ outbound.PRJobFence = (*PostgresStore)(nil)
 
 func (s *PostgresStore) InReadOnlyTransaction(ctx context.Context) bool {
 	tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
@@ -156,23 +155,6 @@ func (s *PostgresStore) WithinReadSnapshot(ctx context.Context, fn func(context.
 		return err
 	}
 	return tx.Commit(ctx)
-}
-
-func (s *PostgresStore) FencePRJob(ctx context.Context, j domain.PRPromotionJob) error {
-	tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
-	if !ok || tx.owner != s || tx.repo != j.RepoID || tx.readOnly {
-		return domain.ErrConflict
-	}
-	var valid bool
-	err := tx.QueryRow(ctx, `SELECT state='running' AND version=$3 AND lease_until>clock_timestamp()
- FROM pr_promotion_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID, j.Version).Scan(&valid)
-	if err != nil {
-		return mapNoRows(err)
-	}
-	if !valid {
-		return domain.ErrRefConflict
-	}
-	return nil
 }
 
 func (s *PostgresStore) CompareAndSwapSecrets(ctx context.Context, repo domain.ContentHash, expected, next []byte) error {

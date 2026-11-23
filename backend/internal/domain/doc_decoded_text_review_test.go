@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -439,63 +438,6 @@ func TestDocDecodedMarkdownReviewCompositeCursorBindingBeforeIO(test *testing.T)
 				test.Fatal("composite cursor crossed source/plan bindings", err)
 			}
 		})
-	}
-}
-
-func TestDocDecodedMarkdownReviewCancellationDiscardsFragmentAndSpan(test *testing.T) {
-	fixture := buildDecodedMarkdownFixture(test, []byte(`{"kind":"reasoning","redacted_summary":"**a\uD83D\uDE42** [label](https://hidden)"}`))
-	cursor, err := NewDocDecodedMarkdownCursor(fixture.plan)
-	if err != nil {
-		test.Fatal(err)
-	}
-	load := func(_ context.Context, hash ContentHash) ([]byte, error) { return fixture.decoded.objects[hash], nil }
-	fragment, err := ReadDocDecodedMarkdownFragment(context.Background(), fixture.plan, cursor, load)
-	if err != nil {
-		test.Fatal(err)
-	}
-	operations := map[string]func(context.Context, func(context.Context, ContentHash) ([]byte, error)) (bool, error){
-		"fragment": func(ctx context.Context, load func(context.Context, ContentHash) ([]byte, error)) (bool, error) {
-			actual, err := ReadDocDecodedMarkdownFragment(ctx, fixture.plan, cursor, load)
-			return reflect.DeepEqual(actual, DocDecodedMarkdownFragment{}), err
-		},
-		"span": func(ctx context.Context, load func(context.Context, ContentHash) ([]byte, error)) (bool, error) {
-			actual, err := fragment.LocateSource(ctx, 0, len(fragment.Text()), load)
-			return actual == (DocFindSpan{}), err
-		},
-	}
-	for name, operation := range operations {
-		test.Run(name, func(test *testing.T) {
-			calls := 0
-			if _, err := operation(context.Background(), func(ctx context.Context, hash ContentHash) ([]byte, error) {
-				calls++
-				return load(ctx, hash)
-			}); err != nil || calls == 0 {
-				test.Fatal("review operation did not exercise prepared objects", calls, err)
-			}
-			for failAt := 1; failAt <= calls; failAt++ {
-				ctx, cancel := context.WithCancel(context.Background())
-				count := 0
-				zero, err := operation(ctx, func(ctx context.Context, hash ContentHash) ([]byte, error) {
-					count++
-					if count == failAt {
-						cancel()
-					}
-					return load(ctx, hash)
-				})
-				cancel()
-				if !zero || !errors.Is(err, context.Canceled) {
-					test.Fatal("canceled composite operation leaked output", failAt, zero, err)
-				}
-			}
-		})
-	}
-	encoded, err := json.Marshal(cursor)
-	if err != nil {
-		test.Fatal(err)
-	}
-	var restored DocDecodedMarkdownCursor
-	if err := json.Unmarshal(encoded, &restored); err != nil || restored != cursor {
-		test.Fatal("composite cursor JSON round trip changed its bindings", err)
 	}
 }
 

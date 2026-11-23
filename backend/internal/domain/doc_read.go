@@ -26,16 +26,6 @@ type DocEventIndex struct {
 	Text   string      `json:"text,omitempty"`
 }
 
-type DocEventPage struct {
-	Hash      ContentHash `json:"hash"`
-	Envelope  CIREnvelope `json:"envelope"`
-	Events    []CIREvent  `json:"events"`
-	Total     int         `json:"total"`
-	Offset    int         `json:"offset"`
-	Next      int         `json:"next"` // -1 means exhausted
-	Inherited int         `json:"inherited"`
-}
-
 func SearchableEventText(e CIREvent) string {
 	if e.Kind == EventReasoning {
 		return e.RedactedSummary

@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
-	"unicode/utf8"
 )
 
 const docToolPolicyReviewMaxSteps = 2048
@@ -23,60 +20,6 @@ func docToolPolicyReviewJSON(test *testing.T, value any) []byte {
 		test.Fatal(err)
 	}
 	return raw
-}
-
-func docToolPolicyReviewLocalNode(test *testing.T, sources []string) []string {
-	test.Helper()
-	node, err := exec.LookPath("node")
-	if err != nil {
-		test.Skip("local Node is unavailable; no external oracle is downloaded")
-	}
-	const script = `
-const fs = require('node:fs');
-const sources = JSON.parse(fs.readFileSync(0, 'utf8'));
-const text = value => typeof value === 'string' ? value : '';
-const diff = (value, prefix) => text(value).split('\n').map(line => prefix + line).join('\n');
-const rendered = sources.map(source => {
-  const event = JSON.parse(source);
-  if (event.kind === 'tool_result') {
-    const output = typeof event.output === 'string' ? event.output : event.output != null ? JSON.stringify(event.output, null, 2) : '';
-    return output.trim() ? output : '';
-  }
-  if (event.kind !== 'tool_call') throw new Error('not a tool call');
-  const name = event.provider_tool_name || event.tool_name || 'tool';
-  const input = event.input ?? {};
-  const path = text(input.file_path);
-  const head = path ? (path.split('/').length > 4 ? '…/' + path.split('/').slice(-3).join('/') : path) : text(input.command) || text(input.pattern) || text(input.url);
-  let output = name + (head ? '(' + head + ')' : '');
-  if (name === 'Edit' && (input.old_string || input.new_string)) {
-    if (text(input.old_string)) output += '\n' + diff(input.old_string, '− ');
-    if (text(input.new_string)) output += '\n' + diff(input.new_string, '+ ');
-  } else if (name === 'Write' && input.content) {
-    output += '\n' + diff(input.content, '+ ');
-  } else if (name === 'Bash' && input.command) {
-    output += '\n$ ' + text(input.command);
-  } else if (Object.keys(input).length) {
-    output += '\n' + JSON.stringify(input, null, 2);
-  }
-  return output;
-});
-process.stdout.write(JSON.stringify(rendered));
-`
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, node, "-e", script)
-	command.Stdin = bytes.NewReader(docToolPolicyReviewJSON(test, sources))
-	var diagnostic bytes.Buffer
-	command.Stderr = &diagnostic
-	raw, err := command.Output()
-	if err != nil {
-		test.Fatalf("local Node oracle failed: %v; %s", err, diagnostic.String())
-	}
-	var rendered []string
-	if json.Unmarshal(raw, &rendered) != nil || len(rendered) != len(sources) {
-		test.Fatal("invalid local Node oracle response")
-	}
-	return rendered
 }
 
 func docToolPolicyReviewFinish(test *testing.T, fixture *docToolPolicyFixture) DocDisplayProjectionGeneration {
@@ -94,138 +37,6 @@ func docToolPolicyReviewFinish(test *testing.T, fixture *docToolPolicyFixture) D
 	return generation
 }
 
-func docToolPolicyReviewCheck(test *testing.T, fixture *docToolPolicyFixture, generation DocDisplayProjectionGeneration, expected string, everyRune bool) {
-	test.Helper()
-	oracle, err := BuildDocToolDisplay(context.Background(), fixture.raw)
-	if err != nil {
-		test.Fatal("small source-span oracle unavailable", err)
-	}
-	if oracle.Text() != expected {
-		test.Fatalf("local Node and small oracle differ: source=%s bytes=%d got=%q want=%q", HashContent(fixture.raw), len(fixture.raw), oracle.Text(), expected)
-	}
-	var output strings.Builder
-	for index := 0; index < generation.Pages.Count; index++ {
-		page, err := ReadDocDisplayProjectionPage(context.Background(), generation, index, fixture.load)
-		if err != nil || page.From != output.Len() || page.ValidateProjection(generation.Source) != nil {
-			test.Fatal("invalid policy display page", index, err)
-		}
-		for offset, character := range page.Text {
-			if !everyRune && offset != 0 && offset%127 != 0 && offset+utf8.RuneLen(character) != len(page.Text) {
-				continue
-			}
-			width := utf8.RuneLen(character)
-			for _, length := range []int{width, min(len(page.Text)-offset, width+17)} {
-				for length > width && offset+length < len(page.Text) && !utf8.RuneStart(page.Text[offset+length]) {
-					length--
-				}
-				got, err := page.SourceRange(offset, length)
-				want, failure := oracle.SourceRange(page.From+offset, length)
-				if err != nil || failure != nil || got != want {
-					test.Fatalf("policy source span changed: source=%s page=%d offset=%d length=%d got=%v want=%v read=%v oracle=%v", HashContent(fixture.raw), index, offset, length, got, want, err, failure)
-				}
-			}
-		}
-		output.WriteString(page.Text)
-	}
-	if output.String() != expected {
-		test.Fatalf("actual policy differs from Node: source=%s bytes=%d got=%q want=%q", HashContent(fixture.raw), len(fixture.raw), output.String(), expected)
-	}
-	if generation.Pages.Count > 1 {
-		loads := 0
-		last, err := ReadDocDisplayProjectionPage(context.Background(), generation, generation.Pages.Count-1, func(ctx context.Context, hash ContentHash) ([]byte, error) {
-			loads++
-			return fixture.load(ctx, hash)
-		})
-		if err != nil || last.Text == "" || loads > docRangeGenerationDepth(generation.Pages.Count)+1 {
-			test.Fatal("late published page replayed a prefix", loads, err)
-		}
-	}
-}
-
-func docToolPolicyReviewPagedInput(name string) string {
-	var fields []string
-	for index := 0; index < 135; index++ {
-		switch index {
-		case 62:
-			fields = append(fields, `"file_path":"stale/path"`)
-		case 63:
-			fields = append(fields, `"command":"stale command"`)
-		case 90:
-			fields = append(fields, `"pattern":"stale pattern","url":"stale url"`)
-		case 126:
-			fields = append(fields, `"old_string":"stale old"`)
-		case 127:
-			fields = append(fields, `"new_string":"stale new"`)
-		case 128:
-			fields = append(fields, `"content":"stale content"`)
-		}
-		fields = append(fields, fmt.Sprintf(`"f%03d":%d`, index, index))
-	}
-	fields = append(fields,
-		`"\u0066ile_path":"/discard/a/b/\uD55C\uD83D\uDE42"`,
-		`"\u0063ommand":"printf '\uAC00'\r\nlast"`,
-		`"\u0070attern":"final pattern","\u0075rl":"https://local.invalid/final"`,
-		`"\u006fld_string":"old\r\n\uD83D\uDE42\n"`,
-		`"\u006eew_string":"new\n\uAC00\r"`,
-		`"\u0063ontent":"written\n\uD83D\uDE42\n"`)
-	return `{"kind":"tool_call","tool_name":"` + name + `","input":{` + strings.Join(fields, ",") + `}}`
-}
-
-func TestDocToolPolicyReviewEscapedDuplicateKeysAcrossRootPages(test *testing.T) {
-	names := []string{"Edit", "Write", "Bash", "Read"}
-	sources := make([]string, len(names))
-	for index, name := range names {
-		sources[index] = docToolPolicyReviewPagedInput(name)
-	}
-	expected := docToolPolicyReviewLocalNode(test, sources)
-	for index, name := range names {
-		test.Run(name, func(test *testing.T) {
-			fixture := newDocToolPolicyFixture(test, sources[index])
-			generation := docToolPolicyReviewFinish(test, fixture)
-			docToolPolicyReviewCheck(test, fixture, generation, expected[index], true)
-			pages := 0
-			for _, previous := range fixture.steps {
-				if previous.Phase != "tool_policy" {
-					continue
-				}
-				state, err := decodeDocToolPolicyState(previous.Active, fixture.objects[previous.Active])
-				if err != nil {
-					test.Fatal(err)
-				}
-				pages = max(pages, state.Page)
-			}
-			if pages < 3 {
-				test.Fatal("known-key selection did not cross three 64-entry pages", pages)
-			}
-			test.Logf("source=%s root_pages=%d saved_steps=%d displayed_bytes=%d", HashContent(fixture.raw), pages, len(fixture.steps), generation.Source.TextBytes)
-		})
-	}
-}
-
-func TestDocToolPolicyReviewNodeNumericAndNonstringTruth(test *testing.T) {
-	values := []string{`-0`, `1e-9999`, `1e9999`, `-1e9999`, `5e-324`, `false`, `null`, `[]`, `{}`, `""`, `"\u0000"`}
-	var sources, labels []string
-	for _, name := range []string{"Edit", "Write", "Bash"} {
-		for _, value := range values {
-			field := `"old_string":` + value + `,"new_string":""`
-			if name == "Write" {
-				field = `"content":` + value
-			} else if name == "Bash" {
-				field = `"command":` + value + `,"pattern":"fallback"`
-			}
-			sources = append(sources, `{"kind":"tool_call","tool_name":"`+name+`","input":{`+field+`}}`)
-			labels = append(labels, name+"/"+value)
-		}
-	}
-	expected := docToolPolicyReviewLocalNode(test, sources)
-	for index, label := range labels {
-		test.Run(label, func(test *testing.T) {
-			fixture := newDocToolPolicyFixture(test, sources[index])
-			docToolPolicyReviewCheck(test, fixture, docToolPolicyReviewFinish(test, fixture), expected[index], true)
-		})
-	}
-}
-
 func docToolPolicyReviewLargeSources() []string {
 	name := strings.Repeat(`\u004e`, 7000) + `\uD83D\uDE42`
 	path := `/` + strings.Repeat(`\u0061`, 13000) + `/discard//\uD55C/last/`
@@ -238,46 +49,6 @@ func docToolPolicyReviewLargeSources() []string {
 		`{"kind":"tool_call","tool_name":"Bash","input":{"file_path":false,"command":"` + strings.Repeat(`echo \uAC00\n`, 900) + `"}}`,
 		`{"kind":"tool_call","tool_name":"Deep","input":{"payload":` + deep + `,"text":"` + strings.Repeat(`\u0061`, 12000) + `"}}`,
 		`{"kind":"tool_call","tool_name":"Bash","input":{"command":1e-` + strings.Repeat("0", DocToolNumberStepSourceBytes+31) + `9999,"pattern":"fallback"}}`,
-	}
-}
-
-func TestDocToolPolicyReviewLargeHeadersDeepRestartAndNoRawAssembly(test *testing.T) {
-	sources := docToolPolicyReviewLargeSources()
-	names := []string{"large-name-path", "Edit", "Write", "Bash", "deep-value", "saved-number-underflow"}
-	expected := docToolPolicyReviewLocalNode(test, sources)
-	for index, name := range names {
-		test.Run(name, func(test *testing.T) {
-			fixture := newDocToolPolicyFixture(test, sources[index])
-			generation := docToolPolicyReviewFinish(test, fixture)
-			docToolPolicyReviewCheck(test, fixture, generation, expected[index], false)
-			assembly, partialHeader, partialNumber := 0, false, false
-			maxControl, maxPolicy := 0, 0
-			for _, previous := range fixture.steps {
-				raw, err := previous.Encode()
-				if err != nil || len(raw) > MaxDocEventDisplayPreparationBytes {
-					test.Fatal("saved outer control exceeded its bound", err)
-				}
-				maxControl = max(maxControl, len(raw))
-				if previous.Phase == "tool_event_assembly" {
-					assembly++
-				}
-				if previous.Phase != "tool_policy" {
-					continue
-				}
-				body := fixture.objects[previous.Active]
-				state, err := decodeDocToolPolicyState(previous.Active, body)
-				if err != nil || bytes.Contains(body, []byte("GENERIC_BODY_MARKER")) || bytes.Contains(body, []byte(strings.Repeat("a", 100))) {
-					test.Fatal("saved policy retained rendered text or failed to restore", err)
-				}
-				maxPolicy = max(maxPolicy, len(body))
-				partialHeader = partialHeader || (state.Phase == "name" || state.Phase == "head") && state.Stats != nil && state.Stats.Bytes > 0 && state.Active != ""
-				partialNumber = partialNumber || state.Phase == "truth" && state.Active != ""
-			}
-			if assembly == 0 || index < 3 && !partialHeader || name == "saved-number-underflow" && !partialNumber {
-				test.Fatal("fixture missed its saved assembly/header/number checkpoints", assembly, partialHeader, partialNumber)
-			}
-			test.Logf("source=%s event_bytes=%d displayed_bytes=%d steps=%d pages=%d assembly_steps=%d max_control=%d max_policy=%d", HashContent(fixture.raw), len(fixture.raw), generation.Source.TextBytes, len(fixture.steps), generation.Pages.Count, assembly, maxControl, maxPolicy)
-		})
 	}
 }
 

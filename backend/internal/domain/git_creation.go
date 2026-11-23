@@ -79,27 +79,6 @@ func ValidateGitCreation(e HistoryEvent) error {
 	return nil
 }
 
-// A delayed upload may refer to an old name; resolve against retained events,
-// never today's mutable name binding. Legacy identities remain explicit.
-func ValidateCreationOrigin(history []HistoryEvent, e HistoryEvent) error {
-	c := e.Creation
-	if c == nil || c.OriginBranchID == "" {
-		return nil
-	}
-	if e.Kind != "attach" && c.OriginBranchID == e.BranchID {
-		return fmt.Errorf("branch cannot be its own creation origin")
-	}
-	if c.OriginBranchID == LegacyContextBranchID(e.RepoID, c.OriginBranch) {
-		return nil
-	}
-	for _, prior := range history {
-		if prior.RepoID == e.RepoID && prior.BranchID == c.OriginBranchID && (prior.Branch == c.OriginBranch || (prior.Kind == "rename" && prior.PreviousBranch == c.OriginBranch)) {
-			return nil
-		}
-	}
-	return fmt.Errorf("creation origin identity has no retained branch evidence")
-}
-
 // Validate the recorded command independently from the capture adapter. A
 // mismatched named start or target cannot masquerade as a valid checkpoint.
 func validateCreationCommand(e HistoryEvent) error {

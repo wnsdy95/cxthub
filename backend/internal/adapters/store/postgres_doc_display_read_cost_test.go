@@ -8,10 +8,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -112,80 +110,3 @@ func (trace *docDisplayReadCostTrace) TraceQueryStart(ctx context.Context, _ *pg
 }
 
 func (*docDisplayReadCostTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-func TestDocDisplayReadPGBoundedFreshRows(test *testing.T) {
-	fixture := docDisplayPG(test)
-	fixture.enqueue(test, 0)
-	job := fixture.claim(test)
-	prepared := fixture.done(test, job)
-	trace := &docDisplayReadCostTrace{}
-	config := fixture.storage.pool.Config()
-	config.ConnConfig.Tracer = trace
-	pool, err := pgxpool.NewWithConfig(fixture.ctx, config)
-	if err != nil {
-		test.Fatal(err)
-	}
-	defer pool.Close()
-	reader := &PostgresStore{pool: pool}
-	if err := reader.WithinReadSnapshot(fixture.ctx, func(ctx context.Context) error {
-		generation, err := reader.ReadDocDisplayGeneration(ctx, job.Target)
-		if !errors.Is(err, domain.ErrNotFound) || generation != (domain.DocDisplayStringGeneration{}) {
-			test.Fatal("missing generation changed its not-found classification", generation, err)
-		}
-		return nil
-	}); err != nil {
-		test.Fatal(err)
-	}
-	if err := fixture.storage.CompleteDocDisplay(fixture.ctx, job, prepared.Checkpoint, time.Now()); err != nil {
-		test.Fatal(err)
-	}
-	for repeat := 0; repeat < 2; repeat++ {
-		*trace = docDisplayReadCostTrace{}
-		if err := reader.WithinReadSnapshot(fixture.ctx, func(ctx context.Context) error {
-			page, err := reader.ReadDocDisplayPage(ctx, job.Target, 0)
-			if err != nil || page.Index != 0 || page.From != 0 || page.Text == "" {
-				test.Fatal("fresh page read failed", page, err)
-			}
-			return nil
-		}); err != nil {
-			test.Fatal(err)
-		}
-		if trace.settings != 1 || trace.joined != 1 || trace.separate != 0 || !trace.bounded {
-			test.Fatal("page read repeated proof queries, reused prior transaction rows or lost byte caps", repeat, *trace)
-		}
-	}
-	if _, err := fixture.storage.pool.Exec(fixture.ctx, `UPDATE doc_display_sources_v1 SET bytes=set_byte(bytes,0,91) WHERE source_hash=$1`, prepared.State.Source); err != nil {
-		test.Fatal(err)
-	}
-	if err := reader.WithinReadSnapshot(fixture.ctx, func(ctx context.Context) error {
-		page, err := reader.ReadDocDisplayPage(ctx, job.Target, 0)
-		if !errors.Is(err, domain.ErrIntegrity) || page.Text != "" || page.Runs != nil {
-			test.Fatal("a previous successful transaction hid current source corruption", page, err)
-		}
-		return nil
-	}); err != nil {
-		test.Fatal(err)
-	}
-}
-
-func TestDocDisplayReadPGActualTransactionSettings(test *testing.T) {
-	fixture := docDisplayPG(test)
-	for _, options := range []pgx.TxOptions{
-		{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
-		{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadWrite},
-		{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
-	} {
-		test.Run(string(options.IsoLevel)+"/"+string(options.AccessMode), func(test *testing.T) {
-			transaction, err := fixture.storage.pool.BeginTx(fixture.ctx, options)
-			if err != nil {
-				test.Fatal(err)
-			}
-			defer rollbackPG(transaction)
-			ctx := context.WithValue(fixture.ctx, repositoryTxKey{}, &repositoryTx{Tx: transaction, owner: fixture.storage, readOnly: true})
-			generation, err := fixture.storage.ReadDocDisplayGeneration(ctx, fixture.targets[0])
-			if !errors.Is(err, domain.ErrConflict) || generation != (domain.DocDisplayStringGeneration{}) {
-				test.Fatal("actual transaction settings were replaced by the caller's readOnly flag", generation, err)
-			}
-		})
-	}
-}

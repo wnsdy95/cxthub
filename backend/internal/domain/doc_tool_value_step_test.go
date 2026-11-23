@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type docToolValueFixture struct {
@@ -131,46 +129,6 @@ func readDocToolValueTestPages(test testing.TB, fixture *docToolValueFixture, pl
 		pages = append(pages, page)
 	}
 	return text.String(), pages
-}
-
-func TestDocToolValueNestedParityAndRestart(test *testing.T) {
-	for _, value := range []string{`{}`, `[]`, `null`, `true`, `false`, `9007199254740993`, `"quoted\n\ud800🙂"`, `{"2":"first","b":{"old":1},"\u0032":[true,{},[]],"b":{"new":2},"1":3}`, "{\"z\" \n : [1,2] , \"a\": {\"x\":-0.001e3}}"} {
-		test.Run(fmt.Sprint(len(value), ":", value[:min(12, len(value))]), func(test *testing.T) {
-			fixture := newDocToolValueFixture(test, value)
-			plan := fixture.compile(test)
-			got, pages := readDocToolValueTestPages(test, fixture, plan)
-			parser, err := newDocFindSourceSyntaxParser(fixture.order.keys.tree.raw, fixture.source.Tree.Root, false)
-			if err != nil {
-				test.Fatal(err)
-			}
-			legacy := docToolDisplayBuilder{ctx: context.Background(), parser: parser, display: docToolDisplay{sourceBytes: len(fixture.order.keys.tree.raw)}, metadata: docToolDisplayBaseBytes, budget: MaxDocToolDisplayBytes}
-			if err := legacy.pretty(fixture.source.Tree.Root, 0); err != nil {
-				test.Fatal(err)
-			}
-			legacy.display.text = legacy.text.String()
-			if got != legacy.display.Text() {
-				test.Fatalf("pretty value changed\ngot %q\nwant %q", got, legacy.display.Text())
-			}
-			for from := range got {
-				if !utf8.RuneStart(got[from]) {
-					continue
-				}
-				_, width := utf8.DecodeRuneInString(got[from:])
-				want, err := legacy.display.SourceRange(from, width)
-				if err != nil {
-					test.Fatal(err)
-				}
-				for _, page := range pages {
-					if from >= page.Display.From && from+width <= page.Display.From+len(page.Display.Text) {
-						span, err := page.SourceRange(from-page.Display.From, width)
-						if err != nil || span != want {
-							test.Fatal("original-byte source range changed", from, span, want, err)
-						}
-					}
-				}
-			}
-		})
-	}
 }
 
 func TestDocToolValueLongScalarsDeepFramesAndWhitespace(test *testing.T) {

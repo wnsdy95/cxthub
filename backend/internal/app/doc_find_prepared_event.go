@@ -7,10 +7,9 @@ import (
 )
 
 type docPreparedFindEvent struct {
-	hash   domain.ContentHash
-	pages  int
-	page   func(int) (domain.DocDisplayPage, error)
-	window func(*domain.DocDisplayPage, domain.DocDisplayPage) (domain.DocDisplaySearchWindow, error)
+	hash  domain.ContentHash
+	pages int
+	page  func(int) (domain.DocDisplayPage, error)
 }
 
 func openDocPreparedFindEvent(source docViewSource, metadata domain.DocRangeEntry, pinned domain.ContentHash) (docPreparedFindEvent, error) {
@@ -63,9 +62,7 @@ func openDocPreparedFindEvent(source docViewSource, metadata domain.DocRangeEntr
 		}
 		return docPreparedFindEvent{hash: domain.HashContent(encoded), pages: generation.Pages.Count,
 			page: func(position int) (domain.DocDisplayPage, error) { return source.displayPage(entry, position) },
-			window: func(previous *domain.DocDisplayPage, current domain.DocDisplayPage) (domain.DocDisplaySearchWindow, error) {
-				return domain.BuildDocDisplaySearchWindow(generation.Source, previous, current)
-			}}, nil
+		}, nil
 	case domain.EventReasoning, domain.EventMessage, domain.EventToolCall:
 		return openDocPreparedProjectionEvent(source, entry)
 	default:
@@ -87,7 +84,5 @@ func openDocPreparedProjectionEvent(source docViewSource, entry domain.DocEventI
 	}
 	return docPreparedFindEvent{hash: domain.HashContent(encoded), pages: generation.Pages.Count,
 		page: func(position int) (domain.DocDisplayPage, error) { return source.eventDisplayPage(entry, position) },
-		window: func(previous *domain.DocDisplayPage, current domain.DocDisplayPage) (domain.DocDisplaySearchWindow, error) {
-			return domain.BuildDocDisplayProjectionSearchWindow(generation.Source, previous, current)
-		}}, nil
+	}, nil
 }

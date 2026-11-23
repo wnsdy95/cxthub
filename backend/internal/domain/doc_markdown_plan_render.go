@@ -57,16 +57,12 @@ type DocMarkdownPlanFragment struct {
 	planPages int
 }
 
-func (fragment DocMarkdownPlanFragment) Text() string { return fragment.page.Text }
-func (fragment DocMarkdownPlanFragment) From() int    { return fragment.page.From }
+func (fragment DocMarkdownPlanFragment) From() int { return fragment.page.From }
 func (fragment DocMarkdownPlanFragment) Next() DocMarkdownPlanCursor {
 	return fragment.next
 }
 func (fragment DocMarkdownPlanFragment) ReadBytes() int { return fragment.readBytes }
 func (fragment DocMarkdownPlanFragment) PlanPages() int { return fragment.planPages }
-func (fragment DocMarkdownPlanFragment) SourceRange(offset, length int) (DocFindSpan, error) {
-	return fragment.page.SourceRange(offset, length)
-}
 
 func ReadDocMarkdownPlanFragment(ctx context.Context, plan DocMarkdownPlan, cursor DocMarkdownPlanCursor, loadObject func(context.Context, ContentHash) ([]byte, error), loadText func(context.Context, int, int) ([]byte, error)) (result DocMarkdownPlanFragment, failure error) {
 	return readDocMarkdownPlanFragment(ctx, plan, cursor, loadObject, loadText, docMarkdownReplayPolicy{})

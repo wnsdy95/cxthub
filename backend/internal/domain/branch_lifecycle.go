@@ -56,27 +56,6 @@ func parseBranchLifecycleTagName(name string) (BranchLifecycleEvent, bool, error
 	return BranchLifecycleEvent{Branch: parts[3], Generation: generation, State: state, Target: target}, true, nil
 }
 
-func NewBranchLifecycleRef(repoID ContentHash, branch string, target ContentHash, generation uint64, state BranchLifecycleState) (Ref, error) {
-	if err := ValidateContentHash(repoID); err != nil {
-		return Ref{}, err
-	}
-	if err := ValidateBranchName(branch); err != nil {
-		return Ref{}, err
-	}
-	if err := ValidateContentHash(target); err != nil {
-		return Ref{}, err
-	}
-	if generation == 0 || (state != BranchActive && state != BranchArchived) {
-		return Ref{}, fmt.Errorf("%w: invalid branch lifecycle event", ErrValidation)
-	}
-	name := fmt.Sprintf("%s%020d/%s/%s/%s", BranchLifecycleTagPrefix, generation, state, strings.TrimPrefix(string(target), "sha256:"), branch)
-	ref := Ref{Kind: RefTag, Name: name, RepoID: repoID, Target: target}
-	if err := ValidateRef(ref); err != nil {
-		return Ref{}, err
-	}
-	return ref, nil
-}
-
 func ParseBranchLifecycleRef(ref Ref) (BranchLifecycleEvent, bool, error) {
 	if ref.Kind != RefTag {
 		return BranchLifecycleEvent{}, false, nil
@@ -103,24 +82,6 @@ func branchLifecycleLater(left, right BranchLifecycleEvent) bool {
 		return left.Target > right.Target
 	}
 	return left.Ref.Name > right.Ref.Name
-}
-
-func LatestBranchLifecycle(refs []Ref, branch string) (BranchLifecycleEvent, bool, error) {
-	var latest BranchLifecycleEvent
-	found := false
-	for _, ref := range refs {
-		event, ok, err := ParseBranchLifecycleRef(ref)
-		if err != nil {
-			return BranchLifecycleEvent{}, false, err
-		}
-		if !ok || event.Branch != branch {
-			continue
-		}
-		if !found || branchLifecycleLater(event, latest) {
-			latest, found = event, true
-		}
-	}
-	return latest, found, nil
 }
 
 // BranchLifecycleStates projects the append-only event refs into one latest
@@ -179,18 +140,4 @@ func ProjectBranchLifecycleRefs(refs []Ref) ([]Ref, error) {
 		out = append(out, ref)
 	}
 	return out, nil
-}
-
-func NextBranchLifecycleGeneration(refs []Ref, branch string) (uint64, error) {
-	latest, ok, err := LatestBranchLifecycle(refs, branch)
-	if err != nil {
-		return 0, err
-	}
-	if !ok {
-		return 1, nil
-	}
-	if latest.Generation == ^uint64(0) {
-		return 0, fmt.Errorf("%w: branch lifecycle generation exhausted", ErrValidation)
-	}
-	return latest.Generation + 1, nil
 }

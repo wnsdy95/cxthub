@@ -17,10 +17,7 @@ const (
 
 type DocumentPublicationStore interface {
 	GetRepo(context.Context, domain.ContentHash) (domain.Repo, error)
-	ListSnapshots(context.Context, domain.ContentHash, string) ([]domain.Snapshot, error)
-	GetSettingsObject(context.Context, domain.ContentHash, domain.ContentHash) (domain.SettingsBundle, error)
 	GetSnapshot(context.Context, domain.ContentHash, domain.ContentHash) (domain.Snapshot, error)
-	PutSnapshot(context.Context, domain.Snapshot) error
 }
 
 type DocumentPublicationChunkStore interface {
@@ -32,14 +29,9 @@ type DocumentPublicationLegacyWriter interface {
 	PutDoc(context.Context, domain.ContentHash, domain.SessionDoc) (bool, error)
 }
 
-type DocumentPublicationSources interface {
-	VerifySnapshotDocument(context.Context, domain.ContentHash, domain.Snapshot) error
-}
-
 type DocumentPublicationScope interface {
 	WithinDocumentCommit(context.Context, domain.ContentHash, func(context.Context) (inbound.CommitOutput, error)) (inbound.CommitOutput, error)
 	WithinChunkStore(context.Context, domain.ContentHash, func(context.Context) (inbound.StoreChunksOutput, error)) (inbound.StoreChunksOutput, error)
-	GraphChanged(context.Context, domain.ContentHash) error
 }
 
 type DocumentPublicationCommandsConfig struct {
@@ -47,21 +39,18 @@ type DocumentPublicationCommandsConfig struct {
 	Store               DocumentPublicationStore
 	Chunks              DocumentPublicationChunkStore
 	Scope               DocumentPublicationScope
-	Sources             DocumentPublicationSources
 	Verified            outbound.VerifiedDocStore
 	LegacyWriter        DocumentPublicationLegacyWriter
 	SupportedIdentities []domain.DocumentIdentity
 }
 
 type DocumentPublicationCommands struct {
-	profile   DocumentPublicationProfile
-	store     DocumentPublicationStore
-	chunks    DocumentPublicationChunkStore
-	scope     DocumentPublicationScope
-	sources   DocumentPublicationSources
-	verified  outbound.VerifiedDocStore
-	legacy    DocumentPublicationLegacyWriter
-	supported []domain.DocumentIdentity
+	profile  DocumentPublicationProfile
+	store    DocumentPublicationStore
+	chunks   DocumentPublicationChunkStore
+	scope    DocumentPublicationScope
+	verified outbound.VerifiedDocStore
+	legacy   DocumentPublicationLegacyWriter
 }
 
 var _ inbound.DocumentPublicationCommands = (*DocumentPublicationCommands)(nil)
@@ -73,7 +62,7 @@ func NewDocumentPublicationCommands(config DocumentPublicationCommandsConfig) (*
 	if !rootAdapterPresent(config.Store) || !rootAdapterPresent(config.Chunks) || !rootAdapterPresent(config.Scope) {
 		return nil, domain.ErrValidation
 	}
-	for _, optional := range []any{config.Sources, config.Verified, config.LegacyWriter} {
+	for _, optional := range []any{config.Verified, config.LegacyWriter} {
 		if optional != nil && !rootAdapterPresent(optional) {
 			return nil, domain.ErrValidation
 		}
@@ -88,14 +77,13 @@ func NewDocumentPublicationCommands(config DocumentPublicationCommandsConfig) (*
 	if !seen[domain.DocumentIdentityLegacy] {
 		return nil, domain.ErrValidation
 	}
-	if config.Profile == DocumentPublicationComplete && (config.Sources == nil || config.Verified == nil) {
+	if config.Profile == DocumentPublicationComplete && config.Verified == nil {
 		return nil, domain.ErrCatalogUnsupported
 	}
 	return &DocumentPublicationCommands{
 		profile: config.Profile,
-		store:   config.Store, chunks: config.Chunks, scope: config.Scope, sources: config.Sources,
+		store:   config.Store, chunks: config.Chunks, scope: config.Scope,
 		verified: config.Verified, legacy: config.LegacyWriter,
-		supported: append([]domain.DocumentIdentity(nil), config.SupportedIdentities...),
 	}, nil
 }
 

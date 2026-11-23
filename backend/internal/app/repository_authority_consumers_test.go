@@ -86,7 +86,7 @@ func TestWave59PublicCommandFactoriesRequireCompleteAuthorityBeforeExecution(tes
 		{name: "typed nil metadata", metadata: (*wave42WorkStore)(nil), repositories: storage, want: domain.ErrValidation},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
-			service := NewService(scenario.metadata, storage, nil, nil, scenario.repositories)
+			service := NewService(scenario.metadata, storage, nil, scenario.repositories)
 			assets, err := service.RepositoryAssetCommands()
 			if !errors.Is(err, scenario.want) || rootAdapterPresent(assets) != (scenario.want == nil) {
 				work := service.repositoryWork()
@@ -118,7 +118,7 @@ func TestWave59CompatibilityCommandsPreserveExplicitAbsentAuthorityCapabilities(
 	storage := store.NewFSStore(test.TempDir())
 	repository, secretsInput := seedSecretsRepo(test, storage, storage)
 	repositories := struct{ outbound.RepositoryStore }{storage}
-	service := NewService(storage, storage, nil, nil, repositories)
+	service := NewService(storage, storage, nil, repositories)
 	if commands, err := service.RepositoryAssetCommands(); !errors.Is(err, domain.ErrCatalogUnsupported) || rootAdapterPresent(commands) {
 		test.Fatal("Complete asset factory silently selected compatibility", err)
 	}
@@ -130,9 +130,8 @@ func TestWave59CompatibilityCommandsPreserveExplicitAbsentAuthorityCapabilities(
 		test.Fatal("legacy asset entry rejected genuinely absent optional authority ports", err)
 	}
 	document := wave58PublicationDocument(test, test.Name())
-	snapshot := wave58PublicationSnapshot(secretsInput.RepoID, document)
-	output, err := service.Commit(ctx, inbound.CommitInput{RepoID: secretsInput.RepoID, Docs: []domain.SessionDoc{document}, Snapshots: []domain.Snapshot{snapshot}})
-	if err != nil || output != (inbound.CommitOutput{StoredDocs: 1, StoredSnapshots: 1}) {
+	output, err := service.Commit(ctx, inbound.CommitInput{RepoID: secretsInput.RepoID, Docs: []domain.SessionDoc{document}})
+	if err != nil || output != (inbound.CommitOutput{StoredDocs: 1}) {
 		test.Fatal("legacy publication entry lost its original scope", output, err)
 	}
 	if output, err := service.SaveSecrets(ctx, secretsInput); err != nil || output.Status != "stored" || output.Revision == "" {
@@ -161,7 +160,7 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 	if _, err := storage.PutRepo(systemTestContext(), domain.Repo{ID: repo, RepositoryID: fixture.repository.ID, DefaultBranch: "main"}); err != nil {
 		test.Fatal(err)
 	}
-	service := NewService(storage, storage, nil, nil, storage)
+	service := NewService(storage, storage, nil, storage)
 	assetPort, err := service.RepositoryAssetCommands()
 	if err != nil {
 		test.Fatal(err)
@@ -185,7 +184,6 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 		test.Helper()
 		ctx := inbound.WithCorrelation(inbound.WithRepositoryActor(context.Background(), fixture.member.ID), stage)
 		document := wave58PublicationDocument(test, stage)
-		snapshot := wave58PublicationSnapshot(repo, document)
 		chunkBody := []byte(stage + " staged chunk")
 		chunk := inbound.ChunkObject{Hash: domain.HashContent(chunkBody), Data: chunkBody}
 		previousSecrets, readErr := storage.GetSecretsEnvelope(systemTestContext(), repo)
@@ -211,8 +209,8 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 				return err
 			}},
 			{name: "commit", run: func() error {
-				output, err := publications.Commit(ctx, inbound.CommitInput{RepoID: repo, Docs: []domain.SessionDoc{document}, Snapshots: []domain.Snapshot{snapshot}})
-				if err == nil && output != (inbound.CommitOutput{StoredDocs: 1, StoredSnapshots: 1}) || err != nil && output != (inbound.CommitOutput{}) {
+				output, err := publications.Commit(ctx, inbound.CommitInput{RepoID: repo, Docs: []domain.SessionDoc{document}})
+				if err == nil && output != (inbound.CommitOutput{StoredDocs: 1}) || err != nil && output != (inbound.CommitOutput{}) {
 					test.Fatal("public commit command lost result isolation", output, err)
 				}
 				return err
@@ -238,15 +236,14 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 			test.Fatal("actual owner lost its original metadata or a denied write changed it", current, err)
 		}
 		storedDocument, documentErr := storage.GetDoc(systemTestContext(), repo, document.Hash)
-		storedSnapshot, snapshotErr := storage.GetSnapshot(systemTestContext(), repo, snapshot.ID)
 		storedChunk, chunkErr := storage.GetChunk(systemTestContext(), repo, chunk.Hash)
 		currentSecrets, secretsErr := storage.GetSecretsEnvelope(systemTestContext(), repo)
 		if want == nil {
-			if documentErr != nil || !reflect.DeepEqual(storedDocument, document) || snapshotErr != nil || storedSnapshot.DocHash != document.Hash || storedSnapshot.RepoID != repo || chunkErr != nil || !bytes.Equal(storedChunk, chunk.Data) || secretsErr != nil || domain.SecretsRevision(currentSecrets) != secretsRevision {
-				test.Fatal("actual public owners did not mutate their original stores", documentErr, snapshotErr, chunkErr, secretsErr)
+			if documentErr != nil || !reflect.DeepEqual(storedDocument, document) || chunkErr != nil || !bytes.Equal(storedChunk, chunk.Data) || secretsErr != nil || domain.SecretsRevision(currentSecrets) != secretsRevision {
+				test.Fatal("actual public owners did not mutate their original stores", documentErr, chunkErr, secretsErr)
 			}
-		} else if !errors.Is(documentErr, domain.ErrNotFound) || !errors.Is(snapshotErr, domain.ErrNotFound) || !errors.Is(chunkErr, domain.ErrNotFound) || secretsErr != nil || !bytes.Equal(previousSecrets, currentSecrets) {
-			test.Fatal("revoked authority reached an original-store mutation", documentErr, snapshotErr, chunkErr, secretsErr)
+		} else if !errors.Is(documentErr, domain.ErrNotFound) || !errors.Is(chunkErr, domain.ErrNotFound) || secretsErr != nil || !bytes.Equal(previousSecrets, currentSecrets) {
+			test.Fatal("revoked authority reached an original-store mutation", documentErr, chunkErr, secretsErr)
 		}
 		audits, err := storage.ListOrganizationAudit(systemTestContext(), fixture.organization.ID, 100)
 		if err != nil {

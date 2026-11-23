@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -210,7 +209,7 @@ type remoteGitTestFixture struct {
 func newRemoteGitTestFixture(t *testing.T, pageSize int) *remoteGitTestFixture {
 	t.Helper()
 	storage := &remoteGitTestStore{FSStore: store.NewFSStore(t.TempDir()), origins: map[domain.ContentHash]string{}}
-	service := NewService(storage, storage, auth.NewTeamTokenAuth(), gitengine.NewEngine(storage), storage)
+	service := NewService(storage, storage, auth.NewTeamTokenAuth(), storage)
 	ctx := systemTestContext()
 	repository := domain.Repository{ID: domain.NewID("ws_"), Name: "test", OwnerID: "owner", Visibility: domain.VisibilityPrivate, CreatedAt: time.Now().UTC()}
 	if err := storage.CreateRepository(ctx, repository); err != nil {
@@ -275,10 +274,6 @@ func TestRemoteGitPassReadsBranchesCommitsAndPullRequests(t *testing.T) {
 	provider.heads["main"], provider.heads["topic"] = main, topic
 	provider.pull(1, 50, topic, remoteGitTestSHA(4), topic)
 	provider.pull(2, 40, fork, fork)
-	before, err := fixture.service.GetRepositoryView(systemTestContext(), fixture.repo)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	start := fixture.clock
 	requests, err := fixture.pass(t)
@@ -307,14 +302,6 @@ func TestRemoteGitPassReadsBranchesCommitsAndPullRequests(t *testing.T) {
 	pulls, err := fixture.storage.ListRemotePulls(ctx, fixture.repo)
 	if err != nil || len(pulls) != 2 || !reflect.DeepEqual(pulls[0], provider.pulls[2]) || !reflect.DeepEqual(pulls[1], provider.pulls[1]) || pulls[1].Truncated {
 		t.Fatalf("pull requests:\n got %+v\nwant %+v %+v\n%v", pulls, provider.pulls[2], provider.pulls[1], err)
-	}
-	// Nothing a pass stores moves the repository revision or makes a ref.
-	after, err := fixture.service.GetRepositoryView(systemTestContext(), fixture.repo)
-	if err != nil || after.Revision != before.Revision {
-		t.Fatalf("revision moved from %d to %d (%v)", before.Revision, after.Revision, err)
-	}
-	if refs, err := fixture.storage.ListRefs(systemTestContext(), fixture.repo); err != nil || len(refs) != 0 {
-		t.Fatalf("the pass made a ref: %+v %v", refs, err)
 	}
 
 	// No pass is due before the next one: the provider is not asked.
@@ -1028,22 +1015,13 @@ func TestRemoteGitReadAndRefresh(t *testing.T) {
 		t.Fatal("a read of what is not a repository")
 	}
 
-	// Asking for a fresh read pulls the next pass closer, without moving the
-	// repository revision.
-	before, err := fixture.service.GetRepositoryView(systemTestContext(), fixture.repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Asking for a fresh read pulls the next pass closer.
 	if err := fixture.service.RequestRemoteGitRefresh(member, fixture.repo); err != nil {
 		t.Fatal(err)
 	}
 	state := fixture.state(t)
 	if state.RequestedAt == nil || !state.NextAt.Before(fixture.clock.Add(5*time.Minute)) {
 		t.Fatalf("state after a member asked: %+v", state)
-	}
-	after, err := fixture.service.GetRepositoryView(systemTestContext(), fixture.repo)
-	if err != nil || after.Revision != before.Revision {
-		t.Fatalf("revision moved from %d to %d (%v)", before.Revision, after.Revision, err)
 	}
 	if err := fixture.service.RequestRemoteGitRefresh(viewer, fixture.repo); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("a viewer asking: %v", err)
@@ -1075,14 +1053,10 @@ func TestRemoteGitReadIsAskedForByPushObservations(t *testing.T) {
 	if _, err := fixture.pass(t); err != nil {
 		t.Fatal(err)
 	}
-	scans, err := NewGitScans(fixture.service, &scanReader{deltas: map[string]domain.GitCommitDelta{}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if state := fixture.state(t); state.RequestedAt != nil {
 		t.Fatalf("state before the push: %+v", state)
 	}
-	if _, err := scans.ObservePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", "", strings.Repeat("1", 40), false, "delivery-1"); err != nil {
+	if _, err := fixture.service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", "", strings.Repeat("1", 40), false, "delivery-1"); err != nil {
 		t.Fatal(err)
 	}
 	state := fixture.state(t)

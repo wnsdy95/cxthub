@@ -200,7 +200,6 @@ func (service *Service) newDocumentQueries(profile documentquery.Profile, full b
 		rangeGenerations, _ := service.blobs.(outbound.DocRangeGenerationStore)
 		readiness, _ := service.blobs.(outbound.DocRangeReadinessStore)
 		jobs, _ := service.blobs.(outbound.DocRangeJobStore)
-		visible, _ := service.blobs.(outbound.DocVisibleGenerationStore)
 		visiblePreparation, _ := service.blobs.(outbound.DocVisiblePreparationStore)
 		boundaries, _ := service.blobs.(outbound.DocRangeBoundaryStore)
 		chunks, _ := service.blobs.(outbound.ConversationChunkReader)
@@ -208,15 +207,12 @@ func (service *Service) newDocumentQueries(profile documentquery.Profile, full b
 		bytes, _ := service.blobs.(outbound.DocByteRangePreparationStore)
 		view := &documentquery.ViewDependencies{Range: ranges, RangeSnapshots: rangeSnapshots,
 			RangeGenerations: rangeGenerations, RangeReadiness: readiness, RangeJobs: jobs,
-			VisibleGenerations: visible, VisiblePreparation: visiblePreparation, Boundaries: boundaries,
+			VisiblePreparation: visiblePreparation, Boundaries: boundaries,
 			Chunks: chunks, DerivedChunks: derived, Bytes: bytes, Resources: scope}
 		if profile == documentquery.LegacyCompatibility {
 			view.LegacyPreparation = ranges
 		}
-		eventDisplay, _ := service.docDisplayRead.(outbound.DocEventDisplayReader)
 		config.View = view
-		config.Find = &documentquery.FindDependencies{Fields: service.docFindFields,
-			DisplayRead: service.docDisplayRead, Display: service.docDisplay, EventDisplay: eventDisplay}
 	}
 	return documentquery.New(config)
 }

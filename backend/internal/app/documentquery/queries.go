@@ -45,7 +45,6 @@ type Config struct {
 	AtomicRead bool
 	ReadOnly   bool
 	View       *ViewDependencies
-	Find       *FindDependencies
 }
 
 type Queries struct {
@@ -54,11 +53,9 @@ type Queries struct {
 	legacy     LegacyReader
 	index      outbound.DocReadStore
 	verified   outbound.VerifiedDocReader
-	rootEvents outbound.VerifiedRootEventReader
 	atomicRead bool
 	readOnly   bool
 	view       ViewDependencies
-	find       FindDependencies
 }
 
 var _ inbound.DocumentQueries = (*Queries)(nil)
@@ -81,21 +78,12 @@ func New(config Config) (*Queries, error) {
 		return nil, fmt.Errorf("%w: verified document query dependencies are required", domain.ErrUnsupportedDocumentIdentity)
 	}
 	queries := &Queries{scope: config.Scope, metadata: config.Snapshots, legacy: config.Legacy, index: config.Index,
-		verified: config.Verified, rootEvents: config.RootEvents, atomicRead: config.AtomicRead, readOnly: config.ReadOnly}
+		verified: config.Verified, atomicRead: config.AtomicRead, readOnly: config.ReadOnly}
 	if config.View != nil {
 		if err := config.View.validate(config.Profile, config.ReadOnly); err != nil {
 			return nil, err
 		}
 		queries.view = *config.View
-	}
-	if config.Find != nil {
-		if config.View == nil {
-			return nil, fmt.Errorf("%w: document find requires view dependencies", domain.ErrValidation)
-		}
-		if err := config.Find.validate(config.ReadOnly); err != nil {
-			return nil, err
-		}
-		queries.find = *config.Find
 	}
 	return queries, nil
 }

@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func messagePlaceholderReviewFixture(test *testing.T, blockType, name string) (DocMessagePlaceholderPlan, map[ContentHash][]byte) {
@@ -39,57 +38,6 @@ func messagePlaceholderReviewFixture(test *testing.T, blockType, name string) (D
 		}
 	}
 	return plan, objects
-}
-
-func TestDocMessagePlaceholderReviewUTF8FragmentEdges(test *testing.T) {
-	for _, scenario := range []struct{ blockType, name string }{
-		{"", ""},
-		{"image", ""},
-		{"", "\ud55c\uae00🙂"},
-		{strings.Repeat("a", DocDisplayPageTextBytes-2) + "🙂", "asset"},
-		{"image", strings.Repeat("a", DocDisplayPageTextBytes-10) + "🙂\ud55c\uae00"},
-	} {
-		plan, objects := messagePlaceholderReviewFixture(test, scenario.blockType, scenario.name)
-		cursor, err := NewDocMessagePlaceholderCursor(plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		var output strings.Builder
-		for cursor.From < plan.TextBytes {
-			fragment, err := ReadDocMessagePlaceholderFragment(context.Background(), plan, cursor, messageInputReviewLoad(objects))
-			if err != nil || fragment.From() != cursor.From || len(fragment.Text()) == 0 || len(fragment.Text()) > DocDisplayPageTextBytes || !utf8.ValidString(fragment.Text()) || fragment.Next().From != cursor.From+len(fragment.Text()) {
-				test.Fatal("invalid UTF-8 fragment or stalled cursor", cursor.From, err)
-			}
-			anchor, err := fragment.SourceRange(0, len(fragment.Text()))
-			if err != nil || anchor != plan.Block.Anchor {
-				test.Fatal("placeholder lost conservative block anchor", anchor, err)
-			}
-			for offset := range fragment.Text() {
-				_, width := utf8.DecodeRuneInString(fragment.Text()[offset:])
-				if _, err := fragment.SourceRange(offset, width); err != nil {
-					test.Fatal("valid source-range rune rejected", err)
-				}
-				if width > 1 {
-					if _, err := fragment.SourceRange(offset+1, width-1); !errors.Is(err, ErrValidation) {
-						test.Fatal("interior-rune source range accepted", err)
-					}
-				}
-			}
-			output.WriteString(fragment.Text())
-			encoded, err := json.Marshal(fragment.Next())
-			if err != nil || json.Unmarshal(encoded, &cursor) != nil {
-				test.Fatal("cursor failed JSON restart", err)
-			}
-		}
-		want := "[" + scenario.blockType
-		if scenario.name != "" {
-			want += ": " + scenario.name
-		}
-		want += "]"
-		if output.String() != want || output.Len() != plan.TextBytes {
-			test.Fatal("fragment join changed plain placeholder bytes", output.Len(), len(want))
-		}
-	}
 }
 
 func TestDocMessagePlaceholderReviewSelectedPartAndPlanBinding(test *testing.T) {

@@ -5,12 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding"
-	"encoding/json"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func discoverDocFields(test *testing.T, raw []byte, size int) (DocFieldDiscoveryState, error) {
@@ -44,67 +41,6 @@ func discoverDocFields(test *testing.T, raw []byte, size int) (DocFieldDiscovery
 		}
 	}
 	return state, nil
-}
-
-func TestDocFieldDiscoveryResumesLexicalAndContainerStates(test *testing.T) {
-	for _, body := range []string{
-		`{"kind":"reasoning","redacted_summary":"visible"}`,
-		"{\"kind\":\"message\",\"blocks\":[{\"text\":\"\ud55c\uae00🙂\",\"type\":\"text\"}]}",
-		`{"kind":"reasoning","unknown":[null,true,false,-0,0.5,1e+99,-4.2E-9,1e99999,{"nested":["\ud83d\ude42\ud800"]}],"redacted_summary":"last"}`,
-		`{"kind":"reasoning","redacted_summary":false,"redacted\u005fsummary":"last","blocks":false}`,
-		`{"kind":"message","blocks":{},"blocks":null,"blocks":[],"redacted_summary":false}`,
-		`{"kind":"tool_result","output":" \t\n\r\f\u000b\u00a0\u1680\u2000\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"}`,
-		`{"kind":"tool_result","output":"first","output":{},"output":"\ud800\ud83d\ude42"}`,
-		`{"k\u0069nd":"tool_result","nested":{"output":"ignored"},"out\u0070ut":"value"}`,
-		`{"kind":"reasoning","redacted_summary":"first","redacted_summary":null}`,
-	} {
-		for padding := 0; padding < 64; padding++ {
-			raw := []byte(strings.Repeat(" ", padding) + body + "\r\n\t ")
-			state, err := discoverDocFields(test, raw, 64)
-			if err != nil {
-				test.Fatalf("padding=%d body=%s: %v", padding, body, err)
-			}
-			want, wantErr := BuildDocFindFields(HashContent(raw), raw)
-			got, gotErr := state.FindFields()
-			if !reflect.DeepEqual(want, got) || (wantErr == nil) != (gotErr == nil) {
-				test.Fatalf("fields differ: raw=%s want=%+v/%v got=%+v/%v", raw, want, wantErr, got, gotErr)
-			}
-			wantedSource, sourceErr := BuildDocDisplayStringSourceReader(context.Background(), HashContent(raw), len(raw), bytes.NewReader(raw))
-			actualSource, actualErr := state.DisplaySource()
-			if !reflect.DeepEqual(wantedSource, actualSource) || !errors.Is(sourceErr, actualErr) {
-				test.Fatalf("display source differs: raw=%s want=%+v/%v got=%+v/%v", raw, wantedSource, sourceErr, actualSource, actualErr)
-			}
-		}
-	}
-}
-
-func TestDocFieldDiscoveryBoundedOpaqueAndDepth(test *testing.T) {
-	for _, size := range []int{1 << 20, 10 << 20} {
-		body := `{"opaque":"` + strings.Repeat("opaque-secret-", size/14) + `","` + strings.Repeat("private-key-", 7000) + `":true,"kind":"tool_result","output":"visible"}`
-		state, err := discoverDocFields(test, []byte(body), DocFieldDiscoveryStepBytes)
-		if err != nil {
-			test.Fatal(err)
-		}
-		source, err := state.DisplaySource()
-		encoded, encodeErr := state.Encode()
-		if err != nil || encodeErr != nil || source.Empty || source.Token.To-source.Token.From != len(`"visible"`) || bytes.Contains(encoded, []byte("opaque-secret")) || bytes.Contains(encoded, []byte("private-key")) {
-			test.Fatal("opaque data leaked into discovery checkpoint", source, err, encodeErr)
-		}
-		test.Logf("source_bytes=%d final_checkpoint_bytes=%d", len(body), len(encoded))
-	}
-	for _, depth := range []int{64, 9998, 9999, 10000} {
-		raw := []byte(`{"kind":"reasoning","unknown":` + strings.Repeat("[", depth) + `0` + strings.Repeat("]", depth) + `}`)
-		want, wantErr := BuildDocFindFields(HashContent(raw), raw)
-		state, err := discoverDocFields(test, raw, 64)
-		if err == nil {
-			actual, actualErr := state.FindFields()
-			if !reflect.DeepEqual(actual, want) || (actualErr == nil) != (wantErr == nil) {
-				test.Fatal("depth semantic mismatch", depth, actual, actualErr, wantErr)
-			}
-		} else if wantErr == nil {
-			test.Fatal("valid depth rejected", depth, err)
-		}
-	}
 }
 
 func TestDocFieldDiscoveryRejectsPartialInvalidAndWrongIdentity(test *testing.T) {
@@ -186,32 +122,4 @@ func TestDocFieldDiscoveryNativeSHAStateContract(test *testing.T) {
 			}
 		}
 	}
-}
-
-func FuzzDocFieldDiscoveryMatchesRawFields(test *testing.F) {
-	for _, raw := range []string{`{"kind":"message","blocks":[]}`, "{\"kind\":\"reasoning\",\"redacted_summary\":\"\ud55c\uae00\"}", `{"kind":"reasoning","x":1e99999}`, `{"kind":"reasoning","redacted_summary":false,"redacted_summary":"last"}`} {
-		test.Add(raw)
-	}
-	test.Fuzz(func(test *testing.T, body string) {
-		if len(body) == 0 || len(body) > 256<<10 || !utf8.ValidString(body) || !json.Valid([]byte(body)) {
-			return
-		}
-		raw := []byte(body)
-		want, wantErr := BuildDocFindFields(HashContent(raw), raw)
-		stepBytes := 64
-		if len(raw) > 4096 {
-			stepBytes = DocFieldDiscoveryStepBytes
-		}
-		state, err := discoverDocFields(test, raw, stepBytes)
-		if err != nil {
-			if wantErr == nil {
-				test.Fatal("valid raw fields rejected", err)
-			}
-			return
-		}
-		actual, actualErr := state.FindFields()
-		if !reflect.DeepEqual(want, actual) || (wantErr == nil) != (actualErr == nil) {
-			test.Fatal("raw projection mismatch", want, wantErr, actual, actualErr)
-		}
-	})
 }

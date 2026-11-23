@@ -114,23 +114,15 @@ func NewDocMessagePlaceholderCursor(plan DocMessagePlaceholderPlan) (DocMessageP
 }
 
 type DocMessagePlaceholderFragment struct {
-	text   string
-	from   int
-	anchor DocFindSpan
-	next   DocMessagePlaceholderCursor
+	text string
+	from int
+	next DocMessagePlaceholderCursor
 }
 
 func (fragment DocMessagePlaceholderFragment) Text() string { return fragment.text }
 func (fragment DocMessagePlaceholderFragment) From() int    { return fragment.from }
 func (fragment DocMessagePlaceholderFragment) Next() DocMessagePlaceholderCursor {
 	return fragment.next
-}
-
-func (fragment DocMessagePlaceholderFragment) SourceRange(offset, length int) (DocFindSpan, error) {
-	if offset < 0 || length <= 0 || length > len(fragment.text) || offset > len(fragment.text)-length || !utf8.RuneStart(fragment.text[offset]) || offset+length < len(fragment.text) && !utf8.RuneStart(fragment.text[offset+length]) || fragment.anchor.From < 0 || fragment.anchor.To <= fragment.anchor.From {
-		return DocFindSpan{}, ErrValidation
-	}
-	return fragment.anchor, nil
 }
 
 func ReadDocMessagePlaceholderFragment(ctx context.Context, plan DocMessagePlaceholderPlan, cursor DocMessagePlaceholderCursor, load func(context.Context, ContentHash) ([]byte, error)) (result DocMessagePlaceholderFragment, failure error) {
@@ -214,5 +206,5 @@ func readDocMessagePlaceholderFragment(ctx context.Context, plan DocMessagePlace
 	}
 	next := cursor
 	next.From += len(output)
-	return DocMessagePlaceholderFragment{text: string(output), from: cursor.From, anchor: plan.Block.Anchor, next: next}, nil
+	return DocMessagePlaceholderFragment{text: string(output), from: cursor.From, next: next}, nil
 }

@@ -102,23 +102,6 @@ func constructorPrefixAssertRejected(test *testing.T, config Config, expected er
 	}
 }
 
-func constructorPrefixAssertAssembly(test *testing.T, config Config) {
-	test.Helper()
-	queries, err := New(config)
-	if err != nil || queries == nil {
-		test.Fatalf("explicit profile assembly failed: queries=%p error=%v", queries, err)
-	}
-	if queries.scope != config.Scope || queries.metadata != config.Snapshots || queries.legacy != config.Legacy {
-		test.Fatal("constructor replaced an explicitly supplied scope, snapshot reader, or legacy reader")
-	}
-	if queries.index != config.Index || queries.verified != config.Verified || queries.rootEvents != config.RootEvents {
-		test.Fatal("constructor inferred, dropped, or replaced an explicitly configured optional port")
-	}
-	if queries.atomicRead != config.AtomicRead {
-		test.Fatal("constructor changed the explicitly selected atomic-read policy")
-	}
-}
-
 func TestConstructorRejectsUndeclaredProfilesBeforePortCalls(test *testing.T) {
 	for _, candidate := range []struct {
 		name    string
@@ -229,65 +212,6 @@ func TestConstructorVerifiedRootsDoesNotInferOmittedPorts(test *testing.T) {
 				config.Index, config.Verified, config.RootEvents = nil, nil, nil
 			}
 			constructorPrefixAssertRejected(test, config, domain.ErrUnsupportedDocumentIdentity)
-		})
-	}
-}
-
-func TestConstructorLegacyCompatibilityPreservesExplicitOptionalAssembly(test *testing.T) {
-	for _, candidate := range []struct {
-		name     string
-		index    bool
-		verified bool
-		roots    bool
-	}{
-		{"none", false, false, false},
-		{"index", true, false, false},
-		{"verified", false, true, false},
-		{"root-events", false, false, true},
-		{"index-and-verified", true, true, false},
-		{"index-and-root-events", true, false, true},
-		{"verified-and-root-events", false, true, true},
-		{"all", true, true, true},
-	} {
-		test.Run(candidate.name, func(test *testing.T) {
-			for _, policy := range []struct {
-				name   string
-				atomic bool
-			}{
-				{"non-atomic", false},
-				{"atomic", true},
-			} {
-				test.Run(policy.name, func(test *testing.T) {
-					config := constructorPrefixConfig(test, LegacyCompatibility)
-					config.AtomicRead = policy.atomic
-					if !candidate.index {
-						config.Index = nil
-					}
-					if !candidate.verified {
-						config.Verified = nil
-					}
-					if !candidate.roots {
-						config.RootEvents = nil
-					}
-					constructorPrefixAssertAssembly(test, config)
-				})
-			}
-		})
-	}
-}
-
-func TestConstructorVerifiedRootsPreservesExplicitAssembly(test *testing.T) {
-	for _, candidate := range []struct {
-		name   string
-		atomic bool
-	}{
-		{"non-atomic", false},
-		{"atomic", true},
-	} {
-		test.Run(candidate.name, func(test *testing.T) {
-			config := constructorPrefixConfig(test, VerifiedRoots)
-			config.AtomicRead = candidate.atomic
-			constructorPrefixAssertAssembly(test, config)
 		})
 	}
 }

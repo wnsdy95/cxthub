@@ -15,10 +15,6 @@ func TestPGOrganizationOwnerAccessContract(t *testing.T) {
 	_, st, _ := collaborationPG(t)
 	runOrganizationOwnerAccess(t, st)
 }
-func TestPGOrganizationOwnerCommands(t *testing.T) {
-	_, st, _ := collaborationPG(t)
-	runOrganizationOwnerCommands(t, st)
-}
 func TestPGOrganizationOwnerDemotionSerializesWithContextWrites(t *testing.T) {
 	_, st, repo := collaborationPG(t)
 	f := makeTeamFixture(t, st)

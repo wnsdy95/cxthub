@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type docToolStringReviewFixture struct {
@@ -96,67 +94,6 @@ func buildDocToolStringReviewFixture(test *testing.T, token string, mode DocTool
 	return fixture
 }
 
-func docToolStringReviewOracle(test *testing.T, fixture docToolStringReviewFixture) *docToolDisplay {
-	test.Helper()
-	parser, err := newDocFindSourceParser(fixture.raw, fixture.source.Token)
-	if err != nil {
-		test.Fatal(err)
-	}
-	builder := docToolDisplayBuilder{ctx: context.Background(), parser: parser, display: docToolDisplay{sourceBytes: len(fixture.raw)}, metadata: docToolDisplayBaseBytes, budget: MaxDocToolDisplayBytes}
-	if fixture.source.Mode == DocToolStringQuoted {
-		err = builder.string(fixture.source.Token, true, 0)
-	} else {
-		err = builder.diff(fixture.source.Token, docToolStringPrefix(fixture.source.Mode))
-	}
-	if err != nil {
-		test.Fatal(err)
-	}
-	builder.display.text = builder.text.String()
-	return &builder.display
-}
-
-func TestDocToolStringReviewRestartTextAndProvenance(test *testing.T) {
-	tokens := []string{
-		`""`, `"plain"`, `"\n"`, `"\r\n\n"`, `"\uD800"`, `"\ud801\ufffd\udc00"`,
-		`"\uD800\uD800\uDC00"`, "\"\ud55c🙂\\uD83D\\uDE00\\\"\\\\\\/\\b\\f\\n\\r\\t\\u0000\\u001f\"",
-		"\"<>&\u2028\u2029\"",
-		`"` + strings.Repeat(`a\u0062\n\uD800x\uD83D\uDE00`, 600) + `"`,
-	}
-	for _, length := range []int{254, 255, 256, 257, 510, 511, 512, 1023, 1024, 4095, 4096, 32755, 32756, 32757, 32758, 32767, 32768, 65537} {
-		tokens = append(tokens, `"`+strings.Repeat("a", length)+`"`)
-	}
-	for _, mode := range []DocToolStringMode{DocToolStringQuoted, DocToolStringAdd, DocToolStringRemove} {
-		for index, token := range tokens {
-			test.Run(fmt.Sprintf("%s/%d", mode, index), func(test *testing.T) {
-				fixture := buildDocToolStringReviewFixture(test, token, mode)
-				oracle := docToolStringReviewOracle(test, fixture)
-				var text strings.Builder
-				rawEnd := fixture.source.Token.From
-				for pageIndex := 0; pageIndex < fixture.plan.Pages.Count; pageIndex++ {
-					page, err := ReadDocToolStringPage(context.Background(), fixture.plan, pageIndex, fixture.load)
-					if err != nil || page.Display.From != text.Len() || page.RawFrom != rawEnd {
-						test.Fatal("resumed page lost adjacency", pageIndex, err)
-					}
-					mapped := page.Display
-					mapped.Version = 2
-					for offset, character := range mapped.Text {
-						got, err := mapped.SourceRange(offset, utf8.RuneLen(character))
-						want, expectedErr := oracle.SourceRange(mapped.From+offset, utf8.RuneLen(character))
-						if err != nil || expectedErr != nil || got != want {
-							test.Fatal("rune lost original-byte provenance", offset, got, want, err, expectedErr)
-						}
-					}
-					text.WriteString(page.Display.Text)
-					rawEnd = page.RawTo
-				}
-				if text.String() != oracle.Text() || rawEnd != fixture.source.Token.To {
-					test.Fatal("resumption changed text or skipped raw bytes")
-				}
-			})
-		}
-	}
-}
-
 func TestDocToolStringReviewNativePageSourceRange(test *testing.T) {
 	fixture := buildDocToolStringReviewFixture(test, `"a\u0062\n"`, DocToolStringQuoted)
 	page, err := ReadDocToolStringPage(context.Background(), fixture.plan, 0, fixture.load)
@@ -211,45 +148,6 @@ func TestDocToolStringReviewInvalidTokensFailClosed(test *testing.T) {
 		}, nil)
 		if !errors.Is(err, ErrIntegrity) || !reflect.DeepEqual(step, DocToolStringStep{}) {
 			test.Fatal("malformed token returned a publishable prefix", token, err)
-		}
-	}
-}
-
-func TestDocToolStringReviewAssemblySmallFragmentsPreserveCovers(test *testing.T) {
-	for _, mode := range []DocToolStringMode{DocToolStringQuoted, DocToolStringAdd, DocToolStringRemove} {
-		fixture := buildDocToolStringReviewFixture(test, `"`+strings.Repeat(`\u0061x\n\uD800🙂\u0000\"`, 110)+`"`, mode)
-		oracle := docToolStringReviewOracle(test, fixture)
-		input, err := NewDocToolStringAssemblyInput(fixture.plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		for _, limit := range []struct{ bytes, runs int }{{4, 1}, {7, 2}, {511, 3}, {DocDisplayPageTextBytes, DocDisplayPageRuns}} {
-			test.Run(fmt.Sprintf("%s/%d/%d", mode, limit.bytes, limit.runs), func(test *testing.T) {
-				cursor := bytes.Clone(input.initial)
-				var text strings.Builder
-				for text.Len() < input.source.TextBytes {
-					loads := 0
-					page, next, err := input.read(context.Background(), cursor, limit.bytes, limit.runs, func(ctx context.Context, hash ContentHash) ([]byte, error) {
-						loads++
-						return fixture.load(ctx, hash)
-					})
-					if err != nil || page.From != text.Len() || len(page.Text) == 0 || len(page.Text) > limit.bytes || len(page.Runs) > limit.runs || loads > DocDisplayMappedReplayObjects {
-						test.Fatal("fragment budget or adjacency changed", err, loads)
-					}
-					for offset, character := range page.Text {
-						got, err := page.SourceRange(offset, utf8.RuneLen(character))
-						want, expectedErr := oracle.SourceRange(page.From+offset, utf8.RuneLen(character))
-						if err != nil || expectedErr != nil || got != want {
-							test.Fatal("clipping changed original cover", got, want, err, expectedErr)
-						}
-					}
-					text.WriteString(page.Text)
-					cursor = bytes.Clone(next)
-				}
-				if text.String() != oracle.Text() {
-					test.Fatal("fragment replay changed text")
-				}
-			})
 		}
 	}
 }

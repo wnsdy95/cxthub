@@ -34,6 +34,10 @@ func (q *sessionQueries) record(ctx context.Context, what string, parts ...any) 
 	q.asked = append(q.asked, strings.TrimSpace(actor+" "+what+" "+fmt.Sprint(parts...)))
 }
 
+func (q *sessionQueries) ListRepos(context.Context, string) ([]domain.Repo, error) {
+	return nil, nil
+}
+
 func (q *sessionQueries) GetAnchoredSession(ctx context.Context, _ domain.ContentHash, provider domain.ProviderKind, id string) (domain.AnchoredSession, error) {
 	q.record(ctx, "get", provider, "/", id)
 	return q.session, q.err

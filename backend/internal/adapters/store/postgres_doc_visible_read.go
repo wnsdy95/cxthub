@@ -4,19 +4,9 @@ package store
 
 import (
 	"context"
-	"maps"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
-
-type postgresDocVisibleGenerationRead struct {
-	gate       chan struct{}
-	generation domain.DocVisibleGeneration
-	binding    domain.DocReadGenerationBinding
-	objects    postgresDocRangeGenerationRead
-	reader     *domain.DocVisibleReader
-}
 
 func (s *PostgresStore) readVisibleGeneration(ctx context.Context, repo, hash domain.ContentHash) (domain.DocVisibleGeneration, error) {
 	generation, _, err := s.readVisibleGenerationBinding(ctx, repo, hash)
@@ -69,77 +59,3 @@ func (s *PostgresStore) readVisibleGenerationBinding(ctx context.Context, repo, 
 	}
 	return generation, binding, ctx.Err()
 }
-
-func (s *PostgresStore) OpenDocVisibleGeneration(ctx context.Context, repo, hash domain.ContentHash) (outbound.DocVisibleGenerationRead, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if !s.InReadOnlyTransaction(ctx) {
-		return nil, domain.ErrConflict
-	}
-	var pinned bool
-	if err := s.db(ctx).QueryRow(ctx, `SELECT current_setting('transaction_isolation')='repeatable read'
- AND current_setting('transaction_read_only')='on'`).Scan(&pinned); err != nil {
-		return nil, err
-	}
-	if !pinned {
-		return nil, domain.ErrConflict
-	}
-	generation, binding, err := s.readVisibleGenerationBinding(ctx, repo, hash)
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	read := &postgresDocVisibleGenerationRead{
-		gate:       make(chan struct{}, 1),
-		generation: generation,
-		binding:    binding,
-		objects: postgresDocRangeGenerationRead{
-			transaction: ctx.Value(repositoryTxKey{}).(*repositoryTx),
-			generation:  domain.DocRangeGeneration{Hash: generation.Hash},
-			objects:     make(map[domain.ContentHash][]byte),
-		},
-	}
-	read.reader, err = domain.NewDocVisibleReader(generation, read.loadObject)
-	if err != nil {
-		return nil, err
-	}
-	return read, nil
-}
-
-func (read *postgresDocVisibleGenerationRead) Descriptor() domain.DocVisibleGeneration {
-	generation := read.generation
-	generation.Views = maps.Clone(generation.Views)
-	return generation
-}
-
-func (read *postgresDocVisibleGenerationRead) Binding() domain.DocReadGenerationBinding {
-	return read.binding
-}
-
-func (read *postgresDocVisibleGenerationRead) loadObject(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
-	return read.objects.loadObject(ctx, hash, domain.MaxDocVisibleObjectBytes)
-}
-
-func (read *postgresDocVisibleGenerationRead) Unit(ctx context.Context, mode string, position int, byEvent bool) (domain.DocVisibleUnit, int, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.DocVisibleUnit{}, 0, err
-	}
-	if read.gate == nil || read.reader == nil {
-		return domain.DocVisibleUnit{}, 0, domain.ErrConflict
-	}
-	select {
-	case read.gate <- struct{}{}:
-		defer func() { <-read.gate }()
-	case <-ctx.Done():
-		return domain.DocVisibleUnit{}, 0, ctx.Err()
-	}
-	if err := read.objects.checkTransaction(ctx); err != nil {
-		return domain.DocVisibleUnit{}, 0, err
-	}
-	return read.reader.Unit(ctx, mode, position, byEvent)
-}
-
-var _ outbound.DocVisibleGenerationStore = (*PostgresStore)(nil)

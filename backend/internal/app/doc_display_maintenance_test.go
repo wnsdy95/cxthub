@@ -25,7 +25,7 @@ func (probe *docDisplayMaintenanceProbe) StepDocDisplayMaintenance(ctx context.C
 }
 
 func TestDocDisplayMaintenanceExplicitAndReadOnlyBoundary(test *testing.T) {
-	service := NewService(nil, nil, nil, nil, nil)
+	service := NewService(nil, nil, nil, nil)
 	if err := service.ProcessDocDisplayMaintenance(context.Background(), 1); err != nil {
 		test.Fatal("unconfigured legacy service acquired maintenance work", err)
 	}

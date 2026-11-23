@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type messageDisplayBuildFixture struct {
@@ -138,50 +137,6 @@ func runMessageDisplayBuild(test *testing.T, fixture messageDisplayBuildFixture,
 		fixture.objects[object.Hash] = bytes.Clone(object.Bytes)
 	}
 	return state, plan, partial
-}
-
-func TestDocMessageDisplayBuildOriginalSourcesAndSeparators(test *testing.T) {
-	raw := []byte(`{"kind":"message","opaque":{"text":"PRIVATE"},"blocks":[{"type":"text","text":null},{"type":"text","text":"\u0060\u0060\u0060\n\u0060\u0060\u0060"},{"type":"text","text":"# \uD83D\uDE42 **title**"},{"type":"text"},{"type":"image","name":"**literal**","text":"PRIVATE"},{"type":"text","text":"[label](https://hidden.test)"},{"type":"text","text":""}]}`)
-	fixture := buildMessageDisplayBuildFixture(test, raw)
-	state, plan, _ := runMessageDisplayBuild(test, fixture, 1)
-	baseline, err := BuildDocEventDisplay(context.Background(), raw)
-	if err != nil || state.Count != 3 || plan.TextBytes != len(baseline.Text()) {
-		test.Fatal("message display totals changed", state.Count, plan.TextBytes, err)
-	}
-	parts, err := ReadDocMessageDisplayParts(context.Background(), plan, 0, fixture.load)
-	if err != nil || len(parts) != 3 {
-		test.Fatal(err)
-	}
-	for index, part := range parts {
-		if part.Block != []int{2, 4, 5}[index] || part.Separator != []int{0, 2, 2}[index] {
-			test.Fatal("visible ordinal or separator changed", part)
-		}
-		text := baseline.Text()[part.From+part.Separator : part.end()]
-		_, width := utf8.DecodeRuneInString(text)
-		first, err := baseline.SourceRange(part.From+part.Separator, width)
-		if err != nil || first != part.First {
-			test.Fatal("first original rune mapping changed", part.First, first, err)
-		}
-		if part.Separator > 0 {
-			anchor, err := baseline.SourceRange(part.From, part.Separator)
-			if err != nil || anchor != part.First {
-				test.Fatal("separator lost its first-rune anchor", anchor, err)
-			}
-		}
-		bound, err := bindDocMessageDisplayChild(fixture.inputs[part.Block], fixture.children[part.Block])
-		if err != nil || part.Kind != bound.Kind || part.Plan != HashContent(bound.Raw) || part.TextBytes != bound.Input.source.TextBytes || !bytes.Equal(fixture.objects[part.Plan], bound.Raw) {
-			test.Fatal("child object not preserved", part, err)
-		}
-	}
-	if string(raw[parts[0].First.From:parts[0].First.To]) != `\uD83D\uDE42` || parts[1].First != fixture.inputs[4].Anchor() {
-		test.Fatal("source coordinates are not original JSON coordinates", parts)
-	}
-	for _, block := range []int{1, 6} {
-		raw, err := fixture.children[block].Markdown.Encode()
-		if err != nil || fixture.objects[HashContent(raw)] != nil {
-			test.Fatal("empty child plan was persisted", block, err)
-		}
-	}
 }
 
 func TestDocMessageDisplayBuildEmptyMarkdownCarriesBreaks(test *testing.T) {

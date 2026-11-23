@@ -3,7 +3,6 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -39,10 +38,6 @@ func (backend *anchoredEventsHTTPBackend) ReadDocViewEvents(_ context.Context, _
 func (backend *anchoredEventsHTTPBackend) ReadDocViewFragment(_ context.Context, _, hash domain.ContentHash, index, offset, budget int) (domain.DocViewFragment, error) {
 	backend.reads = append(backend.reads, strings.Join([]string{"fragment", string(hash), itoa(index), itoa(offset), itoa(budget)}, " "))
 	return domain.DocViewFragment{Index: index, Offset: offset, Next: -1, Total: 4, JSON: `"ok"`}, backend.readErr
-}
-
-func (backend *anchoredEventsHTTPBackend) ReadDocVisiblePage(context.Context, domain.ContentHash, domain.ContentHash, domain.DocVisiblePageRequest) (domain.DocVisiblePage, error) {
-	return domain.DocVisiblePage{}, errors.New("the visible projection is not used for a session's conversation")
 }
 
 func itoa(value int) string {

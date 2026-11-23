@@ -183,7 +183,6 @@ func repositoryAssetHTTPRequests(hash domain.ContentHash) []repositoryAssetHTTPR
 		{name: "about", command: "profile", method: http.MethodPatch, path: "/about", body: `{"description":"retained","website":"https://about.example","topics":["context"]}`},
 		{name: "config", command: "profile", method: http.MethodPatch, path: "/about", body: `{"default_branch":"next","protect_default":false}`},
 		{name: "settings", command: "settings", method: http.MethodPut, path: "/settings/claude", body: `{"kind":"agents","files":[{"path":"AGENTS.md","content_b64":"cmV0YWluZWQ="}],"updated_by":"forged"}`, response: `{"kind":"claude","files":1}`},
-		{name: "settings object", command: "settings object", method: http.MethodPut, path: "/settings-objects/" + string(hash), body: `{"kind":"codex","files":[{"path":"AGENTS.md","content_b64":"cmV0YWluZWQ="}],"updated_by":"object-author"}`, response: `{"status":"stored"}`},
 		{name: "secrets", command: "secrets", method: http.MethodPut, path: "/secrets?expected_revision=previous&rotate=true&expect=fingerprint", body: `{"version":1,"ciphertext":"retained"}`, response: `{"status":"stored","revision":"explicit-revision"}`},
 	}
 }

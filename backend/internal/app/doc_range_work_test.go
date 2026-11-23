@@ -62,7 +62,7 @@ func TestBuildDocRangeWorkUnsupportedUsesCompatibilityWithoutRepreparation(test 
 			return nil
 		},
 	}
-	service := NewService(preparationMetadata{}, nil, nil, nil, nil)
+	service := NewService(preparationMetadata{}, nil, nil, nil)
 	published, err := service.buildDocRangeWork(ctx, storage, job)
 	if err != nil || !published || preparations != 1 || compatibility != 1 {
 		test.Fatal("unsupported work did not use one preparation and one compatibility build", published, err, preparations, compatibility)
@@ -140,7 +140,7 @@ func TestDocRangeWorkerDoesNotRetryCommittedPublicationAfterCleanupFailure(tests
 					return prepared, nil
 				},
 			}
-			service := NewService(preparationMetadata{}, nil, nil, nil, nil)
+			service := NewService(preparationMetadata{}, nil, nil, nil)
 			err := service.runDocRangeJob(context.Background(), storage, domain.DocRangeIndexJob{RepoID: h('1')}, docJobLease)
 			if !errors.Is(err, cleanupFailure) || errors.Is(err, publicationFailure) == committed ||
 				(finished == 0) != committed || finished > 1 || prepared.closes != 1 || prepared.publications != 1 {
@@ -187,7 +187,7 @@ func TestBuildDocRangeWorkFallsBackOnlyWithoutCapability(tests *testing.T) {
 					return nil, scenario.prepareError
 				}}
 			}
-			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 			published, err := service.buildDocRangeWork(ctx, storage, job)
 			wantError := errors.Join(scenario.prepareError, scenario.buildError)
 			if published != (wantError == nil) || (wantError == nil && err != nil) || (scenario.prepareError != nil && !errors.Is(err, scenario.prepareError)) || (scenario.buildError != nil && !errors.Is(err, scenario.buildError)) {
@@ -225,7 +225,7 @@ func TestBuildDocRangeWorkPreservesJobAcrossSteps(tests *testing.T) {
 		}
 		return prepared, nil
 	}}
-	service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+	service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 	published, err := service.buildDocRangeWork(ctx, storage, job)
 	if err != nil || !published || prepared.publications != 1 || prepared.closes != 1 {
 		tests.Fatal("incorrect prepared lifecycle", published, err, prepared)
@@ -262,7 +262,7 @@ func TestBuildDocRangeWorkClosesOnceAndJoinsFailures(tests *testing.T) {
 					}
 					return prepared, nil
 				}}
-				service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+				service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 				published, err := service.buildDocRangeWork(context.Background(), storage, domain.DocRangeIndexJob{})
 				if published != (stage == "success") || (stage != "success" && !errors.Is(err, failure)) || (cleanupFails && !errors.Is(err, cleanupFailure)) || (stage == "success" && !cleanupFails && err != nil) {
 					test.Fatal("publication status or joined error lost", published, err)
@@ -319,7 +319,7 @@ func TestBuildDocRangeWorkCancellationStopsCallbacks(tests *testing.T) {
 			if stage == "entry" {
 				cancel()
 			}
-			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 			published, err := service.buildDocRangeWork(ctx, storage, domain.DocRangeIndexJob{})
 			wantCloses := 1
 			if stage == "entry" || stage == "unsupported" {
@@ -344,7 +344,7 @@ func TestBuildDocRangeWorkYieldsOnlyOwnedBoundedWork(tests *testing.T) {
 				} else if reason == "unknown-owner" {
 					bound = context.WithValue(bound, resourceYieldOwnerKey{}, "unknown")
 				}
-				service := NewService(yieldingPreparationMetadata{nested: reason == "transaction"}, nil, nil, nil, nil)
+				service := NewService(yieldingPreparationMetadata{nested: reason == "transaction"}, nil, nil, nil)
 				if reason == "unknown-transaction" {
 					service.meta = streamingPreparationMetadata{}
 				}
@@ -466,7 +466,7 @@ func TestBuildDocRangeWorkCancellationWhileYieldedRetainsCleanup(tests *testing.
 		storage := preparingDocRangeWorkStore{prepare: func(context.Context, domain.DocRangeIndexJob) (outbound.PreparedDocRangeWork, error) {
 			return prepared, nil
 		}}
-		service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+		service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 		published, err := service.buildDocRangeWork(bound, storage, domain.DocRangeIndexJob{})
 		close(finish)
 		if queuedError := <-queued; queuedError != nil {

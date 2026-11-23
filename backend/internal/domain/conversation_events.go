@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -14,59 +13,11 @@ type RootEventSelection struct {
 }
 
 type verifiedRootEvent struct {
-	body string
-	hash ContentHash
-	seq  int
 }
 
 type VerifiedRootEvents struct {
-	reference                VerifiedDocReference
-	envelope                 string
-	hashes                   []ContentHash
 	events                   []verifiedRootEvent
 	total, offset, inherited int
-	hashesOnly               bool
-}
-
-func (projection VerifiedRootEvents) Reference() VerifiedDocReference {
-	return projection.reference
-}
-
-func (projection VerifiedRootEvents) EventHashes() ([]ContentHash, error) {
-	if !projection.reference.Valid() || !projection.hashesOnly {
-		return nil, ErrIntegrity
-	}
-	return append([]ContentHash{}, projection.hashes...), nil
-}
-
-func (projection VerifiedRootEvents) Page(ctx context.Context) (DocEventPage, error) {
-	if err := ctx.Err(); err != nil {
-		return DocEventPage{}, err
-	}
-	if !projection.reference.Valid() || projection.hashesOnly {
-		return DocEventPage{}, ErrIntegrity
-	}
-	page := DocEventPage{Hash: projection.reference.Hash(), Events: []CIREvent{}, Total: projection.total, Offset: projection.offset, Inherited: projection.inherited, Next: -1}
-	if err := json.Unmarshal([]byte(projection.envelope), &page.Envelope); err != nil {
-		return DocEventPage{}, ErrIntegrity
-	}
-	for _, selected := range projection.events {
-		if err := ctx.Err(); err != nil {
-			return DocEventPage{}, err
-		}
-		event, err := DecodeIndexedEvent([]byte(selected.body), DocEventIndex{Hash: selected.hash, Seq: selected.seq, Length: len(selected.body)})
-		if err != nil {
-			return DocEventPage{}, err
-		}
-		page.Events = append(page.Events, event)
-	}
-	if next := page.Offset + len(page.Events); next < page.Total {
-		page.Next = next
-	}
-	if err := ctx.Err(); err != nil {
-		return DocEventPage{}, err
-	}
-	return page, nil
 }
 
 func (verifier *CanonicalDocVerifier) VerifyConversationEvents(ctx context.Context, want ContentHash, manifest ConversationManifest, load func(context.Context, ContentHash) ([]byte, error), selection RootEventSelection) (VerifiedRootEvents, error) {
@@ -83,7 +34,7 @@ func (verifier *CanonicalDocVerifier) VerifyConversationEvents(ctx context.Conte
 		selection.Limit = 50
 	}
 	selection.Base = append([]ContentHash(nil), selection.Base...)
-	projection := VerifiedRootEvents{envelope: string(manifest.Envelope), hashesOnly: selection.HashesOnly}
+	projection := VerifiedRootEvents{}
 	var pending []canonicalEventProof
 	var eventHash ContentHash
 	check := func(ctx context.Context, version string, body []byte) (int, error) {
@@ -95,7 +46,6 @@ func (verifier *CanonicalDocVerifier) VerifyConversationEvents(ctx context.Conte
 		index := int(position)
 		projection.total++
 		if selection.HashesOnly {
-			projection.hashes = append(projection.hashes, eventHash)
 			return nil
 		}
 		if index == projection.inherited && index < len(selection.Base) && eventHash == selection.Base[index] {
@@ -112,7 +62,7 @@ func (verifier *CanonicalDocVerifier) VerifyConversationEvents(ctx context.Conte
 			closed = true
 			return nil
 		}
-		projection.events = append(projection.events, verifiedRootEvent{body: string(body), hash: eventHash, seq: sequence})
+		projection.events = append(projection.events, verifiedRootEvent{})
 		pageBytes += len(body)
 		return nil
 	}
@@ -146,6 +96,5 @@ func (verifier *CanonicalDocVerifier) VerifyConversationEvents(ctx context.Conte
 		return VerifiedRootEvents{}, err
 	}
 	verifier.remember(pending)
-	projection.reference = VerifiedDocReference{hash: want, identity: DocumentIdentityRootV1}
 	return projection, nil
 }

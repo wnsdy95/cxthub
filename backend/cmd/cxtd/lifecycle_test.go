@@ -8,15 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitevidence"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/webhookdelivery"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
-	"github.com/wnsdy95/cxthub/backend/internal/app/gitchangeworker"
-	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
-	"github.com/wnsdy95/cxthub/backend/internal/app/projectionworker"
-	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"github.com/wnsdy95/cxthub/backend/internal/serverruntime"
@@ -217,178 +210,6 @@ func (apiLifecycleDocumentStore) ClaimDocDisplay(context.Context, time.Time, tim
 	return domain.DocDisplayJob{}, domain.ErrNotFound
 }
 
-func TestAPILifecycleJoinsActualWorkersWithInheritedCancellation(test *testing.T) {
-	test.Run("without GitHub", func(test *testing.T) {
-		testAPILifecycleJoinsActualWorkers(test, false)
-	})
-	test.Run("with GitHub", func(test *testing.T) {
-		testAPILifecycleJoinsActualWorkers(test, true)
-	})
-}
-
-func testAPILifecycleJoinsActualWorkers(test *testing.T, withGitHub bool) {
-	test.Helper()
-	storage, err := store.OpenFSStore(test.TempDir())
-	if err != nil {
-		test.Fatal(err)
-	}
-	service := app.NewService(storage, apiLifecycleRangeStore{FSStore: storage}, nil, nil, storage)
-	service.ConfigureDocumentFindFields(apiLifecycleDocumentStore{})
-	service.ConfigureDocumentDisplay(apiLifecycleDocumentStore{})
-	documentWorkers, err := service.DocumentWorkersForProfile(documentquery.LegacyCompatibility)
-	if err != nil {
-		test.Fatal(err)
-	}
-	if documentWorkers.Finalization == nil || documentWorkers.Range == nil || documentWorkers.FindFields == nil || documentWorkers.Display == nil {
-		test.Fatal("actual API document owners are missing")
-	}
-	projectionWorkers, err := service.ProjectionWorkersForProfile(projectionworker.Compatibility)
-	if err != nil {
-		test.Fatal(err)
-	}
-	if projectionWorkers.Pending == nil || projectionWorkers.Graph == nil || projectionWorkers.Qualification == nil {
-		test.Fatal("actual API projection owners are missing")
-	}
-	identity := app.NewIdentityService(nil, storage)
-	invitationEmailWorker, err := app.NewInvitationEmailWorker(identity.InvitationEmailWorkerConfig(app.InvitationEmailCompatibility))
-	if err != nil || invitationEmailWorker == nil {
-		test.Fatal("actual invitation email owner is missing", err)
-	}
-	notificationWorker, err := app.NewNotificationWorker(app.NotificationWorkerConfig{
-		Profile: notificationworker.Complete, Metadata: storage, Blobs: storage, Repositories: storage, Sender: webhookdelivery.New(),
-	})
-	if err != nil {
-		test.Fatal(err)
-	}
-	maintenanceWorkers, err := app.NewMaintenanceWorkers(app.MaintenanceWorkersConfig{Profile: systemmaintenance.Compatibility, Repositories: storage})
-	if err != nil || maintenanceWorkers.Runtime == nil || maintenanceWorkers.Storage == nil {
-		test.Fatal("actual auxiliary maintenance owners are missing", err)
-	}
-	reader := gitevidence.NewGitHub(func() string { return "" })
-	gitChangeWorker, err := app.NewGitChangeWorker(app.GitChangeWorkerConfig{
-		Profile: gitchangeworker.Compatibility, Metadata: storage, Blobs: storage, Repositories: storage, Reader: reader,
-	})
-	if err != nil {
-		test.Fatal(err)
-	}
-	gitIntegrationWorkers, err := app.NewGitIntegrationWorkers(app.GitIntegrationWorkerConfig{
-		Profile: app.GitIntegrationCompatibility, Metadata: storage, Blobs: storage, Repositories: storage, Reader: reader,
-	})
-	if err != nil {
-		test.Fatal(err)
-	}
-	remoteGitSync, err := app.NewRemoteGitSync(app.RemoteGitSyncConfig{Metadata: storage, Blobs: storage, Repositories: storage, Reader: reader})
-	if err != nil {
-		test.Fatal(err)
-	}
-	memoryPreparations, err := app.NewMemoryPreparationWorkers(app.MemoryPreparationWorkerConfig{
-		Profile: app.MemoryPreparationCompatibility, Resources: service.MemoryPreparationResources(),
-	})
-	if err != nil {
-		test.Fatal(err)
-	}
-	prPromotionWorker, err := app.NewPRPromotionWorker(service.PRPromotionWorkerConfig(app.PRPromotionCompatibility))
-	if err != nil {
-		test.Fatal(err)
-	}
-	maintenance, err := app.NewDisplayMaintenanceWorker(apiLifecycleMaintenanceStore{})
-	if err != nil {
-		test.Fatal(err)
-	}
-	type workerBinding struct {
-		name string
-		run  func(context.Context)
-	}
-	var workers []workerBinding
-	expectedWorkers := 18
-	if withGitHub {
-		github := app.NewGitHubConnections(identity, service, storage, nil)
-		githubWorker, err := app.NewGitHubWorker(github.GitHubWorkerConfig(app.GitHubWorkerCompatibility))
-		if err != nil || githubWorker == nil {
-			test.Fatal("actual GitHub synchronization owner is missing", err)
-		}
-		workers = append(workers, workerBinding{name: "github", run: githubWorker.Run})
-		expectedWorkers++
-	}
-	workers = append(workers, []workerBinding{
-		{name: "git changes", run: gitChangeWorker.Run},
-		{name: "git scans", run: gitIntegrationWorkers.Run},
-		{name: "git reconciliation", run: gitIntegrationWorkers.RunReconciler},
-		{name: "remote Git", run: remoteGitSync.Run},
-		{name: "document finalization", run: documentWorkers.Finalization.Run},
-		{name: "document range", run: documentWorkers.Range.Run},
-		{name: "document find fields", run: documentWorkers.FindFields.Run},
-		{name: "document display", run: documentWorkers.Display.Run},
-		{name: "document display maintenance", run: maintenance.Run},
-		{name: "pending projection", run: projectionWorkers.Pending.Run},
-		{name: "graph projection", run: projectionWorkers.Graph.Run},
-		{name: "memory preparation", run: memoryPreparations.Run},
-		{name: "graph qualification", run: projectionWorkers.Qualification.Run},
-		{name: "PR promotion", run: prPromotionWorker.Run},
-		{name: "notifications", run: notificationWorker.Run},
-		{name: "invitation email", run: invitationEmailWorker.Run},
-		{name: "runtime maintenance", run: maintenanceWorkers.Runtime.Run},
-		{name: "storage maintenance", run: maintenanceWorkers.Storage.Run},
-	}...)
-	if len(workers) != expectedWorkers {
-		test.Fatalf("actual API worker count: got %d, want %d", len(workers), expectedWorkers)
-	}
-	parent, cancelParent := context.WithTimeout(context.WithValue(context.Background(), apiLifecycleContextKey{}, "inherited"), time.Minute)
-	defer cancelParent()
-	entered := make(chan context.Context, len(workers))
-	returned := make(chan string, len(workers))
-	closed := make(chan struct{})
-	lifecycle := newAPILifecycle(parent, func() {
-		if len(returned) != len(workers) {
-			test.Errorf("runtime closed with only %d/%d workers returned", len(returned), len(workers))
-		}
-		close(closed)
-	})
-	test.Cleanup(lifecycle.close)
-	for _, worker := range workers {
-		lifecycle.start(func(ctx context.Context) {
-			entered <- ctx
-			worker.run(ctx)
-			returned <- worker.name
-		})
-	}
-	for range workers {
-		select {
-		case workerContext := <-entered:
-			if workerContext != lifecycle.ctx || workerContext.Value(apiLifecycleContextKey{}) != "inherited" {
-				test.Error("worker did not inherit the single API lifecycle context")
-			}
-			deadline, hasDeadline := workerContext.Deadline()
-			parentDeadline, _ := parent.Deadline()
-			if !hasDeadline || !deadline.Equal(parentDeadline) {
-				test.Error("worker lost the caller's deadline")
-			}
-		case <-time.After(5 * time.Second):
-			test.Fatal("an actual worker did not enter its lifecycle")
-		}
-	}
-	cancelParent()
-	waitAPILifecycleSignal(test, lifecycle.ctx.Done(), "inherited parent cancellation")
-	stopped := make(chan struct{})
-	go func() {
-		lifecycle.close()
-		close(stopped)
-	}()
-	waitAPILifecycleSignal(test, stopped, "all actual worker returns")
-	waitAPILifecycleSignal(test, closed, "runtime close after all actual worker returns")
-	seen := make(map[string]bool, len(workers))
-	for range workers {
-		name := <-returned
-		if seen[name] {
-			test.Errorf("worker returned more than once: %s", name)
-		}
-		seen[name] = true
-	}
-	if !errors.Is(lifecycle.ctx.Err(), context.Canceled) {
-		test.Fatalf("worker context was not canceled: %v", lifecycle.ctx.Err())
-	}
-}
-
 type apiLifecycleGitHubRemote struct {
 	outbound.GitHubApp
 	started  chan<- context.Context
@@ -434,7 +255,7 @@ func TestAPILifecycleJoinsActualGitHubWorkerBeforeRuntimeClose(test *testing.T) 
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	remote := apiLifecycleGitHubRemote{started: started, canceled: canceled, release: release}
-	service := app.NewService(storage, storage, nil, nil, storage)
+	service := app.NewService(storage, storage, nil, storage)
 	github := app.NewGitHubConnections(identity, service, storage, remote)
 	githubWorker, err := app.NewGitHubWorker(github.GitHubWorkerConfig(app.GitHubWorkerCompatibility))
 	if err != nil || githubWorker == nil {

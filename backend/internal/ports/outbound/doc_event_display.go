@@ -27,8 +27,6 @@ type DocToolOrderWorkReader interface {
 }
 
 type DocEventDisplayReader interface {
-	ReadDocEventDisplayGeneration(context.Context, domain.DocDisplayTarget) (domain.DocDisplayProjectionGeneration, error)
-	ReadDocEventDisplayPage(context.Context, domain.DocDisplayTarget, int) (domain.DocDisplayPage, error)
 }
 
 type DocEventDisplayStore interface {

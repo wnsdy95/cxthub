@@ -29,40 +29,13 @@ import (
 
 // Backend is a set of server actions required by REST handlers (app.Service implements).
 type Backend interface {
-	inbound.RepositoryInitialization
-	inbound.BranchPullPlanner
 	Negotiate(ctx context.Context, in inbound.PushNegotiateInput) (inbound.PushNegotiateOutput, error)
 	StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error)
-	PullChunks(ctx context.Context, in inbound.PullChunksInput) (inbound.PullChunksOutput, error)
 	Commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error)
-	Send(ctx context.Context, in inbound.PullSendInput) (inbound.PullSendOutput, error)
-	UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error)
-	UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (inbound.UpdateRefsOutput, error)
-	List(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error)
-	Diff(ctx context.Context, in inbound.DiffInput) (inbound.DiffOutput, error)
-	Search(ctx context.Context, in inbound.SearchInput) (inbound.SearchOutput, error)
-	Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error)
-	PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error
-	GraftSnapshotParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash, expectedSeq uint64) error
-	inbound.JoinPreview
-	GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error)
 	EnsureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
-	Contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error)
-	Activity(ctx context.Context, repositories []domain.Repository) ([]domain.ActivityMonth, error)
 	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
-	Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error)
-	Reflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
-	ListHistory(ctx context.Context, repoID domain.ContentHash) ([]domain.HistoryEvent, error)
-	RecordHistory(ctx context.Context, event domain.HistoryEvent) error
-	EnableContextProtocol(context.Context, domain.ContentHash) error
 	GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error)
-	GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error)
-	ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error)
-	// MemoryDigest: snapshot derivative carried with the raw document (compatibility rules).
-	PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
-	PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
-	inbound.MemoryReuser
 	// About + team default settings bundle (web editing).
 	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
 	PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error)
@@ -70,22 +43,6 @@ type Backend interface {
 	GetSettings(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
 	inbound.SaveSecrets
 	GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
-	PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error
-	GetSettingsObjectByHash(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error)
-	// In-progress context pointer (CLI hook capture mirror — resolved by deletion on commit, for web display).
-	PutPending(ctx context.Context, repoID domain.ContentHash, sessionID string, p domain.Pending) error
-	ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error)
-	DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
-	CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error)
-	DismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
-	UndismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
-	// GitHub PR merged webhook → append base context from head branch to base.
-	PromoteMergedPR(ctx context.Context, gitURL string, pr domain.PullRequestMerge) (int, error)
-	PromoteRepositoryPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error)
-	// Push pending (unsync) pointer ((user, branch) key — resolved by deletion on git push, for On Hold display).
-	PutUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string, u domain.Unsync) error
-	ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([]domain.Unsync, error)
-	DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error
 	// GitHub public state sync (GHVisibilitySync enabled repository — GitHub → cxthub unidirectional).
 	SyncRepositoryVisibility(ctx context.Context, repositoryID string) (domain.Repository, error)
 	// Repository structure setup (default branch, protected branch) — for maintainers and above.
@@ -98,36 +55,11 @@ type Server struct {
 	githubConnections        GitHubConnections
 	githubAppSecret          string
 	githubReturnURL          string
-	gitSyncAudit             inbound.GitSyncAudit
 	docFinalization          inbound.DocFinalization
-	documentEvents           inbound.DocumentEventQueries
 	documentViews            inbound.DocumentViewQueries
 	documentQueryProfile     inbound.DocumentQueryProfile
-	contextQueries           inbound.ContextQuery
-	contextQueryProfile      inbound.ContextQueryProfile
-	docFind                  inbound.DocumentFindQuery
-	docFindFragment          inbound.DocumentFindFragmentQuery
-	effectiveMemory          inbound.EffectiveMemoryReader
-	preparedMemory           inbound.PreparedMemoryReader
-	memorySnapshots          inbound.MemorySnapshotQueries
-	memoryPositions          inbound.MemoryPositionReader
-	codeApplicability        inbound.CodeApplicabilityQuery
-	gitChanges               inbound.GitChanges
-	gitScans                 inbound.GitScans
 	repositoryAssets         inbound.RepositoryAssetCommands
 	documentPublications     inbound.DocumentPublicationCommands
-	repositoryRefs           inbound.RepositoryRefCommands
-	snapshotGrafts           app.SnapshotGraftWriter
-	memoryDigests            app.MemoryDigestWriter
-	historyCommands          inbound.HistoryCommands
-	prPromoter               inbound.PRPromotionDeliverer
-	prPromotions             inbound.PRPromotionCommands
-	contextBranches          inbound.ContextBranchOperations
-	repositoryStates         inbound.RepositoryStateQueries
-	repositoryStateProfile   inbound.RepositoryStateQueryProfile
-	repositoryGraphs         inbound.RepositoryGraphQueries
-	repositoryGraphProfile   inbound.RepositoryGraphQueryProfile
-	changes                  repositoryChangeHub
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (repository ID set).
 	syncInflight sync.Map
 	runtime      outbound.RuntimeStore
@@ -153,9 +85,8 @@ func NewServer(b Backend, id IdentityBackend) *Server {
 		runtime = provider.RuntimeStore()
 	}
 	docFinalization, _ := b.(inbound.DocFinalization)
-	prPromoter, prPromotions := legacyPRPromotionBindings(b)
-	return &Server{b: b, id: id, repositoryAssets: b, documentPublications: b, repositoryRefs: b, snapshotGrafts: b, memoryDigests: b, historyCommands: b, contextBranches: b,
-		prPromoter: prPromoter, prPromotions: prPromotions, docFinalization: docFinalization, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
+	return &Server{b: b, id: id, repositoryAssets: b, documentPublications: b,
+		docFinalization: docFinalization, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
 }
 
 func (server *Server) SetRepositoryAssetCommands(commands inbound.RepositoryAssetCommands) error {
@@ -172,49 +103,11 @@ func (server *Server) SetRepositoryAssetCommands(commands inbound.RepositoryAsse
 	return nil
 }
 
-func (server *Server) SetRepositoryStateQueries(queries inbound.RepositoryStateQueries, profile inbound.RepositoryStateQueryProfile) error {
-	if profile != inbound.RepositoryStateCompatibility && profile != inbound.RepositoryStatePinnedSnapshots {
-		return fmt.Errorf("%w: explicit repository state query profile is required", domain.ErrValidation)
-	}
-	if queries == nil {
-		return fmt.Errorf("%w: repository state queries are required", domain.ErrValidation)
-	}
-	switch value := reflect.ValueOf(queries); value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		if value.IsNil() {
-			return fmt.Errorf("%w: repository state queries are required", domain.ErrValidation)
-		}
-	}
-	server.repositoryStates = queries
-	server.repositoryStateProfile = profile
-	return nil
-}
-
-func (server *Server) SetRepositoryGraphQueries(queries inbound.RepositoryGraphQueries, profile inbound.RepositoryGraphQueryProfile) error {
-	if profile != inbound.RepositoryGraphCompatibility && profile != inbound.RepositoryGraphPinnedSnapshots {
-		return fmt.Errorf("%w: explicit repository graph query profile is required", domain.ErrValidation)
-	}
-	if queries == nil {
-		return fmt.Errorf("%w: repository graph queries are required", domain.ErrValidation)
-	}
-	switch value := reflect.ValueOf(queries); value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		if value.IsNil() {
-			return fmt.Errorf("%w: repository graph queries are required", domain.ErrValidation)
-		}
-	}
-	server.repositoryGraphs = queries
-	server.repositoryGraphProfile = profile
-	return nil
-}
-
 func (server *Server) SetDocumentQueries(queries inbound.DocumentQueries, profile inbound.DocumentQueryProfile) error {
 	if err := server.SetDocumentEventQueries(queries, profile); err != nil {
 		return err
 	}
 	server.documentViews = queries
-	server.docFind = queries
-	server.docFindFragment = queries
 	return nil
 }
 
@@ -231,7 +124,6 @@ func (server *Server) SetDocumentEventQueries(queries inbound.DocumentEventQueri
 			return fmt.Errorf("%w: document event queries are required", domain.ErrValidation)
 		}
 	}
-	server.documentEvents = queries
 	server.documentQueryProfile = profile
 	return nil
 }
@@ -282,41 +174,7 @@ func (s *Server) Handler() http.Handler {
 	// GET at viewer level is allowed for public repositories. Detailed rules are in requireRepoRole.
 	mux.HandleFunc("GET /api/v1/repos", s.listRepos)
 	mux.HandleFunc("POST /api/v1/repos", s.requireUser(s.createRepo)) // distillation (empirically verified usage of bound repositoryRecord is checked by subsequent gate)
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/initialization", s.guard(domain.RoleMaintainer, s.getRepositoryInitialization))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/initialization", s.requireUser(s.beginRepositoryInitialization))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/initialization/finalize", s.guard(domain.RoleMaintainer, s.finalizeRepositoryInitialization))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}", s.guard(domain.RoleViewer, s.getRepo))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/fsck", s.guard(domain.RoleViewer, s.fsck))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/reflog", s.guard(domain.RoleViewer, s.reflog))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/github-sync-check", s.guard(domain.RoleMaintainer, s.checkGitHubSync))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/context-protocol", s.guard(domain.RoleMaintainer, s.enableContextProtocol))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/history", s.guard(domain.RoleViewer, s.listHistory))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promotions", s.guard(domain.RoleMember, s.submitPRPromotion))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/prs/promotions", s.guard(domain.RoleViewer, s.listPRPromotions))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promotions/{jobID}/retry", s.guard(domain.RoleMember, s.retryPRPromotion))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promote", s.guard(domain.RoleMember, s.promoteRepositoryPR))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/history", s.guard(domain.RoleMember, s.recordHistory))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/history/memory-selection", s.guard(domain.RoleMember, s.recordMemorySelection))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/manifest", s.guard(domain.RoleViewer, s.getManifest))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/branches", s.guard(domain.RoleViewer, s.listRefs))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/refs/batch", s.guard(domain.RoleMember, s.putRefs))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/context-query", s.guard(domain.RoleViewer, s.contextQuery))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleMember, s.submitGitChange))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory", s.guard(domain.RoleViewer, s.queryEffectiveMemory))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory/read", s.guard(domain.RoleViewer, s.queryPreparedMemory))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory/positions", s.guard(domain.RoleViewer, s.queryMemoryPositions))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/code-applicability", s.guard(domain.RoleViewer, s.queryCodeApplicability))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-scans", s.guard(domain.RoleViewer, s.listGitScans))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/git/associations", s.guard(domain.RoleViewer, s.getGitAssociationStatus))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-scans/{scanID}/retry", s.guard(domain.RoleMember, s.retryGitScan))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleViewer, s.listGitChanges))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes/{changeID}", s.guard(domain.RoleViewer, s.getGitChange))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes/{changeID}/retry", s.guard(domain.RoleMember, s.retryGitChange))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/view", s.guard(domain.RoleViewer, compressedGraphRead(s.repositoryView)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/bootstrap", s.guard(domain.RoleViewer, s.repositoryBootstrap))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/graph-readiness", s.guard(domain.RoleViewer, s.graphReadiness))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/archive", s.guard(domain.RoleMaintainer, s.archiveSession))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions", s.guard(domain.RoleViewer, s.listAnchoredSessions))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}", s.guard(domain.RoleViewer, s.getAnchoredSession))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/anchored-sessions/{provider}/{sessionID}", s.guard(domain.RoleMember, s.putAnchoredSession))
@@ -343,25 +201,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/worktrees", s.guard(domain.RoleMember, s.putWorktrees))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/remote-git", s.guard(domain.RoleViewer, s.getRemoteGit))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/remote-git/refresh", s.guard(domain.RoleMember, s.refreshRemoteGit))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending-view", s.guard(domain.RoleViewer, compressedGraphRead(s.pendingView)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/graph-state", s.guard(domain.RoleViewer, compressedGraphRead(s.graphState)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/revision", s.guard(domain.RoleViewer, s.repositoryRevision))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/changes", s.withDocumentIdentityStream(s.guard(domain.RoleViewer, s.repositoryChanges)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots", s.guard(domain.RoleViewer, s.listSnapshots))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots/{id}", s.guard(domain.RoleViewer, s.getSnapshot))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/promote", s.guard(domain.RoleMember, s.promoteSnapshot))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/graft", s.guard(domain.RoleMember, s.graftSnapshot))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/join/preview", s.guard(domain.RoleMember, s.previewJoin))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/join", s.guard(domain.RoleMember, s.joinSnapshot))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/search", s.guard(domain.RoleViewer, s.bulkRead(s.search)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.bulkRead(s.getDoc)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/events", s.guard(domain.RoleViewer, s.getDocEvents))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/event-fragments", s.guard(domain.RoleViewer, s.getDocEventFragment))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/find", s.guard(domain.RoleViewer, s.getDocFindPage))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/find-fragments", s.guard(domain.RoleViewer, s.getDocFindFragment))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/turns", s.guard(domain.RoleViewer, s.bulkRead(s.getDocTurns)))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleViewer, s.getMemory))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/memory-objects/{hash}", s.guard(domain.RoleViewer, s.getMemoryObject))
 	// Team-asset reads require puller. Settings writes use the action gate;
 	// secrets writes authorize inside the application transaction.
 	mux.HandleFunc("PATCH /api/v1/repos/{repoID}/about", s.guard(domain.RoleMaintainer, s.patchAbout))
@@ -370,26 +209,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/secrets", s.requireUser(s.putSecrets))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/secrets", s.guard(domain.RolePuller, s.getSecrets))
 	// Commit attachment settings object: Write = context push part (member), Read = pull layer (puller).
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/settings-objects/{hash}", s.guard(domain.RolePuller, s.getSettingsObject))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings-objects/{hash}", s.guard(domain.RoleMember, s.putSettingsObject))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleMember, s.putMemory))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryAttachment))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/memory-publications", s.guard(domain.RoleMember, s.publishMemoryArchive))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/typed-memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putTypedMemoryAttachment))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-reuses/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryReuse))
 	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending", s.guard(domain.RolePuller, s.listPending))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/pending/{sessionID}", s.guard(domain.RoleMember, s.putPending))
-	mux.HandleFunc("DELETE /api/v1/repos/{repoID}/pending/{sessionID}", s.guard(domain.RoleMember, s.deletePending))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pending/{sessionID}/dismiss", s.guard(domain.RoleMember, s.dismissPending))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pending/{sessionID}/undismiss", s.guard(domain.RoleMember, s.undismissPending))
 	// Push pending (unsync) pointer: Key = (authenticated user, branch) — write/delete only by owner.
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/unsync", s.guard(domain.RolePuller, s.listUnsync))
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/unsync/{branch...}", s.guard(domain.RoleMember, s.putUnsync))
-	mux.HandleFunc("DELETE /api/v1/repos/{repoID}/unsync/{branch...}", s.guard(domain.RoleMember, s.deleteUnsync))
 	// {name...}: Branch names can include slashes like in git (feature/login, etc.) — full matching of the rest.
-	mux.HandleFunc("PUT /api/v1/repos/{repoID}/refs/{kind}/{name...}", s.guard(domain.RoleMember, s.putRef))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/conditional-appends/v1/{name...}", s.guard(domain.RoleMember, s.conditionalAppendV1))
 
 	// GitHub webhook reception (PR merged → context promotion). HMAC signature verification instead of authentication — inactive (404) if secret (CXT_GITHUB_WEBHOOK_SECRET) is not set.
 	mux.HandleFunc("POST /api/v1/hooks/github", s.githubWebhook)
@@ -399,16 +221,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/doc-jobs", s.guard(domain.RoleMember, s.submitDocFinalization))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/push/doc-jobs/{jobID}", s.guard(domain.RoleMember, s.getDocFinalization))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.bulkRead(s.pullChunks)))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/branch-plan", s.guard(domain.RolePuller, s.pullBranchPlan))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog", s.guard(domain.RolePuller, s.pullCatalog))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog/merkle", s.guard(domain.RolePuller, s.pullCatalogMerkle))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.bulkRead(s.pullObjects)))
 
 	// Actions exposed by the server. Provider-session restoration remains a local
 	// CLI operation and is deliberately absent from the HTTP surface.
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/diff", s.guard(domain.RoleViewer, s.bulkRead(s.diff)))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/fork", s.guard(domain.RoleMember, s.fork))
 
 	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)
@@ -522,83 +337,16 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, out, err)
 }
 
+// getRepo answers the repository together with the document identities this
+// server reads, which a CLI needs to know before it uploads a conversation.
 func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
-	branch := ""
-	queryValues, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_request", "invalid query")
-		return
-	}
-	if values, present := queryValues["initial_branch"]; present {
-		if len(values) != 1 || domain.ValidateBranchName(values[0]) != nil {
-			s.writeError(w, http.StatusBadRequest, "bad_request", "invalid initial branch")
-			return
-		}
-		branch = values[0]
-	}
 	ids, enabled := s.documentIdentityCapabilities()
-	var out domain.Repo
-	var pending bool
-	if query, ok := s.b.(inbound.RepositoryInitializationQuery); ok {
-		// The service pins requirement and any permitted initialization state in
-		// one snapshot. Incompatible discovery returns metadata only.
-		out, pending, err = query.GetRepositoryInitializationView(r.Context(), s.repoID(r), branch)
-	} else {
-		out, err = s.b.GetRepo(r.Context(), s.repoID(r))
-	}
+	out, err := s.b.GetRepo(r.Context(), s.repoID(r))
 	if err != nil {
 		s.respond(w, nil, err)
 		return
 	}
-	if !documentIdentitySupported(ids, out.RequiredDocIdentity) || !documentIdentitySupported(inbound.DocumentIdentities(r.Context()), out.RequiredDocIdentity) {
-		s.respond(w, repoPullView{Repo: out, DocIdentitiesSupported: ids, RootPublicationEnabled: enabled}, nil)
-		return
-	}
-	catalogVersion := 0
-	if capabilities, ok := s.b.(inbound.CatalogCapabilities); ok {
-		catalogVersion = capabilities.CatalogVersion()
-	}
-	merkleVersion := 0
-	if capabilities, ok := s.b.(inbound.CatalogMerkleCapabilities); ok {
-		merkleVersion = capabilities.CatalogMerkleVersion()
-	}
-	s.respond(w, repoPullView{Repo: out, DocIdentitiesSupported: ids, RootPublicationEnabled: enabled, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, CatalogMerkleVersion: merkleVersion, InitialAnchorAvailable: pending}, nil)
-
-}
-
-// fsck returns reference reachability audit results (read-only — makes no changes).
-func (s *Server) fsck(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.Fsck(r.Context(), s.repoID(r))
-	s.respond(w, out, err)
-}
-
-// reflog returns the repository's ref movement records (newest first) (read-only).
-func (s *Server) reflog(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.Reflog(r.Context(), s.repoID(r))
-	if out == nil {
-		out = []domain.RefLogEntry{}
-	}
-	s.respond(w, out, err)
-}
-
-func (s *Server) getManifest(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetManifest(r.Context(), s.repoID(r))
-	s.respond(w, out, err)
-}
-
-func (s *Server) listRefs(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.ListRefs(r.Context(), s.repoID(r))
-	s.respond(w, out, err)
-}
-
-func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.List(r.Context(), inbound.ListSnapshotsInput{RepoID: s.repoID(r), Branch: r.URL.Query().Get("branch")})
-	s.respond(w, out, err)
-}
-
-func (s *Server) getSnapshot(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetSnapshot(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("id")))
-	s.respond(w, out, err)
+	s.respond(w, repoPullView{Repo: out, DocIdentitiesSupported: ids, RootPublicationEnabled: enabled}, nil)
 }
 
 // requireRepoMember checks if the caller is a member of the repo if it belongs to the repository.
@@ -845,280 +593,6 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
-// getSettingsObject returns the commit attachment settings object.
-func (s *Server) getSettingsObject(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetSettingsObjectByHash(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")))
-	s.respond(w, out, err)
-}
-
-// putSettingsObject stores the commit attachment settings object (idempotent).
-func (s *Server) putSettingsObject(w http.ResponseWriter, r *http.Request) {
-	var bundle domain.SettingsBundle
-	if !s.decode(w, r, &bundle) {
-		return
-	}
-	err := s.repositoryAssets.PutSettingsObject(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), bundle)
-	s.respond(w, map[string]string{"status": "stored"}, err)
-}
-
-// listPending returns the entire list of pending context pointers in the repo (for web display).
-func (s *Server) listPending(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.ListPendings(r.Context(), s.repoID(r))
-	if out == nil {
-		out = []domain.Pending{}
-	}
-	s.respond(w, out, err)
-}
-
-// pendingGuard checks if the caller has the right to overwrite or delete the existing pending for sessionID.
-// unsync enforces ownership by (user,branch) key but pending uses sessionID key, so there was no ownership boundary — any member or someone else could overwrite or delete a pending pointer (asymmetric, review backlog #6).
-// Rule: owner (Author.Email==caller) or maintainer. If no existing pending, new → allowed.
-func (s *Server) pendingGuard(w http.ResponseWriter, r *http.Request, sessionID string) (caller domain.User, handled bool) {
-	caller, _ = userFrom(r.Context())
-	pendings, err := s.b.ListPendings(r.Context(), s.repoID(r))
-	if err != nil {
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return caller, true
-	}
-	for _, p := range pendings {
-		if p.SessionID != sessionID {
-			continue
-		}
-		if p.Author.Email != "" && caller.Email != "" && p.Author.Email == caller.Email {
-			return caller, false // owner
-		}
-		if repo, rerr := s.b.GetRepo(r.Context(), s.repoID(r)); rerr == nil && repo.RepositoryID != "" {
-			if role, ok := s.id.RoleOf(r.Context(), repo.RepositoryID, caller.ID); ok && role.AtLeast(domain.RoleMaintainer) {
-				return caller, false // maintainer or above
-			}
-		}
-		s.writeError(w, http.StatusForbidden, "forbidden", "owned by another session user — only owner or maintainer can change")
-		return caller, true
-	}
-	return caller, false // new
-}
-
-// putPending updates the session's pending pointer (CLI hook detached helper path).
-func (s *Server) putPending(w http.ResponseWriter, r *http.Request) {
-	var p domain.Pending
-	if !s.decode(w, r, &p) {
-		return
-	}
-	sessionID := r.PathValue("sessionID")
-	caller, handled := s.pendingGuard(w, r, sessionID)
-	if handled {
-		return
-	}
-	// Author sets server authority — trusts client body and authenticates user (prevents forgery and misattribution).
-	name := caller.Name
-	if name == "" {
-		name = caller.Username
-	}
-	p.Author = domain.TeamIdentity{Name: name, Email: caller.Email}
-	err := s.b.PutPending(r.Context(), s.repoID(r), sessionID, p)
-	s.respond(w, map[string]string{"status": "stored"}, err)
-}
-
-// deletePending releases the session's pending pointer after commit incorporation or manual cleanup. It is idempotent.
-func (s *Server) deletePending(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.PathValue("sessionID")
-	if _, handled := s.pendingGuard(w, r, sessionID); handled {
-		return
-	}
-	if expected := domain.ContentHash(r.URL.Query().Get("expect")); expected != "" {
-		deleted, err := s.b.CompareAndDeletePending(r.Context(), s.repoID(r), sessionID, expected)
-		status := "kept"
-		if deleted {
-			status = "deleted"
-		}
-		s.respond(w, map[string]string{"status": status}, err)
-		return
-	}
-	err := s.b.DeletePending(r.Context(), s.repoID(r), sessionID)
-	s.respond(w, map[string]string{"status": "deleted"}, err)
-}
-
-// dismissPending hides the capture from the uncommitted list (no data deletion — dismissed flag).
-func (s *Server) dismissPending(w http.ResponseWriter, r *http.Request) {
-	// POST without body can be cross-site submitted via HTML form (unlike PUT/DELETE) —
-	// applies state change common CSRF 2nd defense (application/json enforced) without decode middleware.
-	if !isJSONBody(r) {
-		s.writeError(w, http.StatusUnsupportedMediaType, "bad_request", "Content-Type must be application/json")
-		return
-	}
-	sessionID := r.PathValue("sessionID")
-	if _, handled := s.pendingGuard(w, r, sessionID); handled {
-		return
-	}
-	err := s.b.DismissPending(r.Context(), s.repoID(r), sessionID)
-	s.respond(w, map[string]string{"status": "dismissed"}, err)
-}
-
-// listUnsync returns the entire push queue pointer for the repo (for web On Hold display).
-func (s *Server) listUnsync(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.ListUnsyncs(r.Context(), s.repoID(r))
-	if out == nil {
-		out = []domain.Unsync{}
-	}
-	s.respond(w, out, err)
-}
-
-// putUnsync upserts the push queue pointer for a branch by an authenticated user (for shadow sync).
-func (s *Server) putUnsync(w http.ResponseWriter, r *http.Request) {
-	u, ok := userFrom(r.Context())
-	if !ok {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "Login required")
-		return
-	}
-	var body domain.Unsync
-	if !s.decode(w, r, &body) {
-		return
-	}
-	err := s.b.PutUnsync(r.Context(), s.repoID(r), u.Username, r.PathValue("branch"), body)
-	s.respond(w, map[string]string{"status": "stored"}, err)
-}
-
-// deleteUnsync releases the push queue pointer for a branch by an authenticated user (git push/manual — idempotent).
-func (s *Server) deleteUnsync(w http.ResponseWriter, r *http.Request) {
-	u, ok := userFrom(r.Context())
-	if !ok {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "Login required")
-		return
-	}
-	err := s.b.DeleteUnsync(r.Context(), s.repoID(r), u.Username, r.PathValue("branch"))
-	s.respond(w, map[string]string{"status": "deleted"}, err)
-}
-
-// getMemory returns the compressed memory (MemoryDigest) of a snapshot.
-func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
-	reader := s.memorySnapshots
-	if reader == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "unavailable", "Memory snapshot queries unavailable")
-		return
-	}
-	s.memoryReadWithScope(w, r, reader, func(ctx context.Context) (any, error) {
-		return reader.GetMemoryDigest(ctx, s.repoID(r), domain.ContentHash(r.PathValue("snapshotID")))
-	})
-}
-
-// putMemory attaches compressed memory to a snapshot (idempotent). Target snapshot must exist (404 if not).
-func (s *Server) putMemory(w http.ResponseWriter, r *http.Request) {
-	var d domain.MemoryDigest
-	if !s.decode(w, r, &d) {
-		return
-	}
-	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))
-	hash, err := s.memoryDigests.PutMemoryDigest(r.Context(), s.repoID(r), d)
-	s.respond(w, map[string]any{"memory_hash": hash}, err)
-}
-
-func (s *Server) putMemoryAttachment(w http.ResponseWriter, r *http.Request) {
-	s.putMemoryAttachmentVersion(w, r, false)
-}
-
-func (s *Server) putTypedMemoryAttachment(w http.ResponseWriter, r *http.Request) {
-	s.putMemoryAttachmentVersion(w, r, true)
-}
-
-func (s *Server) putMemoryReuse(w http.ResponseWriter, r *http.Request) {
-	var in inbound.MemoryReuse
-	if !s.decode(w, r, &in) {
-		return
-	}
-	hash, err := s.b.ReuseMemoryDigest(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("snapshotID")), in)
-	s.respond(w, map[string]any{"memory_hash": hash}, err)
-}
-
-func (s *Server) putMemoryAttachmentVersion(w http.ResponseWriter, r *http.Request, typed bool) {
-	var d domain.MemoryDigest
-	if !s.decode(w, r, &d) {
-		return
-	}
-	if (typed && d.ClaimsVersion != domain.MemoryClaimsVersion) || (!typed && (d.ClaimsVersion != 0 || d.HasMemoryClaims())) {
-		s.respond(w, nil, fmt.Errorf("%w: memory claims version does not match attachment endpoint", domain.ErrValidation))
-		return
-	}
-	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))
-	hash, err := s.memoryDigests.PutMemoryDigestCAS(r.Context(), s.repoID(r), d)
-	s.respond(w, map[string]any{"memory_hash": hash}, err)
-}
-
-func (s *Server) getMemoryObject(w http.ResponseWriter, r *http.Request) {
-	reader := s.memorySnapshots
-	if reader == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "unavailable", "Memory snapshot queries unavailable")
-		return
-	}
-	s.memoryReadWithScope(w, r, reader, func(ctx context.Context) (any, error) {
-		return reader.GetMemoryObject(ctx, s.repoID(r), domain.ContentHash(r.PathValue("hash")))
-	})
-}
-
-func (s *Server) getDoc(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetDoc(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")))
-	s.respond(w, out, err)
-}
-
-type putRefBody struct {
-	BranchID       string             `json:"branch_id,omitempty"`
-	Target         domain.ContentHash `json:"target"`
-	ExpectedTarget domain.ContentHash `json:"expected_target"`
-	Symbolic       string             `json:"symbolic"`
-	// Force allows non-fast-forward moves (git push --force).
-	Force bool `json:"force,omitempty"`
-	// Append is like diverged push, grafting the diverged push onto the current head (cxt push --append).
-	Append bool `json:"append,omitempty"`
-}
-
-type putRefsBody struct {
-	Updates []struct {
-		Ref    domain.Ref `json:"ref"`
-		Force  bool       `json:"force,omitempty"`
-		Append bool       `json:"append,omitempty"`
-	} `json:"updates"`
-}
-
-func (s *Server) putRefs(w http.ResponseWriter, r *http.Request) {
-	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
-	if !ok {
-		return
-	}
-	defer release()
-	var body putRefsBody
-	if !s.decodeLimited(w, r, &body, inbound.MaxRefBatchJSONBody) {
-		return
-	}
-	if len(body.Updates) > inbound.MaxRefBatchUpdates {
-		s.respond(w, nil, fmt.Errorf("%w: at most %d ref updates per batch", domain.ErrValidation, inbound.MaxRefBatchUpdates))
-		return
-	}
-	rid := s.repoID(r)
-	updates := make([]inbound.UpdateRefInput, 0, len(body.Updates))
-	for _, update := range body.Updates {
-		update.Ref.RepoID = rid
-		updates = append(updates, inbound.UpdateRefInput{
-			RepoID: rid, Ref: update.Ref, Force: update.Force, Append: update.Append,
-		})
-	}
-	out, err := s.repositoryRefs.UpdateRefs(r.Context(), inbound.UpdateRefsInput{RepoID: rid, Updates: updates})
-	s.respond(w, out, err)
-}
-
-// undismissPending re-adds dismissed uncommitted sessions to the list (undo dismiss).
-func (s *Server) undismissPending(w http.ResponseWriter, r *http.Request) {
-	if !isJSONBody(r) { // dismiss and same body-less POST CSRF 2nd defense
-		s.writeError(w, http.StatusUnsupportedMediaType, "bad_request", "Content-Type must be application/json")
-		return
-	}
-	sessionID := r.PathValue("sessionID")
-	if _, handled := s.pendingGuard(w, r, sessionID); handled {
-		return
-	}
-	err := s.b.UndismissPending(r.Context(), s.repoID(r), sessionID)
-	s.respond(w, map[string]string{"status": "undismissed"}, err)
-}
-
 // githubWebhook converts a merged GitHub PR event into context promotion (audit finding #14).
 // Signature (X-Hub-Signature-256, HMAC-SHA256) verification — secret is server environment variable
 // CXT_GITHUB_WEBHOOK_SECRET (deployment setting). If unset, 404 (feature disabled).
@@ -1147,88 +621,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		s.githubPush(w, r, body)
 		return
 	}
-	if ev := r.Header.Get("X-GitHub-Event"); ev != "pull_request" {
-		s.respond(w, map[string]string{"status": "ignored", "event": ev}, nil)
-		return
-	}
-	var payload struct {
-		Number      int    `json:"number"`
-		Action      string `json:"action"`
-		PullRequest struct {
-			MergeSHA string `json:"merge_commit_sha"`
-			Merged   bool   `json:"merged"`
-			Base     struct {
-				Ref string `json:"ref"`
-			} `json:"base"`
-			Head struct {
-				SHA  string `json:"sha"`
-				Ref  string `json:"ref"`
-				Repo struct {
-					FullName string `json:"full_name"`
-				} `json:"repo"`
-			} `json:"head"`
-		} `json:"pull_request"`
-		Repository struct {
-			HTMLURL  string `json:"html_url"`
-			CloneURL string `json:"clone_url"`
-			FullName string `json:"full_name"`
-		} `json:"repository"`
-	}
-	if jerr := json.Unmarshal(body, &payload); jerr != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_request", "payload parsing failed")
-		return
-	}
-	if payload.Action != "closed" || !payload.PullRequest.Merged {
-		s.respond(w, map[string]string{"status": "ignored"}, nil)
-		return
-	}
-	// Context branch refs belong to the base cxt repository. A fork PR's
-	// same-named branch could otherwise resolve to unrelated base-repo context.
-	if payload.Repository.FullName == "" || payload.PullRequest.Head.Repo.FullName == "" ||
-		!strings.EqualFold(payload.Repository.FullName, payload.PullRequest.Head.Repo.FullName) {
-		s.respond(w, map[string]string{"status": "ignored", "reason": "fork_head"}, nil)
-		return
-	}
-	gitURL := payload.Repository.CloneURL
-	if gitURL == "" {
-		gitURL = payload.Repository.HTMLURL
-	}
-	promote := s.b.PromoteMergedPR
-	if durable, ok := s.b.(interface {
-		SubmitMergedPR(context.Context, string, domain.PullRequestMerge) (int, error)
-	}); ok {
-		promote = durable.SubmitMergedPR
-	}
-	n, perr := promote(inbound.WithSystemActor(r.Context()), gitURL, domain.PullRequestMerge{Number: payload.Number, BaseBranch: payload.PullRequest.Base.Ref, HeadBranch: payload.PullRequest.Head.Ref, HeadSHA: payload.PullRequest.Head.SHA, MergeSHA: payload.PullRequest.MergeSHA})
-	s.respond(w, map[string]interface{}{"status": "accepted", "queued": n}, perr)
-}
-
-func (s *Server) putRef(w http.ResponseWriter, r *http.Request) {
-	class := app.ResourceBulk
-	bounded, supported := s.repositoryRefs.(interface{ SupportsBoundedTagWrites() bool })
-	if supported && bounded.SupportsBoundedTagWrites() && r.PathValue("kind") == string(domain.RefTag) && !strings.HasPrefix(r.PathValue("name"), "cxt/") {
-		class = app.ResourceInteractive
-	}
-	r, release, ok := s.admitResourceRequest(w, r, class)
-	if !ok {
-		return
-	}
-	defer release()
-	var body putRefBody
-	if !s.decodeLimited(w, r, &body, 16<<10) {
-		return
-	}
-	rid := s.repoID(r)
-	ref := domain.Ref{
-		Kind:     domain.RefKind(r.PathValue("kind")),
-		Name:     r.PathValue("name"),
-		RepoID:   rid,
-		Target:   body.Target,
-		Symbolic: body.Symbolic,
-		BranchID: body.BranchID,
-	}
-	out, err := s.repositoryRefs.UpdateRef(r.Context(), inbound.UpdateRefInput{RepoID: rid, Ref: ref, ExpectedTarget: body.ExpectedTarget, Force: body.Force, Append: body.Append})
-	s.respond(w, out, err)
+	s.respond(w, map[string]string{"status": "ignored", "event": r.Header.Get("X-GitHub-Event")}, nil)
 }
 
 type negotiateBody struct {
@@ -1282,144 +675,6 @@ func (s *Server) pushObjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.documentPublications.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Snapshots: body.Snapshots, Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
-	s.respond(w, out, err)
-}
-
-// promoteSnapshot promotes a hook label snapshot message to a commit message (one-way, idempotent).
-func (s *Server) promoteSnapshot(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Message string `json:"message"`
-	}
-	if !s.decode(w, r, &body) {
-		return
-	}
-	err := s.b.PromoteSnapshotMessage(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("id")), body.Message)
-	s.respond(w, map[string]string{"status": "ok"}, err)
-}
-
-// graftSnapshot adds an overlay edge by validating the expected_seq CAS and cycle.
-func (s *Server) graftSnapshot(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Parents     []domain.ContentHash `json:"parents"`
-		ExpectedSeq *uint64              `json:"expected_seq"`
-	}
-	if !s.decode(w, r, &body) {
-		return
-	}
-	if body.ExpectedSeq == nil {
-		s.respond(w, nil, fmt.Errorf("%w: expected_seq is required", domain.ErrValidation))
-		return
-	}
-	err := s.snapshotGrafts.GraftSnapshotParents(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("id")), body.Parents, *body.ExpectedSeq)
-	s.respond(w, map[string]string{"status": "ok"}, err)
-}
-
-// joinSnapshot repositions session forks of the same git branch behind the branch head.
-func (s *Server) previewJoin(w http.ResponseWriter, r *http.Request) {
-	r, release, admitted := s.admitResourceRequest(w, r, app.ResourceBulk)
-	if !admitted {
-		return
-	}
-	defer release()
-	u, _ := userFrom(r.Context())
-	out, err := s.contextBranches.PreviewJoin(r.Context(), inbound.JoinPreviewInput{ActorID: u.ID, RepoID: s.repoID(r), Snapshot: domain.ContentHash(r.URL.Query().Get("snapshot")), Branch: r.URL.Query().Get("branch")})
-	s.respond(w, out, err)
-}
-
-func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
-	r, release, admitted := s.admitResourceRequest(w, r, app.ResourceBulk)
-	if !admitted {
-		return
-	}
-	defer release()
-	var body struct {
-		ExpectedHead       domain.ContentHash `json:"expected_head"`
-		PlanRevision       domain.ContentHash `json:"plan_revision"`
-		BranchID           string             `json:"branch_id,omitempty"`
-		Branch             string             `json:"branch"`
-		Snapshot           domain.ContentHash `json:"snapshot"`
-		IncludeDescendants bool               `json:"include_descendants"`
-	}
-	if !s.decode(w, r, &body) {
-		return
-	}
-	u, _ := userFrom(r.Context())
-	out, err := s.contextBranches.ConfirmJoin(r.Context(), inbound.ConfirmJoinInput{ActorID: u.ID, JoinInput: inbound.JoinInput{
-		ExpectedHead: body.ExpectedHead, PlanRevision: body.PlanRevision,
-		RepoID: s.repoID(r), TargetBranch: body.Branch, BranchID: body.BranchID, Snapshot: body.Snapshot,
-		IncludeDescendants: body.IncludeDescendants,
-	}})
-	s.respond(w, out, err)
-}
-
-type pullBody struct {
-	SnapshotWants         []domain.ContentHash `json:"snapshot_wants"`
-	DocWants              []domain.ContentHash `json:"doc_wants"`
-	DocManifestWants      []domain.ContentHash `json:"doc_manifest_wants"`
-	ChunkWants            []domain.ContentHash `json:"chunk_wants"`
-	ChunkFormatsSupported []string             `json:"chunk_formats_supported"`
-	CIRVersionsSupported  []string             `json:"cir_versions_supported"`
-}
-
-type pullChunksBody struct {
-	ChunkWants []domain.ContentHash `json:"chunk_wants"`
-}
-
-func (s *Server) pullChunks(w http.ResponseWriter, r *http.Request) {
-	var body pullChunksBody
-	if !s.decodeLimited(w, r, &body, inbound.MaxChunkWantJSONBody) {
-		return
-	}
-	out, err := s.b.PullChunks(r.Context(), inbound.PullChunksInput{RepoID: s.repoID(r), Wants: body.ChunkWants})
-	s.respond(w, out, err)
-}
-
-func (s *Server) pullObjects(w http.ResponseWriter, r *http.Request) {
-	var body pullBody
-	if !s.decode(w, r, &body) {
-		return
-	}
-	out, err := s.b.Send(r.Context(), inbound.PullSendInput{RepoID: s.repoID(r), SnapshotWants: body.SnapshotWants, DocWants: body.DocWants, DocManifestWants: body.DocManifestWants, ChunkWants: body.ChunkWants, ChunkFormatsSupported: body.ChunkFormatsSupported, CIRVersionsSupported: body.CIRVersionsSupported})
-	s.respond(w, out, err)
-}
-
-// search searches commit messages/authors + conversation body (read — viewer level and above).
-func (s *Server) search(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.Search(r.Context(), inbound.SearchInput{RepoID: s.repoID(r), Query: r.URL.Query().Get("q")})
-	s.respond(w, out, err)
-}
-
-type diffBody struct {
-	Left  domain.ContentHash `json:"left"`
-	Right domain.ContentHash `json:"right"`
-}
-
-func (s *Server) diff(w http.ResponseWriter, r *http.Request) {
-	var body diffBody
-	if !s.decode(w, r, &body) {
-		return
-	}
-	out, err := s.b.Diff(r.Context(), inbound.DiffInput{RepoID: s.repoID(r), Left: body.Left, Right: body.Right})
-	s.respond(w, out, err)
-}
-
-type forkBody struct {
-	From      domain.ContentHash  `json:"from"`
-	NewBranch string              `json:"new_branch"`
-	Author    domain.TeamIdentity `json:"author"`
-}
-
-func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
-	r, release, admitted := s.admitResourceRequest(w, r, app.ResourceBulk)
-	if !admitted {
-		return
-	}
-	defer release()
-	var body forkBody
-	if !s.decode(w, r, &body) {
-		return
-	}
-	out, err := s.contextBranches.Fork(r.Context(), inbound.ForkInput{RepoID: s.repoID(r), FromSnapshot: body.From, NewBranch: body.NewBranch, Author: body.Author})
 	s.respond(w, out, err)
 }
 

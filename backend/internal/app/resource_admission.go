@@ -281,16 +281,6 @@ func resourceWorkWithWait(ctx context.Context, class ResourceClass, wait bool, w
 	return work(bound)
 }
 
-func admittedJob[Job any](ctx context.Context, claim func(context.Context) (Job, error), run func(context.Context, Job) error) error {
-	return admittedWork(ctx, func(bound context.Context) error {
-		job, err := claim(bound)
-		if err != nil {
-			return err
-		}
-		return run(bound, job)
-	})
-}
-
 func admittedWork(ctx context.Context, work func(context.Context) error) error {
 	return resourceWork(ctx, ResourceBulk, func(bound context.Context) error {
 		var owner *resourceYieldOwner

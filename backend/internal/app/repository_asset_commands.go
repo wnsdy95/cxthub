@@ -37,7 +37,6 @@ type RepositoryAssetStore interface {
 	UpdateRepoAbout(context.Context, domain.ContentHash, string, string, []string) error
 	UpdateRepoConfig(context.Context, domain.ContentHash, *string, *bool) error
 	PutSettingsBundle(context.Context, domain.ContentHash, domain.SettingsBundle) error
-	PutSettingsObject(context.Context, domain.ContentHash, domain.ContentHash, domain.SettingsBundle) error
 	GetSecretsEnvelope(context.Context, domain.ContentHash) ([]byte, error)
 }
 
@@ -181,18 +180,6 @@ func (commands *RepositoryAssetCommands) PutSettings(ctx context.Context, repo d
 		}
 		bundle.UpdatedAt = time.Now().UTC()
 		return commands.store.PutSettingsBundle(bound, repo, bundle)
-	})
-}
-
-func (commands *RepositoryAssetCommands) PutSettingsObject(ctx context.Context, repo, hash domain.ContentHash, bundle domain.SettingsBundle) error {
-	return commands.scope.WithinAssetWrite(ctx, repo, AssetPutSettingsObject, func(bound context.Context) error {
-		if err := validateHashes(repo, hash); err != nil {
-			return err
-		}
-		if err := domain.ValidateSettingsBundle(bundle.Kind, hash, bundle); err != nil {
-			return err
-		}
-		return commands.store.PutSettingsObject(bound, repo, hash, bundle)
 	})
 }
 

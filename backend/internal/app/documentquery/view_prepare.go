@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
@@ -143,16 +142,6 @@ func (queries *Queries) reauthorizeDocumentRead(ctx context.Context, repo domain
 	return queries.scope.AuthorizeDocumentRead(queries.readContext(ctx), repo)
 }
 
-func (queries *Queries) authorizeVisibleRead(ctx context.Context, repo domain.ContentHash) (context.Context, error) {
-	ctx = queries.readContext(ctx)
-	if inbound.DocumentReadAuthorizer(ctx) == nil && inbound.DocumentSnapshotReadAuthorizer(ctx) == nil {
-		if _, system := inbound.RepositoryActor(ctx); !system {
-			return ctx, domain.ErrUnauthorized
-		}
-	}
-	return queries.scope.AuthorizeDocumentRead(ctx, repo)
-}
-
 func docRangePreparationError(job domain.DocRangeIndexJob) error {
 	if job.Reason == "byte_backfill_required" {
 		return domain.ErrDocByteRangeBackfillRequired
@@ -176,18 +165,6 @@ func preparedDocViewRead[Result any](ctx context.Context, queries *Queries, repo
 			requirement = docRangeLegacyMetadata
 		}
 		return queries.prepareDocViewSource(ctx, repo, target, requirement)
-	}
-	return preparedDocumentProjectionRead(ctx, queries, repo, hash, base, prepare, read)
-}
-
-func preparedDocVisibleRead[Result any](ctx context.Context, queries *Queries, repo, hash, base domain.ContentHash, read func() (Result, error)) (Result, error) {
-	prepare := func(ctx context.Context, repo, target domain.ContentHash) (bool, error) {
-		requirement := docRangeRootOnly
-		if target != hash {
-			requirement = docRangeLegacyMetadata
-		}
-		_, err := queries.prepareDocVisibleSource(ctx, repo, target, requirement)
-		return true, err
 	}
 	return preparedDocumentProjectionRead(ctx, queries, repo, hash, base, prepare, read)
 }

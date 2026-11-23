@@ -56,7 +56,6 @@ type ViewDependencies struct {
 	RangeGenerations    outbound.DocRangeGenerationStore
 	RangeReadiness      outbound.DocRangeReadinessStore
 	RangeJobs           DocRangeEnqueuer
-	VisibleGenerations  outbound.DocVisibleGenerationStore
 	VisibleReadiness    DocVisibleReadiness
 	VisiblePreparation  outbound.DocVisiblePreparationStore
 	BoundaryRead        DocRangeBoundaryReader
@@ -75,7 +74,7 @@ func (dependencies ViewDependencies) validate(profile Profile, readOnly bool) er
 		return fmt.Errorf("%w: document view resources are required", domain.ErrValidation)
 	}
 	for _, optional := range []any{dependencies.Range, dependencies.LegacyPreparation, dependencies.RangeSnapshots,
-		dependencies.RangeGenerations, dependencies.RangeReadiness, dependencies.RangeJobs, dependencies.VisibleGenerations,
+		dependencies.RangeGenerations, dependencies.RangeReadiness, dependencies.RangeJobs,
 		dependencies.VisiblePreparation, dependencies.Boundaries, dependencies.Chunks, dependencies.DerivedChunks, dependencies.Bytes,
 		dependencies.VisibleReadiness, dependencies.BoundaryRead, dependencies.BoundaryPreparation, dependencies.ByteReadiness, dependencies.BytePreparation} {
 		if optional != nil && absent(optional) {
@@ -94,7 +93,7 @@ func (dependencies ViewDependencies) validate(profile Profile, readOnly bool) er
 		if dependencies.LegacyPreparation != nil {
 			return fmt.Errorf("%w: verified queries cannot run legacy index preparation", domain.ErrValidation)
 		}
-		requiredPorts := []any{dependencies.Range, dependencies.RangeGenerations, dependencies.RangeReadiness, dependencies.VisibleGenerations, dependencies.Chunks}
+		requiredPorts := []any{dependencies.Range, dependencies.RangeGenerations, dependencies.RangeReadiness, dependencies.Chunks}
 		if readOnly {
 			requiredPorts = append(requiredPorts, dependencies.VisibleReadiness, dependencies.BoundaryRead)
 		} else {
@@ -107,13 +106,6 @@ func (dependencies ViewDependencies) validate(profile Profile, readOnly bool) er
 		}
 	}
 	return nil
-}
-
-func (queries *Queries) visibleReadiness() DocVisibleReadiness {
-	if queries.view.VisibleReadiness != nil {
-		return queries.view.VisibleReadiness
-	}
-	return queries.view.VisiblePreparation
 }
 
 func (queries *Queries) docBoundaryRead() DocRangeBoundaryReader {

@@ -422,15 +422,6 @@ func wave56AssetBundle(kind string) domain.SettingsBundle {
 	return domain.SettingsBundle{Kind: kind, Files: []domain.SettingsFile{{Path: "commands/review.md", ContentB64: base64.StdEncoding.EncodeToString([]byte("review carefully"))}}, UpdatedAt: time.Date(2001, 2, 3, 4, 5, 6, 0, time.FixedZone("submitted", 3600)), UpdatedBy: "original-publisher"}
 }
 
-func wave56AssetHash(test *testing.T, bundle domain.SettingsBundle) domain.ContentHash {
-	test.Helper()
-	hash, err := domain.SettingsObjectHash(bundle)
-	if err != nil {
-		test.Fatal(err)
-	}
-	return hash
-}
-
 func wave56AssetEnvelope(fingerprint string) []byte {
 	return []byte(`{"version":1,"kdf":"PBKDF2-SHA256","iterations":600000,"salt_b64":"AAAAAAAAAAAAAAAAAAAAAA==","cipher":"AES-256-GCM","nonce_b64":"AAAAAAAAAAAAAAAA","ciphertext_b64":"b3BhcXVlIGNpcGhlcnRleHQgbXVzdCBub3QgbGVhdmUgc3RvcmFnZQ==","fingerprint":"` + fingerprint + `"}`)
 }
@@ -448,7 +439,6 @@ type wave56AssetAction struct {
 func wave56AssetActions(test *testing.T) []wave56AssetAction {
 	test.Helper()
 	bundle := wave56AssetBundle("codex")
-	hash := wave56AssetHash(test, bundle)
 	branch, description := "release/topic", "updated"
 	return []wave56AssetAction{
 		{name: "about", operation: AssetUpdateAbout, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
@@ -459,9 +449,6 @@ func wave56AssetActions(test *testing.T) []wave56AssetAction {
 		}},
 		{name: "settings", operation: AssetPutSettings, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
 			return commands.PutSettings(fixture.ctx, fixture.repo, bundle)
-		}},
-		{name: "object", operation: AssetPutSettingsObject, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
-			return commands.PutSettingsObject(fixture.ctx, fixture.repo, hash, bundle)
 		}},
 		{name: "secrets", operation: AssetSaveSecrets, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
 			_, err := commands.SaveSecrets(fixture.ctx, fixture.input())
@@ -806,129 +793,6 @@ func TestWave56RepositoryAssetProfileReturnsCompoundFailureToScope(test *testing
 	result, err := wave56AssetOwner(test, fixture.config).PatchRepoProfile(fixture.ctx, fixture.repo, inbound.RepoProfilePatch{DefaultBranch: &branch, Description: &description})
 	if !errors.Is(err, failure) || !reflect.DeepEqual(result, domain.Repo{}) || fixture.writes != 1 || fixture.callbacks != 1 || !reflect.DeepEqual(fixture.operations, []RepositoryAssetOperation{AssetPatchProfile}) || !reflect.DeepEqual(fixture.events, []string{"get-repo", "update-config", "update-about"}) {
 		test.Fatalf("compound failure was hidden, retried or reread as success: result=%+v error=%v events=%v", result, err, fixture.events)
-	}
-}
-
-func TestWave56RepositoryAssetSettingsKindsMetadataTimeAndObjectHash(test *testing.T) {
-	for _, kind := range []string{"claude", "agents", "codex"} {
-		test.Run(kind, func(test *testing.T) {
-			fixture := newWave56AssetFixture(test)
-			commands := wave56AssetOwner(test, fixture.config)
-			bundle := wave56AssetBundle(kind)
-			original := bundle
-			original.Files = append([]domain.SettingsFile(nil), bundle.Files...)
-			before := time.Now().UTC()
-			if err := commands.PutSettings(fixture.ctx, fixture.repo, bundle); err != nil {
-				test.Fatal(err)
-			}
-			after := time.Now().UTC()
-			if len(fixture.settings) != 1 {
-				test.Fatal("latest settings were not stored exactly once")
-			}
-			stored := fixture.settings[0]
-			if stored.UpdatedAt.Before(before) || stored.UpdatedAt.After(after) || stored.UpdatedAt.Location() != time.UTC {
-				test.Fatalf("latest timestamp is not server UTC time: %v", stored.UpdatedAt)
-			}
-			stored.UpdatedAt = bundle.UpdatedAt
-			if !reflect.DeepEqual(stored, original) || !reflect.DeepEqual(bundle, original) {
-				test.Fatal("latest settings mutated files, attribution or caller metadata")
-			}
-			hash := wave56AssetHash(test, bundle)
-			if err := commands.PutSettingsObject(fixture.ctx, fixture.repo, hash, bundle); err != nil {
-				test.Fatal(err)
-			}
-			changedMetadata := bundle
-			changedMetadata.UpdatedAt, changedMetadata.UpdatedBy = time.Time{}, "different-publisher"
-			if wave56AssetHash(test, changedMetadata) != hash {
-				test.Fatal("object hash unexpectedly includes publication metadata")
-			}
-			if err := commands.PutSettingsObject(fixture.ctx, fixture.repo, hash, changedMetadata); err != nil {
-				test.Fatal(err)
-			}
-			if !reflect.DeepEqual(fixture.objects, []domain.SettingsBundle{bundle, changedMetadata}) || !reflect.DeepEqual(fixture.objectHashes, []domain.ContentHash{hash, hash}) {
-				test.Fatal("immutable settings object metadata or supplied hash changed")
-			}
-			if err := commands.PutSettingsObject(fixture.ctx, fixture.repo, domain.HashContent([]byte("wrong-object")), bundle); !errors.Is(err, domain.ErrIntegrity) || len(fixture.objects) != 2 {
-				test.Fatalf("wrong content hash reached storage: %v", err)
-			}
-		})
-	}
-}
-
-func TestWave56RepositoryAssetSettingsRejectUnsafeBundlesAndHashes(test *testing.T) {
-	for _, kind := range []string{"claude", "agents", "codex"} {
-		for _, scenario := range []struct {
-			name   string
-			change func(*domain.SettingsBundle)
-		}{
-			{name: "unknown-kind", change: func(bundle *domain.SettingsBundle) { bundle.Kind = "unsupported" }},
-			{name: "parent-path", change: func(bundle *domain.SettingsBundle) { bundle.Files[0].Path = "../secret" }},
-			{name: "drive-path", change: func(bundle *domain.SettingsBundle) { bundle.Files[0].Path = "C:/secret" }},
-			{name: "device-path", change: func(bundle *domain.SettingsBundle) { bundle.Files[0].Path = "commands/CON.md" }},
-			{name: "duplicate-path", change: func(bundle *domain.SettingsBundle) { bundle.Files = append(bundle.Files, bundle.Files[0]) }},
-			{name: "invalid-base64", change: func(bundle *domain.SettingsBundle) { bundle.Files[0].ContentB64 = "!" }},
-		} {
-			for _, object := range []bool{false, true} {
-				test.Run(fmt.Sprintf("%s-%s-object-%t", kind, scenario.name, object), func(test *testing.T) {
-					fixture := newWave56AssetFixture(test)
-					commands := wave56AssetOwner(test, fixture.config)
-					bundle := wave56AssetBundle(kind)
-					scenario.change(&bundle)
-					var err error
-					if object {
-						err = commands.PutSettingsObject(fixture.ctx, fixture.repo, wave56AssetHash(test, bundle), bundle)
-					} else {
-						err = commands.PutSettings(fixture.ctx, fixture.repo, bundle)
-					}
-					if !errors.Is(err, domain.ErrIntegrity) || fixture.writes != 0 {
-						test.Fatalf("invalid bundle reached storage: %v", err)
-					}
-				})
-			}
-		}
-	}
-	for _, invalidKey := range []string{"repository", "object"} {
-		test.Run("malformed-"+invalidKey, func(test *testing.T) {
-			fixture := newWave56AssetFixture(test)
-			bundle := wave56AssetBundle("codex")
-			hash := wave56AssetHash(test, bundle)
-			if invalidKey == "repository" {
-				fixture.repo = "invalid"
-			} else {
-				hash = "invalid"
-			}
-			if err := wave56AssetOwner(test, fixture.config).PutSettingsObject(fixture.ctx, fixture.repo, hash, bundle); !errors.Is(err, domain.ErrIntegrity) || fixture.writes != 0 {
-				test.Fatalf("malformed key reached storage: %v", err)
-			}
-		})
-	}
-}
-
-func TestWave56RepositoryAssetSettingsDecodedSizeBoundary(test *testing.T) {
-	for _, object := range []bool{false, true} {
-		for _, overflow := range []bool{false, true} {
-			test.Run(fmt.Sprintf("object-%t-overflow-%t", object, overflow), func(test *testing.T) {
-				fixture := newWave56AssetFixture(test)
-				commands := wave56AssetOwner(test, fixture.config)
-				bundle := domain.SettingsBundle{Kind: "codex", Files: []domain.SettingsFile{{Path: "first", ContentB64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("a"), domain.MaxSettingsBundleBytes/2))}, {Path: "second", ContentB64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("b"), domain.MaxSettingsBundleBytes/2))}}}
-				if overflow {
-					bundle.Files = append(bundle.Files, domain.SettingsFile{Path: "extra", ContentB64: "Yw=="})
-				}
-				var err error
-				if object {
-					err = commands.PutSettingsObject(fixture.ctx, fixture.repo, wave56AssetHash(test, bundle), bundle)
-				} else {
-					err = commands.PutSettings(fixture.ctx, fixture.repo, bundle)
-				}
-				if overflow {
-					if !errors.Is(err, domain.ErrIntegrity) || fixture.writes != 0 {
-						test.Fatalf("decoded aggregate size limit bypassed: %v", err)
-					}
-				} else if err != nil || fixture.writes != 1 {
-					test.Fatalf("exact size boundary rejected: %v", err)
-				}
-			})
-		}
 	}
 }
 

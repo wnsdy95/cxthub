@@ -75,37 +75,3 @@ func TestTypedMemoryValidationAndLegacyIdentity(t *testing.T) {
 		t.Fatalf("legacy encoding changed: %s", raw)
 	}
 }
-
-func TestTypedMemoryMergeRetainsDistinctClaimsAndEmptyVersion(t *testing.T) {
-	source := HashContent([]byte("source"))
-	a := MemoryDigest{ClaimsVersion: 1, Fragments: []MemoryFragment{{SourceSnapshot: source, Summary: "same", Claims: []MemoryClaim{{Kind: "rationale", Text: "First reason"}}}}}
-	b := MemoryDigest{ClaimsVersion: 1, Fragments: []MemoryFragment{{SourceSnapshot: source, Summary: "same", Claims: []MemoryClaim{{Kind: "rationale", Text: "Second reason"}}}}}
-	got := MergeDigests(a, b)
-	if got.ClaimsVersion != 1 || len(got.Fragments) != 2 {
-		t.Fatalf("claims lost: %+v", got)
-	}
-	got = MergeDigests(got, b)
-	if len(got.Fragments) != 2 {
-		t.Fatal("idempotent union duplicated claims")
-	}
-	if MergeDigests(MemoryDigest{ClaimsVersion: 1}, MemoryDigest{}).ClaimsVersion != 1 {
-		t.Fatal("empty typed generation downgraded")
-	}
-	// An old reader drops typed fields; its reconstructed hash must fail identity
-	// validation rather than permitting that object to overwrite the attachment.
-	raw, _ := json.Marshal(a)
-	var old struct {
-		SnapshotID ContentHash  `json:"snapshot_id"`
-		Summary    string       `json:"summary"`
-		KeyFacts   []string     `json:"key_facts"`
-		OpenTasks  []string     `json:"open_tasks"`
-		Provider   ProviderKind `json:"provider"`
-	}
-	if err := json.Unmarshal(raw, &old); err != nil {
-		t.Fatal(err)
-	}
-	oldRaw, _ := json.Marshal(old)
-	if HashContent(oldRaw) == HashContent(raw) {
-		t.Fatal("old reader falsely validates a typed object")
-	}
-}

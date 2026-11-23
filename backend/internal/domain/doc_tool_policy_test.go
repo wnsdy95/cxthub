@@ -3,13 +3,10 @@ package domain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type docToolPolicyFixture struct {
@@ -112,48 +109,6 @@ func (fixture *docToolPolicyFixture) finish(test *testing.T) DocDisplayProjectio
 	return generation
 }
 
-func TestDocToolPolicySharedEventParity(test *testing.T) {
-	raw, err := os.ReadFile("../../../schemas/fixtures/tool-display-v1.json")
-	if err != nil {
-		test.Fatal(err)
-	}
-	var fixtures struct {
-		Cases []struct{ Name, Source, Text string }
-	}
-	if json.Unmarshal(raw, &fixtures) != nil || len(fixtures.Cases) < 25 {
-		test.Fatal("invalid shared tool fixtures")
-	}
-	for _, scenario := range fixtures.Cases {
-		test.Run(scenario.Name, func(test *testing.T) {
-			fixture := newDocToolPolicyFixture(test, scenario.Source)
-			generation := fixture.finish(test)
-			baseline, err := BuildDocToolDisplay(context.Background(), fixture.raw)
-			if err != nil {
-				test.Fatal(err)
-			}
-			var output strings.Builder
-			for index := 0; index < generation.Pages.Count; index++ {
-				page, err := ReadDocDisplayProjectionPage(context.Background(), generation, index, fixture.load)
-				if err != nil || page.From != output.Len() {
-					test.Fatal("noncontiguous tool projection", err)
-				}
-				for offset, character := range page.Text {
-					width := utf8.RuneLen(character)
-					got, err := page.SourceRange(offset, width)
-					want, baselineError := baseline.SourceRange(page.From+offset, width)
-					if err != nil || baselineError != nil || got != want {
-						test.Fatal("tool policy changed original-byte anchor", offset, got, want, err, baselineError)
-					}
-				}
-				output.WriteString(page.Text)
-			}
-			if output.String() != scenario.Text || output.String() != baseline.Text() {
-				test.Fatalf("tool event output=%q want=%q", output.String(), scenario.Text)
-			}
-		})
-	}
-}
-
 func TestDocToolPolicyReceiptRejectsControlTransplants(test *testing.T) {
 	fixture := newDocToolPolicyFixture(test, `{"kind":"tool_call","tool_name":"Edit","input":{"old_string":"old","new_string":"new","file_path":"/a/b/c/d"}}`)
 	fixture.finish(test)
@@ -184,31 +139,5 @@ func TestDocToolPolicyReceiptRejectsControlTransplants(test *testing.T) {
 	}
 	if checked < 10 {
 		test.Fatal("did not inspect enough saved policy phases", checked)
-	}
-}
-
-func TestDocToolPolicyMissingNullInputAndNames(test *testing.T) {
-	for _, scenario := range []struct{ raw, text string }{
-		{`{"kind":"tool_call"}`, "tool"},
-		{`{"kind":"tool_call","tool_name":"Named"}`, "Named"},
-		{`{"kind":"tool_call","provider_tool_name":null,"tool_name":"Named","input":null}`, "Named"},
-		{`{"kind":"tool_call","provider_tool_name":"","tool_name":null,"input":{}}`, "tool"},
-		{`{"kind":"tool_call","provider_tool_name":"Bash","tool_name":"Edit","input":null}`, "Bash"},
-	} {
-		test.Run(scenario.raw, func(test *testing.T) {
-			fixture := newDocToolPolicyFixture(test, scenario.raw)
-			generation := fixture.finish(test)
-			var actual strings.Builder
-			for index := 0; index < generation.Pages.Count; index++ {
-				page, err := ReadDocDisplayProjectionPage(context.Background(), generation, index, fixture.load)
-				if err != nil {
-					test.Fatal(err)
-				}
-				actual.WriteString(page.Text)
-			}
-			if actual.String() != scenario.text {
-				test.Fatal("missing/null input or name changed the header", actual.String(), scenario.text)
-			}
-		})
 	}
 }

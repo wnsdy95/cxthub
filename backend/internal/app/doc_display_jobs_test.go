@@ -90,7 +90,7 @@ func TestDocDisplayWorkerCompletionErrorsDoNotBecomeSuccess(test *testing.T) {
 			} else {
 				storage.completeError = scenario.failure
 			}
-			service := NewService(nil, nil, nil, nil, nil)
+			service := NewService(nil, nil, nil, nil)
 			service.ConfigureDocumentDisplay(storage)
 			if err := service.ProcessDocDisplayJobs(context.Background(), 1); !errors.Is(err, scenario.failure) {
 				test.Fatal("worker dropped completion error", err)
@@ -149,7 +149,7 @@ func TestDocDisplayWorkerDrainsReadyClaimsWithoutPollingSleep(test *testing.T) {
 	job.Target = domain.DocDisplayTarget{RepoID: job.RepoID, DocHash: job.DocHash,
 		Binding: domain.DocReadGenerationBinding{SourceID: "11111111-1111-4111-8111-111111111111", RangeGeneration: domain.HashContent([]byte("range"))}, Event: domain.DocEventIndex{Hash: source.EventHash, Length: source.EventBytes}}
 	storage := &docDisplayDrainStore{docDisplayCompletionStore: &docDisplayCompletionStore{job: job, preparation: domain.DocDisplayPreparation{Source: &source, State: state, Checkpoint: domain.HashContent(checkpoint)}}, quota: 10, done: make(chan struct{})}
-	service := NewService(nil, nil, nil, nil, nil)
+	service := NewService(nil, nil, nil, nil)
 	service.ConfigureDocumentDisplay(storage)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

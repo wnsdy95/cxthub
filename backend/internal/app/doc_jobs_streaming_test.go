@@ -97,7 +97,7 @@ func TestDocJobStreamingPreparationClosesOnEveryOutcome(t *testing.T) {
 					return publication, nil
 				},
 			}
-			service := NewService(metadata, nil, nil, nil, nil)
+			service := NewService(metadata, nil, nil, nil)
 			err = service.runDocJob(ctx, storage, job)
 			wantComplete, wantFinish := 0, 1
 			switch outcome {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -131,109 +130,6 @@ func TestDocDisplayProjectionMetadataAndPageBounds(test *testing.T) {
 	}
 }
 
-func TestDocDisplayProjectionRestartDirectoryAndSelectedRead(test *testing.T) {
-	for _, count := range []int{0, 1, 129, 16385} {
-		test.Run(fmt.Sprint(count), func(test *testing.T) {
-			text := strings.Repeat("z", DocDisplayPageRuns)
-			source := projectionTestSource(count * len(text))
-			state, err := NewDocDisplayProjectionState(source)
-			if err != nil {
-				test.Fatal(err)
-			}
-			stored := make(map[ContentHash][]byte)
-			var hashes []ContentHash
-			maxCheckpoint := 0
-			for index := 0; index < count; index++ {
-				page := projectionTestPage(test, source, index, state.TextBytes, text)
-				before, err := state.Encode(source)
-				if err != nil {
-					test.Fatal(err)
-				}
-				next, objects, err := AppendDocDisplayProjectionPage(context.Background(), source, state, page)
-				if err != nil {
-					test.Fatal(err)
-				}
-				docDisplayStringTestStore(test, stored, objects)
-				encoded, err := page.EncodeProjection(source)
-				if err != nil {
-					test.Fatal(err)
-				}
-				hashes = append(hashes, HashContent(encoded))
-				after, err := state.Encode(source)
-				if err != nil || !bytes.Equal(before, after) {
-					test.Fatal("input frontier mutated", err)
-				}
-				checkpoint, err := next.Encode(source)
-				if err != nil {
-					test.Fatal(err)
-				}
-				maxCheckpoint = max(maxCheckpoint, len(checkpoint))
-				state, err = DecodeDocDisplayProjectionState(source, HashContent(checkpoint), checkpoint)
-				if err != nil {
-					test.Fatal(err)
-				}
-			}
-			generation, objects, err := FinishDocDisplayProjection(context.Background(), source, state)
-			if err != nil || generation.Pages.Count != count {
-				test.Fatal(generation, err)
-			}
-			docDisplayStringTestStore(test, stored, objects)
-			var batchObjects []DocRangeObject
-			batch, err := buildDocRangeDirectory(context.Background(), hashes, &batchObjects)
-			if err != nil || generation.Pages != batch {
-				test.Fatal("batch and resumed directory differ", generation.Pages, batch, err)
-			}
-			encoded, err := generation.Encode()
-			if err != nil {
-				test.Fatal(err)
-			}
-			if decoded, err := DecodeDocDisplayProjectionGeneration(HashContent(encoded), encoded); err != nil || decoded != generation {
-				test.Fatal(decoded, err)
-			}
-			loadCount := 0
-			load := func(_ context.Context, hash ContentHash) ([]byte, error) {
-				loadCount++
-				return stored[hash], nil
-			}
-			if count > 0 {
-				page, err := ReadDocDisplayProjectionPage(context.Background(), generation, count-1, load)
-				if err != nil || page.Index != count-1 || page.Text != text || page.From+len(page.Text) != source.TextBytes || loadCount > 4 {
-					test.Fatal(page.Index, loadCount, err)
-				}
-			} else if _, err := ReadDocDisplayProjectionPage(context.Background(), generation, 0, load); !errors.Is(err, ErrIntegrity) || loadCount != 0 {
-				test.Fatal("empty generation read objects", loadCount, err)
-			}
-			test.Logf("pages=%d displayed_bytes=%d max_checkpoint_bytes=%d selected_object_loads=%d", count, source.TextBytes, maxCheckpoint, loadCount)
-		})
-	}
-}
-
-func TestDocDisplayProjectionCrossPageSearchRetainsReorderedCovers(test *testing.T) {
-	for _, query := range []string{"Needle🙂", strings.Repeat("a", MaxDocFindQueryRunes-1) + "b"} {
-		prefix := strings.Repeat("x", DocDisplayPageRuns-3)
-		if len(query) == MaxDocFindQueryRunes {
-			prefix = strings.Repeat("x", DocDisplayPageRuns-MaxDocFindQueryRunes+1)
-		}
-		text := prefix + query + strings.Repeat("z", 20)
-		split := DocDisplayPageRuns
-		source := projectionTestSource(len(text))
-		previous := projectionTestPage(test, source, 0, 0, text[:split])
-		previous.Runs[0].SourceFrom, previous.Runs[0].SourceTo = 800, 801
-		current := projectionTestPage(test, source, 1, split, text[split:])
-		current.Runs[0].SourceFrom, current.Runs[0].SourceTo = 20, 21
-		window, err := BuildDocDisplayProjectionSearchWindow(source, &previous, current)
-		if err != nil {
-			test.Fatal(err)
-		}
-		previous.Runs[0].SourceFrom = 0
-		current.Runs[0].SourceTo = 4096
-		matches, next, err := FindDocDisplayWindow(context.Background(), window, strings.ToLower(query), 0, 20)
-		if err != nil || next != len(text) || len(matches) != 1 || matches[0].Offset != len(prefix) || matches[0].SourceRange == nil || *matches[0].SourceRange != (DocFindSpan{From: 20, To: 801}) {
-			test.Fatal(matches, next, err)
-		}
-	}
-}
-
 func TestDocDisplayProjectionRejectsPartialPublishAndCanceledEffects(test *testing.T) {
 	source := projectionTestSource(2 * DocDisplayPageRuns)
 	state, err := NewDocDisplayProjectionState(source)
@@ -291,58 +187,6 @@ func TestDocDisplayProjectionLiteralFormatRemainsStrict(test *testing.T) {
 	encoded, _ := json.Marshal(page)
 	if _, err := DecodeDocDisplayPage(source, HashContent(encoded), encoded); !errors.Is(err, ErrIntegrity) {
 		test.Fatal("projection page downgraded to literal", err)
-	}
-}
-
-func TestDocDisplayProjectionExistingToolGoldensUseSharedCoordinates(test *testing.T) {
-	raw, err := os.ReadFile("../../../schemas/fixtures/tool-display-v1.json")
-	if err != nil {
-		test.Fatal(err)
-	}
-	var fixture struct {
-		Cases []struct{ Name, Source, Text string } `json:"cases"`
-	}
-	if err := json.Unmarshal(raw, &fixture); err != nil || len(fixture.Cases) < 25 {
-		test.Fatal("invalid tool goldens", err)
-	}
-	for _, scenario := range fixture.Cases {
-		test.Run(scenario.Name, func(test *testing.T) {
-			display, err := BuildDocToolDisplay(context.Background(), []byte(scenario.Source))
-			if err != nil || display.Text() != scenario.Text {
-				test.Fatal("fixture changed", err)
-			}
-			source := projectionTestSource(len(scenario.Text))
-			source.EventHash, source.EventBytes = HashContent([]byte(scenario.Source)), len(scenario.Source)
-			if scenario.Text == "" {
-				state, err := NewDocDisplayProjectionState(source)
-				if err != nil || !state.Done || state.Directory.Count != 0 {
-					test.Fatal("empty fixture produced a page", state, err)
-				}
-				return
-			}
-			mapped := display.(*docToolDisplay)
-			page := projectionTestPage(test, source, 0, 0, display.Text())
-			page.Runs = nil
-			for index := 0; index < mapped.spanCount; index++ {
-				span := mapped.span(index)
-				page.Runs = append(page.Runs, DocDisplayRun{To: int(span.end), SourceFrom: int(span.sourceFrom), SourceTo: int(span.sourceTo &^ docToolDisplayLinear), Linear: span.sourceTo&docToolDisplayLinear != 0})
-			}
-			if err := page.ValidateProjection(source); err != nil {
-				test.Fatal("fixture could not use mapped page", err)
-			}
-			window, err := BuildDocDisplayProjectionSearchWindow(source, nil, page)
-			if err != nil || window.Text() != scenario.Text {
-				test.Fatal(window.Text(), err)
-			}
-			for offset, character := range scenario.Text {
-				width := utf8.RuneLen(character)
-				want, err := display.SourceRange(offset, width)
-				got, failure := page.SourceRange(offset, width)
-				if err != nil || failure != nil || got != want {
-					test.Fatal("mapped page changed a fixture source cover", offset, got, want, err, failure)
-				}
-			}
-		})
 	}
 }
 

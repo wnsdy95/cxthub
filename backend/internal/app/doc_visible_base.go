@@ -9,27 +9,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (service *Service) openDocVisibleBase(ctx context.Context, repo, hash domain.ContentHash) (docViewSource, error) {
-	snapshot, err := service.meta.GetSnapshot(ctx, repo, hash)
-	if err != nil {
-		return docViewSource{}, err
-	}
-	if err := matchReadSnapshot(domain.DocumentRef{Hash: hash, Identity: snapshot.DocIdentity}, snapshot); err != nil {
-		return docViewSource{}, err
-	}
-	if snapshot.DocIdentity != domain.DocumentIdentityLegacy {
-		if err := service.checkVisibleRootSnapshot(hash, snapshot); err != nil {
-			return docViewSource{}, err
-		}
-		return service.docViewSource(ctx, repo, hash, false)
-	}
-	storage, ok := service.blobs.(outbound.DocRangeGenerationStore)
-	if !ok {
-		return docViewSource{}, domain.ErrDocVisibleProjectionUnsupported
-	}
-	return openLegacyDocRangeMetadataSource(ctx, storage, repo, hash)
-}
-
 func openLegacyDocRangeMetadataSource(ctx context.Context, storage outbound.DocRangeGenerationStore, repo, hash domain.ContentHash) (docViewSource, error) {
 	reader, err := storage.OpenDocRangeGeneration(ctx, repo, hash)
 	if errors.Is(err, domain.ErrDocRangeIndexUnavailable) {

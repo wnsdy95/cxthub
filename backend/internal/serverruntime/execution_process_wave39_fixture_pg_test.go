@@ -690,19 +690,6 @@ func (fixture *executionProcessFixture) waitDocumentJob(test *testing.T, ctx con
 	}
 }
 
-func (fixture *executionProcessFixture) publishSnapshot(test *testing.T, ctx context.Context) {
-	test.Helper()
-	ctx = executionProcessSystemContext(ctx)
-	hash := fixture.job.DocHash
-	if err := fixture.storage.PutSnapshot(ctx, domain.Snapshot{ID: hash, RepoID: fixture.repo, DocHash: hash, DocIdentity: domain.DocumentIdentityRootV1,
-		Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, CreatedAt: time.Now().UTC()}); err != nil {
-		test.Fatal("publish original snapshot only after worker receipt")
-	}
-	if err := fixture.storage.CompareAndSwapRef(ctx, fixture.repo, domain.Ref{RepoID: fixture.repo, Kind: domain.RefBranch, Name: "main", Target: hash}, ""); err != nil {
-		test.Fatal("publish original ref through its unchanged CAS fence")
-	}
-}
-
 func (fixture *executionProcessFixture) assertDocumentReads(test *testing.T, ctx context.Context, api, mcp *executionProcessChild) {
 	test.Helper()
 	client := &http.Client{

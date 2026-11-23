@@ -10,7 +10,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type docRangeJobFake struct {
@@ -59,45 +58,6 @@ func (storage *docRangeJobFake) FinishDocRangeJob(ctx context.Context, job domai
 	return storage.finish(ctx, job, now)
 }
 
-func TestDocViewReadinessQueuesWithoutLoadingHeaderOrBody(t *testing.T) {
-	ctx, repo, directory := systemTestContext(), h('1'), t.TempDir()
-	storage := store.NewFSStore(directory)
-	doc, _ := seedRootReadDoc(t, directory, storage, repo, historyMessage(domain.RoleUser, "queued range"))
-	for _, state := range []string{"waiting", "running", "retrying", "rejected"} {
-		t.Run(state, func(t *testing.T) {
-			queued := 0
-			fake := &docRangeJobFake{FSStore: storage, enqueue: func(_ context.Context, gotRepo, hash domain.ContentHash, _ time.Time) (domain.DocRangeIndexJob, error) {
-				queued++
-				if gotRepo != repo || hash != doc.Hash {
-					t.Fatal("wrong queue scope")
-				}
-				return domain.DocRangeIndexJob{State: state, Reason: "invalid_document"}, nil
-			}}
-			service := NewService(storage, fake, nil, nil, nil)
-			_, err := service.ReadDocViewEvents(ctx, repo, doc.Hash, "", 0, 20, "chat")
-			want := domain.ErrDocRangeIndexPending
-			if state == "rejected" {
-				want = domain.ErrIntegrity
-			}
-			if !errors.Is(err, want) || queued != 1 || fake.ensures != 0 || fake.headers != 0 {
-				t.Fatal("viewer performed work or hid queue state", err, queued, fake.ensures, fake.headers)
-			}
-			_, err = service.ReadDocViewFragment(ctx, repo, doc.Hash, 0, 0, 32)
-			if !errors.Is(err, want) || queued != 2 {
-				t.Fatal("fragment skipped queue contract", err, queued)
-			}
-			_, err = service.ReadDocViewEvents(outbound.WithDocReadOnly(ctx), repo, doc.Hash, "", 0, 20, "chat")
-			if !errors.Is(err, domain.ErrDocRangeIndexUnavailable) || queued != 2 {
-				t.Fatal("read-only request queued maintenance", err, queued)
-			}
-			fake.ready = true
-			if _, err := service.ReadDocViewEvents(ctx, repo, doc.Hash, "", 0, 20, "chat"); !errors.Is(err, domain.ErrDocRangeIndexUnavailable) {
-				t.Fatal("readiness was mistaken for a verified index", err)
-			}
-		})
-	}
-}
-
 func TestDocRangeWorkerFailureAndShutdown(t *testing.T) {
 	for _, scenario := range []struct {
 		name, state, reason string
@@ -139,7 +99,7 @@ func TestDocRangeWorkerFailureAndShutdown(t *testing.T) {
 					return nil
 				},
 			}
-			service := NewService(preparationMetadata{}, fake, nil, nil, nil)
+			service := NewService(preparationMetadata{}, fake, nil, nil)
 			err := service.runDocRangeJob(ctx, fake, job, docJobLease)
 			if !errors.Is(err, scenario.failure) || (finished == 1) != (scenario.state != "") {
 				t.Fatal("incorrect completion", err, finished)
@@ -179,7 +139,7 @@ func TestDocRangeWorkerRenewsUntilCompletionOrLeaseLoss(t *testing.T) {
 					return nil
 				},
 			}
-			service := NewService(preparationMetadata{}, fake, nil, nil, nil)
+			service := NewService(preparationMetadata{}, fake, nil, nil)
 			err := service.runDocRangeJob(context.Background(), fake, domain.DocRangeIndexJob{RepoID: h('1'), Attempts: 1}, docJobLease)
 			wantFinished := 0
 			if lost {
@@ -211,7 +171,7 @@ func TestDocRangeWorkerAdmissionPrecedesClaim(t *testing.T) {
 		t.Fatal("claimed while bulk lane occupied")
 		return domain.DocRangeIndexJob{}, nil
 	}}
-	service := NewService(preparationMetadata{}, fake, nil, nil, nil)
+	service := NewService(preparationMetadata{}, fake, nil, nil)
 	if err := service.ProcessDocRangeJobs(ctx, 1); !errors.Is(err, domain.ErrResourceOverloaded) {
 		t.Fatal("worker bypassed admission", err)
 	}

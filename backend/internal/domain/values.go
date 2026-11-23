@@ -110,15 +110,6 @@ const (
 // HeadRefName is the fixed head-ref name (invariant REF3, data model).
 const HeadRefName = "HEAD"
 
-// SessionRefPrefix builds the Git-branch scope for an internal ref that preserves the session fork
-// left by a partial join. Encoding the branch's byte length as its own path component prevents a prefix
-// comparison from treating "feature" and "feature/foo" as the same scope.
-//
-// Example ref name: fork/v1/4/main/<short-tip>
-func SessionRefPrefix(branch string) string {
-	return fmt.Sprintf("fork/v1/%d/%s/", len(branch), branch)
-}
-
 // ValidateRefKind restricts the ref kind accepted at wire and ref-path boundaries.
 func ValidateRefKind(kind RefKind) error {
 	switch kind {
@@ -209,14 +200,6 @@ func ValidateRef(ref Ref) error {
 	}
 	return ValidateContentHash(ref.Target)
 }
-
-// StashBranchLabel is the Branch label for stash snapshots (the same value used by the CLI). Stashes are
-// normally local-only, but content-hash deduplication can make a stash object share an ID with commit history;
-// ref-based reachability can then include it in a push. The label is used for statistics exclusion and promotion decisions.
-const StashBranchLabel = "(stash)"
-
-// HookMessagePrefix is the Message prefix for hook-capture snapshots (the same value used by the CLI).
-const HookMessagePrefix = "hook: "
 
 // TeamIdentity identifies a snapshot author (data model table, sync protocol).
 //

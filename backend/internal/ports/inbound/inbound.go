@@ -15,33 +15,6 @@ type CommitSnapshot interface {
 	Commit(ctx context.Context, in CommitInput) (CommitOutput, error)
 }
 
-// ForkSnapshot creates a new branch ref by branching off a tip from FromSnapshot ("branch replication + ancestor tracking") (data model, sync protocol fork, auto fork). Adds a new branch ref with tip FromSnapshot (original unchanged, F1). No data duplication.
-type ForkSnapshot interface {
-	Fork(ctx context.Context, in ForkInput) (ForkOutput, error)
-}
-
-// DiffSnapshots returns the event delta between two snapshots (sync protocol diff, compatibility rules). LCA-based comparison is the app's responsibility (data model).
-type DiffSnapshots interface {
-	Diff(ctx context.Context, in DiffInput) (DiffOutput, error)
-}
-
-// UpdateRef moves a ref using compare-and-swap. ExpectedTarget provides
-// optimistic concurrency control for fast-forward and divergent updates.
-type UpdateRef interface {
-	UpdateRef(ctx context.Context, in UpdateRefInput) (UpdateRefOutput, error)
-}
-
-// UpdateRefs applies a bounded ref projection batch and reconciles pending
-// reachability exactly once at the request boundary.
-type UpdateRefs interface {
-	UpdateRefs(ctx context.Context, in UpdateRefsInput) (UpdateRefsOutput, error)
-}
-
-// ListSnapshots returns a list of snapshot metadata per branch (sync protocol, ListSnapshots mirror).
-type ListSnapshots interface {
-	List(ctx context.Context, in ListSnapshotsInput) ([]domain.Snapshot, error)
-}
-
 // PushReceive performs push negotiation (sync protocol step A). Responds with the missing parts (want) after subtracting what the server already has from the client's haves.
 type PushReceive interface {
 	Negotiate(ctx context.Context, in PushNegotiateInput) (PushNegotiateOutput, error)
@@ -52,44 +25,11 @@ type StoreChunks interface {
 	StoreChunks(ctx context.Context, in StoreChunksInput) (StoreChunksOutput, error)
 }
 
-// PullChunks bounds the total raw response size so it stays below proxy and Cloud Run body limits.
-type PullChunks interface {
-	PullChunks(ctx context.Context, in PullChunksInput) (PullChunksOutput, error)
-}
-
 // PromoteSnapshot promotes the message of a hook label snapshot to a commit message (one-way).
 // Content-hash deduplication allows hook capture leaves to commit, recovering lost [git sha] links —
 // Inventory-only push requires a dedicated metadata update path since it does not resend existing objects.
 type PromoteSnapshot interface {
 	PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error
-}
-
-// JoinInput repositions Snapshot(X) behind TargetBranch head(H). Only git branch membership projected via reflog is allowed.
-// Segments follow the unique first-parent child path starting at Snapshot, independent of SessionID.
-// If IncludeDescendants is true, head advances to the server-calculated tip (entire branch), otherwise, it advances only to X,
-// and remaining descendants are preserved as internal session refs branching from X.
-type JoinInput struct {
-	ExpectedHead       domain.ContentHash
-	PlanRevision       domain.ContentHash
-	BranchID           string
-	RepoID             domain.ContentHash
-	TargetBranch       string
-	Snapshot           domain.ContentHash
-	IncludeDescendants bool
-}
-
-// JoinOutput (wire: snake_case).
-type JoinOutput struct {
-	Branch string             `json:"branch"`
-	Head   domain.ContentHash `json:"head"`
-	// ForkBranch names the session ref left behind in the NO (partial merge) case (omitted if none).
-	ForkBranch string `json:"fork_branch,omitempty"`
-}
-
-// PullSend handles pull/objects requests to batch-send missing objects (sync protocol Step B).
-// Pull is read-only and does not change the server (sync protocol Step B).
-type PullSend interface {
-	Send(ctx context.Context, in PullSendInput) (PullSendOutput, error)
 }
 
 // Authenticate verifies team token + user identity (sync protocol).
@@ -114,7 +54,6 @@ const (
 	MaxChunkWireRawBytes = domain.MaxPortableChunkBytes
 	MaxChunkWireObjects  = 32
 	MaxChunkWireJSONBody = 4 << 20
-	MaxChunkWantJSONBody = 64 << 10
 )
 
 type StoreChunksInput struct {
@@ -125,15 +64,6 @@ type StoreChunksInput struct {
 type StoreChunksOutput struct {
 	Stored  int `json:"stored"`
 	Deduped int `json:"deduped"`
-}
-
-type PullChunksInput struct {
-	RepoID domain.ContentHash
-	Wants  []domain.ContentHash
-}
-
-type PullChunksOutput struct {
-	ChunkObjects []ChunkObject `json:"chunk_objects"`
 }
 
 // CommitInput represents the push/objects body (sync protocol Step B).
@@ -152,95 +82,6 @@ type CommitOutput struct {
 	StoredDocs       int
 	DedupedSnapshots int
 	DedupedDocs      int
-}
-
-// ForkInput (data model ForkSession mirror, sync protocol).
-type ForkInput struct {
-	RepoID       domain.ContentHash
-	FromSnapshot domain.ContentHash
-	NewBranch    string
-	Author       domain.TeamIdentity
-}
-
-// ForkOutput: the created branch and its head. (wire: snake_case)
-type ForkOutput struct {
-	Branch string             `json:"branch"`
-	Head   domain.ContentHash `json:"head"`
-}
-
-// DiffInput: comparison of two snapshots (left/right) (sync protocol).
-type DiffInput struct {
-	RepoID domain.ContentHash
-	Left   domain.ContentHash
-	Right  domain.ContentHash
-}
-
-// DiffEntry: Single event change between two snapshots (similar to frontend DiffEntry, wire: op/seq/summary).
-type DiffEntry struct {
-	Op      string `json:"op"`      // "add" | "remove"
-	Seq     int    `json:"seq"`     // CIR seq of the target event
-	Summary string `json:"summary"` // Human-readable change summary
-}
-
-// DiffOutput: List of event unit changes (1:1 with frontend {changes:[...]}).
-type DiffOutput struct {
-	Changes []DiffEntry `json:"changes"`
-}
-
-// UpdateRefInput: CAS ref move (sync protocol).
-type UpdateRefInput struct {
-	RepoID           domain.ContentHash
-	Ref              domain.Ref
-	ExpectedTarget   domain.ContentHash
-	ExpectedRevision *domain.RepositoryRevision
-	// Force allows non-fast-forward moves (equivalent to git push --force). If false (default), non-fast-forward moves without the previous commit as an ancestor are rejected with ErrNonFastForward.
-	Force bool
-	// Append appends a diverged push with no common ancestor (orphaned) to the current head: attaches the current head as a parent to the root of the incoming lineage (graft) followed by a fast-forward. Parents are not included in the content-hash, so snapshot IDs are immutable, and the entire history is preserved (unlike Force, which results in no loss).
-	Append bool
-}
-
-const (
-	MaxRefBatchUpdates  = 4096
-	MaxRefBatchJSONBody = 8 << 20
-)
-
-type UpdateRefsInput struct {
-	RepoID  domain.ContentHash
-	Updates []UpdateRefInput
-}
-
-type UpdateRefsOutput struct {
-	Applied int `json:"applied"`
-}
-
-// RefUpdateResult is the result of ref move determination (sync protocol).
-type RefUpdateResult string
-
-const (
-	RefFastForward    RefUpdateResult = "fast_forward"
-	RefUpToDate       RefUpdateResult = "up_to_date"
-	RefNonFastForward RefUpdateResult = "non_fast_forward"
-	RefDivergedForked RefUpdateResult = "diverged_forked"
-	// RefForced indicates a forced move using --force.
-	RefForced RefUpdateResult = "forced"
-	// RefAppended indicates an irrelevant diverged push that was grafted onto the current head.
-	RefAppended RefUpdateResult = "appended"
-)
-
-// UpdateRefOutput: verdict + (fork info when diverged) (sync protocol).
-type UpdateRefOutput struct {
-	Result          RefUpdateResult    `json:"result"`
-	Ref             domain.Ref         `json:"ref"`
-	RequestedTarget domain.ContentHash `json:"requested_target,omitempty"`
-	ServerTarget    domain.ContentHash `json:"server_target,omitempty"`
-	ForkedRef       *domain.Ref        `json:"forked_ref,omitempty"`
-	MergeBase       domain.ContentHash `json:"merge_base,omitempty"`
-}
-
-// ListSnapshotsInput: branch filter (empty for all).
-type ListSnapshotsInput struct {
-	RepoID domain.ContentHash
-	Branch string
 }
 
 // PushNegotiateInput (sync protocol step A request).
@@ -271,31 +112,6 @@ type PushNegotiateOutput struct {
 	ChunkWants           []domain.ContentHash `json:"chunk_wants,omitempty"`
 }
 
-// PullSendInput (sync protocol Step B Request).
-type PullSendInput struct {
-	RepoID        domain.ContentHash
-	SnapshotWants []domain.ContentHash
-	DocWants      []domain.ContentHash
-	// Chunk Wire (Delta Download): Manifest/Chunk Body Request.
-	DocManifestWants []domain.ContentHash
-	ChunkWants       []domain.ContentHash
-	// Empty means a pre-v2 client, which can safely consume v1 only.
-	ChunkFormatsSupported []string
-	// Empty means a pre-negotiation client, which can safely consume CIR v1 only.
-	CIRVersionsSupported []string
-}
-
-// PullSendOutput: Download Target Object (push/objects Request Body Equivalent). (wire: snake_case)
-type PullSendOutput struct {
-	Snapshots []domain.Snapshot   `json:"snapshots"`
-	Docs      []domain.SessionDoc `json:"docs"`
-	// DocManifests are the chunk manifests requested for the doc — impossible docs are returned as Docs in a single response.
-	DocManifests []ChunkedDoc  `json:"doc_manifests,omitempty"`
-	ChunkObjects []ChunkObject `json:"chunk_objects,omitempty"`
-	// The manifest response announces the pull/chunks capability. Old clients ignore this.
-	BoundedChunksSupported bool `json:"bounded_chunks_supported,omitempty"`
-}
-
 // AuthInput: Bearer team token + X-Cxt-Identity header parsing result (sync protocol).
 type AuthInput struct {
 	TeamToken string
@@ -307,79 +123,4 @@ type AuthInput struct {
 type AuthOutput struct {
 	Team     string
 	Identity domain.TeamIdentity
-}
-
-// SearchInput: Searches snapshot metadata (commit message/author) and conversation body (CIR message/reasoning) as substring (web UI "Where did they say that?" requirement — case-insensitive).
-type SearchInput struct {
-	RepoID domain.ContentHash
-	Query  string
-	Limit  int // 0 means server default (50)
-}
-
-// SearchHit: Search result item. Kind: "commit" (message/author match) | "event" (conversation body match).
-// (wire: snake_case — created_at is RFC3339)
-type SearchHit struct {
-	SnapshotID domain.ContentHash `json:"snapshot_id"`
-	Branch     string             `json:"branch"`
-	Kind       string             `json:"kind"`
-	Role       string             `json:"role,omitempty"` // Speaker (user/assistant ...) in event match
-	Seq        int                `json:"seq,omitempty"`  // CIR seq in event match
-	EventIndex *int               `json:"event_index,omitempty"`
-	Snippet    string             `json:"snippet"`
-	CreatedAt  string             `json:"created_at"`
-}
-
-// SearchOutput: Hit list + whether limit is reached (client should narrow search term if reached).
-type SearchOutput struct {
-	Hits      []SearchHit `json:"hits"`
-	Truncated bool        `json:"truncated"`
-}
-
-// DanglingParent: Points to parent snapshot that does not exist (real corruption — git fsck missing parent response).
-type DanglingParent struct {
-	Snapshot domain.ContentHash `json:"snapshot"`
-	Missing  domain.ContentHash `json:"missing"`
-}
-
-// FsckReport: Reference reachability audit results (read-only, git fsck response). Do not fix anything.
-// Parentless snapshots are classified as normal roots and are not errors.
-type FsckReport struct {
-	Total           int                  `json:"total"`            // Total number of snapshots
-	Reachable       int                  `json:"reachable"`        // Number of snapshots reachable from any ref
-	Roots           []domain.ContentHash `json:"roots"`            // Snapshots without parents (normal roots)
-	Unreachable     []domain.ContentHash `json:"unreachable"`      // Stored snapshots not reachable from current refs or pending sessions
-	DanglingParents []DanglingParent     `json:"dangling_parents"` // Non-existent parent references (corrupted)
-}
-
-// JoinPreview exposes server policy without mutating repository state.
-type JoinPreview interface {
-	PreviewJoin(context.Context, JoinPreviewInput) (JoinPreviewOutput, error)
-	ConfirmJoin(context.Context, ConfirmJoinInput) (JoinOutput, error)
-}
-type JoinPreviewInput struct {
-	ActorID  string
-	RepoID   domain.ContentHash
-	Snapshot domain.ContentHash
-	Branch   string
-}
-type ConfirmJoinInput struct {
-	JoinInput
-	ActorID string
-}
-type JoinBranchOption struct {
-	Branch   string `json:"branch"`
-	BranchID string `json:"branch_id"`
-}
-type JoinPreviewOutput struct {
-	Snapshot     domain.ContentHash   `json:"snapshot"`
-	Branch       string               `json:"branch"`
-	BranchID     string               `json:"branch_id"`
-	Branches     []JoinBranchOption   `json:"branches"`
-	Reason       string               `json:"reason,omitempty"`
-	ExpectedHead domain.ContentHash   `json:"expected_head,omitempty"`
-	Tip          domain.ContentHash   `json:"tip,omitempty"`
-	Descendants  int                  `json:"descendants"`
-	DropTargets  []domain.ContentHash `json:"drop_targets"`
-	OnlyRevision domain.ContentHash   `json:"only_revision,omitempty"`
-	AllRevision  domain.ContentHash   `json:"all_revision,omitempty"`
 }

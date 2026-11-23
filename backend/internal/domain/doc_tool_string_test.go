@@ -5,12 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type docToolStringFixture struct {
@@ -105,89 +103,6 @@ func prepareDocToolStringFixture(test testing.TB, token string, mode DocToolStri
 		test.Fatal(err)
 	}
 	return fixture
-}
-
-func docToolStringSmallOracle(test testing.TB, source DocToolStringSource, raw []byte) *docToolDisplay {
-	test.Helper()
-	builder := docToolDisplayBuilder{ctx: context.Background(), parser: docFindSourceParser{raw: raw}, display: docToolDisplay{sourceBytes: len(raw)}, metadata: docToolDisplayBaseBytes, budget: MaxDocToolDisplayBytes}
-	var err error
-	if source.Mode == DocToolStringQuoted {
-		err = builder.string(source.Token, true, 0)
-	} else {
-		err = builder.diff(source.Token, docToolStringPrefix(source.Mode))
-	}
-	if err != nil {
-		test.Fatal(err)
-	}
-	builder.display.text = builder.text.String()
-	return &builder.display
-}
-
-func TestDocToolStringModesMatchOriginalTextAndEveryRune(test *testing.T) {
-	tokens := []string{
-		`""`, `"plain"`, `"**not markdown** [label](url)"`, `"\n\r\nlast\n"`,
-		`"\u003c\u0026\u003e\u2028\u2029\u0000\u000b\b\f\n\r\t\"\\\/\ufffd"`,
-		`"\ud83d\ude42\uac00\r"`, `"\uD800\udfff\ud800\uD800\udc00\ufffd"`,
-		"\"\ud55c\uae00🙂/<&>\"", `"\ud800x\udfff"`,
-	}
-	for _, mode := range []DocToolStringMode{DocToolStringQuoted, DocToolStringAdd, DocToolStringRemove} {
-		for position, token := range tokens {
-			test.Run(fmt.Sprintf("%s/%d", mode, position), func(test *testing.T) {
-				fixture := prepareDocToolStringFixture(test, token, mode)
-				oracle := docToolStringSmallOracle(test, fixture.plan.Source, fixture.raw)
-				var actual strings.Builder
-				for index := 0; index < fixture.plan.Pages.Count; index++ {
-					page, err := ReadDocToolStringPage(context.Background(), fixture.plan, index, func(_ context.Context, hash ContentHash) ([]byte, error) { return fixture.objects[hash], nil })
-					if err != nil || page.Display.From != actual.Len() {
-						test.Fatal(err)
-					}
-					actual.WriteString(page.Display.Text)
-					for offset, character := range page.Display.Text {
-						got, err := page.SourceRange(offset, utf8.RuneLen(character))
-						want, expectedErr := oracle.SourceRange(page.Display.From+offset, utf8.RuneLen(character))
-						if err != nil || expectedErr != nil || got != want {
-							test.Fatal("source mismatch", offset, got, want, err, expectedErr)
-						}
-					}
-				}
-				if actual.String() != oracle.Text() {
-					test.Fatalf("display = %q; want %q", actual.String(), oracle.Text())
-				}
-			})
-		}
-	}
-}
-
-func TestDocToolStringLargeRestartAndBoundedAssembly(test *testing.T) {
-	for _, mode := range []DocToolStringMode{DocToolStringQuoted, DocToolStringAdd, DocToolStringRemove} {
-		test.Run(string(mode), func(test *testing.T) {
-			token := `"` + strings.Repeat(`PUBLIC_BODY_MARKER\uD800\ud83d\ude42\n\r\u0000🙂`, 3200) + `\n"`
-			fixture := prepareDocToolStringFixture(test, token, mode)
-			input, err := NewDocToolStringAssemblyInput(fixture.plan)
-			if err != nil {
-				test.Fatal(err)
-			}
-			assembled := assembleDisplayFixture(test, input, fixture.objects)
-			actual := assembledFixturePages(test, assembled, nil)
-			var decoded string
-			if json.Unmarshal([]byte(token), &decoded) != nil {
-				test.Fatal("invalid fixture")
-			}
-			want := docToolStringPrefix(mode) + strings.ReplaceAll(decoded, "\n", "\n"+docToolStringPrefix(mode))
-			if mode == DocToolStringQuoted {
-				want = `"` + strings.Repeat(`PUBLIC_BODY_MARKER\ud800🙂\n\r\u0000🙂`, 3200) + `\n"`
-			}
-			if actual != want || len(fixture.states) < 5 {
-				test.Fatal("large text changed", len(actual), len(want), len(fixture.states))
-			}
-			loads := 0
-			last, err := ReadDocToolStringPage(context.Background(), fixture.plan, fixture.plan.Pages.Count-1, func(_ context.Context, hash ContentHash) ([]byte, error) { loads++; return fixture.objects[hash], nil })
-			if err != nil || last.RawTo != fixture.plan.Source.Token.To || loads > 4 {
-				test.Fatal("late lookup scanned the prefix", loads, err)
-			}
-			test.Logf("raw=%d text=%d token_pages=%d checkpoints=%d final_pages=%d max_step_raw=%d late_loads=%d", len(fixture.raw), len(actual), fixture.plan.Pages.Count, len(fixture.states), assembled.generation.Pages.Count, fixture.maxRaw, loads)
-		})
-	}
 }
 
 func TestDocToolStringErrorsDiscardAllOutputs(test *testing.T) {
@@ -305,27 +220,6 @@ func TestDocToolStringAssemblyRejectsInvalidCursorAndCorruption(test *testing.T)
 	}
 }
 
-func TestDocToolStringLargePlainAndEscapedBoundaryTokens(test *testing.T) {
-	for _, width := range []int{1023, 4095, 32755, 65533, 65534, 65535, 65536} {
-		for _, suffix := range []string{`\ud83d\ude42`, `🙂`, `\ud800`, `\n`, ``} {
-			token := `"` + strings.Repeat("a", width) + suffix + `"`
-			fixture := prepareDocToolStringFixture(test, token, DocToolStringQuoted)
-			var result strings.Builder
-			for index := 0; index < fixture.plan.Pages.Count; index++ {
-				page, err := ReadDocToolStringPage(context.Background(), fixture.plan, index, func(_ context.Context, hash ContentHash) ([]byte, error) { return fixture.objects[hash], nil })
-				if err != nil {
-					test.Fatal(width, suffix, err)
-				}
-				result.WriteString(page.Display.Text)
-			}
-			oracle := docToolStringSmallOracle(test, fixture.plan.Source, fixture.raw)
-			if result.String() != oracle.Text() {
-				test.Fatal("boundary changed output", width, suffix)
-			}
-		}
-	}
-}
-
 func TestDocToolStringLateReadsOnlySelectedDirectoryPath(test *testing.T) {
 	for _, count := range []int{5000, 100000} {
 		fixture := prepareDocToolStringFixture(test, `"`+strings.Repeat(`\u0061`, count)+`"`, DocToolStringAdd)
@@ -340,17 +234,6 @@ func TestDocToolStringLateReadsOnlySelectedDirectoryPath(test *testing.T) {
 			test.Fatal("selected-page cost scaled with complete token", count, loads, readBytes, err)
 		}
 		test.Logf("decoded_runes=%d pages=%d late_object_loads=%d late_bytes=%d", count, fixture.plan.Pages.Count, loads, readBytes)
-	}
-}
-
-func TestDocToolDisplayJSONOverflowDoesNotChangeSourceFind(test *testing.T) {
-	raw := []byte(`{"kind":"tool_result","output":[1e1000]}`)
-	display, err := BuildDocToolDisplay(context.Background(), raw)
-	if err != nil || display.Text() != "[\n  null\n]" {
-		test.Fatal("JS tool display did not normalize overflow", err)
-	}
-	if _, err := LocateDocFindTextSource(raw, 0, 0, 1); !errors.Is(err, ErrIntegrity) {
-		test.Fatal("tool display changed typed source-find number validation", err)
 	}
 }
 

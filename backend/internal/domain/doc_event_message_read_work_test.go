@@ -3,7 +3,6 @@ package domain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -24,64 +23,6 @@ func eventMessageReadWorkBody() []byte {
 	}
 	raw.WriteString(`]}`)
 	return raw.Bytes()
-}
-
-func TestDocEventMessagePreparationReadWorkExactTrace(test *testing.T) {
-	fixture := newEventMessageFixture(test, eventMessageReadWorkBody())
-	type stepTrace struct {
-		Prior       ContentHash
-		Preparation json.RawMessage
-		Objects     []ContentHash
-		Loads       []ContentHash
-		Raw         []DocFindSpan
-	}
-	var trace []stepTrace
-	for fixture.state.Phase != "completed" {
-		if len(trace) > 1024 {
-			test.Fatal("message fixture stopped making bounded progress")
-		}
-		var observation stepTrace
-		step, err := StepDocEventDisplay(context.Background(), fixture.state,
-			func(ctx context.Context, offset, length int) ([]byte, error) {
-				observation.Raw = append(observation.Raw, DocFindSpan{From: offset, To: offset + length})
-				return fixture.loadRaw(ctx, offset, length)
-			}, func(ctx context.Context, hash ContentHash) ([]byte, error) {
-				observation.Loads = append(observation.Loads, hash)
-				return fixture.stored(ctx, hash)
-			})
-		if err != nil {
-			test.Fatal("preparation trace failed", fixture.state.Phase, err)
-		}
-		observation.Prior = step.Prior()
-		observation.Preparation, err = step.Preparation().Encode()
-		if err != nil {
-			test.Fatal(err)
-		}
-		for _, object := range step.Objects() {
-			if HashContent(object.Bytes) != object.Hash {
-				test.Fatal("derived object hash mismatch")
-			}
-			observation.Objects = append(observation.Objects, object.Hash)
-			fixture.objects[object.Hash] = bytes.Clone(object.Bytes)
-		}
-		fixture.state = fixture.restore(test, step.Preparation())
-		trace = append(trace, observation)
-	}
-	generation := fixture.finish(test)
-	fixture.pages(test, generation, fixture.oracle(test))
-	raw, err := json.Marshal(struct {
-		Steps      []stepTrace
-		Generation DocDisplayProjectionGeneration
-	}{Steps: trace, Generation: generation})
-	if err != nil {
-		test.Fatal(err)
-	}
-	fingerprint := HashContent(raw)
-	const expected ContentHash = "sha256:02212b94e12a723c840184993e7dfda9d6f324e07b9a14189bbf016998bd2874"
-	if fingerprint != expected {
-		test.Fatal("preparation changed exact physical reads, byte spans, object order, checkpoints or generation", fingerprint, expected)
-	}
-	test.Logf("fingerprint=%s steps=%d", fingerprint, len(trace))
 }
 
 func messagePreparationReadWorkFixture(test *testing.T) *eventMessageFixture {

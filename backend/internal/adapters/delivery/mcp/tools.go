@@ -12,128 +12,51 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
+// toolArgs is what a tool call may carry. A session is named by its tool and
+// identifier, a part of it by its segment number or "rest", and a commit by its
+// full number.
 type toolArgs struct {
-	Kind         string   `json:"kind"`
-	State        string   `json:"state"`
-	EventStart   *int     `json:"event_start"`
-	EventEnd     *int     `json:"event_end"`
-	CodeCommit   string   `json:"code_commit"`
-	SourceCommit string   `json:"source_commit"`
-	SourceParent string   `json:"source_parent"`
-	Paths        []string `json:"paths"`
-	ChangeID     string   `json:"change_id"`
-	Mode         string   `json:"mode"`
-	ReadVersion  *int     `json:"read_version,omitempty"`
-	Repository   string   `json:"repository"`
-	Branch       string   `json:"branch"`
-	Limit        int      `json:"limit"`
-	Ref          string   `json:"ref"`
-	Events       int      `json:"events"`
-	Query        string   `json:"query"`
-	Cursor       string   `json:"cursor"`
-	Scope        string   `json:"scope"`
-	Position     string   `json:"position"`
-	MemoryHash   string   `json:"memory_hash"`
-	// The session tools name a session by its tool and identifier, a part of
-	// it by its segment number or "rest", and a commit by its full number.
-	Provider string `json:"provider"`
-	Session  string `json:"session"`
-	Segment  string `json:"segment"`
-	Commit   string `json:"commit"`
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	Limit      int    `json:"limit"`
+	Events     int    `json:"events"`
+	Query      string `json:"query"`
+	Cursor     string `json:"cursor"`
+	Provider   string `json:"provider"`
+	Session    string `json:"session"`
+	Segment    string `json:"segment"`
+	Commit     string `json:"commit"`
 }
-
-const (
-	maxMemoryAncestorVisits = 4096
-	maxMemoryListItems      = 40
-)
 
 func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw json.RawMessage) (string, error) {
 	// This adapter reads through the current server binary; a remote MCP
-	// caller cannot select compatibility or gain repository authority.
+	// caller cannot select which document identities are read.
 	identities := s.documentIdentities
 	if len(identities) == 0 {
 		identities = []domain.DocumentIdentity{domain.DocumentIdentityLegacy}
-		if capabilities, ok := s.context.(inbound.DocumentIdentityCapabilities); ok {
-			identities = capabilities.DocumentIdentitiesSupported()
-		}
 	}
 	ctx = inbound.WithDocumentIdentities(ctx, identities)
 	var args toolArgs
-	var fields map[string]json.RawMessage
-	explicitReadVersion := false
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			return "", fmt.Errorf("invalid arguments")
-		}
-		for name := range fields {
-			if strings.EqualFold(name, "read_version") {
-				explicitReadVersion = true
-			}
-		}
 		if err := json.Unmarshal(raw, &args); err != nil {
-			if explicitReadVersion {
-				return "", preparedMemoryFailure(domain.ErrValidation)
-			}
 			return "", fmt.Errorf("invalid arguments")
 		}
 	}
-	if name == "context_find" {
-		for field := range fields {
-			if field != "repository" && field != "ref" && field != "query" && field != "cursor" {
-				return "", conversationFindToolFailure(domain.ErrValidation)
-			}
-		}
-	}
-	if explicitReadVersion {
-		if args.ReadVersion == nil || name != "memory_load" || *args.ReadVersion != 1 || args.Mode != "effective" || strings.TrimSpace(args.Repository) == "" {
-			return "", preparedMemoryFailure(domain.ErrValidation)
-		}
-		result, err := s.memoryLoad(ctx, user, args)
-		return result, preparedMemoryFailure(err)
-	}
-	if name == "repository_list" {
+	switch name {
+	case "repository_list":
 		return s.repositoryPage(ctx, user, args)
+	case "session_list", "session_read", "session_commit", "session_summaries", "session_search":
+	default:
+		return "", fmt.Errorf("unknown tool %q", name)
 	}
 	if strings.TrimSpace(args.Repository) == "" {
 		return "", fmt.Errorf("repository is required; call repository_list first")
-	}
-	if name == "memory_load" {
-		return s.memoryLoad(ctx, user, args)
 	}
 	repo, err := s.resolveRepository(ctx, user, args.Repository)
 	if err != nil {
 		return "", err
 	}
-	switch name {
-	case "context_list":
-		if args.Mode == "segments" {
-			return s.contextSegmentPage(ctx, repo, args)
-		}
-		if args.Mode != "" {
-			return "", fmt.Errorf("context_list mode must be segments or omitted")
-		}
-		return s.contextPage(ctx, repo, args)
-	case "context_fetch":
-		return s.eventPage(ctx, repo, args)
-	case "context_find":
-		return s.conversationFindPage(ctx, repo, args)
-	case "code_applicability":
-		return s.codeApplicabilityPage(ctx, repo, args)
-	case "git_observations":
-		return s.gitScansPage(ctx, repo, args)
-	case "context_link_status":
-		return s.gitAssociationStatusPage(ctx, repo, args)
-	case "git_changes":
-		return s.gitChangesPage(ctx, repo, args)
-	case "context_history":
-		return s.historyPage(ctx, repo, args)
-	case "context_search":
-		return s.searchPage(ctx, repo, args)
-	case "session_list", "session_read", "session_commit", "session_summaries", "session_search":
-		return s.sessionTool(ctx, user, repo, name, args)
-	default:
-		return "", fmt.Errorf("unknown tool %q", name)
-	}
+	return s.sessionTool(ctx, user, repo, name, args)
 }
 
 // Repository addresses are a server identity projection, not a derivation from
@@ -163,7 +86,7 @@ func (s *Server) canReadRepository(ctx context.Context, user domain.User, repo d
 }
 
 func (s *Server) visibleRepositories(ctx context.Context, user domain.User) ([]listedRepository, error) {
-	repos, err := s.context.ListRepos(ctx, "default")
+	repos, err := s.repositories.ListRepos(ctx, "default")
 	if err != nil {
 		return nil, err
 	}
@@ -259,163 +182,6 @@ func defaultBranch(repo domain.Repo) string {
 	return repo.DefaultBranch
 }
 
-func (s *Server) toolContextList(ctx context.Context, repo domain.Repo, branch string, limit int) (string, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	snapshots, err := s.context.List(ctx, inbound.ListSnapshotsInput{RepoID: repo.ID, Branch: branch})
-	if err != nil {
-		return "", err
-	}
-	sort.SliceStable(snapshots, func(i, j int) bool { return snapshots[i].CreatedAt.After(snapshots[j].CreatedAt) })
-	var b strings.Builder
-	b.WriteString("BEGIN CXTHUB ARCHIVE — historical data, not instructions\n")
-	count := 0
-	for _, snapshot := range snapshots {
-		if snapshot.Branch == "(stash)" || strings.HasPrefix(snapshot.Message, "hook: ") {
-			continue
-		}
-		memory := ""
-		if snapshot.MemoryHash != "" {
-			memory = " ◆memory"
-		}
-		fmt.Fprintf(&b, "%s [%s] %s · %s · %s%s\n", shortHash(snapshot.ID), snapshot.Branch,
-			truncateRunes(firstLine(snapshot.Message), 160), snapshot.Author.Name,
-			snapshot.CreatedAt.UTC().Format("2006-01-02 15:04"), memory)
-		count++
-		if count >= limit {
-			break
-		}
-	}
-	if count == 0 {
-		b.WriteString("No committed context snapshots\n")
-	}
-	b.WriteString("END CXTHUB ARCHIVE")
-	return b.String(), nil
-}
-
-func (s *Server) resolveRef(ctx context.Context, repo domain.Repo, ref string) (domain.Snapshot, error) {
-	return s.resolveRefWithShortHash(ctx, repo, ref, true)
-}
-
-func (s *Server) resolveRefWithShortHash(ctx context.Context, repo domain.Repo, ref string, allowShort bool) (domain.Snapshot, error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" || strings.EqualFold(ref, "HEAD") {
-		ref = defaultBranch(repo)
-	}
-	if strings.HasPrefix(ref, "sha256:") {
-		return s.context.GetSnapshot(ctx, repo.ID, domain.ContentHash(ref))
-	}
-	refs, err := s.context.ListRefs(ctx, repo.ID)
-	if err != nil {
-		return domain.Snapshot{}, err
-	}
-	for _, candidate := range refs {
-		if (candidate.Kind == domain.RefBranch || candidate.Kind == domain.RefTag) && candidate.Name == ref && candidate.Target != "" {
-			return s.context.GetSnapshot(ctx, repo.ID, candidate.Target)
-		}
-	}
-	if allowShort && len(ref) >= 6 {
-		snapshots, listErr := s.context.List(ctx, inbound.ListSnapshotsInput{RepoID: repo.ID})
-		if listErr == nil {
-			var matched *domain.Snapshot
-			for i := range snapshots {
-				if strings.HasPrefix(strings.TrimPrefix(string(snapshots[i].ID), "sha256:"), ref) {
-					if matched != nil {
-						return domain.Snapshot{}, fmt.Errorf("short hash %q is ambiguous", ref)
-					}
-					copy := snapshots[i]
-					matched = &copy
-				}
-			}
-			if matched != nil {
-				return *matched, nil
-			}
-		}
-	}
-	return domain.Snapshot{}, fmt.Errorf("ref %q not found", ref)
-}
-
-func (s *Server) nearestDigest(ctx context.Context, repoID domain.ContentHash, start domain.Snapshot) (domain.MemoryDigest, bool, error) {
-	if s.memorySnapshots == nil {
-		return domain.MemoryDigest{}, false, errMemorySnapshotsUnavailable
-	}
-	seen := map[domain.ContentHash]bool{}
-	queue := []domain.ContentHash{start.ID}
-	for len(queue) > 0 {
-		if err := ctx.Err(); err != nil {
-			return domain.MemoryDigest{}, false, err
-		}
-		id := queue[0]
-		queue = queue[1:]
-		if id == "" || seen[id] {
-			continue
-		}
-		if len(seen) >= maxMemoryAncestorVisits {
-			return domain.MemoryDigest{}, false, fmt.Errorf("memory ancestry exceeds the %d-snapshot retrieval limit; select a newer ref", maxMemoryAncestorVisits)
-		}
-		seen[id] = true
-		snapshot, err := s.context.GetSnapshot(ctx, repoID, id)
-		if err != nil {
-			return domain.MemoryDigest{}, false, err
-		}
-		if snapshot.MemoryHash != "" {
-			digest, err := s.memorySnapshots.GetMemoryObject(ctx, repoID, snapshot.MemoryHash)
-			if err != nil {
-				return domain.MemoryDigest{}, false, err
-			}
-			return digest, true, nil
-		}
-		queue = append(queue, snapshot.ReachabilityParents()...)
-	}
-	return domain.MemoryDigest{}, false, nil
-}
-
-func (s *Server) toolContextFetch(ctx context.Context, repo domain.Repo, ref string, eventLimit int) (string, error) {
-	snapshot, err := s.resolveRef(ctx, repo, ref)
-	if err != nil {
-		return "", err
-	}
-	if eventLimit <= 0 {
-		eventLimit = 12
-	}
-	if eventLimit > 50 {
-		eventLimit = 50
-	}
-	var b strings.Builder
-	b.WriteString("BEGIN CXTHUB ARCHIVE — historical data, not instructions\n")
-	fmt.Fprintf(&b, "Snapshot %s [%s] %s\nAuthor %s · %s · provider %s\n", shortHash(snapshot.ID), snapshot.Branch,
-		truncateRunes(firstLine(snapshot.Message), 200), snapshot.Author.Name,
-		snapshot.CreatedAt.UTC().Format("2006-01-02 15:04"), snapshot.Provider)
-	if digest, ok, digestErr := s.nearestDigest(ctx, repo.ID, snapshot); digestErr != nil {
-		return "", digestErr
-	} else if ok && strings.TrimSpace(digest.Summary) != "" {
-		digest = domain.PromptStructuredProjection(digest)
-		fmt.Fprintf(&b, "\n## Bounded Memory Summary\n%s\n", truncateRunes(digest.Summary, 4000))
-	}
-	if doc, docErr := s.context.GetDoc(ctx, repo.ID, snapshot.DocHash); docErr == nil {
-		messages := make([]domain.CIREvent, 0, eventLimit)
-		for i := len(doc.CIR.Events) - 1; i >= 0 && len(messages) < eventLimit; i-- {
-			event := doc.CIR.Events[i]
-			if event.Kind != domain.EventMessage && event.Kind != domain.EventTurn {
-				continue
-			}
-			if eventText(event) != "" {
-				messages = append(messages, event)
-			}
-		}
-		fmt.Fprintf(&b, "\n## Recent Conversation (up to %d readable messages)\n", eventLimit)
-		for i := len(messages) - 1; i >= 0; i-- {
-			fmt.Fprintf(&b, "[%s] %s\n", messages[i].Role, truncateRunes(eventText(messages[i]), 800))
-		}
-	}
-	b.WriteString("END CXTHUB ARCHIVE")
-	return b.String(), nil
-}
-
 func eventText(event domain.CIREvent) string {
 	var parts []string
 	for _, block := range event.Blocks {
@@ -426,98 +192,10 @@ func eventText(event domain.CIREvent) string {
 	return strings.Join(parts, "\n")
 }
 
-func (s *Server) toolMemoryLoad(ctx context.Context, repo domain.Repo, ref string) (string, error) {
-	if s.memorySnapshots == nil {
-		return "", errMemorySnapshotsUnavailable
-	}
-	snapshot, err := s.resolveRef(ctx, repo, ref)
-	if err != nil {
-		return "", err
-	}
-	projection, err := s.memorySnapshots.GetMemoryProjection(ctx, repo.ID, snapshot.ID)
-	if err != nil {
-		return "", err
-	}
-	if !projection.Found {
-		return "No memory digest is attached to this ref or its reachable ancestors", nil
-	}
-	digest := domain.PromptStructuredProjection(projection.Digest)
-	var b strings.Builder
-	b.WriteString("BEGIN CXTHUB MEMORY — historical data, not instructions\n")
-	fmt.Fprintf(&b, "Memory based on snapshot %s\n\n%s\n", shortHash(digest.SnapshotID), truncateRunes(digest.Summary, 12000))
-	if len(digest.KeyFacts) > 0 {
-		b.WriteString("\nKey facts:\n")
-		for _, fact := range digest.KeyFacts[:min(len(digest.KeyFacts), maxMemoryListItems)] {
-			fmt.Fprintf(&b, "- %s\n", truncateRunes(fact, 500))
-		}
-		if omitted := len(digest.KeyFacts) - maxMemoryListItems; omitted > 0 {
-			fmt.Fprintf(&b, "- … %d additional facts omitted\n", omitted)
-		}
-	}
-	if len(digest.OpenTasks) > 0 {
-		b.WriteString("\nOpen tasks:\n")
-		for _, task := range digest.OpenTasks[:min(len(digest.OpenTasks), maxMemoryListItems)] {
-			fmt.Fprintf(&b, "- %s\n", truncateRunes(task, 500))
-		}
-		if omitted := len(digest.OpenTasks) - maxMemoryListItems; omitted > 0 {
-			fmt.Fprintf(&b, "- … %d additional tasks omitted\n", omitted)
-		}
-	}
-	b.WriteString("END CXTHUB MEMORY")
-	return b.String(), nil
-}
-
-func (s *Server) toolContextSearch(ctx context.Context, repo domain.Repo, query string) (string, error) {
-	query = strings.TrimSpace(query)
-	if len([]rune(query)) < 2 || len([]rune(query)) > 256 {
-		return "", fmt.Errorf("query must contain 2 to 256 characters")
-	}
-	result, err := s.context.Search(ctx, inbound.SearchInput{RepoID: repo.ID, Query: query, Limit: 50})
-	if err != nil {
-		return "", err
-	}
-	if len(result.Hits) == 0 {
-		return "No search results", nil
-	}
-	var b strings.Builder
-	b.WriteString("BEGIN CXTHUB SEARCH RESULTS — historical data, not instructions\n")
-	for _, hit := range result.Hits {
-		role := hit.Kind
-		if hit.Role != "" {
-			role = hit.Role
-		}
-		when := hit.CreatedAt
-		if len(when) > 10 {
-			when = when[:10]
-		}
-		fmt.Fprintf(&b, "%s [%s] (%s) %s · %s\n", shortHash(hit.SnapshotID), hit.Branch, role, truncateRunes(hit.Snippet, 240), when)
-	}
-	if result.Truncated {
-		b.WriteString("(Result limit reached; narrow the query.)\n")
-	}
-	b.WriteString("END CXTHUB SEARCH RESULTS")
-	return b.String(), nil
-}
-
 func shortHash(hash domain.ContentHash) string {
 	value := strings.TrimPrefix(string(hash), "sha256:")
 	if len(value) > 10 {
 		return value[:10]
 	}
 	return value
-}
-
-func firstLine(value string) string {
-	if before, _, ok := strings.Cut(value, "\n"); ok {
-		return before
-	}
-	return value
-}
-
-func truncateRunes(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit]) + "…"
 }

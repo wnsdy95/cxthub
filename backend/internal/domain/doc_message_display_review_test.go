@@ -8,9 +8,7 @@ import (
 	"maps"
 	"math"
 	"reflect"
-	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func messageDisplayReviewJSON(test *testing.T, value any) []byte {
@@ -455,53 +453,6 @@ func TestDocMessageDisplayReviewHydratedCursorMetadata(test *testing.T) {
 	}
 }
 
-func TestDocMessageDisplayReviewPrefixOnlyContinuation(test *testing.T) {
-	for _, first := range []string{`a`, `a\n`, `a\n\n`} {
-		raw := []byte(`{"kind":"message","blocks":[{"type":"text","text":"` + first + "\"},{\"type\":\"text\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"# \"},{\"type\":\"text\",\"text\":\"# **\\uD83D\\uDE42tail**\"},{\"type\":\"image\",\"name\":\"\ud55c\uae00\"},{\"type\":\"text\",\"text\":null},{\"type\":\"text\",\"text\":\"end\"}]}")
-		fixture := buildMessageDisplayFixture(test, raw)
-		input, err := NewDocMessageDisplayAssemblyInput(fixture.plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		baseline, err := BuildDocEventDisplay(context.Background(), raw)
-		if err != nil {
-			test.Fatal(err)
-		}
-		assertMappingReviewReplay(test, input, fixture.objects, baseline, 4, 1)
-		parts := messageDisplayReviewPage(test, fixture, 0).Parts
-		cursor := bytes.Clone(input.initial)
-		prefixOnly := 0
-		for position := 0; position < input.source.TextBytes; {
-			var before docMessageDisplayCursor
-			if err := json.Unmarshal(cursor, &before); err != nil {
-				test.Fatal(err)
-			}
-			page, next, err := input.read(context.Background(), cursor, 4, 1, messageDisplayReviewLoad(fixture.objects))
-			if err != nil || page.Text == "" {
-				test.Fatal("small-budget replay stalled", err)
-			}
-			if before.Part > 0 && len(before.Body) == 0 {
-				part := parts[before.Part]
-				var after docMessageDisplayCursor
-				if err := json.Unmarshal(next, &after); err != nil {
-					test.Fatal(err)
-				}
-				bodyPosition, err := docMessageDisplayBodyPosition(after)
-				span, spanErr := page.SourceRange(0, len(page.Text))
-				if err != nil || spanErr != nil || page.Text != strings.Repeat("\n", part.Separator) || after.Part != before.Part || after.Prefix != part.Separator || bodyPosition != 0 || span != part.First {
-					test.Fatal("prefix-only page consumed body or changed anchor", before, after, page, span, err, spanErr)
-				}
-				prefixOnly++
-			}
-			position += len(page.Text)
-			cursor = next
-		}
-		if prefixOnly != len(parts)-1 {
-			test.Fatal("fixture missed separator-only continuations", prefixOnly, len(parts))
-		}
-	}
-}
-
 func TestDocMessageDisplayReviewRejectsForgedSeparatorAnchor(test *testing.T) {
 	raw := []byte(`{"kind":"message","blocks":[{"type":"text","text":"left"},{"type":"text","text":"**right**","opaque":"hidden"}]}`)
 	fixture := buildMessageDisplayFixture(test, raw)
@@ -563,75 +514,5 @@ func TestDocMessageDisplayReviewRejectsInvalidChildCursorBeforePrefix(test *test
 	got, next, err := input.read(context.Background(), messageDisplayReviewJSON(test, cursor), 4, 1, messageDisplayReviewLoad(fixture.objects))
 	if !errors.Is(err, ErrIntegrity) || next != nil || !reflect.DeepEqual(got, DocDisplayPage{}) {
 		test.Fatalf("invalid native child cursor returned prefix-only output: text=%q runs=%v next_bytes=%d err=%v", got.Text, got.Runs, len(next), err)
-	}
-}
-
-func TestDocMessageDisplayReviewPageBoundarySourceCovers(test *testing.T) {
-	blocks := make([]map[string]string, DocMessageDisplayPageParts+2)
-	for index := range blocks {
-		text := "block"
-		if index == 0 {
-			text = strings.Repeat("a", DocDisplayPageTextBytes-1) + "L"
-		} else if index == 1 {
-			text = "🙂right"
-		} else if index == DocMessageDisplayPageParts-1 {
-			text = "edge-left"
-		} else if index == DocMessageDisplayPageParts {
-			text = "edge-right"
-		}
-		blocks[index] = map[string]string{"type": "text", "text": text}
-	}
-	raw := messageDisplayReviewJSON(test, map[string]any{"kind": "message", "blocks": blocks})
-	fixture := buildMessageDisplayFixture(test, raw)
-	if fixture.plan.Parts.Count != 2 {
-		test.Fatal("fixture missed the part-page boundary", fixture.plan.Parts.Count)
-	}
-	input, err := NewDocMessageDisplayAssemblyInput(fixture.plan)
-	if err != nil {
-		test.Fatal(err)
-	}
-	baseline, err := BuildDocEventDisplay(context.Background(), raw)
-	if err != nil {
-		test.Fatal(err)
-	}
-	assertMappedAssemblyReplay(test, input, fixture.objects, baseline)
-	assembled := assembleDisplayFixture(test, input, fixture.objects)
-	var previous *DocDisplayPage
-	seen := make(map[string]bool)
-	for index := 0; index < assembled.generation.Pages.Count; index++ {
-		page, err := ReadDocDisplayProjectionPage(context.Background(), assembled.generation, index, messageDisplayReviewLoad(assembled.objects))
-		if err != nil {
-			test.Fatal(err)
-		}
-		for offset, character := range page.Text {
-			for _, length := range []int{utf8.RuneLen(character), len(page.Text) - offset} {
-				got, err := page.SourceRange(offset, length)
-				want, baselineErr := baseline.SourceRange(page.From+offset, length)
-				if err != nil || baselineErr != nil || got != want {
-					test.Fatal("page changed source cover", page.Index, offset, length, got, want, err, baselineErr)
-				}
-			}
-		}
-		window, err := BuildDocDisplayProjectionSearchWindow(assembled.generation.Source, previous, page)
-		if err != nil {
-			test.Fatal(err)
-		}
-		for _, query := range []string{"L\n\n🙂", "edge-left\n\nedge-right"} {
-			matches, _, err := FindDocDisplayWindow(context.Background(), window, query, 0, 10)
-			if err != nil {
-				test.Fatal(err)
-			}
-			for _, match := range matches {
-				want, err := baseline.SourceRange(match.Offset, match.Length)
-				if err != nil || match.SourceRange == nil || *match.SourceRange != want {
-					test.Fatal("cross-page or cross-part match changed source cover", query, match, want, err)
-				}
-				seen[query] = true
-			}
-		}
-		previous = &page
-	}
-	if len(seen) != 2 {
-		test.Fatal("boundary queries did not survive assembly", seen)
 	}
 }

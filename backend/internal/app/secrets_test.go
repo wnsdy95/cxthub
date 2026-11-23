@@ -41,7 +41,7 @@ func TestSecretsCommandRejectsChangedPassphrase(t *testing.T) {
 	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	_, in := seedSecretsRepo(t, st, st)
-	svc := NewService(st, st, nil, nil, st)
+	svc := NewService(st, st, nil, st)
 	first, err := svc.SaveSecrets(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestSecretsCommandAuthorizesInsideApplication(t *testing.T) {
 					}
 				}
 			}
-			_, err := NewService(st, st, nil, nil, st).SaveSecrets(ctx, in)
+			_, err := NewService(st, st, nil, st).SaveSecrets(ctx, in)
 			if tc.allowed {
 				if err != nil {
 					t.Fatal(err)
@@ -131,7 +131,7 @@ func TestSecretsCommandFailsClosed(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	_, in := seedSecretsRepo(t, st, st)
 	broken := secretsReadFailure{st}
-	svc := NewService(broken, st, nil, nil, st)
+	svc := NewService(broken, st, nil, st)
 	if _, err := svc.SaveSecrets(ctx, in); !errors.Is(err, domain.ErrSecretsConsistency) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("read failure: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestSecretsConcurrentSameBaseline(t *testing.T) {
 	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	_, in := seedSecretsRepo(t, st, st)
-	svc := NewService(st, st, nil, nil, st)
+	svc := NewService(st, st, nil, st)
 	first, err := svc.SaveSecrets(ctx, in)
 	if err != nil {
 		t.Fatal(err)

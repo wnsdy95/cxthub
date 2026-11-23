@@ -10,28 +10,6 @@ import (
 	"testing"
 )
 
-func TestDocEventOuterReviewReasoningIgnoresMessageSummaryFlag(test *testing.T) {
-	for _, summary := range []string{`"visible"`, `null`} {
-		raw := []byte(`{"kind":"reasoning","compact_summary":true,"redacted_summary":` + summary + `}`)
-		entry, err := DecodeDocRangeMetadata(raw, DocEventIndex{Hash: HashContent(raw), Length: len(raw)})
-		if err != nil || !entry.CompactSummary || entry.Kind != EventReasoning {
-			test.Fatal("fixture is not admitted Reasoning metadata", err)
-		}
-		if _, err := BuildDocEventDisplay(context.Background(), raw); err != nil {
-			test.Fatal("existing display rejects fixture", err)
-		}
-		state, err := NewDocEventDisplayPreparation(entry)
-		if err != nil {
-			test.Errorf("admitted Reasoning event rejected because it carries a message-only flag: summary=%s err=%v", summary, err)
-			continue
-		}
-		encoded, err := state.Source.Encode()
-		if err != nil || state.Source.Summary || bytes.Contains(encoded, []byte(`"summary"`)) {
-			test.Error("message-only summary flag changes legacy Reasoning source bytes", err)
-		}
-	}
-}
-
 func outerReviewMessagePlan(test *testing.T, raw []byte) (*eventMessageChildTestFixture, DocEventDisplayPreparation) {
 	test.Helper()
 	prepared := buildMessageInputFixture(test, raw)

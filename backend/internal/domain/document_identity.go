@@ -2,7 +2,6 @@ package domain
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,34 +70,4 @@ func (snapshot Snapshot) DocumentRef() DocumentRef {
 
 func (ref DocumentRef) MatchesSnapshot(snapshot Snapshot) bool {
 	return ref.Validate() == nil && snapshot.ID == snapshot.DocHash && ref == snapshot.DocumentRef()
-}
-
-// VerifySessionDocIdentity explicitly checks either identity against a full
-// CIR. It returns no store publication proof. The legacy publication boundary
-// remains closed to roots until all storage and negotiation paths are ready.
-func VerifySessionDocIdentity(ctx context.Context, doc SessionDoc) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := doc.DocumentRef().Validate(); err != nil {
-		return err
-	}
-	if doc.Identity == DocumentIdentityLegacy {
-		if err := ValidateSessionDocHash(doc); err != nil {
-			return err
-		}
-		return ctx.Err()
-	}
-	manifest, _, err := ConversationManifestForCIR(doc.CIR)
-	if err != nil {
-		return err
-	}
-	hash, err := ConversationManifestHash(manifest)
-	if err != nil {
-		return err
-	}
-	if hash != doc.Hash {
-		return ErrIntegrity
-	}
-	return ctx.Err()
 }

@@ -3,7 +3,6 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -413,11 +412,6 @@ func (storage *PostgresStore) OpenDocEventDisplayWork(ctx context.Context, job d
 		storage: storage, owner: owner, source: source, tree: state.ToolTree, keys: state.ToolKeys, orders: state.ToolOrders,
 		checkpoint: checkpoint, use: use, orderCatalog: new(atomic.Pointer[docToolOrderCatalogRead]),
 	}, nil
-}
-
-func equalDocEventDisplaySource(source domain.DocEventDisplaySource, raw []byte, hash domain.ContentHash) bool {
-	expected, err := source.Encode()
-	return err == nil && domain.HashContent(expected) == hash && bytes.Equal(expected, raw)
 }
 
 var _ outbound.DocEventDisplayStore = (*PostgresStore)(nil)

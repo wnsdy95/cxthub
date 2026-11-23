@@ -1,21 +1,10 @@
 package app
 
 import (
-	"context"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/backend/internal/app/archivequery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
-
-func (service *Service) Search(ctx context.Context, input inbound.SearchInput) (inbound.SearchOutput, error) {
-	queries, err := service.ArchiveQueries()
-	if err != nil {
-		return inbound.SearchOutput{}, err
-	}
-	return queries.Search(ctx, input)
-}
 
 // searchableText extracts the search target text from the event — only the readable conversation surface is considered
 // (tool input/output is excluded as it is large original text; it covers the practical requirements of commit message search and doc).
@@ -36,8 +25,4 @@ func searchableText(ev domain.CIREvent) string {
 		return ev.RedactedSummary
 	}
 	return ""
-}
-
-func searchSnippet(text, query string) string {
-	return archivequery.SearchSnippet(text, query)
 }

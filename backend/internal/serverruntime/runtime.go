@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -31,27 +30,9 @@ type Runtime struct {
 	DocumentIdentities     []domain.DocumentIdentity
 	RepositoryAssets       inbound.RepositoryAssetCommands
 	DocumentPublications   inbound.DocumentPublicationCommands
-	RepositoryRefs         inbound.RepositoryRefCommands
-	SnapshotGrafts         app.SnapshotGraftWriter
-	MemoryDigests          app.MemoryDigestWriter
-	HistoryCommands        inbound.HistoryCommands
-	PRPromotions           inbound.PRPromotionCommands
-	ContextBranches        inbound.ContextBranchOperations
-	RepositoryStates       inbound.RepositoryStateQueries
 	RepositoryStateProfile inbound.RepositoryStateQueryProfile
-	RepositoryGraphs       inbound.RepositoryGraphQueries
 	RepositoryGraphProfile inbound.RepositoryGraphQueryProfile
-	ContextQueries         inbound.ContextQuery
 	ContextQueryProfile    inbound.ContextQueryProfile
-	PreparedMemory         inbound.PreparedMemoryReader
-	MemorySnapshots        inbound.MemorySnapshotQueries
-	MemoryLive             inbound.LiveMemoryQueries
-	Archive                inbound.RepositoryArchiveQueries
-	GitChanges             inbound.GitChangeQuery
-	GitScans               inbound.GitScanQuery
-	GitAssociationStatus   inbound.GitAssociationStatusQuery
-	CodeApplicability      inbound.CodeApplicabilityQuery
-	ConversationFind       inbound.ConversationFindQuery
 	// Anchored is the read side of the session structure, for the tool server.
 	Anchored       inbound.AnchoredQueries
 	Identity       *app.IdentityService
@@ -113,12 +94,8 @@ func OpenMCP(ctx context.Context, addr, dataDir string, requirePostgres bool) (_
 }
 
 func openRuntime(ctx context.Context, addr, dataDir string, requirePostgres, queriesOnly bool) (_ *Runtime, err error) {
-	preparedRepos, err := preparedMemoryRepositories(os.Getenv("CXT_MEMORY_READ_REPOS"))
-	if err != nil {
-		return nil, err
-	}
 	rootPublication := EnvBool(os.Getenv("CXT_CONVERSATION_ROOT_PUBLICATION"))
-	if err := app.ValidateConversationRootPublicationConfig(rootPublication); err != nil {
+	if err = app.ValidateConversationRootPublicationConfig(rootPublication); err != nil {
 		return nil, err
 	}
 	var verifier outbound.IdentityVerifier
@@ -174,37 +151,22 @@ func openRuntime(ctx context.Context, addr, dataDir string, requirePostgres, que
 	}()
 	r.Identity = app.NewIdentityService(verifier, st).WithDomainResolver(net.DefaultResolver)
 	if queriesOnly {
-		if err = r.configureMCPReads(profile, preparedRepos, rootPublication); err != nil {
+		if err = r.configureMCPReads(); err != nil {
 			return nil, err
 		}
 		return r, nil
 	}
-	r.Context = app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	r.Context = app.NewService(st, st, auth.NewTeamTokenAuth(), st)
 	if display, ok := st.(outbound.DocDisplayReader); ok {
 		r.Context.ConfigureDocumentDisplayReads(display)
 	}
 	if fields, ok := st.(outbound.DocFindFieldsStore); ok {
 		r.Context.ConfigureDocumentFindFields(fields)
 	}
-	if err = r.Context.ConfigurePreparedMemoryReads(preparedRepos); err != nil {
-		return nil, fmt.Errorf("configure prepared memory reads: %w", err)
-	}
 	if err = r.Context.ConfigureConversationRootPublication(rootPublication); err != nil {
 		return nil, err
 	}
 	if err = r.ConfigureDocumentQueries(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureRepositoryQueries(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigurePreparedMemoryQueries(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureMemorySnapshotQueries(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureLiveMemoryQueries(); err != nil {
 		return nil, err
 	}
 	if err = r.ConfigureRepositoryAssetCommands(); err != nil {
@@ -213,105 +175,7 @@ func openRuntime(ctx context.Context, addr, dataDir string, requirePostgres, que
 	if err = r.ConfigureDocumentPublicationCommands(); err != nil {
 		return nil, err
 	}
-	if err = r.ConfigureRepositoryRefCommands(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureSnapshotGraftCommands(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureMemoryDigestCommands(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureHistoryCommands(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigurePRPromotionCommands(); err != nil {
-		return nil, err
-	}
-	if err = r.ConfigureContextBranchOperations(); err != nil {
-		return nil, err
-	}
 	return r, nil
-}
-
-func (runtime *Runtime) ConfigureContextBranchOperations() error {
-	if runtime == nil {
-		return fmt.Errorf("configure context branch operations: %w", domain.ErrCatalogUnsupported)
-	}
-	runtime.ContextBranches = nil
-	if runtime.Context == nil {
-		return fmt.Errorf("configure context branch operations: %w", domain.ErrCatalogUnsupported)
-	}
-	operations, err := runtime.Context.ContextBranchOperations()
-	if err != nil {
-		return fmt.Errorf("configure context branch operations: %w", err)
-	}
-	runtime.ContextBranches = operations
-	return nil
-}
-
-func (runtime *Runtime) ConfigurePRPromotionCommands() error {
-	if runtime == nil {
-		return fmt.Errorf("configure PR promotion commands: %w", domain.ErrCatalogUnsupported)
-	}
-	runtime.PRPromotions = nil
-	if runtime.Context == nil {
-		return fmt.Errorf("configure PR promotion commands: %w", domain.ErrCatalogUnsupported)
-	}
-	commands, err := runtime.Context.PRPromotionCommands()
-	if err != nil {
-		return fmt.Errorf("configure PR promotion commands: %w", err)
-	}
-	runtime.PRPromotions = commands
-	return nil
-}
-
-func (runtime *Runtime) ConfigureHistoryCommands() error {
-	if runtime == nil {
-		return fmt.Errorf("configure history commands: %w", domain.ErrCatalogUnsupported)
-	}
-	runtime.HistoryCommands = nil
-	if runtime.Context == nil {
-		return fmt.Errorf("configure history commands: %w", domain.ErrCatalogUnsupported)
-	}
-	commands, err := runtime.Context.HistoryCommands()
-	if err != nil {
-		return fmt.Errorf("configure history commands: %w", err)
-	}
-	runtime.HistoryCommands = commands
-	return nil
-}
-
-func (runtime *Runtime) ConfigureRepositoryRefCommands() error {
-	if runtime == nil {
-		return fmt.Errorf("configure repository ref commands: %w", domain.ErrCatalogUnsupported)
-	}
-	runtime.RepositoryRefs = nil
-	if runtime.Context == nil {
-		return fmt.Errorf("configure repository ref commands: %w", domain.ErrCatalogUnsupported)
-	}
-	commands, err := runtime.Context.RepositoryRefCommands()
-	if err != nil {
-		return fmt.Errorf("configure repository ref commands: %w", err)
-	}
-	runtime.RepositoryRefs = commands
-	return nil
-}
-
-func (runtime *Runtime) ConfigureSnapshotGraftCommands() error {
-	if runtime == nil {
-		return fmt.Errorf("configure snapshot graft commands: %w", domain.ErrCatalogUnsupported)
-	}
-	runtime.SnapshotGrafts = nil
-	if runtime.Context == nil {
-		return fmt.Errorf("configure snapshot graft commands: %w", domain.ErrCatalogUnsupported)
-	}
-	commands, err := runtime.Context.SnapshotGraftCommands()
-	if err != nil {
-		return fmt.Errorf("configure snapshot graft commands: %w", err)
-	}
-	runtime.SnapshotGrafts = commands
-	return nil
 }
 
 func (runtime *Runtime) ConfigureDocumentPublicationCommands() error {
@@ -339,68 +203,6 @@ func (runtime *Runtime) ConfigureRepositoryAssetCommands() error {
 		return fmt.Errorf("configure repository asset commands: %w", err)
 	}
 	runtime.RepositoryAssets = commands
-	return nil
-}
-
-func (runtime *Runtime) ConfigureLiveMemoryQueries() error {
-	if runtime == nil || runtime.Context == nil {
-		return fmt.Errorf("configure live memory queries: %w", domain.ErrCatalogUnsupported)
-	}
-	queries, err := runtime.Context.LiveMemoryQueries()
-	if err != nil {
-		return fmt.Errorf("configure live memory queries: %w", err)
-	}
-	runtime.MemoryLive = queries
-	return nil
-}
-
-func (runtime *Runtime) ConfigureMemorySnapshotQueries() error {
-	if runtime == nil || runtime.Context == nil {
-		return fmt.Errorf("configure memory snapshot queries: %w", domain.ErrCatalogUnsupported)
-	}
-	queries, err := runtime.Context.MemorySnapshotQueries()
-	if err != nil {
-		return fmt.Errorf("configure memory snapshot queries: %w", err)
-	}
-	runtime.MemorySnapshots = queries
-	return nil
-}
-
-func (runtime *Runtime) ConfigurePreparedMemoryQueries() error {
-	if runtime == nil || runtime.Context == nil {
-		return fmt.Errorf("configure prepared memory queries: %w", domain.ErrCatalogUnsupported)
-	}
-	queries, err := runtime.Context.PreparedMemoryQueries()
-	if err != nil {
-		return fmt.Errorf("configure prepared memory queries: %w", err)
-	}
-	runtime.PreparedMemory = queries
-	return nil
-}
-
-func (runtime *Runtime) ConfigureRepositoryQueries() error {
-	profile := inbound.RepositoryStateCompatibility
-	if _, pinned := runtime.Store.(outbound.RepositoryTransactions); pinned {
-		profile = inbound.RepositoryStatePinnedSnapshots
-	}
-	queries, err := runtime.Context.RepositoryStateQueriesForProfile(profile)
-	if err != nil {
-		return fmt.Errorf("configure repository state queries: %w", err)
-	}
-	graphs, err := runtime.Context.GraphQueriesForProfile(profile)
-	if err != nil {
-		return fmt.Errorf("configure repository graph queries: %w", err)
-	}
-	contexts, err := runtime.Context.ContextQueriesForProfile(profile)
-	if err != nil {
-		return fmt.Errorf("configure repository context queries: %w", err)
-	}
-	runtime.RepositoryStates = queries
-	runtime.RepositoryStateProfile = profile
-	runtime.RepositoryGraphs = graphs
-	runtime.RepositoryGraphProfile = profile
-	runtime.ContextQueries = contexts
-	runtime.ContextQueryProfile = profile
 	return nil
 }
 

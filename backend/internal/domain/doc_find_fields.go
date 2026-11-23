@@ -3,7 +3,6 @@ package domain
 import (
 	"bytes"
 	"encoding/json"
-	"unicode/utf8"
 )
 
 const MaxDocFindFieldsBytes = 2048
@@ -19,38 +18,6 @@ type DocFindFields struct {
 	EventBytes int          `json:"event_bytes"`
 	Summary    *DocFindSpan `json:"summary"`
 	Blocks     *DocFindSpan `json:"blocks,omitempty"`
-}
-
-func BuildDocFindFields(eventHash ContentHash, raw []byte) (DocFindFields, error) {
-	if ValidateContentHash(eventHash) != nil || len(raw) == 0 || HashContent(raw) != eventHash {
-		return DocFindFields{}, ErrIntegrity
-	}
-	var body docRangeJSONView
-	if !utf8.Valid(raw) || json.Unmarshal(raw, &body) != nil {
-		return DocFindFields{}, ErrIntegrity
-	}
-	kind := docRangeJSONField(body, "kind")
-	name, opening := "redacted_summary", byte('"')
-	if docRangeJSONTextEquals(kind, string(EventMessage)) {
-		name, opening = "blocks", '['
-	} else if !docRangeJSONTextEquals(kind, string(EventReasoning)) {
-		return DocFindFields{}, ErrIntegrity
-	}
-	fields := DocFindFields{Version: 1, EventHash: eventHash, EventBytes: len(raw)}
-	value, from, to := docRangeJSONFieldPosition(body, name)
-	if len(value) != 0 && !bytes.Equal(value, []byte("null")) {
-		if len(value) < 2 || value[0] != opening {
-			return DocFindFields{}, ErrIntegrity
-		}
-		leading := len(raw) - len(bytes.TrimLeft(raw, " \t\r\n"))
-		span := &DocFindSpan{From: leading + from, To: leading + to}
-		if opening == '[' {
-			fields.Blocks = span
-		} else {
-			fields.Summary = span
-		}
-	}
-	return fields, nil
 }
 
 func (fields DocFindFields) Validate(eventHash ContentHash, eventBytes int) error {

@@ -49,44 +49,6 @@ func projectionReviewJSON(test *testing.T, value any) []byte {
 	return raw
 }
 
-func projectionReviewSelected(test *testing.T, source domain.DocDisplayProjectionSource, count, index int, pageRaw []byte) (domain.DocDisplayProjectionGeneration, map[domain.ContentHash][]byte, []domain.ContentHash) {
-	test.Helper()
-	selected := domain.HashContent(pageRaw)
-	bodies := map[domain.ContentHash][]byte{selected: bytes.Clone(pageRaw)}
-	path := []domain.ContentHash{selected}
-	for level, childSpan := 0, 1; ; level, childSpan = level+1, childSpan*domain.DocRangeDirectoryFanout {
-		span := childSpan * domain.DocRangeDirectoryFanout
-		start := index / span * span
-		hashes := make([]domain.ContentHash, min(domain.DocRangeDirectoryFanout, (count-start+childSpan-1)/childSpan))
-		for offset := range hashes {
-			hashes[offset] = domain.HashContent([]byte(fmt.Sprintf("unselected/%d/%d", level, start+offset*childSpan)))
-		}
-		hashes[(index-start)/childSpan] = selected
-		raw := projectionReviewJSON(test, map[string]any{"level": level, "start": start, "hashes": hashes})
-		selected = domain.HashContent(raw)
-		bodies[selected] = raw
-		path = append(path, selected)
-		if span >= count {
-			break
-		}
-	}
-	for left, right := 0, len(path)-1; left < right; left, right = left+1, right-1 {
-		path[left], path[right] = path[right], path[left]
-	}
-	return domain.DocDisplayProjectionGeneration{Version: 1, Source: source,
-		Pages: domain.DocRangeDirectoryRoot{Hash: selected, Count: count}}, bodies, path
-}
-
-func projectionReviewLoad(bodies map[domain.ContentHash][]byte) func(context.Context, domain.ContentHash) ([]byte, error) {
-	return func(_ context.Context, hash domain.ContentHash) ([]byte, error) {
-		raw, found := bodies[hash]
-		if !found {
-			return nil, domain.ErrNotFound
-		}
-		return bytes.Clone(raw), nil
-	}
-}
-
 func TestDocDisplayProjectionReviewCommitmentAndEventBounds(test *testing.T) {
 	source := projectionReviewSource(2)
 	page := projectionReviewPage(test, source, 0, 0, "ab")
@@ -337,98 +299,6 @@ func TestDocDisplayProjectionReviewNumericAndGenerationLimits(test *testing.T) {
 	}
 }
 
-func TestDocDisplayProjectionReviewSelectedPathsAndCancellation(test *testing.T) {
-	for _, count := range []int{129, domain.MaxConversationDocumentBytes / domain.DocDisplayPageRuns} {
-		test.Run(fmt.Sprint(count), func(test *testing.T) {
-			source := projectionReviewSource(count * domain.DocDisplayPageRuns)
-			page := projectionReviewPage(test, source, count-1, (count-1)*domain.DocDisplayPageRuns, strings.Repeat("a", domain.DocDisplayPageRuns))
-			raw, err := page.EncodeProjection(source)
-			if err != nil {
-				test.Fatal(err)
-			}
-			generation, bodies, path := projectionReviewSelected(test, source, count, count-1, raw)
-			var loaded []domain.ContentHash
-			found, err := domain.ReadDocDisplayProjectionPage(context.Background(), generation, count-1, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
-				loaded = append(loaded, hash)
-				return projectionReviewLoad(bodies)(ctx, hash)
-			})
-			if err != nil || !reflect.DeepEqual(found, page) || !reflect.DeepEqual(loaded, path) {
-				test.Fatal("selected read touched siblings or returned wrong page", loaded, err)
-			}
-			for _, target := range path {
-				ctx, cancel := context.WithCancel(context.Background())
-				found, err := domain.ReadDocDisplayProjectionPage(ctx, generation, count-1, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
-					if hash == target {
-						cancel()
-					}
-					return projectionReviewLoad(bodies)(ctx, hash)
-				})
-				cancel()
-				if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(found, domain.DocDisplayPage{}) {
-					test.Fatal("canceled selected path returned output", err)
-				}
-				original := bodies[target]
-				bodies[target] = append(bytes.Clone(original), ' ')
-				found, err = domain.ReadDocDisplayProjectionPage(context.Background(), generation, count-1, projectionReviewLoad(bodies))
-				bodies[target] = original
-				if !errors.Is(err, domain.ErrIntegrity) || !reflect.DeepEqual(found, domain.DocDisplayPage{}) {
-					test.Fatal("corrupt selected object returned output", err)
-				}
-			}
-		})
-	}
-}
-
-func TestDocDisplayProjectionReviewHashConsistentSelectedCorruption(test *testing.T) {
-	source := projectionReviewSource(129 * domain.DocDisplayPageRuns)
-	page := projectionReviewPage(test, source, 128, 128*domain.DocDisplayPageRuns, strings.Repeat("a", domain.DocDisplayPageRuns))
-	raw, err := page.EncodeProjection(source)
-	if err != nil {
-		test.Fatal(err)
-	}
-	for name, mutate := range map[string]func(map[string]json.RawMessage){
-		"wrong-level": func(fields map[string]json.RawMessage) { fields["level"] = json.RawMessage(`0`) },
-		"wrong-start": func(fields map[string]json.RawMessage) { fields["start"] = json.RawMessage(`1`) },
-		"bad-hash":    func(fields map[string]json.RawMessage) { fields["hashes"] = json.RawMessage(`["bad","bad"]`) },
-		"short-node":  func(fields map[string]json.RawMessage) { fields["hashes"] = json.RawMessage(`[]`) },
-	} {
-		test.Run(name, func(test *testing.T) {
-			generation, bodies, _ := projectionReviewSelected(test, source, 129, 128, raw)
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(bodies[generation.Pages.Hash], &fields); err != nil {
-				test.Fatal(err)
-			}
-			mutate(fields)
-			altered := projectionReviewJSON(test, fields)
-			generation.Pages.Hash = domain.HashContent(altered)
-			bodies[generation.Pages.Hash] = altered
-			found, err := domain.ReadDocDisplayProjectionPage(context.Background(), generation, 128, projectionReviewLoad(bodies))
-			if !errors.Is(err, domain.ErrIntegrity) || !reflect.DeepEqual(found, domain.DocDisplayPage{}) {
-				test.Fatal("structurally invalid directory survived rehashing", err)
-			}
-		})
-	}
-	for name, mutate := range map[string]func(*domain.DocDisplayPage){
-		"wrong-ordinal": func(value *domain.DocDisplayPage) { value.Index-- },
-		"wrong-source":  func(value *domain.DocDisplayPage) { value.Source = source.Plan },
-		"downgrade":     func(value *domain.DocDisplayPage) { value.Version = 1 },
-		"short-final": func(value *domain.DocDisplayPage) {
-			value.Text = value.Text[:len(value.Text)-1]
-			value.Runs = []domain.DocDisplayRun{{To: len(value.Text), SourceFrom: 0, SourceTo: 1}}
-		},
-	} {
-		test.Run(name, func(test *testing.T) {
-			changed := page
-			mutate(&changed)
-			generation, bodies, _ := projectionReviewSelected(test, source, 129, 128, projectionReviewJSON(test, changed))
-			found, err := domain.ReadDocDisplayProjectionPage(context.Background(), generation, 128, projectionReviewLoad(bodies))
-			if !errors.Is(err, domain.ErrIntegrity) || !reflect.DeepEqual(found, domain.DocDisplayPage{}) {
-				test.Fatal("invalid selected page survived rehashing", err)
-			}
-		})
-	}
-}
-
 type projectionReviewCancelContext struct {
 	context.Context
 	cancel    context.CancelFunc
@@ -496,29 +366,6 @@ func TestDocDisplayProjectionReviewCancellationDuringFrontierOperations(test *te
 	}
 	if canceledAppend < 3 || canceledFinish < 3 {
 		test.Fatal("did not exercise mid-operation cancellation", canceledAppend, canceledFinish)
-	}
-}
-
-func TestDocDisplayProjectionReviewRejectsImpossibleSelectedOrdinals(test *testing.T) {
-	for _, scenario := range []struct {
-		name                      string
-		count, index, total, from int
-		text                      string
-	}{
-		{"prefix-exceeds-page-capacity", 2, 1, 2 * domain.DocDisplayPageTextBytes, 2*domain.DocDisplayPageTextBytes - 1, "x"},
-		{"suffix-exceeds-page-capacity", 2, 0, 2 * domain.DocDisplayPageTextBytes, 0, strings.Repeat("x", domain.DocDisplayPageRuns)},
-		{"suffix-cannot-fill-nonterminal-page", 3, 0, 2*domain.DocDisplayPageRuns + 1, 0, strings.Repeat("x", 2*domain.DocDisplayPageRuns)},
-	} {
-		test.Run(scenario.name, func(test *testing.T) {
-			source := projectionReviewSource(scenario.total)
-			page := projectionReviewPage(test, source, scenario.index, scenario.from, scenario.text)
-			raw := projectionReviewJSON(test, page)
-			generation, bodies, _ := projectionReviewSelected(test, source, scenario.count, scenario.index, raw)
-			found, err := domain.ReadDocDisplayProjectionPage(context.Background(), generation, scenario.index, projectionReviewLoad(bodies))
-			if !errors.Is(err, domain.ErrIntegrity) || !reflect.DeepEqual(found, domain.DocDisplayPage{}) {
-				test.Errorf("selected page cannot belong to any contiguous generation: count=%d index=%d total=%d from=%d bytes=%d; returned=%d error=%v", scenario.count, scenario.index, scenario.total, scenario.from, len(scenario.text), len(found.Text), err)
-			}
-		})
 	}
 }
 

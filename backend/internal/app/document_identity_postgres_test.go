@@ -32,7 +32,7 @@ func TestP6PGQueuedOldWriteSeesCommittedRequirement(t *testing.T) {
 	if _, err = st.PutRepo(ctx, domain.Repo{ID: id}); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(st, st, nil, nil, nil)
+	svc := NewService(st, st, nil, nil)
 	locked := make(chan struct{})
 	release := make(chan struct{})
 	ownerDone := make(chan error, 1)

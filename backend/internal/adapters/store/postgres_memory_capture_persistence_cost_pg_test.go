@@ -4,16 +4,11 @@ package store
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 type memoryCapturePersistenceCostKey struct{}
@@ -121,55 +116,6 @@ func memoryCapturePersistencePhase(sql string) string {
 	}
 }
 
-func memoryCapturePersistenceFixture(test *testing.T, storage *PostgresStore, ctx context.Context, repo domain.ContentHash, count int) domain.MemoryCaptureBundle {
-	test.Helper()
-	generation := memorySourceGenerationPG(test, ctx, storage, repo)
-	parts := make([]domain.MemoryCapturePart, 0, count)
-	unique := make(map[domain.ContentHash]bool, count)
-	for ordinal := 0; ordinal < count; ordinal++ {
-		seed := fmt.Sprintf("%s/snapshot-%06d", repo, ordinal)
-		identifier := domain.HashContent([]byte(seed))
-		snapshot := domain.Snapshot{
-			ID: identifier, RepoID: repo, Branch: "cost-probe",
-			Parents: []domain.ContentHash{}, DocHash: identifier,
-			Message:   strings.Repeat("synthetic metadata ", 12) + seed,
-			CreatedAt: time.Date(2026, time.January, 1, 0, 0, ordinal, 0, time.UTC),
-		}
-		body, err := json.Marshal(snapshot)
-		if err != nil {
-			test.Fatal(err)
-		}
-		digest := domain.HashContent(body)
-		if unique[digest] {
-			test.Fatal("synthetic capture bodies must be unique")
-		}
-		unique[digest] = true
-		parts = append(parts, domain.MemoryCapturePart{Kind: "graph:snapshot", Key: string(snapshot.ID), Sequence: generation.Graph.Sequence, Value: body})
-	}
-	header := domain.MemoryCaptureHeader{Version: domain.MemoryCaptureVersion, Rules: domain.MemoryCaptureRules,
-		Generation: generation, Selection: domain.EffectiveMemorySelection{SnapshotID: domain.ContentHash(parts[0].Key), CodeCommit: strings.Repeat("a", 40)}}
-	return memoryBundlePGSeal(test, ctx, header, parts)
-}
-
-func memoryCapturePersistencePool(test *testing.T, storage *PostgresStore, ctx context.Context) {
-	test.Helper()
-	original := storage.pool
-	config := original.Config().Copy()
-	config.ConnConfig.Tracer = memoryCapturePersistenceTracer{}
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		test.Fatal(err)
-	}
-	test.Cleanup(func() {
-		storage.pool = original
-		pool.Close()
-	})
-	if err := pool.Ping(ctx); err != nil {
-		test.Fatal(err)
-	}
-	storage.pool = pool
-}
-
 func (cost *memoryCapturePersistenceCost) report(test *testing.T, count, sample int, total, validation time.Duration, writeErr error) {
 	test.Helper()
 	var queryTime, batchTime time.Duration
@@ -205,48 +151,5 @@ func (cost *memoryCapturePersistenceCost) report(test *testing.T, count, sample 
 		len(cost.batches), len(cost.queries), batchStatements, batchResults, len(cost.queries)+batchStatements, writeErr)
 	if phaseCounts["begin"] != 1 || phaseCounts["header"] != 1 || phaseCounts["commit"] != 1 || phaseCounts["rollback"] != 0 || len(cost.batches) == 0 {
 		test.Errorf("expected one new capture transaction, not reuse: phases=%v batches=%d", phaseCounts, len(cost.batches))
-	}
-}
-
-func TestPGMemoryCapturePersistenceCostD3ac(test *testing.T) {
-	if os.Getenv("CXT_MEMORY_COST_PROBE") != "1" {
-		test.Skip("set CXT_MEMORY_COST_PROBE=1 and CXT_TEST_DSN to a disposable cost-only PostgreSQL database")
-	}
-	if os.Getenv("CXT_TEST_DSN") == "" {
-		test.Fatal("CXT_TEST_DSN must identify a disposable cost-only PostgreSQL database")
-	}
-	test.Log("store-only synthetic full capture; unique snapshot JSON bodies; not application/source-graph qualification; three raw samples, no percentile claim")
-	test.Log("pgx statement counts exclude server-nested SQL, triggers, and protocol preparation; batch wall time includes send through result close, not individual server statement latency")
-	test.Log("validation_probe_outside_write is separate and not additive; the one actual WriteMemoryCapture validates again; untraced residual includes validation, hashing, batch assembly, and pool acquisition; COMMIT includes deferred constraints and durable commit")
-	for _, count := range []int{100, 1000} {
-		for sample := 1; sample <= 3; sample++ {
-			test.Run(fmt.Sprintf("parts_%d/sample_%d", count, sample), func(test *testing.T) {
-				storage, ctx, repo := catalogPG(test)
-				bundle := memoryCapturePersistenceFixture(test, storage, ctx, repo, count)
-				memoryCapturePersistencePool(test, storage, ctx)
-				validationStarted := time.Now()
-				header, bodyBytes, keyBytes, err := memoryCaptureBundleSizes(ctx, bundle)
-				validation := time.Since(validationStarted)
-				if err != nil {
-					test.Fatal(err)
-				}
-				expires := time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond)
-				cost := &memoryCapturePersistenceCost{}
-				observed := context.WithValue(ctx, memoryCapturePersistenceCostKey{}, cost)
-				cost.started = time.Now()
-				writeErr := storage.WriteMemoryCapture(observed, bundle, expires)
-				total := time.Since(cost.started)
-				cost.report(test, count, sample, total, validation, writeErr)
-				if writeErr != nil {
-					test.Fatal(writeErr)
-				}
-				memoryBundlePGRead(test, storage, ctx, bundle)
-				if counts := memoryBundlePGCounts(test, storage, ctx, repo); counts != [3]int{1, count, count} {
-					test.Fatal("capture did not persist all unique parts and blocks", counts)
-				}
-				test.Logf("D3ac-persistence parts=%d sample=%d header_bytes=%d body_bytes=%d key_bytes=%d unique_blocks=%d persisted_roundtrip=matched capture_id=%s",
-					count, sample, len(header), bodyBytes, keyBytes, count, bundle.ID)
-			})
-		}
 	}
 }

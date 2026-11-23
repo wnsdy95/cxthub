@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -246,11 +245,11 @@ func TestPGRegistrationScopeFirstRegistrationOrdersWithRevocation(test *testing.
 					paused := &authorityScopeHoldPG{PostgresStore: authority, ready: make(chan struct{}), release: release}
 					first = launch(func() error { return authorityScopeMutation(ctx, NewIdentityService(nil, paused), fixture, mutation) })
 					authorityScopeAwait(test, ctx, paused.ready, first)
-					second = launch(func() error { return register(NewService(writer, writer, nil, gitengine.NewEngine(writer), writer)) })
+					second = launch(func() error { return register(NewService(writer, writer, nil, writer)) })
 					registrationScopeBlocked(test, ctx, observer, writerName, authorityName, second)
 				} else {
 					paused := &registrationScopePutHoldPG{PostgresStore: writer, ready: make(chan struct{}), release: release}
-					first = launch(func() error { return register(NewService(paused, writer, nil, gitengine.NewEngine(writer), writer)) })
+					first = launch(func() error { return register(NewService(paused, writer, nil, writer)) })
 					authorityScopeAwait(test, ctx, paused.ready, first)
 					expected := registration
 					expected.RepositoryID = fixture.repository.ID

@@ -13,10 +13,6 @@ import (
 func TestAnchoredNoteBelongsToItsAuthorAndIsMasked(t *testing.T) {
 	service, _, repo := anchoredSessionFixture(t)
 	alice, bob := anchoredActor("member-a"), anchoredActor("member-b")
-	before, err := service.GetRepositoryView(systemTestContext(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
 	commit := domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteCommit, Commit: anchoredTestSHA("a")}
 	token := "ghp_" + strings.Repeat("a1B2", 9)
 	note, err := service.CreateAnchoredNote(alice, repo, commit, "  Hand-applied hotfix.\r\nToken used: "+token+"  ")
@@ -63,11 +59,6 @@ func TestAnchoredNoteBelongsToItsAuthorAndIsMasked(t *testing.T) {
 	}
 	if listed, err := service.ListAnchoredNotes(alice, repo); err != nil || len(listed) != 1 || listed[0].Body != rewritten.Body {
 		t.Fatalf("after removing: %+v %v", listed, err)
-	}
-	// Notes are not part of what the repository revision covers.
-	after, err := service.GetRepositoryView(systemTestContext(), repo)
-	if err != nil || !reflect.DeepEqual(after.Revision, before.Revision) {
-		t.Fatalf("a note moved the repository revision: %+v -> %+v %v", before.Revision, after.Revision, err)
 	}
 }
 

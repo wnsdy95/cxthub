@@ -22,10 +22,6 @@ func (g *GitHubConnections) binding(ctx context.Context, c domain.GitHubConnecti
 	return g.worker().binding(ctx, c, b)
 }
 
-func (g *GitHubConnections) enqueuePR(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding, pr domain.PullRequestMerge) error {
-	return g.worker().enqueuePR(ctx, c, b, pr)
-}
-
 func (g *GitHubConnections) deliver(ctx context.Context, id string) error {
 	return g.worker().deliver(ctx, id)
 }

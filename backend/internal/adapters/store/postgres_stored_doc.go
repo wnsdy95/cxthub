@@ -3,10 +3,7 @@
 package store
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -101,111 +98,6 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 	}
 	s.rememberHistoryRootReference(ctx, repo, proof)
 	return proof, nil
-}
-
-// FinalizedDocReference implements outbound.FinalizedDocAttestor for legacy
-// v2 documents and conversation roots. It recomputes the finalization job
-// identity from the manifest that is stored now, so a completed job for another
-// representation of the same hash does not match, and it requires the
-// repository to still own the document object and every chunk the manifest
-// names. No chunk body is read. Anything that does not match, including a
-// document the repository does not own, is reported as not found, so the byte
-// verifier remains the only place that refuses a document. Inside history
-// preparation an attested root is remembered like a byte-verified one.
-func (s *PostgresStore) FinalizedDocReference(ctx context.Context, repo, hash domain.ContentHash) (proof domain.VerifiedDocReference, found bool, err error) {
-	err = s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
-		raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		id, matches, chunkList, ok := finalizedDocJobKey(ctx, repo, hash, raw)
-		if !ok {
-			return nil
-		}
-		job, err := s.GetDocJob(ctx, repo, id)
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if job.State != "completed" || job.DocHash != hash || !matches(job) {
-			return nil
-		}
-		seen := make(map[domain.ContentHash]bool, len(chunkList))
-		chunks := make([]string, 0, len(chunkList))
-		for _, chunk := range chunkList {
-			if !seen[chunk] {
-				seen[chunk] = true
-				chunks = append(chunks, string(chunk))
-			}
-		}
-		var unowned bool
-		if err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM unnest($2::text[]) AS wanted(hash)
- WHERE NOT EXISTS (SELECT 1 FROM repo_blobs owned JOIN blobs body ON body.hash=owned.hash
-  WHERE owned.repo_id=$1 AND owned.kind='chunk' AND owned.hash=wanted.hash))`, string(repo), chunks).Scan(&unowned); err != nil {
-			return err
-		}
-		if unowned {
-			return nil
-		}
-		proof, err = domain.FinalizedDocReference(job)
-		found = err == nil
-		return err
-	})
-	if err != nil {
-		return domain.VerifiedDocReference{}, false, err
-	}
-	if found {
-		// History preparation reuses a root reference established in its own
-		// read transaction instead of reading the root again, whether bytes or
-		// this record established it.
-		s.rememberHistoryRootReference(ctx, repo, proof)
-	}
-	return proof, found, nil
-}
-
-// finalizedDocJobKey derives, from the stored document object alone, the
-// finalization job identity that would have published exactly that object, a
-// check that the job record carries the same manifest, and the chunks the
-// manifest names. ok is false for anything that is neither a legacy v2 chunk
-// manifest nor a canonical conversation root.
-func finalizedDocJobKey(ctx context.Context, repo, hash domain.ContentHash, raw []byte) (id string, matches func(domain.DocFinalizationJob) bool, chunks []domain.ContentHash, ok bool) {
-	root, isRoot, err := storedConversationManifest(ctx, raw)
-	if err != nil {
-		return "", nil, nil, false
-	}
-	if isRoot {
-		canonical, err := domain.CanonicalConversationManifest(root)
-		if err != nil {
-			return "", nil, nil, false
-		}
-		id, err := domain.RootDocFinalizationID(repo, domain.DocumentRepresentation{Hash: hash, Identity: domain.DocumentIdentityRootV1, RootManifest: canonical})
-		if err != nil {
-			return "", nil, nil, false
-		}
-		return id, func(job domain.DocFinalizationJob) bool {
-			return job.DocIdentity == domain.DocumentIdentityRootV1 && bytes.Equal(job.RootManifest, canonical)
-		}, conversationChunkOrder(root), true
-	}
-	data, err := docDecompress(raw)
-	if err != nil {
-		return "", nil, nil, false
-	}
-	manifest, chunked := domain.ParseDocChunkManifest(data)
-	if !chunked || manifest.Format != domain.ChunkFormatV2 {
-		return "", nil, nil, false
-	}
-	wanted, err := domain.NewDocFinalizationJob(repo, hash, manifest, time.Unix(0, 0).UTC())
-	if err != nil {
-		return "", nil, nil, false
-	}
-	return wanted.ID, func(job domain.DocFinalizationJob) bool {
-		return job.DocIdentity == domain.DocumentIdentityLegacy && sameDocManifest(job.Manifest, manifest)
-	}, manifest.Chunks, true
 }
 
 func (s *PostgresStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (doc domain.VerifiedSessionDoc, err error) {
@@ -344,9 +236,3 @@ SELECT selected.hash,selected.size,
 
 var _ outbound.StoredDocVerifier = (*PostgresStore)(nil)
 var _ outbound.VerifiedDocReader = (*PostgresStore)(nil)
-
-func (s *PostgresStore) CaptureSupersedes(ctx context.Context, repo, old, next domain.ContentHash, provider domain.ProviderKind, session string) (bool, error) {
-	return compareStoredCaptures(ctx, s, &s.docProofs, repo, old, next, provider, session)
-}
-
-var _ outbound.StoredCaptureComparator = (*PostgresStore)(nil)

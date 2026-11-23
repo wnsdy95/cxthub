@@ -19,7 +19,6 @@ type anchoredRemovalStores interface {
 	outbound.AnchoredSummaryStore
 	outbound.AnchoredPublicationStore
 	PutDoc(ctx context.Context, repo domain.ContentHash, doc domain.SessionDoc) (bool, error)
-	PutSnapshot(ctx context.Context, snapshot domain.Snapshot) error
 }
 
 // anchoredStoreSessionWithContent is a session whose one segment is the
@@ -185,12 +184,6 @@ func checkAnchoredRemovalPersistence(t *testing.T, ctx context.Context, storage 
 	}
 	if used, err := storage.AnchoredContentInUse(ctx, repo, captured.Hash); err != nil || used {
 		t.Fatalf("a stored document nothing names in use = %v %v", used, err)
-	}
-	if err := storage.PutSnapshot(ctx, domain.Snapshot{ID: captured.Hash, DocHash: captured.Hash, RepoID: repo, Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull}); err != nil {
-		t.Fatal(err)
-	}
-	if used, err := storage.AnchoredContentInUse(ctx, repo, captured.Hash); err != nil || !used {
-		t.Fatalf("a document a snapshot holds in use = %v %v", used, err)
 	}
 }
 

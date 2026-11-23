@@ -37,7 +37,6 @@ type GitHubApp interface {
 	Repositories(context.Context, int64) ([]domain.GitHubRepository, error)
 	Teams(context.Context, int64, string) ([]domain.GitHubTeam, error)
 	TeamMembers(context.Context, int64, string, string) ([]int64, error)
-	MergedPullRequests(context.Context, int64, domain.GitHubRepository, int) ([]domain.PullRequestMerge, bool, error)
 	Invalidate(int64)
 }
 

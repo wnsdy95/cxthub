@@ -5,8 +5,6 @@ import "time"
 // MaxGraftSeq is the upper bound of the graft Lamport version that PostgreSQL BIGINT and FS/CLI JSON replicas can share. Wrapping around at the upper bound could cause removed edges to revive as legacy seq=0, so mutations are fail-closed.
 const MaxGraftSeq uint64 = 1<<63 - 1
 
-const MemoryProjectionVersion uint32 = 1
-
 // Repo is the root of the session storage space (data model, sync protocol).
 //
 // One per detected code repository. Namespace root for all branch/snapshot/ref names.
@@ -55,54 +53,6 @@ type SettingsBundle struct {
 	Files     []SettingsFile `json:"files"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	UpdatedBy string         `json:"updated_by,omitempty"`
-}
-
-// Unsync is a branch-specific mutable pointer for "push pending (local ahead)" state,
-// representing the commit side of the On Hold view.
-// Key = (auth user, branch) — each team member's unpushed chain is independently displayed.
-// The snapshot arrives first through a shadow push; a Git push that advances the ref resolves the pointer by deletion.
-type Unsync struct {
-	RepoID    ContentHash  `json:"repo_id"`
-	User      string       `json:"user"` // Authenticated user username (server injected — pointer key)
-	Branch    string       `json:"branch"`
-	Target    ContentHash  `json:"target"`
-	Author    TeamIdentity `json:"author"`
-	UpdatedAt time.Time    `json:"updated_at"`
-}
-
-// Pending is a session-specific "in-progress context" mutable pointer (hook capture landing point mirror).
-// It points to the latest hook capture snapshot without moving branch refs, which the web renders as
-// a "continuing conversation tail" (same session as the tip commit) or "Uncommitted" (detached session).
-// When a commit snapshot absorbs the session, the CLI resolves it with DELETE.
-type Pending struct {
-	RepoID    ContentHash  `json:"repo_id"`
-	SessionID string       `json:"session_id"`
-	Branch    string       `json:"branch"`
-	Provider  ProviderKind `json:"provider"`
-	Target    ContentHash  `json:"target"`
-	Author    TeamIdentity `json:"author"`
-	UpdatedAt time.Time    `json:"updated_at"`
-	// ActivityAt is transcript activity reported by the capturing client; replay never refreshes it.
-	ActivityAt *time.Time `json:"activity_at,omitempty"`
-	// Dismissed means the user hid this durable capture from the uncommitted list.
-	// It does not delete data: snapshot, document, and session history remain intact. The flag is sticky;
-	// PutPending preserves it so SyncPendings cannot make the entry visible again. Only the UI list excludes it.
-	Dismissed bool `json:"dismissed,omitempty"`
-}
-
-// PendingDeleteResult is the storage-level outcome of an expected-target
-// compare-and-delete. Absent is a successful idempotent resolution, while Kept
-// proves that a concurrent newer capture exists and must not be removed.
-type PendingDeleteResult uint8
-
-const (
-	PendingDeleteKept PendingDeleteResult = iota
-	PendingDeleteDeleted
-	PendingDeleteAbsent
-)
-
-func (r PendingDeleteResult) Resolved() bool {
-	return r == PendingDeleteDeleted || r == PendingDeleteAbsent
 }
 
 // Snapshot is the session state at one point in time (a commit). The body identified by ID and its natural
@@ -235,26 +185,6 @@ type RefLogEntry struct {
 	Old       ContentHash `json:"old"`
 	New       ContentHash `json:"new"`
 	CreatedAt time.Time   `json:"created_at"`
-}
-
-// Manifest is the repository-level metadata index (data model, schemas/manifest.schema.json).
-//
-// It serves two roles: (a) push/pull negotiation by computing missing snapshots and
-// (b) storage of the optimistic-lock version.
-//
-// Invariants:
-//   - M1: All targets in refs must be included in SnapshotIndex (dangling ref forbidden).
-//   - M2: Version must monotonically increase with each update ( CAS).
-//   - C1: Manifest write must fail without version-CAS (lost-update prevention).
-type Manifest struct {
-	ContextProtocol   int                         `json:"context_protocol,omitempty"`
-	RepoID            ContentHash                 `json:"repo_id"`
-	Refs              []Ref                       `json:"refs"`
-	SnapshotIndex     []ContentHash               `json:"snapshot_index"`
-	MemoryAttachments map[ContentHash]ContentHash `json:"memory_attachments"`
-	SnapshotStates    map[ContentHash]ContentHash `json:"snapshot_states,omitempty"`
-	Version           int                         `json:"version"`
-	UpdatedAt         time.Time                   `json:"updated_at"`
 }
 
 // MemoryDigest is the distilled memory from a snapshot (derivative, data model table, sync protocol).

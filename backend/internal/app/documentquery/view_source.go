@@ -10,22 +10,17 @@ import (
 )
 
 type docViewSource struct {
-	binding                domain.DocReadGenerationBinding
-	envelope               domain.CIREnvelope
-	total                  int
-	root                   bool
-	streamBytes            int64
-	byteStorage            domain.DocRangeByteStorage
-	chunk                  func(int) (domain.ConversationManifestChunk, error)
-	block                  func(int) (domain.ContentHash, error)
-	entry                  func(int) (domain.DocRangeEntry, error)
-	location               func(int) (domain.DocEventIndex, error)
-	read                   func(int, int) ([]byte, error)
-	findFields             func(domain.DocEventIndex) (domain.DocFindFields, error)
-	displayGeneration      func(domain.DocEventIndex) (domain.DocDisplayStringGeneration, error)
-	displayPage            func(domain.DocEventIndex, int) (domain.DocDisplayPage, error)
-	eventDisplayGeneration func(domain.DocEventIndex) (domain.DocDisplayProjectionGeneration, error)
-	eventDisplayPage       func(domain.DocEventIndex, int) (domain.DocDisplayPage, error)
+	binding     domain.DocReadGenerationBinding
+	envelope    domain.CIREnvelope
+	total       int
+	root        bool
+	streamBytes int64
+	byteStorage domain.DocRangeByteStorage
+	chunk       func(int) (domain.ConversationManifestChunk, error)
+	block       func(int) (domain.ContentHash, error)
+	entry       func(int) (domain.DocRangeEntry, error)
+	location    func(int) (domain.DocEventIndex, error)
+	read        func(int, int) ([]byte, error)
 }
 
 func (queries *Queries) docViewSource(ctx context.Context, repo, hash domain.ContentHash, legacyCompatibility bool) (docViewSource, error) {
@@ -149,31 +144,7 @@ func legacyDocViewSource(source docReadSource) docViewSource {
 		}
 		return source.read(offset, length)
 	}
-	fields := func(item domain.DocEventIndex) (domain.DocFindFields, error) {
-		metadata, err := entry(item.Index)
-		if err != nil {
-			return domain.DocFindFields{}, err
-		}
-		if metadata.DocEventIndex != item {
-			return domain.DocFindFields{}, domain.ErrIntegrity
-		}
-		return domain.BuildDocFindFields(item.Hash, cachedBody)
-	}
-	return docViewSource{envelope: source.index.Envelope, total: len(source.index.Events), entry: entry, location: location, read: read, findFields: fields}
-}
-
-func (queries *Queries) legacyGenerationSource(ctx context.Context, repo, hash domain.ContentHash) (docViewSource, bool, error) {
-	if queries.view.RangeGenerations == nil {
-		return docViewSource{}, false, nil
-	}
-	snapshot, err := queries.metadata.GetSnapshot(ctx, repo, hash)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return docViewSource{}, false, err
-	}
-	if err != nil {
-		return queries.legacySnapshotGenerationSource(ctx, repo, hash, nil)
-	}
-	return queries.legacySnapshotGenerationSource(ctx, repo, hash, &snapshot)
+	return docViewSource{envelope: source.index.Envelope, total: len(source.index.Events), entry: entry, location: location, read: read}
 }
 
 func (queries *Queries) legacySnapshotGenerationSource(ctx context.Context, repo, hash domain.ContentHash, snapshot *domain.Snapshot) (docViewSource, bool, error) {
@@ -237,26 +208,6 @@ func (queries *Queries) legacySnapshotGenerationSource(ctx context.Context, repo
 			}
 		}
 		return read(offset, length)
-	}
-	cachedEvent := -1
-	var cachedFields domain.DocFindFields
-	source.findFields = func(entry domain.DocEventIndex) (domain.DocFindFields, error) {
-		current, err := source.location(entry.Index)
-		if err != nil {
-			return domain.DocFindFields{}, err
-		}
-		if current != entry {
-			return domain.DocFindFields{}, domain.ErrIntegrity
-		}
-		if cachedEvent == entry.Index {
-			return cachedFields, nil
-		}
-		fields, err := domain.BuildDocFindFieldsReader(ctx, entry.Hash, entry.Length, &docFindEventReader{source: source, entry: entry})
-		if err != nil {
-			return domain.DocFindFields{}, err
-		}
-		cachedEvent, cachedFields = entry.Index, fields
-		return fields, nil
 	}
 	return source, true, nil
 }

@@ -188,55 +188,6 @@ func TestWave42RepositoryWorkAuthorizationAndOriginalKeys(test *testing.T) {
 	}
 }
 
-func TestWave42RepositoryWorkNestedAfterCommitRevisionAndAudit(test *testing.T) {
-	storage := &wave42WorkStore{FSStore: store.NewFSStore(test.TempDir())}
-	fixture := makeTeamFixture(test, storage.FSStore)
-	repo := hh(test.Name())
-	if _, err := storage.FSStore.PutRepo(systemTestContext(), domain.Repo{ID: repo, RepositoryID: fixture.repository.ID}); err != nil {
-		test.Fatal(err)
-	}
-	work := newRepositoryWork(storage, storage, []domain.DocumentIdentity{domain.DocumentIdentityLegacy})
-	ctx := inbound.WithCorrelation(inbound.WithRepositoryActor(context.Background(), fixture.owner.ID), "wave42-request")
-	ctx = auditOperation(pendingWriteContext(ctx), "wave42.updated")
-	notified := []string{}
-	result, err := repositoryWriteWithWork(ctx, work, repo, func(bound context.Context) (string, error) {
-		after, ok := bound.Value(afterCommitKey{}).(*afterCommitActions)
-		if !ok || after == nil || bound.Value(revisionScopeKey{}) != "pending" {
-			test.Fatal("root after-commit or revision marker replaced")
-		}
-		afterRepositoryCommit(bound, func() { notified = append(notified, "outer") })
-		return repositoryWriteWithWork(bound, work, repo, func(nested context.Context) (string, error) {
-			if nested.Value(afterCommitKey{}) != after || len(notified) != 0 {
-				test.Fatal("nested work lost outer commit ownership")
-			}
-			afterRepositoryCommit(nested, func() { notified = append(notified, "nested") })
-			return "nested result", nil
-		})
-	})
-	if err != nil || result != "nested result" || !reflect.DeepEqual(notified, []string{"outer", "nested"}) {
-		test.Fatal(result, notified, err)
-	}
-	if wave42Count(storage.calls, "write") != 2 || wave42Count(storage.calls, "pending") != 1 || wave42Count(storage.calls, "audit") != 1 || wave42Count(storage.calls, "graph") != 0 {
-		test.Fatal("nested work independently revised or audited", storage.calls)
-	}
-	if len(storage.audits) != 1 || storage.audits[0].Action != "wave42.updated" || storage.audits[0].ActorID != fixture.owner.ID || storage.audits[0].TargetID != fixture.repository.ID || storage.audits[0].CorrelationID != "wave42-request" {
-		test.Fatal("original audit operation context lost", storage.audits)
-	}
-	for _, scope := range []string{"none", "evidence", "pending", "graph"} {
-		storage.calls = nil
-		if err := work.revisionWrite(context.WithValue(systemTestContext(), revisionScopeKey{}, scope), repo); err != nil {
-			test.Fatal(err)
-		}
-		want := []string{scope}
-		if scope == "none" {
-			want = nil
-		}
-		if !reflect.DeepEqual(storage.calls, want) {
-			test.Fatal("original revision key routing changed", scope, storage.calls)
-		}
-	}
-}
-
 func TestWave42RepositoryWorkRetryOnlyExplicitAbortCodes(test *testing.T) {
 	for _, state := range []wave42SQLState{"40001", "40P01", "23505", "08006"} {
 		for _, eventualSuccess := range []bool{false, true} {

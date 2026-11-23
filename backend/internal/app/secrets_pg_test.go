@@ -44,7 +44,7 @@ func TestPGSecretsConcurrentEditingBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer peer.Close()
-	services := []*Service{NewService(st, st, nil, nil, st), NewService(peer, peer, nil, nil, peer)}
+	services := []*Service{NewService(st, st, nil, st), NewService(peer, peer, nil, peer)}
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	results := make(chan error, 8)
@@ -126,7 +126,7 @@ func TestPGSecretsAuthorizationPinnedUntilCommit(t *testing.T) {
 	pause := pausedSecretsPG{st, make(chan struct{}), make(chan struct{})}
 	var release sync.Once
 	defer release.Do(func() { close(pause.release) })
-	svc := NewService(pause, st, nil, nil, st)
+	svc := NewService(pause, st, nil, st)
 	done := make(chan error, 1)
 	go func() { _, err := svc.SaveSecrets(ctx, in); done <- err }()
 	select {
@@ -165,7 +165,7 @@ func TestPGSecretsAuthorizationPinnedUntilCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.Edit.ExpectedRevision = domain.SecretsRevision(raw)
-	if _, err := NewService(st, st, nil, nil, st).SaveSecrets(ctx, in); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := NewService(st, st, nil, st).SaveSecrets(ctx, in); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("revoked member saved: %v", err)
 	}
 }

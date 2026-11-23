@@ -245,30 +245,3 @@ func FinishDocDisplayProjection(ctx context.Context, source DocDisplayProjection
 	}
 	return generation, objects, nil
 }
-
-func ReadDocDisplayProjectionPage(ctx context.Context, generation DocDisplayProjectionGeneration, index int, load func(context.Context, ContentHash) ([]byte, error)) (result DocDisplayPage, failure error) {
-	defer func() {
-		if err := ctx.Err(); err != nil {
-			result, failure = DocDisplayPage{}, err
-		}
-	}()
-	if err := ctx.Err(); err != nil {
-		return DocDisplayPage{}, err
-	}
-	if generation.Validate() != nil || index < 0 || index >= generation.Pages.Count || load == nil {
-		return DocDisplayPage{}, ErrIntegrity
-	}
-	hash, err := ResolveDocRangeLeaf(ctx, generation.Pages, index, load)
-	if err != nil {
-		return DocDisplayPage{}, err
-	}
-	raw, err := load(ctx, hash)
-	if err != nil {
-		return DocDisplayPage{}, err
-	}
-	page, err := DecodeDocDisplayProjectionPage(generation.Source, hash, raw)
-	if err != nil || page.Index != index || !validDocDisplayProjectionCount(generation.Pages.Count-index-1, generation.Source.TextBytes-page.From-len(page.Text), true) {
-		return DocDisplayPage{}, ErrIntegrity
-	}
-	return page, nil
-}

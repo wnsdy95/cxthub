@@ -239,8 +239,6 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	// Anonymous public read: username/slug → public repository interpretation (private results in 404 — non-existence not exposed).
 	mux.HandleFunc("GET /api/v1/public/repositories/{username}/{slug}", s.optionalUser(s.publicRepository))
 	mux.HandleFunc("GET /api/v1/public/users/{username}", s.optionalUser(s.publicUser))
-	mux.HandleFunc("GET /api/v1/public/users/{username}/contributions", s.optionalUser(s.userContributions))
-	mux.HandleFunc("GET /api/v1/public/users/{username}/activity", s.optionalUser(s.userActivity))
 	mux.HandleFunc("POST /api/v1/repositories", s.requireUser(s.createRepository))
 	mux.HandleFunc("PATCH /api/v1/repositories/{repositoryID}", s.requireUser(s.patchRepository))
 	mux.HandleFunc("POST /api/v1/repositories/{repositoryID}/transfer", s.requireUser(s.transferRepository))
@@ -570,61 +568,6 @@ func (s *Server) publicUser(w http.ResponseWriter, r *http.Request) {
 		publicRepositories = append(publicRepositories, publicRepositoryViewOf(repositoryRecord))
 	}
 	s.respond(w, map[string]any{"user": publicUserViewOf(u), "repositories": publicRepositories}, nil)
-}
-
-// userContributions counts finalized publications by recorded UTC event date,
-// repository-wide rather than by Git author. PublicUser visibility is unchanged.
-func (s *Server) userContributions(w http.ResponseWriter, r *http.Request) {
-	viewer, _ := userFrom(r.Context())
-	_, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
-	if err != nil {
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return
-	}
-	ids := make([]string, 0, len(repositoryList))
-	for _, repositoryRecord := range repositoryList {
-		ids = append(ids, repositoryRecord.ID)
-	}
-	counts, err := s.b.Contributions(r.Context(), ids)
-	if err != nil {
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return
-	}
-	type day struct {
-		Date  string `json:"date"`
-		Count int    `json:"count"`
-	}
-	days := make([]day, 0, len(counts))
-	total := 0
-	for d, c := range counts {
-		days = append(days, day{Date: d, Count: c})
-		total += c
-	}
-	s.respond(w, map[string]any{"days": days, "total": total}, nil)
-}
-
-// userActivity groups the same finalized publication counts by month, plus
-// repository creation, within the existing PublicUser visibility boundary.
-func (s *Server) userActivity(w http.ResponseWriter, r *http.Request) {
-	viewer, _ := userFrom(r.Context())
-	_, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
-	if err != nil {
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return
-	}
-	months, err := s.b.Activity(r.Context(), repositoryList)
-	if err != nil {
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return
-	}
-	if months == nil {
-		months = []domain.ActivityMonth{}
-	}
-	s.respond(w, map[string]any{"months": months}, nil)
 }
 
 // patchMember changes member role (owner only, constructor role fixed).

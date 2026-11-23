@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -15,7 +14,7 @@ import (
 
 func TestDocJobHTTPDurabilityAndAuthorization(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
 	id := app.NewIdentityService(auth.NewDevVerifier(), st)
 	server := httptest.NewServer(NewServer(svc, id).Handler())
 	defer server.Close()

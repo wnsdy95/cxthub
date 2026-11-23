@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func completeStructuredToolResult(test *testing.T, value string) (DocEventDisplayPreparation, *docToolValueFixture) {
@@ -51,42 +49,6 @@ func completeStructuredToolResult(test *testing.T, value string) (DocEventDispla
 		}
 	}
 	return state, fixture
-}
-
-func TestDocEventStructuredToolResultPublicationParity(test *testing.T) {
-	for _, value := range []string{`{}`, `[]`, `true`, `false`, `0`, `1e400`, `-0`, `1.2345`, "{\"3\":\"first\",\"0\":\"zero\",\"dup\":1,\"dup\":2,\"nested\":[true,null,\"\ud55c\uae00\\ud800🙂\"]}"} {
-		test.Run(value, func(test *testing.T) {
-			state, fixture := completeStructuredToolResult(test, value)
-			load := fixture.order.keys.tree.load
-			generation, err := ValidateDocEventDisplayPublication(context.Background(), state, load)
-			if err != nil || generation.Source.Plan != state.Plan || state.Plan != state.ToolPlan {
-				test.Fatal("publication changed source identity", err)
-			}
-			baseline, err := BuildDocToolDisplay(context.Background(), fixture.order.keys.tree.raw)
-			if err != nil {
-				test.Fatal(err)
-			}
-			var actual strings.Builder
-			for index := 0; index < generation.Pages.Count; index++ {
-				page, err := ReadDocDisplayProjectionPage(context.Background(), generation, index, load)
-				if err != nil || page.From != actual.Len() {
-					test.Fatal("projection pages lost continuity", err)
-				}
-				for offset, character := range page.Text {
-					width := utf8.RuneLen(character)
-					got, err := page.SourceRange(offset, width)
-					want, baselineError := baseline.SourceRange(page.From+offset, width)
-					if err != nil || baselineError != nil || got != want {
-						test.Fatal("projection changed original-byte mapping", got, want, err, baselineError)
-					}
-				}
-				actual.WriteString(page.Text)
-			}
-			if actual.String() != baseline.Text() {
-				test.Fatal("projection changed tool result", actual.String(), baseline.Text())
-			}
-		})
-	}
 }
 
 func TestDocEventStructuredToolPublicationFences(test *testing.T) {

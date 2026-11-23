@@ -569,22 +569,26 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
     data: { id: contextRepo, remote_url: remote, default_branch: 'main' },
   });
   expect(contextRepository.ok(), await contextRepository.text()).toBe(true);
-  for (const kind of ['publication', 'integration', 'memory']) {
-    const statusResponse = await api.get(`/api/v1/repos/${encodeURIComponent(contextRepo)}/git/associations?kind=${kind}`);
-    expect(statusResponse.ok()).toBe(true);
-    const status = await statusResponse.json();
-    expect(status.items).toEqual([]);
-    expect(status.discovery.state).toBe('no_origin');
-    expect(status.current_applicability).toBe('not_evaluated');
+  // The API and the tool server answer the same thing about the new repository's sessions.
+  const sessionsResponse = await api.get(`/api/v1/repos/${encodeURIComponent(contextRepo)}/anchored-sessions`);
+  expect(sessionsResponse.ok()).toBe(true);
+  expect(await sessionsResponse.json()).toEqual([]);
+  const callTool = async (name: string) => {
     const toolResponse = await api.post('/mcp', {
       headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json, text/event-stream' },
-      data: { jsonrpc: '2.0', id: `status-${kind}`, method: 'tools/call', params: { name: 'context_link_status', arguments: { repository: contextRepo, kind } } },
+      data: { jsonrpc: '2.0', id: name, method: 'tools/call', params: { name, arguments: { repository: contextRepo } } },
     });
     expect(toolResponse.ok()).toBe(true);
-    const tool = await toolResponse.json();
-    expect(tool.result.isError, JSON.stringify(tool)).not.toBe(true);
-    expect(JSON.parse(tool.result.content[0].text)).toEqual(status);
-  }
+    return toolResponse.json();
+  };
+  const listed = await callTool('session_list');
+  expect(listed.result.isError, JSON.stringify(listed)).not.toBe(true);
+  const piece = JSON.parse(listed.result.content[0].text);
+  expect(piece.page_complete).toBe(true);
+  expect(JSON.parse(piece.json_fragment)).toEqual({ sessions: [] });
+  // A tool that read captures is no longer known.
+  const removedTool = await callTool('context_link_status');
+  expect(removedTool.result.isError).toBe(true);
   await api.patch('/api/v1/me', {headers:{Origin:origin,'X-Cxt-CSRF':'1'},data:{locale:'en'}});
   await page.goto(`/${me.username}`);
   await page.getByRole('button', {name:'Profile menu',exact:true}).click();

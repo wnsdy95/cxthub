@@ -63,6 +63,8 @@ type AnchoredSummaries interface {
 // the context: all of a session to its uploader, the open parts to anyone
 // else.
 type AnchoredQueries interface {
+	// ListRepos lists the repositories; the caller decides which of them its user may read.
+	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 	GetAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredSession, error)
 	ListAnchoredSessions(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSessionSummary, error)
 	AnchoredCommitSegments(ctx context.Context, repo domain.ContentHash, commitSHA string) ([]domain.AnchoredCommitSegment, error)

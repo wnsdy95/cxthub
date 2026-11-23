@@ -95,7 +95,7 @@ func TestWave59RuntimeCommandConfigurationRejectsAuthorityBeforeIO(test *testing
 		{name: "typed nil authority", repositories: (*store.FSStore)(nil), want: domain.ErrValidation},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
-			runtime := &Runtime{Context: app.NewService(storage, storage, nil, nil, scenario.repositories)}
+			runtime := &Runtime{Context: app.NewService(storage, storage, nil, scenario.repositories)}
 			if err := runtime.ConfigureRepositoryAssetCommands(); !errors.Is(err, scenario.want) || runtime.RepositoryAssets != nil {
 				test.Fatal("runtime published an asset owner without complete authority", err)
 			}
@@ -103,27 +103,5 @@ func TestWave59RuntimeCommandConfigurationRejectsAuthorityBeforeIO(test *testing
 				test.Fatal("runtime published a publication owner without complete authority", err)
 			}
 		})
-	}
-}
-
-func TestWave59OpenMCPDoesNotRequireAuthorityCommandConstruction(test *testing.T) {
-	infrastructureRuntimeEnvironment(test)
-	test.Setenv("CXT_EXECUTION_PROFILE", "embedded")
-	runtime, err := OpenMCP(test.Context(), "127.0.0.1:0", test.TempDir(), false)
-	if err != nil {
-		test.Fatal(err)
-	}
-	test.Cleanup(runtime.Close)
-	if runtime.Context != nil || runtime.RepositoryAssets != nil || runtime.DocumentPublications != nil {
-		test.Fatal("OpenMCP assembled repository authority commands")
-	}
-	if runtime.infrastructure == nil || runtime.Store != runtime.infrastructure.Store || runtime.Store != runtime.infrastructure.ownedStore || runtime.DocumentQueries == nil || runtime.ContextQueries == nil {
-		test.Fatal("MCP lost its original store or read owners while omitting authority commands")
-	}
-	if err := runtime.ConfigureRepositoryAssetCommands(); !errors.Is(err, domain.ErrCatalogUnsupported) || runtime.RepositoryAssets != nil {
-		test.Fatal("MCP silently created an asset authority dependency", err)
-	}
-	if err := runtime.ConfigureDocumentPublicationCommands(); !errors.Is(err, domain.ErrCatalogUnsupported) || runtime.DocumentPublications != nil {
-		test.Fatal("MCP silently created a publication authority dependency", err)
 	}
 }

@@ -151,7 +151,7 @@ func TestExecutionProfilePostgresActualAPIMCPRootsAndControlLoss(test *testing.T
 			if !root.BoundedDocuments() || root.execution.role.Role != outbound.ProcessRole(name) || root.infrastructure.Store != root.Store || root.DocumentQueryProfile != documentquery.VerifiedRoots {
 				test.Fatal("bounded root lost role, one-store ownership or verified schema policy")
 			}
-			if _, ok := root.Store.(*store.PostgresStore); !ok || (root.Context != nil) != (name == "api") || root.DocumentQueries == nil || root.Identity == nil {
+			if _, ok := root.Store.(*store.PostgresStore); !ok || (root.Context != nil) != (name == "api") || (root.DocumentQueries != nil) != (name == "api") || (root.Anchored != nil) != (name == "mcp") || root.Identity == nil {
 				test.Fatal("bounded root changed API/MCP functional ownership")
 			}
 			response := httptest.NewRecorder()

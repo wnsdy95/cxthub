@@ -65,7 +65,7 @@ func TestBuildDocRangeWorkLateCompatibilityClosesBeforeDirectFallback(tests *tes
 					return scenario.fallbackErr
 				},
 			}
-			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 			published, err := service.buildDocRangeWork(ctx, storage, job)
 			want := []string{"prepare"}
 			wantSteps, wantResources := 1, 0
@@ -138,7 +138,7 @@ func TestBuildDocRangeWorkLateCompatibilityFailsClosed(tests *testing.T) {
 					return domain.ErrIntegrity
 				},
 			}
-			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil, nil)
+			service := NewService(yieldingPreparationMetadata{}, nil, nil, nil)
 			published, err := service.buildDocRangeWork(ctx, storage, domain.DocRangeIndexJob{})
 			if published || !errors.Is(err, scenario.wantErr) || (scenario.closeErr != nil && !errors.Is(err, scenario.closeErr)) ||
 				!reflect.DeepEqual(calls, []string{"prepare", "step", "close"}) || prepared.steps != 1 ||

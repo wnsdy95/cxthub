@@ -124,7 +124,7 @@ func TestDocumentWorkersShareQueriesScopeAndOriginalVerifier(test *testing.T) {
 	if finalization.FieldByName("verifier").Pointer() != reflect.ValueOf(config.Verifier).Pointer() {
 		test.Fatal("composition copied or replaced its verifier")
 	}
-	service := NewService(config.Metadata, config.Blobs, nil, nil, nil)
+	service := NewService(config.Metadata, config.Blobs, nil, nil)
 	service.ConfigureDocumentFindFields(config.FindFields)
 	service.ConfigureDocumentDisplay(config.Display)
 	bound, err := service.DocumentWorkersForProfile(config.Profile)
@@ -237,7 +237,7 @@ func TestDocumentWorkersLegacySourceDefersToLoadCompletionAndValidationOrder(tes
 				expected = domain.ErrConflict
 				storage.completeError = expected
 			}
-			service := NewService(nil, nil, nil, nil, nil)
+			service := NewService(nil, nil, nil, nil)
 			service.ConfigureDocumentDisplay(storage)
 			worker, err := service.documentDisplayWorker()
 			if err != nil {
@@ -277,7 +277,7 @@ func TestDocumentWorkersLegacySourcesCopyPortsAndOpenBothActualQueries(test *tes
 	document := seedLegacyFindDocument(test, storage, repo, []domain.CIREvent{
 		{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "copied legacy query ports"}}},
 	})
-	service := NewService(storage, storage, nil, nil, nil)
+	service := NewService(storage, storage, nil, nil)
 	scope := newDocumentWorkerScope(storage, storage, config.Profile)
 	sources, err := service.documentWorkerSources(scope)
 	if err != nil {
@@ -309,7 +309,7 @@ func TestDocumentWorkersLegacySourcesCopyPortsAndOpenBothActualQueries(test *tes
 }
 
 func TestDocumentWorkersLegacySourceFailureOccursOnlyOnDemand(test *testing.T) {
-	service := NewService(nil, nil, nil, nil, nil)
+	service := NewService(nil, nil, nil, nil)
 	scope := newDocumentWorkerScope(nil, nil, documentquery.LegacyCompatibility)
 	sources, err := service.documentWorkerSources(scope)
 	if err != nil || sources == nil {

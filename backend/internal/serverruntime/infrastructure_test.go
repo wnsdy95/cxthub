@@ -237,7 +237,6 @@ func TestRuntimeValidationStillPrecedesInfrastructure(test *testing.T) {
 				publicURL string
 				want      string
 			}{
-				{name: "prepared scope first", prepared: "invalid", auth: "invalid", publicURL: "invalid", want: "CXT_MEMORY_READ_REPOS requires comma-separated repository hashes"},
 				{name: "auth before public origin", auth: "invalid", publicURL: "invalid", want: "CXT_AUTH must be firebase or dev"},
 				{name: "firebase before public origin", auth: "firebase", publicURL: "invalid", want: "CXT_FIREBASE_PROJECT is required for Firebase authentication"},
 				{name: "public origin before store", auth: "dev", publicURL: "invalid", want: "CXT_PUBLIC_URL must be an absolute origin without credentials, path, query or fragment"},

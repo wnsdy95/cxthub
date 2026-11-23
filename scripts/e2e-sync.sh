@@ -333,7 +333,7 @@ for removed in save status checkout pull commit stash load claude codex mcp capt
 done
 expect "this computer keeps the mark, the connection, its lock and the copies of what was sent" "$(ls .cxt | sort | tr '\n' ' ')" "HEAD config locks sessions "
 if [ -z "${CXT_E2E_DSN:-}" ]; then
-  expect "no capture was registered on the server" "$(curl -fsSb "$J" "$B/repos/$RID/snapshots" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))') $(curl -fsSb "$J" "$B/repos/$RID/refs" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" "0 0"
+  expect "the server has no routes that take or list captures" "$(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$RID/snapshots") $(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$RID/refs")" "404 404"
 fi
 
 echo

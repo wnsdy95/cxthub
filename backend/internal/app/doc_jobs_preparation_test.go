@@ -76,7 +76,7 @@ func preparationFixture(t *testing.T) (*Service, domain.DocFinalizationJob) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewService(preparationMetadata{}, preparationChunks{repo: repo, bodies: plan.Bodies}, nil, nil, nil), j.Claim(time.Now().UTC(), docJobLease)
+	return NewService(preparationMetadata{}, preparationChunks{repo: repo, bodies: plan.Bodies}, nil, nil), j.Claim(time.Now().UTC(), docJobLease)
 }
 
 func TestDocJobPreparationRenewsAndJoinsBeforeCompletion(t *testing.T) {

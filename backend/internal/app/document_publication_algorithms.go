@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func (commands *DocumentPublicationCommands) storeChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
@@ -62,9 +59,13 @@ func (commands *DocumentPublicationCommands) commit(ctx context.Context, in inbo
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.CommitOutput{}, err
 	}
+	// A capture is no longer stored: a client that still sends one is told so
+	// before anything is written.
+	if len(in.Snapshots) > 0 {
+		return inbound.CommitOutput{}, fmt.Errorf("%w: this server stores sessions, not captures; update cxt", domain.ErrValidation)
+	}
 	// The staged discriminator is not an advertised publication capability.
-	// Reject a mixed batch before reassembly, body reads or any object writes,
-	// including snapshots whose legacy body is supplied in this same request.
+	// Reject a mixed batch before reassembly, body reads or any object writes.
 	for _, doc := range in.Docs {
 		if doc.Identity != domain.DocumentIdentityLegacy {
 			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
@@ -73,23 +74,6 @@ func (commands *DocumentPublicationCommands) commit(ctx context.Context, in inbo
 	for _, doc := range in.ChunkedDocs {
 		if doc.Identity != domain.DocumentIdentityLegacy {
 			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
-		}
-	}
-	for _, snap := range in.Snapshots {
-		if err := snap.DocIdentity.Validate(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if snap.DocIdentity == domain.DocumentIdentityRootV1 {
-			if !hasDocumentIdentity(commands.supported, snap.DocIdentity) {
-				return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
-			}
-			// This route attaches metadata to an already-owned, verified root.
-			// New root admission belongs to the durable finalization endpoint;
-			// disabling it must not freeze existing snapshots or memory archives.
-			bound := outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), commands.supported)
-			if err := requireRootDocumentRepository(bound, commands.store, in.RepoID); err != nil {
-				return inbound.CommitOutput{}, err
-			}
 		}
 	}
 	// Reassemble a chunked wire document from chunks received in this request plus repository-owned stored chunks. Verify the canonical document hash, then pass the complete document through the ordinary validation and storage path.
@@ -159,64 +143,17 @@ func (commands *DocumentPublicationCommands) commit(ctx context.Context, in inbo
 			docs = append(docs, domain.SessionDoc{Hash: chunkedDoc.Hash, CIR: cir})
 		}
 	}
-	docByHash := make(map[domain.ContentHash]domain.VerifiedSessionDoc, len(docs))
 	verifiedDocs := make([]domain.VerifiedSessionDoc, 0, len(docs))
 	for _, document := range docs {
 		if err := ctx.Err(); err != nil {
 			return inbound.CommitOutput{}, err
 		}
+		// Validate every submitted body, even a duplicate claimed hash.
 		verified, err := domain.VerifySessionDoc(document)
 		if err != nil {
 			return inbound.CommitOutput{}, err
 		}
-		// Validate every submitted body, even a duplicate claimed hash.
-		docByHash[document.Hash] = verified
 		verifiedDocs = append(verifiedDocs, verified)
-	}
-	verifiedSettings := make(map[domain.ContentHash]bool)
-	normalizedSnaps := make([]domain.Snapshot, 0, len(in.Snapshots))
-	for _, snap := range in.Snapshots {
-		if err := ctx.Err(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		snap.RepoID = in.RepoID
-		// Branches is a response-specific projection calculated from the branch reflog. If the client stores the sent value, it can introduce fake membership in the next response through the FS adapter.
-		snap.Branches = nil
-		if err := domain.ValidateSnapshotHashes(snap); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if document, ok := docByHash[snap.DocHash]; ok {
-			if !document.Reference().Matches(snap) {
-				return inbound.CommitOutput{}, domain.ErrIntegrity
-			}
-		} else {
-			if commands.sources == nil {
-				return inbound.CommitOutput{}, domain.ErrCatalogUnsupported
-			}
-			err := commands.sources.VerifySnapshotDocument(ctx, in.RepoID, snap)
-			if err != nil {
-				if errors.Is(err, domain.ErrNotFound) {
-					return inbound.CommitOutput{}, fmt.Errorf("%w: snapshot %s references an absent doc %s (send doc first via push/objects)", domain.ErrIntegrity, snap.ID, snap.DocHash)
-				}
-				return inbound.CommitOutput{}, err
-			}
-		}
-		for _, hash := range []domain.ContentHash{snap.ClaudeSettings, snap.AgentsSettings, snap.CodexSettings} {
-			if hash == "" || verifiedSettings[hash] {
-				continue
-			}
-			if _, err := commands.store.GetSettingsObject(ctx, in.RepoID, hash); err != nil {
-				if errors.Is(err, domain.ErrNotFound) {
-					return inbound.CommitOutput{}, fmt.Errorf("%w: snapshot %s references missing settings object %s", domain.ErrIntegrity, snap.ID, hash)
-				}
-				return inbound.CommitOutput{}, err
-			}
-			verifiedSettings[hash] = true
-		}
-		// MemoryHash is derived metadata. Only PutMemoryDigest may attach it after
-		// validating the digest hash, snapshot ownership, and repo-scoped blob grant.
-		snap.MemoryHash = ""
-		normalizedSnaps = append(normalizedSnaps, snap)
 	}
 	if err := ctx.Err(); err != nil {
 		return inbound.CommitOutput{}, err
@@ -227,13 +164,6 @@ func (commands *DocumentPublicationCommands) commit(ctx context.Context, in inbo
 	}
 	if repo.RepositoryID == "" {
 		return inbound.CommitOutput{}, fmt.Errorf("%w: repo is not bound to a repository", domain.ErrForbidden)
-	}
-	existingSnaps, err := commands.store.ListSnapshots(ctx, in.RepoID, "")
-	if err != nil {
-		return inbound.CommitOutput{}, err
-	}
-	if err := domain.ValidateSnapshotGraphUpdate(existingSnaps, normalizedSnaps); err != nil {
-		return inbound.CommitOutput{}, err
 	}
 	var out inbound.CommitOutput
 	for position, document := range docs {
@@ -256,33 +186,6 @@ func (commands *DocumentPublicationCommands) commit(ctx context.Context, in inbo
 			out.StoredDocs++
 		} else {
 			out.DedupedDocs++
-		}
-	}
-	for _, snap := range normalizedSnaps {
-		if err := ctx.Err(); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		before, priorErr := commands.store.GetSnapshot(ctx, in.RepoID, snap.ID)
-		if err := priorErr; err == nil {
-			out.DedupedSnapshots++
-		} else if errors.Is(err, domain.ErrNotFound) {
-			out.StoredSnapshots++
-		} else {
-			return inbound.CommitOutput{}, err
-		}
-		if err := commands.store.PutSnapshot(ctx, snap); err != nil {
-			return inbound.CommitOutput{}, err
-		}
-		if priorErr == nil {
-			after, err := commands.store.GetSnapshot(ctx, in.RepoID, snap.ID)
-			if err != nil {
-				return inbound.CommitOutput{}, err
-			}
-			if !reflect.DeepEqual(before, after) {
-				if err := commands.scope.GraphChanged(ctx, in.RepoID); err != nil {
-					return inbound.CommitOutput{}, err
-				}
-			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

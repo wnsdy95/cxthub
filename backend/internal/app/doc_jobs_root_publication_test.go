@@ -111,7 +111,7 @@ func TestRootDocJobWorkerFreshRepositoryBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(nil, rootPreparationChunks{preparationChunks{repo: repo, bodies: bodies}}, nil, nil, nil)
+	svc := NewService(nil, rootPreparationChunks{preparationChunks{repo: repo, bodies: bodies}}, nil, nil)
 	if _, err := svc.verifyDocJob(context.Background(), j); err != nil {
 		t.Fatal(err)
 	}

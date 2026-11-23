@@ -20,7 +20,6 @@ import (
 	dsig "github.com/russellhaering/goxmldsig"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	delivery "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/http"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -104,7 +103,7 @@ func newSAMLFlow(t *testing.T) *samlFlow {
 		t.Fatal(err)
 	}
 	f.settings.EntityID, f.settings.ACS = view.EntityID, view.ACS
-	handler := delivery.NewServer(app.NewService(st, st, nil, gitengine.NewEngine(st), st), ids).Handler()
+	handler := delivery.NewServer(app.NewService(st, st, nil, st), ids).Handler()
 	return &samlFlow{st, ids, p, f, user, sess, ep, view, handler, d}
 }
 func (f *samlFlow) start(t *testing.T, assertionID string) (string, []byte) {

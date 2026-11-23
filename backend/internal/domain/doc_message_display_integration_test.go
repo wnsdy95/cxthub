@@ -3,13 +3,10 @@ package domain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 type messageDisplayFixture struct {
@@ -135,80 +132,6 @@ func buildMessageDisplayFixture(test *testing.T, raw []byte) messageDisplayFixtu
 	return fixture
 }
 
-func TestDocMessageDisplayMixedBlocksMatchWholeEventOracle(test *testing.T) {
-	for _, blocks := range []string{
-		`[]`,
-		`[{"type":"text"},{"type":"text","text":null},{"type":"text","text":""}]`,
-		`[{"type":"text","text":"**first"},{"type":"text","text":"last**"}]`,
-		"[{\"type\":\"text\",\"text\":\"# **\ud55c\uae00\\uD83D\\uDE42**\"},{\"type\":\"image\",\"name\":\"**asset**\"},{\"type\":\"text\",\"text\":\"- end\"}]",
-		`[{"type":"text","text":"# first"},{"type":"text","text":""},{"type":"text","text":"\n\n# "},{"type":"text","text":"# last"}]`,
-		`[{"type":"text","text":"paragraph"},{"type":"text","text":"# "},{"type":"text","text":null},{"type":"text","text":"- next"}]`,
-		`[{},{"type":null,"name":"asset"},{"type":"Text","text":"not a text block"}]`,
-		"[{\"type\":\"text\",\"text\":\"```\\n**literal**\\n```\"},{\"type\":\"text\",\"text\":\"**last**\"}]",
-	} {
-		test.Run(blocks, func(test *testing.T) {
-			raw := []byte(`{"kind":"message","blocks":` + blocks + `}`)
-			fixture := buildMessageDisplayFixture(test, raw)
-			input, err := NewDocMessageDisplayAssemblyInput(fixture.plan)
-			if err != nil {
-				test.Fatal(err)
-			}
-			baseline, err := BuildDocEventDisplay(context.Background(), raw)
-			if err != nil {
-				test.Fatal(err)
-			}
-			assertMappedAssemblyReplay(test, input, fixture.objects, baseline)
-			assembled := assembleDisplayFixture(test, input, fixture.objects)
-			output := assembledFixturePages(test, assembled, func(page DocDisplayPage) {
-				for offset, character := range page.Text {
-					got, err := page.SourceRange(offset, utf8.RuneLen(character))
-					want, failure := baseline.SourceRange(page.From+offset, utf8.RuneLen(character))
-					if err != nil || failure != nil || got != want {
-						test.Fatal("composed message source changed", got, want, err, failure)
-					}
-				}
-			})
-			if output != baseline.Text() {
-				test.Fatal("ordinary message boundaries changed", output, baseline.Text())
-			}
-		})
-	}
-}
-
-func TestDocMessageDisplayLargePagedSequenceAndLatePart(test *testing.T) {
-	const count = 1200
-	var raw strings.Builder
-	raw.WriteString(`{"kind":"message","blocks":[`)
-	var want strings.Builder
-	for index := 0; index < count; index++ {
-		if index > 0 {
-			raw.WriteByte(',')
-			want.WriteString("\n\n")
-		}
-		fmt.Fprintf(&raw, `{"type":"text","text":"**block %d**","opaque":"private"}`, index)
-		fmt.Fprintf(&want, "block %d", index)
-	}
-	raw.WriteString(`]}`)
-	fixture := buildMessageDisplayFixture(test, []byte(raw.String()))
-	if fixture.plan.Count != count || fixture.plan.Parts.Count != (count+DocMessageDisplayPageParts-1)/DocMessageDisplayPageParts {
-		test.Fatal("large message lost parts", fixture.plan.Count, fixture.plan.Parts.Count)
-	}
-	loads := 0
-	last, err := ReadDocMessageDisplayParts(context.Background(), fixture.plan, fixture.plan.Parts.Count-1, func(_ context.Context, hash ContentHash) ([]byte, error) { loads++; return fixture.objects[hash], nil })
-	if err != nil || len(last) == 0 || last[len(last)-1].Block != count-1 || loads > 4 {
-		test.Fatal("late part scanned preceding plan pages", loads, err)
-	}
-	input, err := NewDocMessageDisplayAssemblyInput(fixture.plan)
-	if err != nil {
-		test.Fatal(err)
-	}
-	assembled := assembleDisplayFixture(test, input, fixture.objects)
-	if got := assembledFixturePages(test, assembled, nil); got != want.String() {
-		test.Fatal("large ordinary message changed", len(got), want.Len())
-	}
-	test.Logf("event_bytes=%d blocks=%d plan_pages=%d build_steps=%d max_build_loads=%d checkpoint_bytes=%d late_part_loads=%d display_bytes=%d assembly_steps=%d display_pages=%d", raw.Len(), count, fixture.plan.Parts.Count, fixture.steps, fixture.maxLoads, fixture.maxCheckpoint, loads, assembled.generation.Source.TextBytes, assembled.steps, assembled.generation.Pages.Count)
-}
-
 func TestDocMessageDisplayBatchReadBudgetAndAtomicFailure(test *testing.T) {
 	raw := []byte(`{"kind":"message","blocks":[` + strings.Repeat(`{"type":"text","text":"**a**"},`, 39) + `{"type":"text","text":"**a**"}]}`)
 	fixture := buildMessageDisplayFixture(test, raw)
@@ -248,34 +171,4 @@ func TestDocMessageDisplayBatchReadBudgetAndAtomicFailure(test *testing.T) {
 			test.Fatal("partially produced batch survived a fatal error", cancelRead, failed.Text, err)
 		}
 	}
-}
-
-func FuzzDocMessageDisplayWholeEventParity(fuzz *testing.F) {
-	for _, text := range []string{"", "**first", "# \ud55c\uae00🙂", "a\n\nb", "# ", "\u0000\r\t"} {
-		fuzz.Add(text, "last**", true)
-		fuzz.Add(text, "asset", false)
-	}
-	fuzz.Fuzz(func(test *testing.T, first, last string, textBlock bool) {
-		if len(first)+len(last) > 1024 || !utf8.ValidString(first) || !utf8.ValidString(last) || strings.HasPrefix(strings.TrimLeftFunc(first, docRangePresentationSpace), "[cxt") {
-			test.Skip()
-		}
-		second := map[string]any{"type": "image", "name": last, "text": "hidden"}
-		if textBlock {
-			second = map[string]any{"type": "text", "text": last}
-		}
-		raw, err := json.Marshal(map[string]any{"kind": "message", "blocks": []any{map[string]any{"type": "text", "text": first}, map[string]any{"type": "text", "text": "# "}, second}})
-		if err != nil {
-			test.Fatal(err)
-		}
-		fixture := buildMessageDisplayFixture(test, raw)
-		input, err := NewDocMessageDisplayAssemblyInput(fixture.plan)
-		if err != nil {
-			test.Fatal(err)
-		}
-		baseline, err := BuildDocEventDisplay(context.Background(), raw)
-		if err != nil {
-			test.Fatal(err)
-		}
-		assertMappedAssemblyReplay(test, input, fixture.objects, baseline)
-	})
 }

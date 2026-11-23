@@ -2,7 +2,6 @@ package domain
 
 import (
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -60,71 +59,5 @@ func TestMemorySelectionParentShape(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "memory_selection_parent") {
 		t.Fatal("legacy payload gained a field")
-	}
-}
-func TestMemorySelectionParentPredicate(t *testing.T) {
-	before, after := memorySelectionPair()
-	if !IsInitialMemorySelection(before, after) {
-		t.Fatal("exact successor rejected")
-	}
-	after.MemorySource = after.Target
-	if !IsInitialMemorySelection(before, after) {
-		t.Fatal("explicit self owner rejected")
-	}
-	for _, tc := range []struct {
-		name   string
-		change func(*HistoryEvent, *HistoryEvent)
-	}{
-		{"binding-parent-only", func(b, a *HistoryEvent) { a.BindingParent = a.MemorySelectionParent; a.MemorySelectionParent = "" }},
-		{"wrong-parent", func(b, a *HistoryEvent) { a.MemorySelectionParent = strings.Repeat("9", 32) }},
-		{"repo", func(b, a *HistoryEvent) { a.RepoID = strings.Repeat("9", 64) }},
-		{"identity", func(b, a *HistoryEvent) { a.BranchID = "other" }},
-		{"branch", func(b, a *HistoryEvent) { a.Branch = "other" }},
-		{"alias", func(b, a *HistoryEvent) { a.LocalBranch = "other" }},
-		{"worktree", func(b, a *HistoryEvent) { a.WorktreeID = strings.Repeat("9", 32) }},
-		{"code", func(b, a *HistoryEvent) { a.GitAfter = strings.Repeat("9", 40) }},
-		{"target", func(b, a *HistoryEvent) { a.Source = HashContent([]byte("9")); a.Target = a.Source }},
-		{"birth-predecessor", func(b, a *HistoryEvent) { b.Kind = "birth" }},
-		{"nonempty-predecessor", func(b, a *HistoryEvent) { b.MemoryHash = a.MemoryHash }},
-		{"unpinned-predecessor", func(b, a *HistoryEvent) { b.MemoryPinned = false }},
-		{"predecessor-owner", func(b, a *HistoryEvent) { b.MemorySource = b.Target }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			b, a := memorySelectionPair()
-			tc.change(&b, &a)
-			if IsInitialMemorySelection(b, a) {
-				t.Fatal("unrelated selection accepted")
-			}
-		})
-	}
-}
-func TestMemorySelectionParentDependencies(t *testing.T) {
-	before, after := memorySelectionPair()
-	// Deduplicate a dependency used by two fields without changing their policies.
-	after.BindingParent = before.ID
-	if got := HistoryDependencies(after); !reflect.DeepEqual(got, []string{before.ID}) {
-		t.Fatalf("duplicate dependencies: %v", got)
-	}
-	if got, err := OrderHistoryEvents([]HistoryEvent{after, before, after}); err != nil || len(got) != 2 || got[0].ID != before.ID {
-		t.Fatalf("deduplicated order: %v %v", got, err)
-	}
-	before.BindingParent = after.ID
-	if _, err := OrderHistoryEvents([]HistoryEvent{before, after}); err == nil {
-		t.Fatal("cross-field cycle accepted")
-	}
-	// Ordinary BindingParent may still refer to an identity birth, and has no
-	// initial-memory meaning. Do not narrow its longstanding validation here.
-	before, after = memorySelectionPair()
-	before.Kind = "birth"
-	after.MemorySelectionParent = ""
-	after.BindingParent = before.ID
-	if err := ValidateHistoryEvent(after); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := OrderHistoryEvents([]HistoryEvent{after, before}); err != nil {
-		t.Fatal(err)
-	}
-	if IsInitialMemorySelection(before, after) {
-		t.Fatal("birth interpreted as memory selection")
 	}
 }

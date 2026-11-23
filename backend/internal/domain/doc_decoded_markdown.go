@@ -89,21 +89,9 @@ type DocDecodedMarkdownFragment struct {
 	next    DocDecodedMarkdownCursor
 }
 
-func (fragment DocDecodedMarkdownFragment) Text() string { return fragment.display.Text() }
-func (fragment DocDecodedMarkdownFragment) From() int    { return fragment.display.From() }
+func (fragment DocDecodedMarkdownFragment) From() int { return fragment.display.From() }
 func (fragment DocDecodedMarkdownFragment) Next() DocDecodedMarkdownCursor {
 	return fragment.next
-}
-
-func (fragment DocDecodedMarkdownFragment) LocateSource(ctx context.Context, offset, length int, loadObject func(context.Context, ContentHash) ([]byte, error)) (DocFindSpan, error) {
-	if err := ctx.Err(); err != nil {
-		return DocFindSpan{}, err
-	}
-	span, err := fragment.display.SourceRange(offset, length)
-	if err != nil {
-		return DocFindSpan{}, err
-	}
-	return LocateDocDecodedTextSource(ctx, fragment.input, span.From, span.To-span.From, loadObject)
 }
 
 func ReadDocDecodedMarkdownFragment(ctx context.Context, plan DocDecodedMarkdownPlan, cursor DocDecodedMarkdownCursor, loadObject func(context.Context, ContentHash) ([]byte, error)) (result DocDecodedMarkdownFragment, failure error) {
