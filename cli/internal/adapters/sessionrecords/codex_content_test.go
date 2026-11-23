@@ -138,7 +138,7 @@ func TestCodexContentNamesWhatItCannotReadBack(t *testing.T) {
 	if out, err := exec.Command("sqlite3", filepath.Join(changed, "thread_history_2.sqlite"), "CREATE TABLE thread_items (thread_id TEXT, payload TEXT);").CombinedOutput(); err != nil {
 		t.Fatalf("sqlite3: %v\n%s", err, out)
 	}
-	if _, err := NewCodexContent(changed).ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}); err == nil || !strings.Contains(err.Error(), "could not be read") {
+	if _, err := NewCodexContent(changed).ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}); err == nil || !strings.Contains(err.Error(), "thread_history_2.sqlite: table thread_items has no column") || !strings.Contains(err.Error(), "A newer cxt is needed") {
 		t.Fatalf("another layout: %v", err)
 	}
 	missing := NewCodexContent(home)

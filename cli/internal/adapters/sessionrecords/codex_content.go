@@ -80,7 +80,10 @@ func (c *CodexContent) ReadSessionContent(ctx context.Context, repoRoot string, 
 		if errors.Is(err, errSQLiteMissing) {
 			return out, fmt.Errorf("session %s: the sqlite3 program is not installed, so the thread's items were not read", records.ID)
 		}
-		return out, fmt.Errorf("session %s: the thread's items could not be read: %w", records.ID, err)
+		if errors.Is(err, errCodexHistoryMissing) {
+			return out, fmt.Errorf("session %s: %w", records.ID, err)
+		}
+		return out, fmt.Errorf("session %s: %s", records.ID, codexReadFailure(ctx, c.home, c.rows, err))
 	}
 	envelope, events := domain.Envelope{}, 0
 	for index, ids := range records.Ranges {

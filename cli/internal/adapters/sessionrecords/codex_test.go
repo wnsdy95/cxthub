@@ -25,6 +25,9 @@ type codexFixture struct {
 	items   []map[string]any
 	fail    map[string]error
 	queries []string
+	// layout replaces the columns a table says it has. A table that is not
+	// named has the columns cxt reads.
+	layout map[string][]string
 }
 
 var codexInList = regexp.MustCompile(`thread_id IN \(([^)]*)\)`)
@@ -38,6 +41,19 @@ func (f *codexFixture) rows(_ context.Context, database, query string, row func(
 	}
 	var rows []map[string]any
 	switch {
+	case strings.Contains(query, "pragma_table_info"):
+		for _, table := range codexLayout {
+			if !strings.Contains(query, "'"+table.Table+"'") {
+				continue
+			}
+			columns, replaced := f.layout[table.Table]
+			if !replaced {
+				columns = table.Columns
+			}
+			for _, column := range columns {
+				rows = append(rows, map[string]any{"name": column})
+			}
+		}
 	case strings.Contains(query, "FROM threads"):
 		rows = f.threads
 	case strings.Contains(query, "FROM thread_spawn_edges"):
@@ -260,10 +276,12 @@ func TestCodexRecordsReportsWhatItCouldNotRead(t *testing.T) {
 	}{
 		{"the sqlite3 program is missing", both, &codexFixture{fail: map[string]error{"FROM threads": errSQLiteMissing}},
 			"state_5.sqlite", "the sqlite3 program is not installed, so the thread database was not read"},
-		{"the thread table changed", both, &codexFixture{fail: map[string]error{"FROM threads": errors.New("sqlite3: no such column: history_mode")}},
-			"state_5.sqlite", "thread database could not be read: sqlite3: no such column: history_mode"},
-		{"the item table changed", both, &codexFixture{threads: inRepo, fail: map[string]error{"SELECT DISTINCT": errors.New("sqlite3: no such table: thread_items")}},
-			"thread_history_1.sqlite", "thread database could not be read: sqlite3: no such table: thread_items"},
+		{"the thread table changed", both, &codexFixture{fail: map[string]error{"FROM threads": errors.New("sqlite3: no such column: history_mode")}, layout: map[string][]string{"threads": {"id", "cwd", "created_at_ms"}}},
+			"state_5.sqlite", "Codex keeps its threads another way than this cxt reads them (state_5.sqlite: table threads has no column git_origin_url, history_mode). A newer cxt is needed; the threads stay on this computer and are uploaded once it reads them"},
+		{"the item table is gone", both, &codexFixture{threads: inRepo, fail: map[string]error{"SELECT DISTINCT": errors.New("sqlite3: no such table: thread_items")}, layout: map[string][]string{"thread_items": nil}},
+			"thread_history_1.sqlite", "Codex keeps its threads another way than this cxt reads them (thread_history_1.sqlite has no table thread_items). A newer cxt is needed; the threads stay on this computer and are uploaded once it reads them"},
+		{"a read fails in the layout cxt knows", both, &codexFixture{fail: map[string]error{"FROM threads": errors.New("sqlite3: database is locked")}},
+			"state_5.sqlite", "thread database could not be read: sqlite3: database is locked"},
 		{"a thread keeps its history in a rollout file", both, &codexFixture{threads: []map[string]any{codexThreadRow("old-thread", "/work/app", nil, "legacy")}},
 			"state_5.sqlite", "thread old-thread keeps its history in an older rollout file, which this command does not read"},
 		{"a thread identifier is not safe to query", both, &codexFixture{threads: []map[string]any{codexThreadRow("x'; DROP TABLE threads; --", "/work/app", nil, "paginated")}},
@@ -448,10 +466,14 @@ INSERT INTO thread_items VALUES ('unrelated','t3','a',1,3000,json_object('type',
 		t.Fatal(err)
 	}
 
-	// A database in a layout this reader does not know is reported.
+	if differences := CodexLayoutDifferences(context.Background(), home, nil); len(differences) != 0 {
+		t.Fatalf("the databases are in the layout cxt reads, but: %v", differences)
+	}
+	// A database in a layout this reader does not know is reported, with what
+	// differs.
 	sqlite(history, "ALTER TABLE thread_items RENAME COLUMN item_json TO payload;")
 	batch, err = NewCodexRecords(home, testNormalize).ReadSessionRecords(context.Background(), testScope)
-	if err != nil || len(batch.Unread) != 1 || batch.Unread[0].Source != history || !strings.Contains(batch.Unread[0].Reason, "could not be read") {
+	if err != nil || len(batch.Unread) != 1 || batch.Unread[0].Source != history || !strings.Contains(batch.Unread[0].Reason, "thread_history_1.sqlite: table thread_items has no column item_json)") {
 		t.Fatalf("changed layout: batch=%+v err=%v", batch, err)
 	}
 }

@@ -222,7 +222,7 @@ func (r *CodexRecords) readSessionRecords(ctx context.Context, scope domain.Sess
 		if errors.Is(err, errSQLiteMissing) {
 			unread(source, "the sqlite3 program is not installed, so the thread database was not read")
 		} else {
-			unread(source, "thread database could not be read: "+err.Error())
+			unread(source, codexReadFailure(ctx, r.home, r.rows, err))
 		}
 		return batch, nil
 	}

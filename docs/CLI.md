@@ -1254,6 +1254,14 @@ What is read:
   immutable, so that SQLite creates no lock file beside it. Older Codex rollout
   files are not read.
 
+  These databases are Codex's own and their layout is not a published
+  interface. cxt names only the tables and columns it needs (three tables), so
+  Codex may add to them freely. When a Codex release lays them out another way,
+  the threads are listed as unread with each difference named, for example
+  `thread_history_2.sqlite: table thread_items has no column item_json`, and a
+  newer cxt is needed. Nothing is lost meanwhile: the threads stay where Codex
+  keeps them, and `cxt segments push` uploads them once cxt reads them again.
+
 A session belongs to the repository when a working folder its records name is
 inside one of the repository's worktrees. The one fallback is a Codex thread
 whose recorded remote address is the repository's `origin`, for a thread whose
