@@ -131,8 +131,14 @@ func TestSegmentsCommandContract(t *testing.T) {
 	if ReadOnlyInvocation([]string{"cxt", "segments", "push"}) || ReadOnlyInvocation([]string{"cxt", "segments", "push", "--json"}) {
 		t.Fatal("segments push must not be classified as a read-only command")
 	}
+	// Reading what .cxt keeps is reading, for every session or for one.
+	if !ReadOnlyInvocation([]string{"cxt", "segments", "log"}) || !ReadOnlyInvocation([]string{"cxt", "segments", "log", "codex", "thread-1", "--json"}) {
+		t.Fatal("segments log must be classified as a read-only command")
+	}
 	for _, args := range [][]string{{"cxt", "segments", "extra"}, {"cxt", "segments", "--all"}, {"cxt", "segments", "--json", "--json"},
-		{"cxt", "segments", "push", "extra"}, {"cxt", "segments", "pull"}, {"cxt", "segments", "push", "--force"}} {
+		{"cxt", "segments", "push", "extra"}, {"cxt", "segments", "pull"}, {"cxt", "segments", "push", "--force"},
+		{"cxt", "segments", "log", "claude"}, {"cxt", "segments", "log", "other", "session-1"}, {"cxt", "segments", "log", "claude", "../escape"},
+		{"cxt", "segments", "log", "claude", "session-1", "extra"}} {
 		if err := Run(nil, args); err == nil {
 			t.Fatalf("%v must be rejected before dispatch", args)
 		}
@@ -183,7 +189,8 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 		"Conversation: uploaded for 1 sessions, not uploaded for 1",
 		"Without conversation (1) — these reports are on the server, their conversation is not",
 		"  codex same: synthetic content gap",
-		"Only you can read these reports on the server. Nothing was written on this computer.",
+		"On the server a report is read by you alone until what it explains is pushed; a pushed part is read by whoever may view the repository.",
+		"Nothing was written on this computer.",
 		"Refused (1) — these sessions are not on the server",
 		"  codex taken: synthetic refusal",
 		"Unread session records (1) — these exist but were not read, so no report covers them",
@@ -240,6 +247,21 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Conversation") {
 		t.Fatalf("no conversation: %v\n%s", err, out.String())
 	}
+	// A run that keeps copies says where, and says when one was not written.
+	plain.LocalRecords = &domain.SegmentPushLocalRecords{Kept: 1, NotKept: "synthetic disk failure"}
+	out.Reset()
+	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Copies: what was sent for 1 sessions is kept under .cxt/sessions, each with a log of its uploads",
+		"  a copy was not written in this run: synthetic disk failure",
+		"On this computer only the copies in .cxt/sessions were written.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
 	failure := errors.New("synthetic failure")
 	failing := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) {
 		return domain.SegmentPushResult{}, failure
@@ -249,5 +271,76 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	}
 	if err := RunSegmentsPush(context.Background(), nil, "/work/app", false, &out); err == nil {
 		t.Fatal("a missing uploader must be an error")
+	}
+}
+
+type segmentCareFake struct {
+	asked    *domain.SessionUploadKey
+	listings []domain.SessionUploadListing
+	err      error
+}
+
+func (f *segmentCareFake) UploadLog(_ context.Context, _ string, key *domain.SessionUploadKey) ([]domain.SessionUploadListing, error) {
+	f.asked = key
+	return f.listings, f.err
+}
+
+func TestSegmentsLogSaysWhatIsKeptAndWhatHappened(t *testing.T) {
+	doc := domain.ContentHash("sha256:" + strings.Repeat("a", 64))
+	care := &segmentCareFake{listings: []domain.SessionUploadListing{
+		{Provider: domain.ProviderClaude, SessionID: "session-1", ReportKept: true, ConversationKept: true, Segments: 2, Records: 9, Doc: doc, Events: 14, Lines: 3,
+			Log: []domain.SessionUploadLogEntry{{At: "2031-01-02T03:04:05Z", Automatic: true, Report: domain.SegmentPushStored, Revision: 4, Content: domain.SegmentContentStored, Events: 14, Summaries: 1}}},
+		{Provider: domain.ProviderCodex, SessionID: "thread-1", Lines: 2,
+			Log: []domain.SessionUploadLogEntry{{At: "2031-01-02T03:05:05Z", Report: domain.SegmentPushRefused, Reason: "synthetic refusal"}}},
+	}}
+	var out strings.Builder
+	if err := RunSegmentsLog(context.Background(), care, "/work/app", nil, false, &out); err != nil || care.asked != nil {
+		t.Fatalf("%v asked=%+v", err, care.asked)
+	}
+	for _, want := range []string{
+		"Upload records kept under .cxt/sessions (2 sessions)",
+		"claude session-1",
+		"  report copy        2 segments, 9 records",
+		"  conversation copy  kept; the report names 14 events in " + string(doc),
+		"  last of 3 log lines:",
+		"  2031-01-02T03:04:05Z  automatic  report stored (revision 4) · conversation of 14 events · 1 summaries stored",
+		"codex thread-1",
+		"  report copy        none",
+		"  conversation copy  none",
+		"  2031-01-02T03:05:05Z  requested  report refused: synthetic refusal",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	// One session is asked for by its tool and identifier; other things done
+	// to it have their own lines.
+	care.listings = []domain.SessionUploadListing{{Provider: domain.ProviderClaude, SessionID: "session-1", Lines: 2, Log: []domain.SessionUploadLogEntry{
+		{At: "2031-01-02T03:06:00Z", Content: domain.SegmentContentNotUploaded, ContentReason: "synthetic gap", Report: domain.SegmentPushUnchanged, SummaryReason: "synthetic summary gap"},
+		{At: "2031-01-02T03:07:00Z", Action: "removed from the server"}}}}
+	out.Reset()
+	if err := RunSegmentsLog(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err != nil || care.asked == nil || *care.asked != (domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "session-1"}) {
+		t.Fatalf("%v asked=%+v", err, care.asked)
+	}
+	for _, want := range []string{
+		"  2031-01-02T03:06:00Z  requested  report unchanged · conversation not uploaded: synthetic gap · a summary was not stored: synthetic summary gap",
+		"  2031-01-02T03:07:00Z  removed from the server",
+	} {
+		if !strings.Contains(out.String(), want) || strings.Contains(out.String(), "Upload records kept") {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	// JSON is one object, also when nothing is kept.
+	care.listings = nil
+	out.Reset()
+	if err := RunSegmentsLog(context.Background(), care, "/work/app", nil, true, &out); err != nil || strings.TrimSpace(out.String()) != `{"version":1,"sessions":[]}` {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	out.Reset()
+	if err := RunSegmentsLog(context.Background(), care, "/work/app", nil, false, &out); err != nil || !strings.Contains(out.String(), "none yet: cxt segments push, or the collector, writes them when it uploads") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	if err := RunSegmentsLog(context.Background(), nil, "/work/app", nil, false, &out); err == nil {
+		t.Fatal("a missing service must be an error")
 	}
 }

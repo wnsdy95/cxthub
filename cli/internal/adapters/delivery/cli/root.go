@@ -107,6 +107,9 @@ type Container struct {
 	Segments inbound.SegmentReporter
 	// SegmentUpload uploads that report to the repository's server, one report per session.
 	SegmentUpload inbound.SegmentUploader
+	// SegmentCare finds and puts right what is wrong between the sessions on
+	// the server and the records on this computer.
+	SegmentCare inbound.SegmentCare
 	// SegmentCollector is the same upload when a hook woke it: sessions since
 	// automatic reading began, and only what changed since its last run.
 	SegmentCollector inbound.SegmentCollector
@@ -177,8 +180,15 @@ func Run(c *Container, args []string) error {
 		if c != nil {
 			reporter, uploader = c.Segments, c.SegmentUpload
 		}
-		if parsed.first() == "push" {
+		switch parsed.first() {
+		case "push":
 			return RunSegmentsPush(ctx, uploader, cwd, parsed.has("--json"), os.Stdout)
+		case "log":
+			var care inbound.SegmentCare
+			if c != nil {
+				care = c.SegmentCare
+			}
+			return RunSegmentsLog(ctx, care, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
 		}
 		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
@@ -1486,7 +1496,9 @@ usage: cxt <command> [flags]
                             pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
   segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
-  segments push [--json]    upload that report to the server, one report per session, readable only by you
+  segments push [--json]    upload that report to the server, one report per session; a copy of what was sent is kept under .cxt/sessions
+  segments log [claude|codex <session>] [--json]
+                            show what .cxt/sessions keeps about the uploads: every session with its last upload, or one session's whole log
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization
   branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch

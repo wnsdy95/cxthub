@@ -298,6 +298,12 @@ expect "content document holds the conversation in order" "$(curl -sb "$JA" "$B/
 expect "an account outside the repository cannot read the content document" "$(code -b "$JM" "$B/repos/$CLIRID/docs/$SEGDOC")" 403
 expect "session content creates no snapshot" "$(curl -sb "$JA" "$B/repos/$CLIRID/snapshots" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
 expect "the same report again changes nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"],r["unchanged"],r["refused"],r["content_not_uploaded"],r["sessions"][0]["content"])')" "0 1 0 0 stored"
+# A copy of what was sent is kept under .cxt/sessions and read back without the server.
+SEGKEPT=".cxt/sessions/claude/e2e-segments"
+expect "the upload keeps the report, the conversation and a log for the session" "$(ls "$SEGKEPT" | sort | tr '\n' ' ')" "conversation.json.gz log.jsonl report.json "
+expect "the conversation copy is the document that was sent" "$(python3 -c "import gzip,json;d=json.load(gzip.open('$SEGKEPT/conversation.json.gz'));print(len(d['events']),d['events'][4]['blocks'][0]['text'],d['envelope']['session_origin_id'])")" "5 one more thing e2e-segments"
+expect "the copies name no folder of this computer" "$(python3 -c "import gzip;print('$TMP' in open('$SEGKEPT/report.json').read() or '$TMP' in gzip.open('$SEGKEPT/conversation.json.gz','rt').read())")" "False"
+expect "the log has a line for the stored report and one for the run that only wrote the summary again" "$(cxt segments log claude e2e-segments --json | python3 -c 'import json,sys;s=json.load(sys.stdin)["sessions"][0];l=s["log"];print(s["lines"],l[0]["report"],l[0]["revision"],l[0]["content"],l[0]["events"],l[1]["report"],l[1]["summaries"],l[1]["report_hash"]==s["report_hash"],l[1]["doc"]==s["doc"])')" "2 stored 1 stored 5 unchanged 1 True True"
 # Appended records extend the same document: the earlier events keep their place.
 printf '%s\n' '{"type":"assistant","uuid":"m6","sessionId":"e2e-segments","timestamp":"2031-01-02T03:00:41.000Z","cwd":"'"$PWD"'","gitBranch":"'"$SEGBRANCH"'","message":{"content":[{"type":"text","text":"done"}]}}' >>"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"
 expect "an appended record replaces the report" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"],r["unchanged"],r["sessions"][0]["revision"])')" "1 0 2"

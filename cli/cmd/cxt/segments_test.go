@@ -671,3 +671,71 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return raw
 }
+
+// Where cxt is set up, an upload keeps a copy of what it sent for each
+// session under .cxt/sessions, and cxt segments log reads the copies back
+// without the server.
+func TestSegmentsPushKeepsCopiesThatSegmentsLogReads(t *testing.T) {
+	base, repo, _ := segmentsTestFixture(t)
+	if err := os.MkdirAll(filepath.Join(repo, ".cxt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stored := `{"revision":1,"body_hash":"sha256:` + strings.Repeat("0", 64) + `","changed":true}`
+	fake := &segmentsTestServer{chunks: map[string][]byte{}, manifests: map[string]segmentsTestManifest{}, token: "synthetic-token",
+		answer: func(string) (int, string) { return http.StatusOK, stored }}
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
+	t.Setenv("CXT_TOKEN", "synthetic-token")
+
+	var result domain.SegmentPushResult
+	if err := json.Unmarshal([]byte(segmentsTestRun(t, "segments", "push", "--json")), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.LocalRecords == nil || result.LocalRecords.Kept != 3 || result.LocalRecords.NotKept != "" {
+		t.Fatalf("local records = %+v", result.LocalRecords)
+	}
+	dir := filepath.Join(repo, ".cxt", "sessions", "claude", "original")
+	for _, name := range []string{"report.json", "conversation.json.gz", "log.jsonl"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s: %v %v", name, info, err)
+		}
+	}
+	// The copy of the report is the report that was sent: it names no folder
+	// of this computer either.
+	report, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	if err != nil || strings.Contains(string(report), base) || !strings.Contains(string(report), `"session_id": "original"`) {
+		t.Fatalf("report copy: %v\n%s", err, report)
+	}
+
+	// The same upload again sends the same thing: no new log line.
+	segmentsTestRun(t, "segments", "push", "--json")
+	var listed struct {
+		Sessions []domain.SessionUploadListing `json:"sessions"`
+	}
+	server.Close() // the log is read from this computer alone
+	if err := json.Unmarshal([]byte(segmentsTestRun(t, "segments", "log", "--json")), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 3 {
+		t.Fatalf("listed = %+v", listed.Sessions)
+	}
+	for _, session := range listed.Sessions {
+		if !session.ReportKept || session.Lines != 1 || len(session.Log) != 1 || session.Log[0].Report != domain.SegmentPushStored || session.Log[0].Revision != 1 || session.Log[0].Automatic {
+			t.Fatalf("session = %+v", session)
+		}
+	}
+	one := segmentsTestRun(t, "segments", "log", "claude", "original")
+	for _, want := range []string{"claude original", "report copy        1 segments", "conversation copy  kept; the report names", "requested  report stored (revision 1) · conversation of", "1 summaries stored"} {
+		if !strings.Contains(one, want) {
+			t.Fatalf("missing %q in:\n%s", want, one)
+		}
+	}
+	if _, err := segmentsTestRunErr(t, "segments", "log", "claude", "never-uploaded"); err == nil || !strings.Contains(err.Error(), "no upload record is kept for claude never-uploaded") {
+		t.Fatalf("a session nothing is kept for: %v", err)
+	}
+}

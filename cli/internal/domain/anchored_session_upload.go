@@ -339,6 +339,19 @@ type SegmentPushResult struct {
 	Branches *SegmentPushBranches `json:"branches,omitempty"`
 	// Worktrees is absent when this run does not report the worktree list.
 	Worktrees *SegmentPushWorktrees `json:"worktrees,omitempty"`
+	// LocalRecords is absent when this run keeps no copy of what it sends.
+	LocalRecords *SegmentPushLocalRecords `json:"local_records,omitempty"`
+}
+
+// SegmentPushLocalRecords says what a run kept in the repository's .cxt
+// folder: for each session the report and the conversation as they were sent
+// and a log of the uploads. Keeping them never stops the run: a failure is
+// said here and the next run tries again.
+type SegmentPushLocalRecords struct {
+	// Kept counts the sessions whose record is up to date after this run.
+	Kept int `json:"kept"`
+	// NotKept says why a record was not written.
+	NotKept string `json:"not_kept,omitempty"`
 }
 
 // SegmentPushBranches says what a run did about branch IDs. They are handled

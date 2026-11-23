@@ -13,7 +13,8 @@ type SegmentReporter interface {
 }
 
 // SegmentUploader computes the same report and uploads one report per session
-// to the repository's server. It writes nothing on this computer.
+// to the repository's server. On this computer it writes branch IDs into
+// Git's configuration and, where cxt is set up, a copy of what it sent.
 type SegmentUploader interface {
 	PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
 }
@@ -24,4 +25,13 @@ type SegmentUploader interface {
 // since its last run.
 type SegmentCollector interface {
 	CollectSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
+}
+
+// SegmentCare is what a person, or the AI working for them, uses when the
+// sessions on the server and on this computer do not agree: commands that
+// find what is wrong and commands that put it right.
+type SegmentCare interface {
+	// UploadLog lists what is kept on this computer about the uploads of
+	// every session, or of the one session key names.
+	UploadLog(ctx context.Context, cwd string, key *domain.SessionUploadKey) ([]domain.SessionUploadListing, error)
 }

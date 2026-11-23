@@ -88,21 +88,26 @@ func run(args []string) error {
 	if args[1] == "segments" {
 		// Reading session records needs no store or provider adapter, so this
 		// path builds neither. The report itself cannot write on this
-		// computer; push adds the repository's server and writes only branch
-		// IDs into Git's own branch configuration.
+		// computer; push adds the repository's server, writes branch IDs into
+		// Git's own branch configuration and keeps a copy of what it sent
+		// under .cxt/sessions.
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if slices.Contains(args[2:], "push") {
+		if positionals := segmentPositionals(args[2:]); len(positionals) > 0 && positionals[0] == "push" {
 			// The same readers plus the repository's server: still no local store.
 			uploader, err := newSegmentUploader(loadConfig(), "")
 			if err != nil {
 				return err
 			}
 			return delivcli.RunSegmentsPush(ctx, uploader, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+		}
+		if positionals := segmentPositionals(args[2:]); len(positionals) > 0 && positionals[0] == "log" {
+			// What .cxt keeps is read from this computer alone.
+			return delivcli.RunSegmentsLog(ctx, newSegmentCare(), cwd, positionals[1:], slices.Contains(args[2:], "--json"), os.Stdout)
 		}
 		reporter, err := newSegmentReporter("")
 		if err != nil {
@@ -475,6 +480,7 @@ func buildContainer(cfg config) container {
 	// The session report collector a hook wakes. A hook is never what it
 	// reads: it reads what the tools and Git recorded, whatever woke it.
 	if collector, files, err := newSegmentCollector(cfg); err == nil {
+		clictr.SegmentCare = newSegmentCare()
 		clictr.SegmentCollector = collector
 		clictr.WithSegmentCollectorLock = files.WithCollectorLock
 		clictr.SegmentCollectorState = files.LoadCollectorState

@@ -12,8 +12,9 @@ import (
 )
 
 // SegmentUploadService uploads the report SegmentReportService computes, one
-// report per session. Like the report it reads everything again on each call
-// and keeps nothing on this computer.
+// report per session. Like the report it reads everything again on each call.
+// What it writes on this computer is said by its options: branch IDs in Git's
+// configuration, the collector's memory, and a copy of what it sent.
 type SegmentUploadService struct {
 	reports *SegmentReportService
 	remote  outbound.AnchoredSessionRemote
@@ -31,6 +32,9 @@ type SegmentUploadService struct {
 	// summaryRemote and summarizer are set together by WithSummaries.
 	summaryRemote outbound.AnchoredSummaryRemote
 	summarizer    outbound.SessionSummarizer
+	// uploadRecords and clock are set by WithUploadRecords.
+	uploadRecords outbound.SessionUploadRecords
+	clock         func() time.Time
 	// state, now and contentEpoch are set together by WithCollectorState.
 	state        outbound.CollectorStateStore
 	now          func() time.Time
@@ -65,6 +69,14 @@ func (s *SegmentUploadService) WithSummaries(remote outbound.AnchoredSummaryRemo
 // computer.
 func (s *SegmentUploadService) WithBranchIDs(store outbound.BranchIDStore, remote outbound.BranchLedgerRemote, newID func() (string, error)) *SegmentUploadService {
 	s.branchIDs, s.branchRemote, s.newBranchID = store, remote, newID
+	return s
+}
+
+// WithUploadRecords also keeps, in the repository's .cxt folder, a copy of
+// what is sent for each session and a log of the uploads. The copies are a
+// record to compare the server with; no run reads them.
+func (s *SegmentUploadService) WithUploadRecords(records outbound.SessionUploadRecords, clock func() time.Time) *SegmentUploadService {
+	s.uploadRecords, s.clock = records, clock
 	return s
 }
 
@@ -395,6 +407,26 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		}
 		if auto != nil {
 			auto.state.Sessions[key] = remembered
+		}
+		if s.uploadRecords != nil && s.clock != nil {
+			entry := domain.SessionUploadLogEntry{
+				At: s.clock().UTC().Format(time.RFC3339Nano), Automatic: auto != nil,
+				Report: session.State, Revision: session.Revision, ReportHash: domain.Fingerprint(upload.Body), Reason: session.Reason,
+				Content: session.Content, ContentReason: session.ContentReason, Summaries: session.Summaries, SummaryReason: session.SummaryReason,
+			}
+			if content := upload.Body.Content; content != nil {
+				entry.Doc, entry.Events = content.Doc, content.Events
+			}
+			if result.LocalRecords == nil {
+				result.LocalRecords = &domain.SegmentPushLocalRecords{}
+			}
+			if err := s.uploadRecords.KeepSessionUpload(context.WithoutCancel(ctx), cwd, upload, conversation, entry); err != nil {
+				if result.LocalRecords.NotKept == "" {
+					result.LocalRecords.NotKept = err.Error()
+				}
+			} else {
+				result.LocalRecords.Kept++
+			}
 		}
 		result.Sessions = append(result.Sessions, session)
 	}

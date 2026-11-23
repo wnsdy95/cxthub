@@ -98,7 +98,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", minArgs: 1, maxArgs: 2, flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
 	"sync":      {usage: "cxt sync status [--json] | cxt sync pause-history | cxt sync resume-history", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
-	"segments":  {usage: "cxt segments [push] [--json]", maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
+	"segments":  {usage: "cxt segments [push] [--json] | cxt segments log [claude|codex <session>] [--json]", maxArgs: 3, flags: commandFlags(nil, []string{"--json"})},
 	"status":    {usage: "cxt status [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"diff":      {usage: "cxt diff [--staged] [--json]", flags: commandFlags(nil, []string{"--staged", "--json"})},
 	"reflog":    {usage: "cxt reflog"},
@@ -387,7 +387,15 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 	case "hooks":
 		valid = sub == "install" || sub == "uninstall"
 	case "segments":
-		valid = sub == "" || sub == "push"
+		switch sub {
+		case "", "push":
+			valid = len(pos) <= 1
+		case "log":
+			// Every session, or one named by its tool and identifier.
+			valid = len(pos) == 1 || (len(pos) == 3 && segmentSessionKeyValid(pos[1], pos[2]))
+		default:
+			valid = false
+		}
 		if sub == "push" {
 			// It uploads, so it is not a read-only invocation, although it
 			// writes nothing on this computer.
@@ -567,4 +575,10 @@ func providerPassthroughArgs(args []string) []string {
 		return args[1:]
 	}
 	return args
+}
+
+// segmentSessionKeyValid reports whether a tool and a session identifier name
+// a session the way the server and the .cxt folder key it.
+func segmentSessionKeyValid(provider, session string) bool {
+	return (provider == string(domain.ProviderClaude) || provider == string(domain.ProviderCodex)) && domain.ValidAnchoredSessionID(session)
 }

@@ -1334,10 +1334,10 @@ cxt segments push [--json]
 Computes the same report and uploads it to the repository's CXTHub server, one
 report per session, together with the conversation of each session's own
 records. It needs a connected remote and a login, and repository member access.
-It does not change capture, synchronization or any hook: snapshots, context
-branches and what teammates see stay exactly as they were. The one thing it
-writes on this computer is a branch ID in Git's own configuration of each
-branch, described below.
+It does not change capture, synchronization or any hook: snapshots and context
+branches stay exactly as they were. On this computer it writes two things,
+both described below: a branch ID in Git's own configuration of each branch,
+and, where cxt is set up, a copy of what it sent under `.cxt/sessions`.
 
 What is uploaded for a session:
 
@@ -1516,12 +1516,58 @@ uploaded with no session.
 `refused`, `content_not_uploaded`, `sessions`, `unread`,
 `agent_calls_without_sender` and `branches` (`with_id`, `assigned`,
 `on_origin`, `registered`, and `not_assigned` or `not_registered` with the
-reason when a step did not happen). Each session carries `content` (`stored`, `none`
-or `not-uploaded`) and, for the last, `content_reason`.
+reason when a step did not happen) and `local_records`. Each session carries
+`content` (`stored`, `none` or `not-uploaded`) and, for the last,
+`content_reason`.
 
 Every run reads all records again and rebuilds every session's document to
 know its identity, which can take a while on a computer with many long
 sessions, even when the server then needs nothing sent.
+
+Copies on this computer. Where cxt is set up in the repository, every upload
+keeps what it sent for a session in the repository's `.cxt` folder, which Git
+ignores:
+
+```text
+.cxt/sessions/<tool>/<session id>/report.json           the report as it was last sent and taken
+.cxt/sessions/<tool>/<session id>/conversation.json.gz  the conversation document as it was last sent
+.cxt/sessions/<tool>/<session id>/log.jsonl             one line per run that sent something or failed
+```
+
+- They are a record, kept so that the server and this computer can be compared
+  when they do not agree, and so that what was sent can be sent again after
+  the tool removed its own files. No upload is computed from them: every run
+  still reads the tools' records and Git.
+- The conversation copy is the masked document that was uploaded, not the
+  tool's file. It is written again only when the document changed. Together
+  the copies take about as much disk as the conversations uploaded from this
+  computer, compressed.
+- A log line says when the run was, whether a person asked for it or the
+  collector ran, what the server did with the report (`stored` with its
+  revision, `unchanged`, or `refused` with the reason), which document the
+  report names for the conversation, how many summaries were stored, and why
+  something was not. A run in which nothing was sent and nothing failed leaves
+  no line, and a failure that repeats is logged once.
+- The files are readable by you alone. A copy that cannot be written does not
+  stop the upload: the result says so under `local_records` (`kept`,
+  `not_kept`) and the next run tries again. In a repository where cxt is not
+  set up, nothing is kept.
+
+### `cxt segments log`
+
+```text
+cxt segments log [--json]
+cxt segments log claude|codex <session id> [--json]
+```
+
+Shows what `.cxt/sessions` keeps, from this computer alone: every session with
+what its copies hold and its last log line, or one session with its whole log.
+It reads only and needs no server. `--json` prints one object with `version`
+and `sessions`; each session carries `report_kept`, `conversation_kept`,
+`segments`, `records`, `doc`, `events`, `report_hash`, `lines` and `log`.
+`report_hash` is the fingerprint of the report copy; the last `stored` or
+`unchanged` line of the log carries the same value when the copy is the report
+the server last took.
 
 ### Automatic upload
 
@@ -1564,6 +1610,10 @@ What it keeps on this computer:
   made of session files and thread databases that have not changed since, so
   that a run reads again only what changed. It holds identifiers, times,
   folders, branch names and commit-number candidates, and no conversation text.
+- in the repository's `.cxt` folder (`.cxt/sessions`): the same copies
+  `cxt segments push` keeps, each log line marked as automatic. A run that
+  did not read a session's conversation back, because nothing of it changed,
+  leaves the conversation copy as it is.
   It can be deleted at any time.
 
 `cxt segments` and `cxt segments push` use neither: they read everything again

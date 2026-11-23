@@ -236,9 +236,23 @@ func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 		if branches.NotRegistered != "" {
 			fmt.Fprintf(w, "  IDs were not registered in this run: %s\n", branches.NotRegistered)
 		}
-		fmt.Fprintln(w, "Only you can read these reports on the server. On this computer only branch IDs in Git's branch configuration were written.")
-	} else {
-		fmt.Fprintln(w, "Only you can read these reports on the server. Nothing was written on this computer.")
+	}
+	if records := result.LocalRecords; records != nil {
+		fmt.Fprintf(w, "Copies: what was sent for %d sessions is kept under .cxt/sessions, each with a log of its uploads\n", records.Kept)
+		if records.NotKept != "" {
+			fmt.Fprintf(w, "  a copy was not written in this run: %s\n", records.NotKept)
+		}
+	}
+	fmt.Fprintln(w, "On the server a report is read by you alone until what it explains is pushed; a pushed part is read by whoever may view the repository.")
+	switch {
+	case result.Branches != nil && result.LocalRecords != nil:
+		fmt.Fprintln(w, "On this computer, branch IDs were written into Git's branch configuration and the copies into .cxt/sessions.")
+	case result.Branches != nil:
+		fmt.Fprintln(w, "On this computer only branch IDs in Git's branch configuration were written.")
+	case result.LocalRecords != nil:
+		fmt.Fprintln(w, "On this computer only the copies in .cxt/sessions were written.")
+	default:
+		fmt.Fprintln(w, "Nothing was written on this computer.")
 	}
 	if result.Refused > 0 {
 		fmt.Fprintf(w, "\nRefused (%d) — these sessions are not on the server\n", result.Refused)
@@ -269,6 +283,98 @@ func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 	if result.AgentCallsWithoutSender > 0 {
 		fmt.Fprintf(w, "\n%d agent calls were recorded by a session outside this repository and were not uploaded\n", result.AgentCallsWithoutSender)
 	}
+}
+
+// RunSegmentsLog prints what the repository's .cxt folder keeps about the
+// uploads: every session with its last log line, or, when a tool and a
+// session identifier are given, that session's whole log. It reads only.
+func RunSegmentsLog(ctx context.Context, care inbound.SegmentCare, cwd string, session []string, asJSON bool, w io.Writer) error {
+	if care == nil {
+		return fmt.Errorf("upload records unavailable")
+	}
+	var key *domain.SessionUploadKey
+	if len(session) == 2 {
+		key = &domain.SessionUploadKey{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}
+	}
+	listings, err := care.UploadLog(ctx, cwd, key)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		if listings == nil {
+			listings = []domain.SessionUploadListing{}
+		}
+		return json.NewEncoder(w).Encode(struct {
+			Version  int                           `json:"version"`
+			Sessions []domain.SessionUploadListing `json:"sessions"`
+		}{1, listings})
+	}
+	if key == nil {
+		fmt.Fprintf(w, "Upload records kept under .cxt/sessions (%d sessions)\n", len(listings))
+		if len(listings) == 0 {
+			fmt.Fprintln(w, "  none yet: cxt segments push, or the collector, writes them when it uploads")
+		}
+	}
+	for _, listing := range listings {
+		fmt.Fprintf(w, "%s %s\n", listing.Provider, listing.SessionID)
+		if listing.ReportKept {
+			fmt.Fprintf(w, "  report copy        %d segments, %d records\n", listing.Segments, listing.Records)
+		} else {
+			fmt.Fprintln(w, "  report copy        none")
+		}
+		switch {
+		case listing.ConversationKept && listing.Doc != "":
+			fmt.Fprintf(w, "  conversation copy  kept; the report names %d events in %s\n", listing.Events, listing.Doc)
+		case listing.ConversationKept:
+			fmt.Fprintln(w, "  conversation copy  kept; the report names no conversation")
+		default:
+			fmt.Fprintln(w, "  conversation copy  none")
+		}
+		if key == nil && listing.Lines > len(listing.Log) {
+			fmt.Fprintf(w, "  last of %d log lines:\n", listing.Lines)
+		}
+		for _, entry := range listing.Log {
+			fmt.Fprintf(w, "  %s  %s\n", entry.At, segmentLogLine(entry))
+		}
+	}
+	return nil
+}
+
+// segmentLogLine says one log entry in words.
+func segmentLogLine(entry domain.SessionUploadLogEntry) string {
+	run := "requested"
+	if entry.Automatic {
+		run = "automatic"
+	}
+	if entry.Action != "" {
+		line := entry.Action
+		if entry.Reason != "" {
+			line += ": " + entry.Reason
+		}
+		return line
+	}
+	parts := []string{}
+	switch {
+	case entry.Report == domain.SegmentPushRefused:
+		parts = append(parts, "report refused: "+entry.Reason)
+	case entry.Report != "" && entry.Revision > 0:
+		parts = append(parts, fmt.Sprintf("report %s (revision %d)", entry.Report, entry.Revision))
+	case entry.Report != "":
+		parts = append(parts, "report "+string(entry.Report))
+	}
+	switch entry.Content {
+	case domain.SegmentContentStored:
+		parts = append(parts, fmt.Sprintf("conversation of %d events", entry.Events))
+	case domain.SegmentContentNotUploaded:
+		parts = append(parts, "conversation not uploaded: "+entry.ContentReason)
+	}
+	if entry.Summaries > 0 {
+		parts = append(parts, fmt.Sprintf("%d summaries stored", entry.Summaries))
+	}
+	if entry.SummaryReason != "" {
+		parts = append(parts, "a summary was not stored: "+entry.SummaryReason)
+	}
+	return run + "  " + strings.Join(parts, " · ")
 }
 
 // segmentCollectorInterval is the least time between the starts of two

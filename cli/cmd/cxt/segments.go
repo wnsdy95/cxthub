@@ -13,6 +13,7 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/sessionrecords"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/app"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
@@ -78,8 +79,10 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 		domain.ProviderClaude: memory.NewClaudeMemorySource(),
 		domain.ProviderCodex:  memory.NewCodexMemorySource(),
 	}, memory.NewRuleDistiller(), capture.ScrubNativeMemory))
-	// Branch IDs live in Git's own branch configuration. This is the one
-	// thing an upload writes on this computer.
+	// A copy of what is sent for each session, and a log of the uploads, is
+	// kept in the repository's .cxt folder, where cxt is set up.
+	service.WithUploadRecords(storage.NewSessionUploadFiles(gitctx.ContextRoot), time.Now)
+	// Branch IDs live in Git's own branch configuration.
 	// The server is told the names of this computer's worktrees, never their
 	// paths, so that a worktree no session worked in is still listed.
 	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID).WithWorktreeList(remote), nil
@@ -111,4 +114,22 @@ func newSegmentCollector(cfg config) (inbound.SegmentCollector, *gitctx.Collecto
 		return policy + "\n" + identity
 	}
 	return service.WithCollectorState(files, time.Now, epoch), files, nil
+}
+
+// newSegmentCare wires what reads the records kept in the repository's .cxt
+// folder. It needs no server and no reader of the tools' records.
+func newSegmentCare() *app.SegmentCareService {
+	return app.NewSegmentCareService(storage.NewSessionUploadFiles(gitctx.ContextRoot))
+}
+
+// segmentPositionals returns the arguments of cxt segments that are not
+// flags. They were validated before this path is reached.
+func segmentPositionals(args []string) []string {
+	var out []string
+	for _, arg := range args {
+		if len(arg) > 0 && arg[0] != '-' {
+			out = append(out, arg)
+		}
+	}
+	return out
 }
