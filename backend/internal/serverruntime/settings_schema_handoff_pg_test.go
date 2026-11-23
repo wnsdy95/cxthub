@@ -30,7 +30,7 @@ import (
 )
 
 const settingsSchemaHandoffPreviousCatalog = "5ccf1e9041446edf410205a978616aad20acbd3e07dac491fe80185d3a561994"
-const settingsSchemaHandoffCurrentCatalog = "794ab6a28da0749f3ba582a0a0e567a23608ef1f279096f7c1a03efaacbcc74a"
+const settingsSchemaHandoffCurrentCatalog = "661dbe47cec87628d4bec85c68f6c19ed9ba7edb1fe8e83d11d32b43543a1443"
 const settingsSchemaHandoffPreviousExecutableSHA256 = "3146224d654cfa753b04d82e42f2692815fb78eb6a457617d41d47a96a57a91a"
 
 type schemaHandoffPredecessor struct {
@@ -88,7 +88,7 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	if err != nil {
 		test.Fatal("resolve the complete current released SQL bundle", err)
 	}
-	currentBundle := settingsSchemaHandoffBundle(test, currentSource, 168, settingsSchemaHandoffCurrentCatalog)
+	currentBundle := settingsSchemaHandoffBundle(test, currentSource, 169, settingsSchemaHandoffCurrentCatalog)
 	entries, err := os.ReadDir(previousBundle)
 	if err != nil {
 		test.Fatal("read the copied historical bundle", err)
@@ -222,7 +222,7 @@ func runSettingsSchemaHandoff(test *testing.T, predecessor schemaHandoffPredeces
 	}
 	assertCurrentRefused(nil)
 	preserved := fixture.settingsSchemaHandoffPreservedData(test, ctx, predecessor.count)
-	if applied, err := fixture.storage.ApplyPublicMigrations(ctx, current.migrations); err != nil || applied != 168-predecessor.count {
+	if applied, err := fixture.storage.ApplyPublicMigrations(ctx, current.migrations); err != nil || applied != 169-predecessor.count {
 		test.Fatal("only an explicit operator application of the complete current bundle may apply the exact missing migrations", applied, err)
 	}
 	history := fixture.releaseProtocolCatalog(test, ctx)
@@ -356,8 +356,8 @@ func settingsSchemaHandoffBundle(test *testing.T, source string, count int, expe
 		wantLatest = "0152_settings_codex.sql"
 	} else if count == 153 {
 		wantLatest = "0153_blob_representation_quota.sql"
-	} else if count == 168 {
-		wantLatest = "0168_anchored_session_removals.sql"
+	} else if count == 169 {
+		wantLatest = "0169_drop_capture_tables.sql"
 	}
 	if copied != count || latest != wantLatest || hex.EncodeToString(catalog.Sum(nil)) != expected {
 		test.Fatal("the selected SQL bundle is not the complete exact historical/current released catalog", copied, latest)

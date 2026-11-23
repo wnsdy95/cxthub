@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 168-file SQL bundle, from
-`0001_init.sql` through `0168_anchored_session_removals.sql`. Its catalog
+This source release requires the complete 169-file SQL bundle, from
+`0001_init.sql` through `0169_drop_capture_tables.sql`. Its catalog
 digest is
-`794ab6a28da0749f3ba582a0a0e567a23608ef1f279096f7c1a03efaacbcc74a`, matching
+`661dbe47cec87628d4bec85c68f6c19ed9ba7edb1fe8e83d11d32b43543a1443`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current
@@ -70,10 +70,21 @@ still applies: operator application and verification must precede verify-only
 runtime startup. A current binary rejects an incomplete or different catalog,
 even if that catalog was valid for an earlier release.
 
+**`0169_drop_capture_tables.sql` destroys data.** It drops 66 tables, one view
+and 42 functions of the earlier capture approach: the memory digests of
+captures and what was derived from captures (prepared documents, graph and
+pending projections, prepared memory, Git scans, PR promotion jobs). It cannot
+be undone from the database. Before applying it, run `cxt push` on every
+computer whose sessions should be on the server, and take the backup the
+sequence below requires. The captures themselves (`snapshots`, `refs`,
+`context_history` and the tables around them) stay: functions that stay still
+name them. Nothing is dropped with `CASCADE`, so the migration fails instead of
+removing an object that something which stays still depends on.
+
 There is no automatic destructive schema downgrade. Do not remove Codex
 settings, edit migration receipts, rewrite historical SQL, or point an old
 binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with the actual database catalog (168 after this release's upgrade),
+compatible with the actual database catalog (169 after this release's upgrade),
 or a separately verified pre-upgrade backup recovery that explicitly accounts
 for writes after the backup. Local fixture tests are not evidence that a
 production backup or recovery has been tested.
@@ -91,7 +102,7 @@ leave the previous constraint intact.
 The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
 That bundle belongs only to the corresponding historical artifacts, not the
-current 168-file release. Current verify-only startup still checks the public
+current 169-file release. Current verify-only startup still checks the public
 table and its validated, local, exact kind constraint. A receipt without the
 expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
 is not a compatible schema. Verification does not repair these conditions.
