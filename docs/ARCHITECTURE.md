@@ -1,143 +1,196 @@
 # Architecture and enforced boundaries
 
-CXTHub stores shared repository facts in the cloud backend. The CLI's `.cxt`
-store is a local replica, recovery outbox and worktree selection cache. It is not
-the authoritative database for Web or remote MCP queries.
+CXTHub keeps coding-agent sessions with the Git commits they produced. The
+`cxt` CLI reads what the agent tools and Git recorded on a member's computer,
+cuts each session at its commits, and uploads the result. The server stores
+it, decides who may read which part, and serves the web application and the
+remote MCP tools.
+
+The server is the store that Web and MCP read. A repository's `.cxt` folder
+holds the CLI's connection settings, the mark that cxt may act there, and
+copies of what was uploaded (`.cxt/sessions`). Those copies are a record of
+what was sent, not a source: every upload is computed again from the tools'
+records and Git.
+
+## What is stored
+
+| Thing | What it is |
+|---|---|
+| Session report | One per (repository, tool, session identifier). It holds the session's segments, the commits each segment ends at with the rule that linked them, and the uncommitted part with the worktrees and branches it passed through. Uploading again replaces the report as a whole. It belongs to the account that first reported the session. |
+| Conversation document | One document per session, holding the session's own records after masking. It is stored through the chunked document path and read through the read index stored with it. |
+| Summary | What a CLI wrote of a session at one commit a segment of that session ends at. |
+| Open ranges | Which parts of a session are readable by others. What was opened stays open. |
+| Branch lifetimes | One record per lifetime of a branch name on the remote, with the branch IDs joined to it, so that two uses of one name are told apart. |
+| Remote Git cache | What the server read from the Git hosting provider: commits, branch heads and pull requests. Nothing in it comes from a client. |
+| Notes and worktree lists | Manual notes about a commit, a branch or a worktree, and each member's list of worktrees by name. |
+| Archive marks and removals | An archive mark hides a session from lists, the search and the summaries. A removal deletes a session and keeps its report from being stored again until it is allowed again. |
+
+A session is named by its tool and its identifier, a part of it by its segment
+number, and a commit by its number. The hash of a session's conversation
+document is shown to nobody but the uploader, and the MCP tools neither take
+nor answer one.
+
+## Who reads what
+
+A report is read in full by the account that uploaded it. The server opens it
+part by part to whoever may view the repository, from its own read of the
+hosting provider and never from what a CLI says:
+
+- a segment, when one of its commits, or a copy with the same author time,
+  author and subject, is on the remote;
+- the uncommitted part, up to the turns that had begun when a branch it passed
+  through was seen pushed;
+- a spawned session, when the point of its parent that spawned it is open.
+
+The read routes of sessions ask for the viewer role, which a public repository
+gives to a visitor who is not signed in. Storing a report, writing a note,
+reporting worktrees and asking for a provider read need a member. Archiving
+and removing a session are for its uploader and for whoever manages the
+repository. REST and MCP answer through the same application rule, so a part
+that is not open is not found by either.
 
 ## Server deployment boundary
 
 Production uses Vercel for the frontend, independent Render `cxtd` API and
 `cxt-mcp` services, and shared PostgreSQL. `internal/serverruntime` initializes
-common store/authentication/lifecycle dependencies without starting workers.
-`internal/mcpserver` composes only remote MCP/OAuth and query ports. API keeps
-all GitHub, ingestion, promotion, notification and maintenance workers. A
-transitive import test prevents recombining these executable dependencies.
-Both services reuse application rules and PostgreSQL transaction contracts;
+common store, authentication and lifecycle dependencies. `internal/mcpserver`
+composes only the remote MCP and OAuth routes and the read side of sessions; it
+holds no command service and starts no workers. Tests in
+`internal/architecture` keep these executable dependencies apart. Both
+services reuse the application rules and the PostgreSQL transaction contracts;
 separation does not introduce a second authorization model or copied data.
 See [deployment](../deploy/RENDER.md) for routing and rollout order.
 
+With the default `embedded` execution profile the API process starts these
+workers:
+
+| Worker | Work |
+|---|---|
+| Remote Git | Reads commits, branch heads and pull requests from the hosting provider for every repository that has an origin, and then runs the rule that opens sessions |
+| GitHub | GitHub App work, such as applying deliveries; started only where a GitHub App is configured |
+| Document finalization | Verifies an uploaded document and publishes it |
+| Notifications | Delivers queued webhook notifications |
+| Invitation e-mail | Sends queued invitation e-mail |
+| Maintenance (two workers) | Runtime and storage housekeeping |
+
+A GitHub push delivery records which branch name is alive or gone in the
+branch ledger and asks for a read of the remote. A pull-request delivery asks
+for that read. Applying a delivery reads nothing from GitHub; the remote Git
+worker does the reading.
+
 ## Ownership
 
-- **Domain:** immutable history/evidence values, branch identities, applicability,
-  Join planning and secrets policy. Historical completion and current effective
-  inclusion are separate facts; changed edges do not erase an acknowledged PR.
-- **Application:** command/query orchestration through ports, authorization,
-  transaction scopes, revision checks and publication order. Storage failures do
-  not authorize a ref rewind, guessed source binding or loss of retry work.
-- **Adapters:** PostgreSQL/FS, Git and provider file operations, HTTP/MCP/hook
-  protocol mapping. Composition roots choose concrete adapters. Public adapters
-  consume application contracts rather than reconstructing domain decisions.
-- **Web:** server query results plus local selection, folding, scroll, hover and
-  graph coordinates. Hiding a node is not deleting an event or revoking merge
-  completion. `EventStream` renders transcript rows independently of the page
-  that fetches them; formatting helpers do not depend on pages.
+- **Domain:** the rules that cut a session at its commits and link it to them,
+  the validation of a report's shape, the rule that opens parts of a session,
+  branch lifetimes, the diagnosis `cxt doctor` prints, and secrets policy. The
+  report builder and the diagnosis are pure functions over the records that
+  were read.
+- **Application:** command and query orchestration through ports,
+  authorization, transaction scopes and publication order.
+- **Adapters:** PostgreSQL and file storage, Git and provider file reading,
+  HTTP, MCP and hook protocol mapping. Composition roots choose concrete
+  adapters. Public adapters consume application contracts rather than
+  reconstructing domain decisions.
+- **Web:** server query results plus local selection, folding, scroll and
+  graph layout. Hiding a row is not deleting anything on the server.
 
-`docs/CONTEXT_HISTORY.md` defines the history, memory, effective-state and active
-session notice contracts. These boundaries are incremental safeguards, not a
-claim that directory names alone prove domain correctness.
+These boundaries are incremental safeguards, not a claim that directory names
+alone prove domain correctness.
+
+## CLI: reading, rules, upload
+
+Reading and rules are separate in the CLI. The readers (`sessionrecords` for
+the tools' session records, `gitctx` for Git) make tool-neutral records, and
+the report is built from those records by one function without side effects.
+The read-only command `cxt segments` constructs no store and writes nothing.
+
+- **Claude Code** sessions are read from the session files the tool keeps,
+  including the sub-session files of each session.
+- **Codex** threads are read from Codex's own databases through the `sqlite3`
+  program, opened read-only.
+- **Git** is read for every worktree, the HEAD log of each one, and the commit
+  objects.
+
+The upload (`cxt push`, and the collector that hooks wake) sends one report
+per session, the conversation document, the summaries, the worktree list and
+the branch IDs. A hook is never what is read: Git hooks and agent hooks only
+wake a detached collector, one per repository, which reads the same records by
+the same rules and sends only what changed. A hook cannot stop a Git command
+or an agent.
+
+Conversations are masked before they leave the computer: first the values
+listed in `.cxtsecrets`, then the pattern scrub of the configured tier.
+
+The CLI and backend are separate Go modules with no shared package. A parity
+test (`go test -tags monorepo ./internal/domain` in `cli/`) keeps the files
+both modules carry for the conversation manifest byte for byte identical.
+
+## Conversation documents
+
+The conversation of a session is one document. The upload negotiates which
+chunks the server lacks (`POST /push/negotiate`), sends only those
+(`POST /push/chunks`), and submits the document for finalization
+(`POST /push/doc-jobs`, with `GET /push/doc-jobs/{jobID}` for its state). The
+finalization worker verifies the whole document before it is published. A
+session that grew sends what was appended. `POST /push/objects` takes
+conversation documents; a batch that carries a capture is refused.
+
+A report names its document and, for every segment and for the uncommitted
+part, where the range starts in the document and how many events it holds. A
+report that names a document the repository does not hold is refused. When a
+report names another document than the one before, the earlier document is
+deleted when no other report uses it.
+
+Two document identities exist: the hash of the canonical document, and the
+manifest-root identity described in
+[conversation identity](CONVERSATION_IDENTITY.md) and
+[conversation storage](CONVERSATION_MEMORY_STORAGE.md).
 
 ## Production store requirements
 
-`cxtd` validates the required `ProductionStore` capability set before migrations,
-workers or HTTP startup when PostgreSQL is configured or required. One concrete
-store must provide transactions, repository access locks, revisions, durable jobs,
-lease fencing, outboxes, shared runtime/authentication state, immutable document
-publication, indexed reads and Git evidence. Missing capability is a startup
-error. PostgreSQL also has a build-time interface assertion.
+`cxtd` validates the required `ProductionStore` capability set before workers
+or HTTP start when PostgreSQL is configured or required. One concrete store
+must provide repository and identity transactions, repository access locks,
+revisions, durable document jobs, notifications, shared runtime and
+authentication state, storage accounting, verified document publication,
+indexed document reads, and every store of the session structure: reports,
+the branch ledger, notes, reported worktrees, the remote Git cache, open
+ranges, summaries and removals. A missing capability is a startup error.
+PostgreSQL also has a build-time interface assertion.
 
-FS remains an explicit development/test adapter and is not accepted as the cloud
-transaction boundary. Interface conformance is necessary but does not prove
-ACID: real PostgreSQL tests cover rollback, racing commands, authorization changes,
-revisions, leases and duplicate delivery against shared state.
+The file store remains an explicit development and test adapter and is not
+accepted as the cloud transaction boundary. Interface conformance is necessary
+but does not prove ACID: real PostgreSQL tests cover rollback, racing commands,
+authorization changes, leases and duplicate delivery against shared state. The
+[collaboration transaction contract](COLLABORATION_TRANSACTIONS.md) says what
+commits together.
 
-Context ref validation checks the repository protocol before deciding whether
-branch history is required. In protocol 1, branch writes still require durable
-identity evidence and validate it inside the graph transaction. Head, session
-and tag refs do not use that branch projection, so their protocol check does not
-load the full history or look up a branch identity. Unsupported protocol versions
-remain errors for every ref kind. This narrows only the protocol validation
-read set; authorization, journal recovery, object checks, compare-and-swap and
-publication still run in their existing command and storage boundaries.
-FS ref writes reject unreadable existing pointers instead of treating them as
-absent. After journal recovery, protocol-1 symbolic HEAD writes recheck their
-branch target under the repository lock; recovery cannot leave HEAD attached to
-a branch it just removed. Legacy unborn HEAD bootstrap remains supported.
+PostgreSQL processes verify the schema at startup and never apply migrations;
+see [database migration ownership](DATABASE_MIGRATIONS.md).
 
-Document finalization separates pure preparation from publication. The worker
-verifies current owned v2 chunks and retains an immutable segmented document;
-publication reuses those chunk boundaries instead of assembling and re-chunking
-the cumulative transcript. Its legacy whole-document identity still requires
-streaming all canonical bytes through the hash. V1 remains a compatibility path.
-The worker renews its durable lease while the PostgreSQL adapter prepares chunk
-references and read-index blocks from that verified document. Preparation acquires
-no database transaction and grants no ownership. A private prepared-publication
-handle then rechecks the current job version, lease and document hash inside the
-repository transaction. Chunk retention/integrity checks, selective search-row
-construction, quota accounting, ownership and the completion receipt still
-commit together. The lease is not renewed concurrently with the locked job row.
-An expired or replaced worker cannot publish its prepared result. This reduces
-CPU work under the repository lock; it does not remove database contention or
-make document publication cost-independent of document size.
+## Shared admission of heavy work
 
-Missing viewer range indexes use a separate derived-data queue, not document
-publication or a new graph event. PostgreSQL viewer requests register owned-root
-jobs and return bounded pending responses; the API worker verifies under shared
-bulk admission and atomically commits the index with its fenced completion
-receipt. Read-only/MCP contexts do not acquire this write path. Existing source
-content identities, refs and activity revisions stay unchanged. PostgreSQL viewer
-reads use compact v2 generation descriptors and authenticated selected metadata
-paths, not complete manifests. A trigger-controlled source version fences each
-generation's lifetime even when an older writer cannot see newly published rows;
-the source version is not a replacement for document identity or current access.
-The exact readiness,
-verification and retry contracts are in [conversation range reads](DOCUMENT_RANGE_READS.md).
+Heavy reads and uploads share one process-level admission gate with two
+classes, interactive and bulk (`app.AcquireResources`). The gate admits a
+bounded number of operations and queues a bounded number of callers. A caller
+that is not admitted in time gets `resource_overloaded` (HTTP 503 with a
+`Retry-After` header) instead of waiting without bound. The session search, the read of summaries along a
+branch and the read of a session's content enter as bulk reads.
 
-[Conversation chunks and memory versions](CONVERSATION_MEMORY_STORAGE.md)
-defines why memory recompression publishes a separate version without replacing
-conversation chunks. A manifest-root protocol that removes full-stream hashing
-is a separate compatibility change, not implied by this allocation improvement.
+## Web
 
-## CLI native capture and local retry work
+The repository page opens on the Sessions tab, which is also what an address
+without a tab shows. A list named "On Hold" inside that tab shows what of the
+reader's own sessions nobody else can read yet. The other tabs are
+Connections, Members and Settings. An address that still names the earlier
+`onhold` tab leads to the On Hold list, and one that names the earlier
+`context` tab leads to the Sessions tab.
 
-`SessionCapture` is injected into save/stash use cases. Its adapter owns native
-transcript access, masking and disposable incremental projection checkpoints.
-The full native prefix and masking policy are verified before reusing projected
-chunks; the content-addressed document is durable before a checkpoint is saved.
-The application publishes snapshots and refs only after successful capture.
-
-Native session materializers own their capture-baseline ledger record. Both
-Claude and Codex recovery output stays excluded from recapture until actual
-provider conversation grows; application code does not manipulate provider files.
-Session identifier validation is a domain value rule.
-
-`SyncOutbox` is injected into save/sync. Its adapter owns queue JSON, legacy-format
-reads, atomic file replacement and process locks. Application code owns ordered
-CAS graft retries, conflict handling and queue-before-snapshot order. No network
-request runs inside a queue lock. Promotion acknowledgements compare the exact
-sent value under lock, preserving concurrent replacements and unrelated writes.
-Corrupt queue bytes are retained and rejected. An output queue is not a distributed
-transaction: failed remote delivery is retried idempotently rather than described
-as exactly-once transport.
-
-## Local CLI reads and transport cleanup
-
-Local CLI history reads compare fresh complete snapshot/ref observations before
-projecting ancestry. `SnapshotCatalogReader` is an optional read port that omits
-the presentation sort; the application still canonicalizes and validates every
-record, including unreachable metadata. Adapters without it retain the ordinary
-`ListSnapshots` path. `FileStore` shares validation between the two paths and
-honors cancellation while scanning, without returning a partial catalog. Neither
-path caches mutable metadata, takes a mutation lock or repairs local state.
-Status retains its complete working-state fence, and diff revalidates after
-reading documents. Unchanged log/status/diff therefore still enumerate metadata
-2/4/6 times; eliminating a redundant sort is not a disk-scan reduction.
-
-The REST client drains unused successful acknowledgments to support HTTP/1
-connection reuse, bounded by 32 KiB and a 100 ms cleanup timer started after
-successful headers. The ordinary request deadline remains unchanged. A failed
-cleanup closes the response but does not turn an acknowledged write into a
-failure or retry. Responses with a consumed application payload retain their
-existing decoding/error contract.
+The tab draws the commit graph as the server read it from the hosting
+provider, with the segments that end at each commit, pull requests, branches,
+worktrees, notes, a search, a comparison of two commits and the list of
+archived sessions. The selection is part of the address. A conversation is
+read through the session routes, page by page.
 
 ## Continuous checks
 
@@ -148,86 +201,8 @@ existing decoding/error contract.
 - Web `npm run check:architecture` uses the TypeScript parser and module resolver,
   including aliases and barrel exports, to reject runtime dependency cycles.
   Explicit type-only edges are exempt; mixed and side-effect imports are checked.
-- API contracts, real browser E2E and provider/sync E2E remain required. Dependency
-  checks complement those regressions rather than replacing behavior verification.
-
-## Server-owned graph reads
-
-`domain.ProjectGraphState` decides publication tiers, branch identity, archived
-membership, retained-progress groups, On Hold clusters and supported birth/merge
-operations. It shares branch bindings and completion semantics with the existing
-context query used by REST and MCP. MCP does not need SVG layout metadata.
-
-`GetRepositoryView`, `GetPendingView` and `QueryGraphState` load metadata in one
-repository read transaction. PostgreSQL pins one MVCC generation across metadata,
-revision and projection. Pending responses carry the same classification contract
-but only current capture metadata; they omit branch memberships owned by the full
-view. Missing new inputs trigger one full browser refresh, not local inference.
-
-The bounded cross-request graph cache requires a read-only transaction and keys
-on the complete metadata fingerprint, revisions, position and Git origin.
-Staging metadata can change before its publication revision advances; a
-revision-only cache could serve stale inputs on one replica. Cache hits use
-interactive admission. In the uncommitted cold-read prototype, builds that cannot
-upgrade immediately unwind the
-read transaction and outer request permit before joining the bounded bulk FIFO
-once. The HTTP retry rechecks authentication and repository access, then reloads
-all inputs in a fresh snapshot. Its original deadline and final response admission
-remain in force. Caller-owned permits/transactions are never surrendered by a
-nested query. Per-read ancestry bitsets have an 8 MiB / 4,096-entry cache limit;
-exhaustion changes cost, never correctness. Documents are not loaded for graph
-classification.
-
-The uncommitted implementation is being validated under the approved
-[architecture design](INCREMENTAL_READ_PUBLICATION_DESIGN.md).
-The next changes and their acceptance gates are tracked in
-[incremental publication and bounded reads](INCREMENTAL_READ_PUBLICATION_PLAN.md).
-The in-process cache is not yet a durable incrementally maintained read model.
-
-The HTTP graph adapter uses `indexed-v1`: repeated ID sets reference one response
-local dictionary. These indices are neither persisted identities nor business
-state. Web validates and decodes the transport, resolves IDs, and then handles
-folding, selection and geometry. `/view`, `/pending-view` and `/graph-state` support
-gzip inside their viewer authorization guard; SSE is not compressed by this
-adapter. Deploy the backend contract before the corresponding frontend. A missing
-or unsupported contract fails explicitly rather than silently restoring old
-frontend policy rules.
-
-Browser fixtures invoke the actual Go domain projection and wire encoder. The
-same tests cover live capture changes with PR history, superseded grafts,
-renames/name reuse, read-only position selection and invalid-response recovery.
-A rejected refresh preserves the last coherent conversation; an invalid first
-read shows an error and does not draw a guessed graph.
-
-Session archiving uses a separate repository-wide `SessionArchiveStore` port.
-The application owns authorization and transactions; a domain projection groups
-provider/session snapshots and resolves evidence-backed provenance. The Web
-receives explicit archived snapshot IDs, then filters visibility only after the
-complete branch graph projection. Archiving never changes publication tiers,
-branch refs, PR completion, memory applicability or MCP/CLI context selection.
-See [session archives](LIVE_CAPTURE.md#session-archives).
-
-### First conversation without the full graph
-
-`GET /repos/{repoID}/bootstrap` selects the current branch ref, its snapshot and
-optional first parent. A session archive is checked by its stable key, including
-the legacy snapshot-key fallback. PostgreSQL reads these fields and the repository
-revision in one pinned snapshot, rechecking viewer authorization after admission.
-The endpoint neither scans snapshot history nor calculates PR inclusion.
-
-This bounded path requires context protocol 1 and snapshot-capable storage.
-Unsupported stores return an explicit `repository_bootstrap_unavailable` 501;
-only that unsupported contract permits the legacy graph-based selection path.
-Permission, integrity and overload failures do not silently select another head.
-
-The browser starts the first conversation page before the heavy graph and On Hold
-reads. A graph failure does not prevent a separately authorized conversation from
-being read. Bootstrap metadata never patches a differently revised graph; user
-selection and archived-session visibility remain separate concerns. The existing
-change stream still carries revisions rather than conversation bodies.
-
-The `on-hold-v1` HTTP response includes branch refs for filters, not internal
-retention tags. Classification and stored projection parts retain the full inputs.
-This reduces response size without changing publication or archive semantics.
-The complete graph response is still a separate large read; bootstrap does not
-claim to make that response bounded or activate durable projections automatically.
+- `scripts/e2e.sh` and `scripts/e2e-sync.sh` run the real `cxt` and `cxtd`
+  binaries; the second runs the chain a Git hook starts, on the file store or,
+  with `CXT_E2E_DSN`, on PostgreSQL.
+- API contracts and real browser E2E remain required. Dependency checks
+  complement those regressions rather than replacing behavior verification.

@@ -411,8 +411,7 @@ branch.<name>.cxtBranchIdIssuedFor   the name the ID was issued for
   branch drops them, a branch made again under the same name starts without an
   ID, and every worktree of the repository sees the same value. The ID only
   tells two uses of one name apart. It proves nothing about when or how the
-  branch was made, and it is not the context branch identity cxt uses
-  elsewhere.
+  branch was made.
 - `git branch -c` copies the settings. When two branches hold one ID, every
   holder whose name is not the name the ID was issued for gets a new ID. A
   branch that was renamed keeps the old issued-for name, so if it is copied
@@ -642,7 +641,7 @@ prints what starts it (`claude --resume …` or `codex resume …`).
   tool gets it rebuilt in its own format, which loses what only the first tool
   can read, such as locked reasoning.
 - A conversation larger than the tool takes at the start of a session is cut to
-  its newest whole turns, by the limit `cxt load` uses. The summary the session
+  its newest whole turns. The summary the session
   has at the commit is put first in place of what was left out; without a
   summary there, a line says how many events were left out. The result names
   which of the two it was.

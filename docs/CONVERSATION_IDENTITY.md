@@ -1,19 +1,18 @@
 # Conversation identity contract
 
-Root reads, publication, negotiation and capture use an explicit tagged
-contract. New root publication remains opt-in: it requires a compatible
-released binary, the server admission setting and the repository requirement.
-Existing archives retain their canonical-CIR IDs. An incompatible binary or
-peer must reject a root reference; it must never treat it as a legacy hash.
+A conversation document has one of two identities, and every read, upload and
+negotiation of a document names which one it uses. New root publication is
+opt-in: it requires a compatible released binary, the server admission setting
+and the repository requirement. Existing documents retain their canonical-CIR
+IDs. An incompatible binary or peer must reject a root reference; it must never
+treat it as a legacy hash.
 
 ## Identity and representation
 
-The absent or empty `identity` on a document, and `doc_identity` on a snapshot,
-mean the existing SHA-256 of canonical CIR bytes. These fields are omitted for
-legacy objects, preserving their wire bytes and snapshot-state fingerprints.
-`Snapshot.ID == Snapshot.DocHash` remains required. Identity metadata is
-immutable; replay cannot relabel a stored snapshot. Memory and graph overlays
-remain separate from the conversation identity.
+The absent or empty `identity` on a document means the SHA-256 of its
+canonical CIR bytes. The field is omitted for such documents, preserving their
+wire bytes. Identity metadata is immutable: a stored document cannot be
+relabeled.
 
 The `cxt-manifest-sha256-v1` scheme hashes the exact bytes:
 
@@ -68,26 +67,13 @@ There is one durable verification record: the completed finalization job. A
 job becomes completed only in the transaction that verified the whole document
 and published it, and its identity binds the repository, the document hash and
 the exact manifest: the chunk manifest of a legacy v2 document, or the
-canonical root manifest of a root. Publishing a snapshot or history event that
-references either kind accepts that record in place of reading the document
-again, when all of these hold in the publishing transaction:
-
-- the repository owns the document object;
-- the job identity recomputed from the manifest stored now names a completed
-  job with that same manifest and identity;
-- the repository owns every chunk the manifest names, and each chunk exists.
-
-Root publication still requires the repository's root requirement and peer
-compatibility first. Otherwise, including for documents stored without a job,
-the bytes are verified as before. The record shows that the document
-was verified once. It does not show that the stored bytes are still intact:
-damage after finalization is found when the bytes are read, not when a snapshot
-is published. Without this record, every snapshot of a growing session read the
-whole cumulative document again, so publishing cost grew with session length.
+canonical root manifest of a root. The record shows that the document was
+verified once. It does not show that the stored bytes are still intact: damage
+after finalization is found when the bytes are read.
 
 Finalizing a legacy v2 document still reads and hashes every chunk once. The
 legacy hash covers the envelope before the events, and the envelope changes
-between captures, so that pass cannot resume from an earlier capture. What a
+between uploads, so that pass cannot resume from an earlier upload. What a
 finalization can skip is the repeated prefix. When the repository owns an
 earlier legacy document that this process published, and that document's stored
 manifest starts with the same chunks, finalization handles those leading chunks
@@ -100,114 +86,39 @@ differently:
 
 If the earlier document is no longer owned at publication, every chunk is
 checked as before. The hint that names the earlier document is per process, so
-after a restart the next document is finalized in full. This targets retained
-history uploads, which finalize many captures of one long session in capture
-order, each repeating almost all of the previous one.
-
-## Explicit readers and retention
-
-The server's `ReadVerifiedDoc` and CLI's `GetDocReference` and
-`VerifyStoredDocReference` read canonical root manifests and their current
-chunks. Callers join both the declared identity and hash to the expected
-snapshot/reference. Hash-only legacy readers reject root storage, including
-when a stale read/search index exists or snapshot metadata is absent.
-
-Server event pages stream the complete owned root, but retain only the selected
-event bytes. Exact-prefix comparison prepares the base's event hashes before
-reading the target; it does not retain two complete conversations. The page is
-returned only after every chunk occurrence, including the unused tail, passes
-verification. A later storage mutation cannot substitute different page bytes.
-Fragments, search and agent-history still materialize a verified root document;
-the event-page working-set improvement does not cover those paths. PostgreSQL
-reads use one read snapshot or the caller's existing transaction. These reads
-do not publish indexes, rewrite documents or grant future write authority.
-Root search cannot be excluded by legacy search-index candidate filters.
-
-PostgreSQL root publication atomically stores verified manifest ownership and
-the completed job receipt. It does not build the legacy persistent read/search
-index, which root consumers do not use. Search is immediately available through
-the verified-root path above; there is no asynchronous search-readiness state.
-Legacy documents still publish their existing index. Previously stored indexes
-remain intact, and old staged derivatives retain their normal transactional
-cleanup and shared-owner protection. Backfill verifies current root bytes
-without creating a legacy index.
-
-Page reads use hashes and sequences established by streaming verification;
-fragment reads use the verified document's event locations. Neither computes
-searchable text for the entire conversation. Agent-history reads still derive
-exact roles, and search requests retain the complete search projection. Store instances may reuse up
-to 65,536 exact event-hash/CIR-version semantic proofs to avoid repeated typed
-decoding; they retain no event
-bodies. Every read still checks current owned chunks, framing and ordering.
-Eviction or a process restart affects speed only. This does not make a first
-page proportional to page size: full current-byte verification remains required.
-
-Reference-only verification also streams every current chunk without retaining
-the full conversation. It returns a domain-owned reference only after complete
-validation. Neither that reference nor an event page is a persistent certificate.
-History preparation may reuse that successful reference, or a root reference
-attested by its completed finalization job, only inside the same active request,
-repository, store and exact read transaction. Capture still
-checks the descriptor and records all dependency versions; the later write
-transaction pins those versions and rechecks authorization. Another read
-transaction, failed verification or ended proof scope cannot reuse it.
-Working memory still includes the largest complete event, selected page bytes,
-bounded semantic-proof metadata and, when requested, base event hashes. It is
-not a strict 512 KiB bound. Giant individual events and the remaining full-body
-consumers require separate capacity evaluation.
-
-An opt-in local measurement uses synthetic data by default:
-
-```sh
-cd backend
-CXT_TEST_ROOT_READ_LARGE=1 go test ./internal/app \
-  -run '^TestRootEventPageLargeWorkingSet$' -count=1 -timeout=120s -v
-```
-
-It compares bounded event-page working sets under `GOMEMLIMIT=384MiB`; this is
-not a cloud latency or concurrent-load acceptance test. Private local fixtures
-must stay outside the repository and must not be uploaded with benchmark logs.
-
-Local and FS maintenance mark root chunk dependencies without repacking the
-root as a legacy object. An undecodable document aborts destructive chunk
-sweeping. PostgreSQL document deletion continues retaining chunk grants.
-
-Agent history, import, initialization and publication carry the same tagged
-reference. Full root reads and search still verify all current body bytes;
-root identity alone does not make reads or search incremental.
+after a restart the next document is finalized in full. This targets a session
+that grows: each upload of its document repeats almost all of the previous
+one.
 
 ## Rollout requirements
 
 Before enabling a root writer, all of these paths must support the tagged
 identity and reject incompatible peers before side effects:
 
-1. Local and server storage, body reads, event pages and search indexing.
-2. Snapshot/catalog metadata, import, initialization, retention and accounting.
-3. Chunk uploads, durable finalization jobs, receipt validation and restart.
-4. CLI capture, push, pull, verification and interrupted synchronization.
-5. Repository-level compatibility checks, including metadata-only operations
-   and a concurrent first-root publication.
+1. Local and server storage, body reads and read indexing.
+2. Chunk uploads, durable finalization jobs, receipt validation and restart.
+3. The CLI's upload of conversation documents, including an interrupted one.
+4. Repository-level compatibility checks, including a concurrent first-root
+   publication.
 
-Root support is negotiated independently from CIR version, chunk format
-and metadata catalog capabilities. An old peer's empty missing-object list is
-not proof of compatibility. A previously created root cannot be relabeled or
-rehashed into a legacy object during retry. Creating a legacy equivalent would
-be a separate object with separate provenance, never an implicit fallback.
+Root support is negotiated independently from CIR version and chunk format. An
+old peer's empty missing-object list is not proof of compatibility. A
+previously created root cannot be relabeled or rehashed into a legacy object
+during retry. Creating a legacy equivalent would be a separate object, never an
+implicit fallback.
 
-Read support requires complete reader and accepted-job recovery adapters.
-New publication additionally requires production repository transactions.
-Admission is off by default. Disabling it after opt-in keeps existing root
-reads, metadata updates, memory versions and accepted-job recovery available;
-it does not remove the repository requirement or make old clients compatible.
+New publication requires production repository transactions. Admission is off
+by default. Disabling it after opt-in keeps existing root reads available; it
+does not remove the repository requirement or make old clients compatible.
 
 Before repository opt-in, replace and verify every API, MCP, worker and
 maintenance binary that can access it. A schema migration alone cannot protect
 data from an old binary. See [conversation storage](CONVERSATION_MEMORY_STORAGE.md)
-for admission settings and [CLI configuration](CLI.md) for the capture
-preference. Configuring capture checks the server; later offline captures can
-use that saved preference, but every upload checks current admission again.
+for admission settings and [CLI configuration](CLI.md) for the `capture.identity`
+preference. Configuring it checks the server; every upload checks current
+admission again.
 
 Root hashing is proportional to manifest size. Full current-byte verification
 still reads existing bytes, and the flat manifest remains proportional to chunk
 occurrences. Incremental body writes alone do not establish incremental
-verification, constant memory or constant-time search-index publication.
+verification, constant memory or constant-time read-index publication.

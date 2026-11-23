@@ -26,8 +26,9 @@ The API still validates that browser Origin behind the proxy: the Blueprint
 sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
 `CXT_COOKIE_SECURE=1`. Keep SameSite=Lax and leave the cookie domain unset.
 
-- `cxtd`: REST, sessions, ingestion, GitHub callbacks/webhooks and all background
-  workers (promotion, Git evidence, email, notifications, maintenance).
+- `cxtd`: REST, sessions, uploads, GitHub callbacks/webhooks and all background
+  workers (the read of the Git hosting provider, GitHub App work, document
+  finalization, email, notifications, maintenance).
 - `cxt-mcp`: MCP queries and OAuth registration, consent, token exchange and
   revocation. No GitHub credentials or email configuration are loaded.
 - Shared application/domain code and PostgreSQL are the consistency boundary;
@@ -87,12 +88,11 @@ for the initial tier. A Render environment override takes precedence and must be
 revalidated with that service's actual workload. Do not set it to `off` merely
 because the platform already has a container limit: the local 310 MiB mixed-load
 negative control still OOM-killed without the soft target, even after streaming
-publication was implemented. The bounded-read, publication and load-test contract
-is documented in [Conversation range reads](../docs/DOCUMENT_RANGE_READS.md).
+publication was implemented.
 
 Keep the source database and its verified backup intact. Restore a fresh,
 consistent dump to the new cloud database before starting application writers.
-Verify migrations, record counts and document/memory/parent references before
+Verify migrations, record counts and document references before
 cutover. The earlier rehearsal dump is not a final cutover snapshot if local
 writes continued. Allow external database access only from the migration
 operator's IP for the transfer, then restore `ipAllowList: []`; never expose it
@@ -222,20 +222,16 @@ cd frontend/web
 CXT_E2E_FULLSTACK=1 CXT_E2E_DSN='<test DSN>' npm run test:e2e
 ```
 
-`TestPGIndependentMCP` additionally verifies independent pool/server restarts,
-private-repository permission revocation, token revocation across services and
-absence of API mutation routes on MCP. The browser test covers API login,
+The browser test covers API login,
 MCP OAuth consent, PKCE, read-only calls and account-screen disconnection.
 
 ## Operations
 
-The [sync validation](SYNC_VALIDATION.md) reduced peak resident memory for one
-163 MiB stored conversation from about 1.45 GiB to 1.08 GiB. This remains above the 512 MB
-`starter` limit. The API budget also leaves room for publication/indexing and
+The API budget leaves room for publication/indexing and
 other requests; the MCP budget covers cold index reads after data transfer.
-These are initial validation budgets, not concurrency/load guarantees. Warm the
-selected branch reads and measure representative concurrent traffic in staging
-before launch. Separating services does not remove per-request allocation costs.
+These are initial validation budgets, not concurrency/load guarantees. Measure
+representative concurrent traffic in staging before launch. Separating
+services does not remove per-request allocation costs.
 
 Render's current equivalent plan IDs are `2c-4g` and `1c-2g`; legacy names remain
 supported. As of 2026-09-28, these service plans list at $85 and $25/month, plus
@@ -258,7 +254,7 @@ Budget database connections across **both** pools and all replicas. pgx accepts
 when scaling. Use direct Postgres connections for startup advisory locks and
 transactions; do not put migration sessions behind transaction-mode pooling.
 
-Validate large uploads, long-lived repository event streams, MCP paging and
+Validate large uploads, MCP paging and
 cold-start latency through the deployed Vercel proxy. Gateway limits are not
 removed by separating servers; a local test is not a cloud load measurement.
 Preserve the public domain when reconnecting a custom domain or rolling back.
@@ -274,8 +270,7 @@ and set `CXT_PREFLIGHT_PYTHON` to that environment's Python executable.
 Run `scripts/deploy-preflight.sh full` from the repository root. It checks the
 Render contract, frontend routes, Go tests, real PostgreSQL migrations, both
 Docker images, route isolation, independent API shutdown, and database failure
-and recovery. The [sync validation plan and results](SYNC_VALIDATION.md) include
-the separate large-document, concurrent-read and PostgreSQL CLI checks.
+and recovery.
 It creates only disposable local containers; it never pushes an image or creates
 cloud resources. CI also exercises the two real Docker images.
 

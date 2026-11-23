@@ -1,15 +1,8 @@
 # Collaboration transaction contract
 
-The authoritative repository is in cloud PostgreSQL. CLI `.cxt` directories are
-working replicas with durable delivery records; they are not the shared database.
-
-The worktree-scoped manual index freezes source ranges before a local commit.
-Its journal records source observations before publishing pointers, and recovery
-preserves concurrent later index entries. A local finalized receipt does not
-claim server acceptance. Fetch observations and applied-pull receipts also have
-separate revisions; explicit repair preserves displaced values and checks the
-expected selection. See [Context selection and agent input](CONTEXT_INPUT.md)
-for upgrade restrictions and the provider delivery boundary.
+The authoritative repository is in cloud PostgreSQL. A repository's `.cxt`
+folder on a member's computer holds the CLI's connection settings and copies
+of what it uploaded; it is not the shared database.
 
 These guarantees apply to the PostgreSQL adapter and upgraded clients. The
 filesystem backend is a single-machine development adapter and does not provide
@@ -19,24 +12,25 @@ multi-file or multi-server ACID transactions.
 
 | Operation | Atomic publication boundary |
 |---|---|
-| Object batch | Validated document bodies, repository ownership, snapshot rows, indexes and transactional storage accounting |
-| Ref batch | All requested ref changes, graft overlays, reflog entries, associated pending resolution and notification jobs |
-| Branch history, fork, join | History/retention evidence and the resulting shared refs and overlays |
-| PR promotion | Exact source binding, DAG append, ref/reflog, completion receipt, and the claimed job's completed state |
-| Pending replacement | Pointer replacement and verified obsolete-prefix cleanup; distinct raw captures are retained |
-| Memory publication | Immutable body first, then atomic compare-and-swap of the snapshot's memory pointer; a losing body's data is retained |
+| Conversation document | The verified document, the repository's ownership of it, its read index, the completion of its finalization job and transactional storage accounting |
+| Session report | The report, the index from commits to its segments, and the ranges that the report opens; the role of the caller is rechecked in the same transaction |
+| Session removal | The report with its commit links, its summaries and its open ranges, the remembered removal, and the deletion of the conversation document when no other report uses it |
+| Delivered push | The branch ledger observation and the request for a read of the remote |
 | Encrypted secrets | Replace the exact editing revision and enqueue its notification in the same transaction |
 | New member accepts invite | Membership change and notification; concurrent acceptance creates one event |
 
-Chunk uploads and memory bodies can exist before their publication pointers.
-Such staging objects are deliberately retained and are not an incomplete graph
-commit. Separate HTTP requests, separate repositories, Git, provider files and
-the cloud database do **not** form one distributed database transaction.
+Uploaded chunks can exist before the document that uses them is published.
+Such staged objects are deliberately retained and are not an incomplete
+publication. A session's document and its report are stored by separate
+requests: the report is taken only when the repository holds the document it
+names. Separate HTTP requests, separate repositories, Git, the tools' own
+files and the cloud database do **not** form one distributed database
+transaction.
 
 ## Isolation and conflicts
 
 Repository business writes acquire a PostgreSQL transaction-scoped advisory lock
-before reading mutable graph state. Same-repository operations are serialized
+before reading mutable repository state. Same-repository operations are serialized
 across server instances; different repositories can proceed independently.
 Row locks, unique constraints and existing CAS predicates still apply to
 individual registers. Direct SQL writes that bypass these application rules are
@@ -48,18 +42,12 @@ Passing that context to another store instance fails rather than opening an
 independent write. Transaction callbacks must not start goroutines or make
 network calls.
 
-- A supplied `expected_target` is checked even for a forced ref update. An
-  identical target replay succeeds. Omitting the expectation retains the
-  existing explicit, unconditional force semantics.
-- Memory CAS permits one writer at a given parent revision. Both immutable
-  bodies survive a conflict so the caller can reconcile them.
-- Pending pointers are serialized last-accepted captures, not ordered by
-  transcript length: a provider compaction can legitimately shorten a session.
-  Dismissal is sticky and does not delete session data.
-- PR workers lock and validate the claimed job's version, state and unexpired
-  lease **before** graph mutation. A superseded worker cannot publish. The job
-  row stays locked through the final commit, preventing a second claim while
-  that valid worker finishes.
+- A session belongs to the account that first reported it. Another account's
+  report for the same session is refused with a conflict. Storing the same
+  report again changes nothing; otherwise the report's revision increases.
+- No report is taken for a removed session, from anyone, until the removal is
+  taken back.
+- A provider delivery that is processed twice changes the branch ledger once.
 - Registration can fill an unknown Git origin, but cannot overwrite an
   established origin or reset the configured default branch.
 - Secrets require the `expected_revision` returned before editing, even for
@@ -76,10 +64,9 @@ network calls.
 
 Only explicit database transaction-abort codes (`40001`, `40P01`) receive up to
 three attempts, each with a fresh transaction and fresh after-commit callbacks.
-An uncertain COMMIT acknowledgement is not blindly retried. Durable operation
-IDs, PR completion receipts and CAS make operation-specific reconciliation
-possible after reconnecting. A completed PR replay never reapplies an old merge
-over a later deliberate rewind.
+An uncertain COMMIT acknowledgement is not blindly retried. Every write of the
+session structure can be repeated: a report or a summary with the same content
+again changes nothing.
 
 ## Authorization belongs to the write transaction
 
@@ -96,20 +83,6 @@ wait for an already-authorized transaction to finish. Notification retries use
 the identity transaction boundary as well. Filesystem development storage
 rechecks current authority but does not promise PostgreSQL cross-process ACID.
 
-## A graph read is one generation
-
-`GET /api/v1/repos/{repoID}/view` reads refs, snapshots, reflog, history, pending
-and unsync metadata in one read-only REPEATABLE READ transaction, with the same
-viewer permission boundary as the existing graph APIs. Each response therefore
-contains one committed database generation, even while another server appends
-a PR. One failed component fails the whole response.
-
-Context and On Hold use one React Query cache entry for this response. Revision-driven refresh
-replaces the complete bundle; it cannot combine new refs with old snapshots or
-completion receipts. Document bodies remain fetched separately by immutable
-hash. Memory projections, manifests, pull responses and integrity audits also
-use a consistent database read snapshot.
-
 ## Durability and process failure
 
 The PostgreSQL pool requests `synchronous_commit=on` (preserving the stronger
@@ -118,15 +91,9 @@ disabled. A request cancellation or lost connection rolls back an uncommitted
 operation, including changes inside released savepoints. Rollback uses an
 independent bounded cleanup context.
 
-CLI mutation locks use a persistent-inode OS file lock. They cannot expire while
-a writer is alive; the kernel releases the lock when the process exits. The
-legacy directory lock remains during upgrades, and a dead owner's lock can be
-recovered immediately. Upgrade all simultaneous local writers for this guarantee.
-Supported systems are macOS and Linux with local filesystems; network filesystem
-locking and local disk durability require separate operator validation.
-
-Ref updates, secrets changes and new invite acceptances enqueue a PostgreSQL
+Secrets changes and new invite acceptances enqueue a PostgreSQL
 notification outbox record in the same transaction as their business change.
+A branch that moves sends no notification.
 An enqueue failure rolls the change back. A worker claims committed jobs with
 `FOR UPDATE SKIP LOCKED`, a version and a two-minute lease; it sends outside
 transactions with a five-second HTTP timeout. Database time governs claims and
@@ -165,43 +132,21 @@ setting `synchronous_commit=on` alone does not provision replicas. See PostgreSQ
 Every pull request runs these real PostgreSQL tests once; the `CI heavy` workflow
 (main pushes, nightly, `ci:full` pull requests) repeats them under the Go race detector:
 
-- Two separate server pools limited to two connections each, six parallel PRs with duplicate deliveries, and a
-  concurrent ordinary push: every source remains reachable, one completion per PR.
-- Invalid second ref update, failed second snapshot, failed completion receipt,
-  and failed job completion: no partial publication.
-- Stale worker claims, explicit rewind followed by old PR replay, stale forced
-  writes, concurrent memory CAS and encrypted-envelope CAS.
 - Cancellation and backend connection termination: rollback; reopening the
   store sees the committed state.
-- A PR commits between the graph reader's refs and snapshot reads: the reader
-  returns the old complete generation, and the next request returns the new one.
-- CLI writer termination and an artificially aged live lock: recovery without
-  stealing a live writer's lock.
-- Injected outbox insert failure rolls back ciphertext, refs and membership;
+- Injected outbox insert failure rolls back ciphertext and membership;
   concurrent invite acceptance through independent PostgreSQL pools creates one event.
 - Same-key edit and rotation conflicts, dirty CLI pulls, worker lease takeover,
   restart persistence, transient HTTP failures and destination changes.
 - Browser E2E: stale drafts survive rejection and latest-version comparison;
   rotation sends its decrypted revision; delivery status and retry controls work.
-- Browser E2E: graph polling advances from the complete view even if the legacy
-  component endpoints still expose an older generation.
 
 These are explicit guarantees for the tested paths, not a claim that every
 future implementation or infrastructure failure is impossible.
 
 ## Authorization and audit completion (2026-09-24)
 
-The HTTP body-read race suite covers 13 mutations against five access changes:
-ref/batch-ref, settings, About, config, memory/causal-memory/typed-memory, pending,
-unsync, promotion, objects and chunks; direct membership removal, Organization
-Owner demotion, Team removal, archival and base-access withdrawal. A separate
-Owner-only settings-policy transition makes 66 scenarios. Each checks denied
-in-flight writes, fresh denial, unchanged revisions/outbox/view, and an authorized
-control. This is a defined coverage matrix, not a proof of every possible race.
-
-Pending session ownership and authenticated unsync usernames are checked inside
-the write transaction. Concurrent first writes cannot claim another user's
-pending session. About and repository config edits now validate and commit as one
+About and repository config edits validate and commit as one
 command. Organization metadata audit is appended inside ordinary repository,
 settings, secrets and membership write transactions; audit failure rolls the
 write back. Internal system workflows retain their dedicated history/outbox
@@ -222,9 +167,6 @@ Use only disposable PostgreSQL 16 databases. Do not point fixtures at production
   uses fixed smoke fixtures and must run once against a fresh database.
 - `CXT_TEST_DSN=… go test -tags postgres ./internal/app ./internal/adapters/delivery/http -run '^TestPG' -race -count=3`
   checks transactions, rollback, revocation, invitations and MCP token races.
-- `CXT_LOAD_DSN=… CXT_LOAD_MULTIPROCESS=1 go test -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresMultiInstanceLoad$' -v`
-  starts separate server processes sharing only PostgreSQL, restarts one during
-  authentication pairing, checks tenant isolation and executes REST/MCP load.
 - From the repository root, `CXT_RECOVERY_DSN=… CXT_RECOVERY_RESTORE_DSN=… bash scripts/verify-postgres-recovery.sh`
   backs up and restores into an explicitly empty target, then compares every
   public table's row count and sorted row-content digests. After equality is
@@ -235,22 +177,15 @@ Use only disposable PostgreSQL 16 databases. Do not point fixtures at production
   tables except the two catalog tables still match. It refuses a nonempty target;
   temporary dumps are permission-restricted and removed afterwards.
 
-Keep catalog clients and source writers stopped on both validation databases
+Keep source writers stopped on both validation databases
 throughout the rehearsal. Exact backup equality must be verified **before**
 rotating restored epochs, and rotation must commit **before serving** the restored
-database. Otherwise, a checkpoint issued before recovery could incorrectly appear
+database. Otherwise, work accepted before recovery could incorrectly appear
 current after a database rewind. For an older schema without `cxt_reset_catalog`,
 the script reports `catalog epoch rotation not available; migrate before serving`;
 the content comparison alone does not validate catalog recovery. See
 [Catalog maintenance and restore](CATALOG_SYNC.md#maintenance-retention-and-restore)
-for epoch rotation and checkpoint reset semantics.
-
-Local validation: 100 MiB text, 4,096 events, 1,001 snapshots, 16 concurrent readers,
-320 successful requests across two server processes. Observed p95 REST 12.6 ms,
-MCP 344.9 ms. Backup/restore matched all 67 tables. These measurements are local;
-they do not validate WAN latency, managed database failover, public OAuth or webhook
-configuration. Keep deployment limits unchanged until staging is explicitly
-configured and tested.
+for epoch rotation.
 
 An upgrade rehearsal started the previous `c5d17aa` PostgreSQL binary against an
 empty database, created an Organization, repository, member, Team and maintainer

@@ -6,15 +6,15 @@ Implementation tracking: [#266](https://github.com/wnsdy95/cxthub/issues/266).
 
 GitHub sign-in identifies a person. GitHub App installation authorizes server
 access to selected repositories. Neither grants CXTHub membership by itself.
-Existing Firebase UIDs, repository IDs, natural context parents, saved memory,
-and manual access grants remain unchanged.
+Existing Firebase UIDs, repository IDs, stored sessions and manual access
+grants remain unchanged.
 
 The first release targets GitHub.com personal accounts and organizations.
 Teams are mapped within an organization installation. Enterprise displays its
 organizations' connections without gaining implicit repository access.
 Enterprise-level API operations, SCIM/SSO, GHES, and GitHub role mirroring are
-separate extensions. Connecting a GitHub repository does not publish its context
-or make its CXTHub repository public.
+separate extensions. Connecting a GitHub repository does not make its CXTHub
+repository public.
 
 ## Implementation sequence
 
@@ -54,11 +54,14 @@ provider verification are reported separately from code completion.
 - Scope token caches, request limits and backoff to installations.
 - Persist signed events before acknowledging them; reconcile missed changes.
 - Handle installation suspension/removal and repository selection changes.
-- Reuse existing durable PR promotion and Git evidence services.
+- On a branch push, record in the branch ledger that the branch name is alive
+  or gone, and ask for a read of the remote. On a pull-request event, ask for
+  that read.
+- Read the hosting provider with the installation's token for a repository
+  that is bound to a connection.
 - Recheck the current binding before committing results from external requests.
-- Preserve existing local gh/token lookup as a supplementary path.
-- Validate expiry, concurrent refresh, duplicate/out-of-order delivery, restart,
-  revocation during work, and late source-context publication.
+- Validate expiry, concurrent refresh, duplicate/out-of-order delivery, restart
+  and revocation during work.
 
 ### 4. Team connections — implemented
 
@@ -88,16 +91,16 @@ include concurrent authority changes. Web keeps selection/dialog state and rende
 server decisions. FS remains a single-process development adapter; no unsupported
 multi-file crash rollback guarantee is implied.
 
-Existing local and remote context history is not migrated or repaired by this
-feature. Installation removal stops external synchronization and invalidates its
-derived authority; it does not erase stored context history.
+Stored sessions are not migrated or changed by this feature. Installation
+removal stops external synchronization and invalidates its derived authority;
+it does not erase stored sessions.
 
 ## Verification and rollout
 
 - Focused backend domain/application/adapter tests, including a fake GitHub server.
 - Real PostgreSQL migration, isolation, rollback and revocation tests.
 - Frontend unit, i18n, architecture, typecheck, build and browser E2E checks.
-- Existing context/graph/PR integration, secrets and account login regressions.
+- Existing session, secrets and account login regressions.
 - Signed commit and PR checks, then install the exact merged binaries for dogfood.
 - Real GitHub/Firebase verification requires configured registrations, callback
   URLs, App credentials and a reachable signed HTTPS webhook receiver. Do not
@@ -178,10 +181,10 @@ create an App, issue credentials, or run `terraform apply`.
 3. The actor must administer the CXTHub owner and prove GitHub account ownership
    or GitHub organization administrator membership. Pending organization approval
    grants nothing; after approval, restart Connect from this page.
-4. Select an installed GitHub repository and an existing CXTHub context repository
+4. Select an installed GitHub repository and an existing CXTHub repository
    with the same Git origin. Binding also requires the CXTHub repository's owner
    role. Organization owners inherit that role; organization administrators do
-   not. Connection management never reveals another private context's metadata.
+   not. Connection management never reveals another private repository's metadata.
 5. Optionally map teams and explicitly enable **Sync members**. Both verified
    GitHub identity and current CXTHub organization membership are required. The
    workflow does not create accounts, invite outsiders, mirror GitHub roles or
@@ -196,15 +199,13 @@ create an App, issue credentials, or run `terraform apply`.
   bindings share that installation; an external repository is bound once within
   it. An unrelated GitHub account cannot replace it through a reconnect.
 - Source repository and account IDs survive GitHub renames. Verified API requests
-  use the new name while stored context history/origin remains unchanged. Transfers
+  use the new name while the stored origin remains unchanged. Transfers
   to another GitHub owner require new authorized installation and binding.
 - Webhooks persist before acknowledgement. Duplicate delivery IDs must have the
   same event kind and content hash. Completed payloads are discarded while the
   idempotency proof remains. PostgreSQL transactions and leases allow multiple
-  workers and restarts; publication rechecks connection generation and binding.
-  Git tree/head/reversal workers also capture a source authorization fence before
-  provider I/O and check it inside the publication transaction, so a disconnect
-  or rebind during the request cannot publish its stale response.
+  workers and restarts; applying a delivery rechecks the connection and its
+  binding inside the repository transaction.
 - Installation/member changes immediately suspend imported grants until an
   authoritative REST refresh. Reconciliation runs every five minutes; imported
   grants expire after ten minutes without refresh. Remote failures narrow access
@@ -212,16 +213,13 @@ create an App, issue credentials, or run `terraform apply`.
   independent manual memberships remain.
 - Team members returned by GitHub include child-team membership according to the
   GitHub API. This does not create or mirror a nested CXTHub team hierarchy.
-- PR repair scans one page of closed PRs per binding per reconciliation, cycling
-  through full pagination. Recovery time grows with repository history. Only
-  merged PRs from the same GitHub repository enter the existing context promotion
-  queue; cross-repository/fork context joins remain outside the existing model.
-  No context lineage is fabricated from a PR title or repository URL.
-- Existing Git-ref reconciliation handles missing push deliveries. Context source
-  material that arrives later is handled by the existing durable PR queue.
-- The legacy CLI `gh`/environment-token path is unchanged. Server operator-token
-  fallback remains for namespaces without a connection; an explicitly disabled,
-  stale or unbound connection cannot silently fall back to that token.
+- A push or pull-request delivery only asks for a read of the remote; the
+  remote Git worker reads branch heads, commits and pull requests from GitHub.
+  That worker also reads on its own schedule, which makes up for a delivery
+  that never arrived. No session is moved or merged by a delivery, and nothing
+  is inferred from a pull request's title or a repository URL.
+- Server operator-token fallback (`CXT_GITHUB_TOKEN`) remains for repositories
+  whose owner has no connection.
 - GitHub.com only. GHES, direct Enterprise installations/API operations, SCIM/SSO,
   automatic role mirroring, billing and provider-user-token storage are excluded.
 - Durable request/idempotency metadata has no retention sweep in this release;
@@ -236,8 +234,8 @@ Code and synthetic/local verification are complete before live rollout:
 - PostgreSQL 16 migration and three repeated race runs of transaction, permissions,
   rollback and source-aware team/offboarding contracts.
 - Frontend unit, i18n, dependency-boundary, typecheck and production build checks.
-- Full browser E2E: 76 tests, including existing graph, memory, MCP and authorization
-  regressions; GitHub connection selection/generation and mobile layout covered.
+- Full browser E2E at the time, including MCP and authorization regressions;
+  GitHub connection selection/generation and mobile layout covered.
 - Terraform initialization without backend state and validation; no cloud apply.
 
 Still required in the operator environment: create/configure both registrations,

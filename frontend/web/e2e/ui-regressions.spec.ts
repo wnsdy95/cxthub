@@ -54,7 +54,7 @@ test('landing renders every captured product view without placeholders', async (
   await page.goto('/');
   await expect(page.locator('.shot-placeholder')).toHaveCount(0);
   await expect(page.locator('.product-shot img')).toHaveCount(6);
-  await expect(page.locator('.landing-nav a')).toHaveText(['Auto-capture', 'Product', 'Security', 'Pricing']);
+  await expect(page.locator('.landing-nav a')).toHaveText(['Sessions at commits', 'Product', 'Security', 'Pricing']);
 
   const expected = ['setup.jpg', 'context.jpg', 'onhold.jpg', 'profile.jpg', 'security.jpg', 'permissions.jpg'];
   const images = page.locator('.product-shot img');
