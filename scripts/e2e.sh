@@ -472,6 +472,23 @@ PYCDX
 else
   echo "  (sqlite3 is not installed: the Codex thread checks did not run)"
 fi
+# A session is removed from the server for every reader, is not sent again by
+# an upload or by the collector, and comes back when it is allowed again.
+segheld() { curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(sum(1 for s in json.load(sys.stdin) if s["session_id"]=="e2e-segments"))'; }
+SEGDOCLAST="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['doc']")"
+expect "removing without confirmation removes nothing and fails" "$(cxt segments remove claude e2e-segments >/dev/null 2>&1; echo "$? $(segheld)")" "1 1"
+expect "a teammate who does not manage the repository cannot remove another member's session" "$(ccurl -sb "$JS" -o /dev/null -w '%{http_code}' -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(segheld)" "403 1"
+expect "the uploader removes its session" "$(cxt segments remove claude e2e-segments --yes --json | python3 -c 'import json,sys;r=json.load(sys.stdin)["removed"];print(len(r),r[0]["session_id"],r[0]["by_you"])')" "1 e2e-segments True"
+expect "the removed session is gone for its uploader and for a teammate" "$(code -b "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(segheld) $(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "404 404 0 0 0"
+expect "its conversation document is deleted" "$(code -b "$JA" "$B/repos/$CLIRID/docs/$SEGDOCLAST")" 404
+expect "the uploader lists the removal" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-removals" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["session_id"],r[0]["by_you"])')" "1 e2e-segments True"
+expect "an upload sends nothing of the removed session and does not fail" "$(cxt segments push --json >"$TMP/segments-removed.json" 2>/dev/null; echo "$? $(python3 -c 'import json,sys;r=json.load(open(sys.argv[1]));s=[x for x in r["sessions"] if x["id"]=="e2e-segments"][0];print(r["removed"],r["refused"],s["state"],"content" in s)' "$TMP/segments-removed.json") $(segheld)")" "0 1 0 removed False 0"
+expect "the collector does not bring it back" "$(segappend m10 31; segcollect; segheld)" 0
+expect "the server refuses its report from anyone" "$(ccurl -sb "$JA" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" -H 'Content-Type: application/json' -d '{"rule_version":1,"sub":false,"scope":"working-folder","records":0,"commands":0,"copied_records":0,"segments":[]}')" 409
+expect "allowing it again uploads it from the tool's records" "$(cxt segments allow claude e2e-segments --json | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r["upload"]["sessions"];print(len(s),s[0]["state"],s[0]["revision"],s[0]["content"],r["upload"].get("not_found"))') $(segheld) $(segcount "anchored-commits/$SEGSHA")" "1 stored 1 stored None 1 1"
+expect "the session's log on this computer says what was done to it" "$(cxt segments log claude e2e-segments --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["sessions"][0]["log"];a=[e["action"] for e in l if e.get("action")];print(a[0],"|",a[1],"|",a[-1])')" "removed from the server | not sent | allowed again on the server"
+expect "one session is uploaded by name" "$(cxt segments push claude e2e-segments --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r["sessions"]),r["sessions"][0]["id"])')" "1 e2e-segments"
+expect "a name the tools did not record fails" "$(cxt segments push claude never-recorded >/dev/null 2>&1; echo "$?")" 1
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"

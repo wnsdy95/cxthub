@@ -189,11 +189,20 @@ func writeSegmentReport(w io.Writer, report domain.SegmentReport) {
 // RunSegmentsPush computes the same report and uploads one report per session
 // to the repository's server. Every session is listed with what happened to
 // it; a refused report makes the command fail after the others were stored.
-func RunSegmentsPush(ctx context.Context, uploader inbound.SegmentUploader, cwd string, asJSON bool, w io.Writer) error {
+//
+// With a tool and a session identifier it uploads that session alone; a
+// session the tools' records on this computer do not hold makes it fail.
+func RunSegmentsPush(ctx context.Context, uploader inbound.SegmentUploader, cwd string, session []string, asJSON bool, w io.Writer) error {
 	if uploader == nil {
 		return fmt.Errorf("session report upload unavailable")
 	}
-	result, err := uploader.PushSegments(ctx, cwd)
+	var result domain.SegmentPushResult
+	var err error
+	if len(session) == 2 {
+		result, err = uploader.PushSegmentsOf(ctx, cwd, []domain.SessionUploadKey{{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}})
+	} else {
+		result, err = uploader.PushSegments(ctx, cwd)
+	}
 	if err != nil {
 		return err
 	}
@@ -207,11 +216,18 @@ func RunSegmentsPush(ctx context.Context, uploader inbound.SegmentUploader, cwd 
 	if result.Refused > 0 {
 		return fmt.Errorf("%d of %d session reports were refused", result.Refused, len(result.Sessions))
 	}
+	if len(result.NotFound) > 0 {
+		return fmt.Errorf("%s %s is not among the sessions the tools recorded for this repository on this computer", result.NotFound[0].Provider, result.NotFound[0].SessionID)
+	}
 	return nil
 }
 
 func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
-	fmt.Fprintf(w, "Session reports: %d stored, %d unchanged, %d refused (%d sessions)\n", result.Stored, result.Unchanged, result.Refused, len(result.Sessions))
+	removed := ""
+	if result.Removed > 0 {
+		removed = fmt.Sprintf(", %d removed from the server", result.Removed)
+	}
+	fmt.Fprintf(w, "Session reports: %d stored, %d unchanged, %d refused%s (%d sessions)\n", result.Stored, result.Unchanged, result.Refused, removed, len(result.Sessions))
 	withContent := 0
 	for _, session := range result.Sessions {
 		if session.Content == domain.SegmentContentStored {
@@ -258,6 +274,14 @@ func writeSegmentPushResult(w io.Writer, result domain.SegmentPushResult) {
 		fmt.Fprintf(w, "\nRefused (%d) — these sessions are not on the server\n", result.Refused)
 		for _, session := range result.Sessions {
 			if session.State == domain.SegmentPushRefused {
+				fmt.Fprintf(w, "  %s %s: %s\n", session.Provider, session.ID, session.Reason)
+			}
+		}
+	}
+	if result.Removed > 0 {
+		fmt.Fprintf(w, "\nRemoved (%d) — these sessions were removed from the server and nothing of them was sent\n", result.Removed)
+		for _, session := range result.Sessions {
+			if session.State == domain.SegmentPushRemoved {
 				fmt.Fprintf(w, "  %s %s: %s\n", session.Provider, session.ID, session.Reason)
 			}
 		}
@@ -336,6 +360,89 @@ func RunSegmentsLog(ctx context.Context, care inbound.SegmentCare, cwd string, s
 		for _, entry := range listing.Log {
 			fmt.Fprintf(w, "  %s  %s\n", entry.At, segmentLogLine(entry))
 		}
+	}
+	return nil
+}
+
+// RunSegmentsRemove removes a session from the server for every reader, with
+// the sessions it spawned. Without confirmed it removes nothing and fails,
+// saying what it would do, so that nothing is removed by a command that was
+// only tried.
+func RunSegmentsRemove(ctx context.Context, care inbound.SegmentCare, cwd string, session []string, confirmed, asJSON bool, w io.Writer) error {
+	if care == nil {
+		return fmt.Errorf("the repository's server is unavailable")
+	}
+	if len(session) != 2 {
+		return fmt.Errorf("name the session by its tool and its identifier")
+	}
+	key := domain.SessionUploadKey{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}
+	if !confirmed {
+		return fmt.Errorf("nothing was removed. cxt segments remove %s %s --yes removes this session from the server for every reader: its report, its summaries, its conversation, and the sessions it spawned. "+
+			"Nothing on this computer is removed. It is uploaded again only after cxt segments allow %s %s", key.Provider, key.SessionID, key.Provider, key.SessionID)
+	}
+	result, err := care.RemoveSession(ctx, cwd, key)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return json.NewEncoder(w).Encode(result)
+	}
+	fmt.Fprintf(w, "Removed from the server (%d sessions): the report, the summaries and the conversation of each\n", len(result.Removed))
+	for _, removed := range result.Removed {
+		fmt.Fprintf(w, "  %s %s\n", removed.Provider, removed.SessionID)
+	}
+	fmt.Fprintln(w, "Nothing on this computer was removed: the tool's records and the copies under .cxt/sessions stay.")
+	fmt.Fprintln(w, "The server takes none of these sessions again until it is allowed again, one session at a time:")
+	for _, removed := range result.Removed {
+		fmt.Fprintf(w, "  cxt segments allow %s %s\n", removed.Provider, removed.SessionID)
+	}
+	return nil
+}
+
+// RunSegmentsAllow takes back the removal of a session and uploads it again.
+func RunSegmentsAllow(ctx context.Context, care inbound.SegmentCare, cwd string, session []string, asJSON bool, w io.Writer) error {
+	if care == nil {
+		return fmt.Errorf("the repository's server is unavailable")
+	}
+	if len(session) != 2 {
+		return fmt.Errorf("name the session by its tool and its identifier")
+	}
+	key := domain.SessionUploadKey{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}
+	result, err := care.AllowSession(ctx, cwd, key)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(w, "%s %s is allowed on the server again.\n", key.Provider, key.SessionID)
+		switch {
+		case len(result.Upload.NotFound) > 0:
+			fmt.Fprintln(w, "It was not uploaded: the tool's records of this session are no longer on this computer.")
+		case result.Upload.Refused > 0:
+			for _, session := range result.Upload.Sessions {
+				fmt.Fprintf(w, "It was not uploaded: %s\n", session.Reason)
+			}
+		default:
+			for _, session := range result.Upload.Sessions {
+				fmt.Fprintf(w, "Uploaded again: report %s", session.State)
+				if session.Revision > 0 {
+					fmt.Fprintf(w, " (revision %d)", session.Revision)
+				}
+				if session.Content == domain.SegmentContentStored {
+					fmt.Fprint(w, ", with its conversation")
+				}
+				if session.Summaries > 0 {
+					fmt.Fprintf(w, ", %d summaries", session.Summaries)
+				}
+				fmt.Fprintln(w)
+			}
+		}
+	}
+	if len(result.Upload.NotFound) > 0 || result.Upload.Refused > 0 {
+		return fmt.Errorf("%s %s is allowed again but was not uploaded", key.Provider, key.SessionID)
 	}
 	return nil
 }

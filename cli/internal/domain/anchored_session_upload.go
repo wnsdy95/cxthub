@@ -281,6 +281,9 @@ const (
 	SegmentPushStored    SegmentPushState = "stored"
 	SegmentPushUnchanged SegmentPushState = "unchanged"
 	SegmentPushRefused   SegmentPushState = "refused"
+	// SegmentPushRemoved means the session was removed from the server and
+	// not allowed again: nothing of it was read back or sent.
+	SegmentPushRemoved SegmentPushState = "removed"
 )
 
 // SegmentContentState is what happened to the conversation of one session.
@@ -323,6 +326,9 @@ type SegmentPushResult struct {
 	Stored          int  `json:"stored"`
 	Unchanged       int  `json:"unchanged"`
 	Refused         int  `json:"refused"`
+	// Removed counts sessions that were removed from the server and are
+	// therefore not sent. It is no failure.
+	Removed int `json:"removed,omitempty"`
 	// ContentNotUploaded counts sessions whose report went up without their
 	// conversation; each one says why.
 	ContentNotUploaded int `json:"content_not_uploaded"`
@@ -341,6 +347,10 @@ type SegmentPushResult struct {
 	Worktrees *SegmentPushWorktrees `json:"worktrees,omitempty"`
 	// LocalRecords is absent when this run keeps no copy of what it sends.
 	LocalRecords *SegmentPushLocalRecords `json:"local_records,omitempty"`
+	// NotFound names sessions the run was asked for that the tools' records
+	// on this computer do not hold. It is set only by a run for named
+	// sessions.
+	NotFound []SessionUploadKey `json:"not_found,omitempty"`
 }
 
 // SegmentPushLocalRecords says what a run kept in the repository's .cxt
@@ -388,4 +398,14 @@ func AnchoredCommitSubject(subject string) string {
 		cut--
 	}
 	return subject[:cut]
+}
+
+// AnchoredSessionRemoval says that a session was removed from the server.
+// While it stands the server takes no report for the session. ByYou is false
+// when someone who manages the repository removed it.
+type AnchoredSessionRemoval struct {
+	Provider  ProviderKind `json:"provider"`
+	SessionID string       `json:"session_id"`
+	RemovedAt string       `json:"removed_at"`
+	ByYou     bool         `json:"by_you"`
 }

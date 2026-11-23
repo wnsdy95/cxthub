@@ -98,7 +98,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", minArgs: 1, maxArgs: 2, flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
 	"sync":      {usage: "cxt sync status [--json] | cxt sync pause-history | cxt sync resume-history", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
-	"segments":  {usage: "cxt segments [push] [--json] | cxt segments log [claude|codex <session>] [--json]", maxArgs: 3, flags: commandFlags(nil, []string{"--json"})},
+	"segments":  {usage: "cxt segments [--json] | cxt segments push|log [claude|codex <session>] [--json] | cxt segments remove claude|codex <session> --yes [--json] | cxt segments allow claude|codex <session> [--json]", maxArgs: 3, flags: commandFlags(nil, []string{"--json", "--yes"})},
 	"status":    {usage: "cxt status [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"diff":      {usage: "cxt diff [--staged] [--json]", flags: commandFlags(nil, []string{"--staged", "--json"})},
 	"reflog":    {usage: "cxt reflog"},
@@ -387,18 +387,25 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 	case "hooks":
 		valid = sub == "install" || sub == "uninstall"
 	case "segments":
+		named := len(pos) == 3 && segmentSessionKeyValid(pos[1], pos[2])
 		switch sub {
-		case "", "push":
-			valid = len(pos) <= 1
-		case "log":
+		case "":
+			valid = len(pos) == 0
+		case "push", "log":
 			// Every session, or one named by its tool and identifier.
-			valid = len(pos) == 1 || (len(pos) == 3 && segmentSessionKeyValid(pos[1], pos[2]))
+			valid = len(pos) == 1 || named
+		case "remove", "allow":
+			valid = named
 		default:
 			valid = false
 		}
-		if sub == "push" {
-			// It uploads, so it is not a read-only invocation, although it
-			// writes nothing on this computer.
+		// Only removing is confirmed.
+		if _, yes := flags["--yes"]; yes && sub != "remove" {
+			valid = false
+		}
+		if sub == "push" || sub == "remove" || sub == "allow" {
+			// They change what the server holds, so they are not read-only
+			// invocations.
 			p.effect = commandLocalWrite
 		}
 	case "config":

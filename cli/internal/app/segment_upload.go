@@ -32,6 +32,8 @@ type SegmentUploadService struct {
 	// summaryRemote and summarizer are set together by WithSummaries.
 	summaryRemote outbound.AnchoredSummaryRemote
 	summarizer    outbound.SessionSummarizer
+	// removalRemote is set by WithRemovals.
+	removalRemote outbound.AnchoredRemovalRemote
 	// uploadRecords and clock are set by WithUploadRecords.
 	uploadRecords outbound.SessionUploadRecords
 	clock         func() time.Time
@@ -69,6 +71,15 @@ func (s *SegmentUploadService) WithSummaries(remote outbound.AnchoredSummaryRemo
 // computer.
 func (s *SegmentUploadService) WithBranchIDs(store outbound.BranchIDStore, remote outbound.BranchLedgerRemote, newID func() (string, error)) *SegmentUploadService {
 	s.branchIDs, s.branchRemote, s.newBranchID = store, remote, newID
+	return s
+}
+
+// WithRemovals makes every run ask the server which of the caller's sessions
+// were removed from it, and send nothing of those: neither the report nor the
+// conversation. A removed session is uploaded again only after it is allowed
+// again.
+func (s *SegmentUploadService) WithRemovals(remote outbound.AnchoredRemovalRemote) *SegmentUploadService {
+	s.removalRemote = remote
 	return s
 }
 
@@ -202,7 +213,32 @@ func refusedSessionReport(err error) bool {
 // the run a person asks for: it reads everything, sends every report and lets
 // the server say what changed.
 func (s *SegmentUploadService) PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error) {
-	return s.push(ctx, cwd, nil)
+	return s.push(ctx, cwd, nil, nil)
+}
+
+// PushSegmentsOf uploads only the named sessions, by the same rules as
+// PushSegments: everything is read again, and the report, the conversation
+// and the summaries of each named session are sent. A session the tools'
+// records on this computer do not hold is named in the result.
+func (s *SegmentUploadService) PushSegmentsOf(ctx context.Context, cwd string, keys []domain.SessionUploadKey) (domain.SegmentPushResult, error) {
+	only := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		only[domain.CollectorSessionKey(key.Provider, key.SessionID)] = true
+	}
+	result, err := s.push(ctx, cwd, nil, only)
+	if err != nil {
+		return result, err
+	}
+	handled := map[string]bool{}
+	for _, session := range result.Sessions {
+		handled[domain.CollectorSessionKey(session.Provider, session.ID)] = true
+	}
+	for _, key := range keys {
+		if !handled[domain.CollectorSessionKey(key.Provider, key.SessionID)] {
+			result.NotFound = append(result.NotFound, key)
+		}
+	}
+	return result, nil
 }
 
 // CollectSegments is the run that needs nobody to ask for it. It reads the
@@ -243,7 +279,7 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 	if s.contentEpoch != nil {
 		run.epoch = s.contentEpoch(ctx, cwd)
 	}
-	result, runErr := s.push(ctx, cwd, run)
+	result, runErr := s.push(ctx, cwd, run, nil)
 	state.LastRun = &domain.CollectorRun{At: now.Format(time.RFC3339Nano), Stored: result.Stored, Unchanged: result.Unchanged, Refused: result.Refused}
 	if runErr != nil {
 		state.LastRun.Error = runErr.Error()
@@ -262,7 +298,10 @@ type collectorRun struct {
 	epoch     string
 }
 
-func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *collectorRun) (domain.SegmentPushResult, error) {
+// push is one run. auto carries the memory of an automatic run and is nil for
+// a run a person asked for; only, when it is not nil, names the sessions the
+// run is for.
+func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *collectorRun, only map[string]bool) (domain.SegmentPushResult, error) {
 	result := domain.SegmentPushResult{Version: 1, Automatic: auto != nil, Sessions: []domain.SegmentPushSession{}, Unread: []domain.UnreadSessionRecord{}}
 	if s.reports == nil || s.remote == nil || s.repo == nil {
 		return result, fmt.Errorf("session report upload unavailable")
@@ -297,10 +336,53 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 	stopped := func(err error) error {
 		return fmt.Errorf("stopped after %d of %d session reports: %w", len(result.Sessions), len(plan.Uploads), err)
 	}
+	// Sessions that were removed from the server are not sent. The server
+	// would refuse their report; asking first keeps their conversation from
+	// being uploaded before that refusal. The server is asked once, and only
+	// when the run is about to send something: a run with nothing new makes
+	// no request at all.
+	var removed map[string]domain.AnchoredSessionRemoval
+	removalOf := func(key string) (domain.AnchoredSessionRemoval, bool, error) {
+		if s.removalRemote == nil {
+			return domain.AnchoredSessionRemoval{}, false, nil
+		}
+		if removed == nil {
+			listed, err := s.removalRemote.ListRemovedAnchoredSessions(ctx, string(repo.ID))
+			if err != nil {
+				return domain.AnchoredSessionRemoval{}, false, err
+			}
+			removed = make(map[string]domain.AnchoredSessionRemoval, len(listed))
+			for _, removal := range listed {
+				removed[domain.CollectorSessionKey(removal.Provider, removal.SessionID)] = removal
+			}
+		}
+		removal, gone := removed[key]
+		return removal, gone, nil
+	}
+	// notSent records a removed session in the result, in the collector's
+	// memory and in the session's log.
+	notSent := func(session domain.SegmentPushSession, key string, removal domain.AnchoredSessionRemoval) {
+		session.State, session.Reason = domain.SegmentPushRemoved, removedSessionReason(removal)
+		session.Content, session.ContentReason = "", ""
+		result.Removed++
+		if auto != nil {
+			// What was sent is no longer on the server.
+			delete(auto.state.Sessions, key)
+		}
+		if s.uploadRecords != nil && s.clock != nil {
+			_ = s.uploadRecords.LogSessionAction(context.WithoutCancel(ctx), cwd, domain.SessionUploadKey{Provider: session.Provider, SessionID: session.ID},
+				domain.SessionUploadLogEntry{At: s.clock().UTC().Format(time.RFC3339Nano), Automatic: auto != nil, Action: "not sent", Reason: session.Reason})
+		}
+		result.Sessions = append(result.Sessions, session)
+	}
 	// The plan holds one upload per session of the report, in the same order.
 	for index, upload := range plan.Uploads {
 		if err := ctx.Err(); err != nil {
 			return result, err
+		}
+		key := domain.CollectorSessionKey(upload.Provider, upload.SessionID)
+		if only != nil && !only[key] {
+			continue
 		}
 		if auto != nil && !domain.InAutomaticScope(report.Sessions[index], auto.enabledAt) {
 			result.BeforeAutomatic++
@@ -313,7 +395,6 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 			result.Sessions = append(result.Sessions, session)
 			continue
 		}
-		key := domain.CollectorSessionKey(upload.Provider, upload.SessionID)
 		var remembered domain.CollectorSessionState
 		if auto != nil {
 			remembered = auto.state.Sessions[key]
@@ -336,6 +417,15 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 				}
 			}
 			if !reused {
+				// The conversation is about to be read back and sent.
+				removal, gone, removalErr := removalOf(key)
+				if removalErr != nil {
+					return result, stopped(removalErr)
+				}
+				if gone {
+					notSent(session, key, removal)
+					continue
+				}
 				var first, count []int
 				state, reason, first, count, conversation, err = s.attachContent(ctx, string(repo.ID), inputs.Git.Root, records[index], &upload.Body)
 				if err != nil {
@@ -361,6 +451,18 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		known := auto != nil && sent != "" && remembered.Sent == sent
 		var receipt domain.AnchoredSessionReceipt
 		if !known {
+			// The report is about to be sent.
+			removal, gone, removalErr := removalOf(key)
+			if removalErr != nil {
+				return result, stopped(removalErr)
+			}
+			if gone {
+				if session.Content == domain.SegmentContentNotUploaded {
+					result.ContentNotUploaded--
+				}
+				notSent(session, key, removal)
+				continue
+			}
 			receipt, err = s.remote.PutAnchoredSession(ctx, string(repo.ID), upload)
 			remembered.Sent = ""
 		}
@@ -541,4 +643,18 @@ func (s *SegmentUploadService) pushSummaries(ctx context.Context, repoID, folder
 	}
 	remembered.Summarized = domain.AnchoredSummaryRemembered(points, done)
 	return written, reason, nil
+}
+
+// removedSessionReason says why a removed session is not sent and what
+// brings it back.
+func removedSessionReason(removal domain.AnchoredSessionRemoval) string {
+	who := "you removed it from the server"
+	if !removal.ByYou {
+		who = "someone who manages the repository removed it from the server"
+	}
+	when := ""
+	if removal.RemovedAt != "" {
+		when = " on " + removal.RemovedAt
+	}
+	return fmt.Sprintf("%s%s; cxt segments allow %s %s lets it be uploaded again", who, when, removal.Provider, removal.SessionID)
 }

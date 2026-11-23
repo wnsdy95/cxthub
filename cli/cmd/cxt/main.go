@@ -97,23 +97,38 @@ func run(args []string) error {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if positionals := segmentPositionals(args[2:]); len(positionals) > 0 && positionals[0] == "push" {
+		positionals := segmentPositionals(args[2:])
+		asJSON := slices.Contains(args[2:], "--json")
+		sub := ""
+		if len(positionals) > 0 {
+			sub = positionals[0]
+		}
+		switch sub {
+		case "push":
 			// The same readers plus the repository's server: still no local store.
 			uploader, err := newSegmentUploader(loadConfig(), "")
 			if err != nil {
 				return err
 			}
-			return delivcli.RunSegmentsPush(ctx, uploader, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
-		}
-		if positionals := segmentPositionals(args[2:]); len(positionals) > 0 && positionals[0] == "log" {
+			return delivcli.RunSegmentsPush(ctx, uploader, cwd, positionals[1:], asJSON, os.Stdout)
+		case "log":
 			// What .cxt keeps is read from this computer alone.
-			return delivcli.RunSegmentsLog(ctx, newSegmentCare(), cwd, positionals[1:], slices.Contains(args[2:], "--json"), os.Stdout)
+			return delivcli.RunSegmentsLog(ctx, newSegmentCare(), cwd, positionals[1:], asJSON, os.Stdout)
+		case "remove", "allow":
+			care, err := newSegmentCareWithServer(loadConfig())
+			if err != nil {
+				return err
+			}
+			if sub == "remove" {
+				return delivcli.RunSegmentsRemove(ctx, care, cwd, positionals[1:], slices.Contains(args[2:], "--yes"), asJSON, os.Stdout)
+			}
+			return delivcli.RunSegmentsAllow(ctx, care, cwd, positionals[1:], asJSON, os.Stdout)
 		}
 		reporter, err := newSegmentReporter("")
 		if err != nil {
 			return err
 		}
-		return delivcli.RunSegments(ctx, reporter, cwd, slices.Contains(args[2:], "--json"), os.Stdout)
+		return delivcli.RunSegments(ctx, reporter, cwd, asJSON, os.Stdout)
 	}
 	if args[1] == "capture" {
 		cwd, err := os.Getwd()

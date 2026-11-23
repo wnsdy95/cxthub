@@ -104,3 +104,21 @@ type SessionUploadKey struct {
 	Provider  ProviderKind `json:"provider"`
 	SessionID string       `json:"session_id"`
 }
+
+// SegmentRemoveResult is what removing a session from the server removed:
+// the session asked for first, then the sessions it spawned.
+type SegmentRemoveResult struct {
+	Version int                      `json:"version"`
+	Removed []AnchoredSessionRemoval `json:"removed"`
+}
+
+// SegmentAllowResult is what allowing a removed session again did: the
+// removal was taken back and the session was uploaded from the tool's
+// records, as far as this computer still holds them.
+type SegmentAllowResult struct {
+	Version int              `json:"version"`
+	Allowed SessionUploadKey `json:"allowed"`
+	// Upload is the run that sent the session again. Its NotFound names the
+	// session when the tool's records are no longer on this computer.
+	Upload SegmentPushResult `json:"upload"`
+}

@@ -131,6 +131,24 @@ func TestSegmentsCommandContract(t *testing.T) {
 	if ReadOnlyInvocation([]string{"cxt", "segments", "push"}) || ReadOnlyInvocation([]string{"cxt", "segments", "push", "--json"}) {
 		t.Fatal("segments push must not be classified as a read-only command")
 	}
+	// Uploading one session, removing one and allowing one again name it by
+	// its tool and its identifier, and none of them is read-only.
+	for _, args := range [][]string{{"cxt", "segments", "push", "claude", "session-1"}, {"cxt", "segments", "remove", "claude", "session-1", "--yes"},
+		{"cxt", "segments", "remove", "codex", "thread-1"}, {"cxt", "segments", "allow", "codex", "thread-1", "--json"}} {
+		if ReadOnlyInvocation(args) {
+			t.Fatalf("%v must not be classified as a read-only command", args)
+		}
+		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
+			t.Fatalf("%v was rejected: %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"cxt", "segments", "remove"}, {"cxt", "segments", "remove", "claude"}, {"cxt", "segments", "remove", "other", "session-1", "--yes"},
+		{"cxt", "segments", "allow", "claude", "../escape"}, {"cxt", "segments", "allow", "claude", "session-1", "--yes"}, {"cxt", "segments", "push", "claude"},
+		{"cxt", "segments", "push", "--yes"}, {"cxt", "segments", "--yes"}, {"cxt", "segments", "log", "--yes"}} {
+		if err := Run(nil, args); err == nil {
+			t.Fatalf("%v must be rejected before dispatch", args)
+		}
+	}
 	// Reading what .cxt keeps is reading, for every session or for one.
 	if !ReadOnlyInvocation([]string{"cxt", "segments", "log"}) || !ReadOnlyInvocation([]string{"cxt", "segments", "log", "codex", "thread-1", "--json"}) {
 		t.Fatal("segments log must be classified as a read-only command")
@@ -164,6 +182,14 @@ func (f segmentUploaderFunc) PushSegments(ctx context.Context, cwd string) (doma
 	return f(ctx, cwd)
 }
 
+// PushSegmentsOf answers what the function answers, with the sessions asked
+// for named as not found, so that a test sees which were asked for.
+func (f segmentUploaderFunc) PushSegmentsOf(ctx context.Context, cwd string, keys []domain.SessionUploadKey) (domain.SegmentPushResult, error) {
+	result, err := f(ctx, cwd)
+	result.NotFound = keys
+	return result, err
+}
+
 func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	result := domain.SegmentPushResult{Version: 1, Stored: 1, Unchanged: 1, Refused: 1, ContentNotUploaded: 1, AgentCallsWithoutSender: 2,
 		Sessions: []domain.SegmentPushSession{
@@ -179,7 +205,7 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 		return result, nil
 	})
 	var out bytes.Buffer
-	err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out)
+	err := RunSegmentsPush(context.Background(), uploader, "/work/app", nil, false, &out)
 	// The other reports were stored, and the command still fails so the gap is noticed.
 	if err == nil || !strings.Contains(err.Error(), "1 of 3 session reports were refused") || cwd != "/work/app" {
 		t.Fatalf("err=%v cwd=%q", err, cwd)
@@ -206,7 +232,7 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", true, &out); err == nil {
+	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", nil, true, &out); err == nil {
 		t.Fatal("a refused report must fail the JSON form too")
 	}
 	var decoded domain.SegmentPushResult
@@ -217,7 +243,7 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	// A report without its conversation is listed, and is not a failure.
 	result.Refused, result.Sessions = 0, result.Sessions[:2]
 	out.Reset()
-	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Refused") || !strings.Contains(out.String(), "Without conversation (1)") {
+	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", nil, false, &out); err != nil || strings.Contains(out.String(), "Refused") || !strings.Contains(out.String(), "Without conversation (1)") {
 		t.Fatalf("nothing refused: %v\n%s", err, out.String())
 	}
 	// A run that handles branch IDs says what it wrote here and what it could not do.
@@ -225,7 +251,7 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	withBranches.Branches = &domain.SegmentPushBranches{WithID: 4, Assigned: 1, OnOrigin: 3, Registered: 0, NotRegistered: "synthetic refusal"}
 	out.Reset()
 	branchRun := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) { return withBranches, nil })
-	if err := RunSegmentsPush(context.Background(), branchRun, "/work/app", false, &out); err != nil {
+	if err := RunSegmentsPush(context.Background(), branchRun, "/work/app", nil, false, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -244,13 +270,13 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	plain := domain.SegmentPushResult{Version: 1, Stored: 1, Sessions: []domain.SegmentPushSession{{Provider: domain.ProviderClaude, ID: "stored", State: domain.SegmentPushStored, Revision: 1}}}
 	out.Reset()
 	quiet := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) { return plain, nil })
-	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", false, &out); err != nil || strings.Contains(out.String(), "Conversation") {
+	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", nil, false, &out); err != nil || strings.Contains(out.String(), "Conversation") {
 		t.Fatalf("no conversation: %v\n%s", err, out.String())
 	}
 	// A run that keeps copies says where, and says when one was not written.
 	plain.LocalRecords = &domain.SegmentPushLocalRecords{Kept: 1, NotKept: "synthetic disk failure"}
 	out.Reset()
-	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", false, &out); err != nil {
+	if err := RunSegmentsPush(context.Background(), quiet, "/work/app", nil, false, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -266,10 +292,10 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 	failing := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) {
 		return domain.SegmentPushResult{}, failure
 	})
-	if err := RunSegmentsPush(context.Background(), failing, "/work/app", false, &out); !errors.Is(err, failure) {
+	if err := RunSegmentsPush(context.Background(), failing, "/work/app", nil, false, &out); !errors.Is(err, failure) {
 		t.Fatalf("upload error: %v", err)
 	}
-	if err := RunSegmentsPush(context.Background(), nil, "/work/app", false, &out); err == nil {
+	if err := RunSegmentsPush(context.Background(), nil, "/work/app", nil, false, &out); err == nil {
 		t.Fatal("a missing uploader must be an error")
 	}
 }
@@ -277,7 +303,19 @@ func TestRunSegmentsPushListsWhatIsNotOnTheServer(t *testing.T) {
 type segmentCareFake struct {
 	asked    *domain.SessionUploadKey
 	listings []domain.SessionUploadListing
+	removed  domain.SegmentRemoveResult
+	allowed  domain.SegmentAllowResult
 	err      error
+}
+
+func (f *segmentCareFake) RemoveSession(_ context.Context, _ string, key domain.SessionUploadKey) (domain.SegmentRemoveResult, error) {
+	f.asked = &key
+	return f.removed, f.err
+}
+
+func (f *segmentCareFake) AllowSession(_ context.Context, _ string, key domain.SessionUploadKey) (domain.SegmentAllowResult, error) {
+	f.asked = &key
+	return f.allowed, f.err
 }
 
 func (f *segmentCareFake) UploadLog(_ context.Context, _ string, key *domain.SessionUploadKey) ([]domain.SessionUploadListing, error) {
@@ -342,5 +380,121 @@ func TestSegmentsLogSaysWhatIsKeptAndWhatHappened(t *testing.T) {
 	}
 	if err := RunSegmentsLog(context.Background(), nil, "/work/app", nil, false, &out); err == nil {
 		t.Fatal("a missing service must be an error")
+	}
+}
+
+func TestSegmentsPushOfOneSessionAndWhatWasRemoved(t *testing.T) {
+	result := domain.SegmentPushResult{Version: 1, Stored: 1, Removed: 1, Sessions: []domain.SegmentPushSession{
+		{Provider: domain.ProviderClaude, ID: "kept", State: domain.SegmentPushStored, Revision: 2},
+		{Provider: domain.ProviderClaude, ID: "gone", State: domain.SegmentPushRemoved, Reason: "you removed it from the server on 2031-01-02T03:04:05Z; cxt segments allow claude gone lets it be uploaded again"},
+	}}
+	var asked []domain.SessionUploadKey
+	uploader := segmentUploaderFunc(func(context.Context, string) (domain.SegmentPushResult, error) { return result, nil })
+	var out strings.Builder
+	// A removed session is said, with what brings it back, and is no failure.
+	if err := RunSegmentsPush(context.Background(), uploader, "/work/app", nil, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Session reports: 1 stored, 0 unchanged, 0 refused, 1 removed from the server (2 sessions)",
+		"Removed (1) — these sessions were removed from the server and nothing of them was sent",
+		"  claude gone: you removed it from the server on 2031-01-02T03:04:05Z; cxt segments allow claude gone lets it be uploaded again",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	// One session is asked for by name; one the tools did not record fails.
+	named := segmentNamedUploader{result: domain.SegmentPushResult{Version: 1, Stored: 1, Sessions: result.Sessions[:1]}, asked: &asked}
+	out.Reset()
+	if err := RunSegmentsPush(context.Background(), named, "/work/app", []string{"claude", "kept"}, false, &out); err != nil || len(asked) != 1 || asked[0] != (domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "kept"}) {
+		t.Fatalf("%v asked=%+v", err, asked)
+	}
+	named.result = domain.SegmentPushResult{Version: 1, NotFound: []domain.SessionUploadKey{{Provider: domain.ProviderCodex, SessionID: "absent"}}}
+	if err := RunSegmentsPush(context.Background(), named, "/work/app", []string{"codex", "absent"}, false, &out); err == nil || !strings.Contains(err.Error(), "codex absent is not among the sessions the tools recorded for this repository on this computer") {
+		t.Fatalf("a session the tools did not record: %v", err)
+	}
+}
+
+type segmentNamedUploader struct {
+	result domain.SegmentPushResult
+	asked  *[]domain.SessionUploadKey
+}
+
+func (u segmentNamedUploader) PushSegments(context.Context, string) (domain.SegmentPushResult, error) {
+	return domain.SegmentPushResult{}, errors.New("every session was asked for")
+}
+
+func (u segmentNamedUploader) PushSegmentsOf(_ context.Context, _ string, keys []domain.SessionUploadKey) (domain.SegmentPushResult, error) {
+	*u.asked = keys
+	return u.result, nil
+}
+
+func TestSegmentsRemoveNeedsToBeConfirmedAndSaysWhatBringsItBack(t *testing.T) {
+	care := &segmentCareFake{removed: domain.SegmentRemoveResult{Version: 1, Removed: []domain.AnchoredSessionRemoval{
+		{Provider: domain.ProviderClaude, SessionID: "session-1", RemovedAt: "2031-01-02T03:04:05Z", ByYou: true},
+		{Provider: domain.ProviderClaude, SessionID: "sub-1", RemovedAt: "2031-01-02T03:04:05Z", ByYou: true}}}}
+	var out strings.Builder
+	// Tried without confirmation: nothing reaches the service, and the
+	// command fails saying what it would do.
+	err := RunSegmentsRemove(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, false, &out)
+	if err == nil || care.asked != nil || !strings.Contains(err.Error(), "nothing was removed") || !strings.Contains(err.Error(), "cxt segments remove claude session-1 --yes") ||
+		!strings.Contains(err.Error(), "for every reader") || out.Len() != 0 {
+		t.Fatalf("unconfirmed: %v asked=%+v out=%q", err, care.asked, out.String())
+	}
+	if err := RunSegmentsRemove(context.Background(), care, "/work/app", []string{"claude", "session-1"}, true, false, &out); err != nil || care.asked == nil || care.asked.SessionID != "session-1" {
+		t.Fatalf("confirmed: %v asked=%+v", err, care.asked)
+	}
+	for _, want := range []string{
+		"Removed from the server (2 sessions): the report, the summaries and the conversation of each",
+		"  claude session-1", "  claude sub-1",
+		"Nothing on this computer was removed: the tool's records and the copies under .cxt/sessions stay.",
+		"  cxt segments allow claude session-1", "  cxt segments allow claude sub-1",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if err := RunSegmentsRemove(context.Background(), care, "/work/app", []string{"claude", "session-1"}, true, true, &out); err != nil || !strings.HasPrefix(out.String(), `{"version":1,"removed":[{"provider":"claude","session_id":"session-1"`) {
+		t.Fatalf("json: %v %s", err, out.String())
+	}
+	care.err = errors.New("synthetic refusal")
+	if err := RunSegmentsRemove(context.Background(), care, "/work/app", []string{"claude", "session-1"}, true, false, &out); err == nil {
+		t.Fatal("a refused removal succeeded")
+	}
+	if err := RunSegmentsRemove(context.Background(), nil, "/work/app", []string{"claude", "session-1"}, true, false, &out); err == nil {
+		t.Fatal("a missing service must be an error")
+	}
+}
+
+func TestSegmentsAllowSaysWhetherTheSessionWentUpAgain(t *testing.T) {
+	key := domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "session-1"}
+	care := &segmentCareFake{allowed: domain.SegmentAllowResult{Version: 1, Allowed: key, Upload: domain.SegmentPushResult{Version: 1, Stored: 1,
+		Sessions: []domain.SegmentPushSession{{Provider: key.Provider, ID: key.SessionID, State: domain.SegmentPushStored, Revision: 1, Content: domain.SegmentContentStored, Summaries: 2}}}}}
+	var out strings.Builder
+	if err := RunSegmentsAllow(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err != nil || *care.asked != key {
+		t.Fatalf("%v asked=%+v", err, care.asked)
+	}
+	for _, want := range []string{"claude session-1 is allowed on the server again.", "Uploaded again: report stored (revision 1), with its conversation, 2 summaries"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	// The tool's records are gone: allowed, not uploaded, and the command fails so that it is noticed.
+	care.allowed.Upload = domain.SegmentPushResult{Version: 1, NotFound: []domain.SessionUploadKey{key}}
+	out.Reset()
+	if err := RunSegmentsAllow(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err == nil ||
+		!strings.Contains(out.String(), "It was not uploaded: the tool's records of this session are no longer on this computer.") {
+		t.Fatalf("records gone: %v\n%s", err, out.String())
+	}
+	care.allowed.Upload = domain.SegmentPushResult{Version: 1, Refused: 1, Sessions: []domain.SegmentPushSession{{Provider: key.Provider, ID: key.SessionID, State: domain.SegmentPushRefused, Reason: "synthetic refusal"}}}
+	out.Reset()
+	if err := RunSegmentsAllow(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err == nil || !strings.Contains(out.String(), "It was not uploaded: synthetic refusal") {
+		t.Fatalf("refused again: %v\n%s", err, out.String())
+	}
+	care.err = errors.New("synthetic refusal")
+	if err := RunSegmentsAllow(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err == nil {
+		t.Fatal("a refused allow succeeded")
 	}
 }

@@ -203,11 +203,19 @@ func writeSessionUploadFile(root, relative string, data []byte) error {
 	return providerfs.WriteRegularFileAtomic(path, data, 0o600)
 }
 
-// LogSessionAction appends a line that is not an upload.
+// LogSessionAction appends a line that is not an upload, unless it only
+// repeats the last line.
 func (f *SessionUploadFiles) LogSessionAction(ctx context.Context, cwd string, key domain.SessionUploadKey, entry domain.SessionUploadLogEntry) error {
 	root, dir, ok, err := f.place(ctx, cwd, key)
 	if err != nil || !ok {
 		return err
+	}
+	log, err := readSessionUploadLog(root, dir)
+	if err != nil {
+		return err
+	}
+	if len(log) > 0 && log[len(log)-1].SameOutcome(entry) {
+		return nil
 	}
 	return appendSessionUploadLog(root, dir, entry)
 }

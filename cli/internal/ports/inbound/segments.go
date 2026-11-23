@@ -17,6 +17,8 @@ type SegmentReporter interface {
 // Git's configuration and, where cxt is set up, a copy of what it sent.
 type SegmentUploader interface {
 	PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
+	// PushSegmentsOf uploads only the named sessions.
+	PushSegmentsOf(ctx context.Context, cwd string, keys []domain.SessionUploadKey) (domain.SegmentPushResult, error)
 }
 
 // SegmentCollector is the upload nobody has to ask for. It reads the same
@@ -34,4 +36,11 @@ type SegmentCare interface {
 	// UploadLog lists what is kept on this computer about the uploads of
 	// every session, or of the one session key names.
 	UploadLog(ctx context.Context, cwd string, key *domain.SessionUploadKey) ([]domain.SessionUploadListing, error)
+	// RemoveSession removes a session, and the sessions it spawned, from the
+	// server for every reader. The server remembers the removal: the session
+	// is not uploaded again until it is allowed again.
+	RemoveSession(ctx context.Context, cwd string, key domain.SessionUploadKey) (domain.SegmentRemoveResult, error)
+	// AllowSession takes back the removal of a session and uploads the
+	// session again from the tool's records.
+	AllowSession(ctx context.Context, cwd string, key domain.SessionUploadKey) (domain.SegmentAllowResult, error)
 }

@@ -12,3 +12,16 @@ import (
 type AnchoredSessionRemote interface {
 	PutAnchoredSession(ctx context.Context, repoID string, upload domain.AnchoredSessionUpload) (domain.AnchoredSessionReceipt, error)
 }
+
+// AnchoredRemovalRemote reads and changes which of the caller's sessions are
+// removed on the server.
+type AnchoredRemovalRemote interface {
+	// ListRemovedAnchoredSessions lists the caller's own removed sessions.
+	// A server that has no such list answers none.
+	ListRemovedAnchoredSessions(ctx context.Context, repoID string) ([]domain.AnchoredSessionRemoval, error)
+	// RemoveAnchoredSession removes a session and the sessions it spawned
+	// and answers what was removed, the session asked for first.
+	RemoveAnchoredSession(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string) ([]domain.AnchoredSessionRemoval, error)
+	// AllowAnchoredSession takes back the removal of one session.
+	AllowAnchoredSession(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string) error
+}

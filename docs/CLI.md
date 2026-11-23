@@ -1329,6 +1329,7 @@ many long sessions.
 
 ```text
 cxt segments push [--json]
+cxt segments push claude|codex <session id> [--json]
 ```
 
 Computes the same report and uploads it to the repository's CXTHub server, one
@@ -1501,8 +1502,19 @@ branch.<name>.cxtBranchIdIssuedFor   the name the ID was issued for
 - Neither step stops the upload. If Git refuses the write or the server does
   not take the report, the output says so and the next run tries again.
 
-Every session is listed with what happened to it: `stored`, `unchanged` or
-`refused`. A report is refused when another account already reported the same
+With a tool and a session identifier only that session is uploaded, by the
+same rules: everything is read again and the report, the conversation and the
+summaries of that one session are sent. A session the tools' records on this
+computer do not hold makes the command fail and is named under `not_found`.
+
+Every session is listed with what happened to it: `stored`, `unchanged`,
+`refused` or `removed`. A session that was removed from the server (see
+`cxt segments remove`) is `removed`: nothing of it is read back or sent, the
+reason says who removed it and what brings it back, and it is no failure. A
+run that is about to send something first asks the server, once, which of your
+sessions are removed.
+
+A report is refused when another account already reported the same
 session identifier, when the tool's identifier cannot be used as a key, or when
 the server finds the report too large or not well formed. The other sessions
 are still uploaded, and the command then exits with a failure so that the gap
@@ -1569,6 +1581,40 @@ and `sessions`; each session carries `report_kept`, `conversation_kept`,
 `unchanged` line of the log carries the same value when the copy is the report
 the server last took.
 
+### `cxt segments remove` and `cxt segments allow`
+
+```text
+cxt segments remove claude|codex <session id> --yes [--json]
+cxt segments allow claude|codex <session id> [--json]
+```
+
+`remove` takes a session off the server for every reader: its report with its
+commit links, its summaries and the ranges that were open, and its conversation
+document when no other report uses it. The sessions it spawned, as far as they
+are yours, are removed with it, and each one is listed in the result. The
+member the session belongs to may remove it, and so may a maintainer of the
+repository.
+
+- Without `--yes` nothing is removed and the command fails, saying what it
+  would do. That is deliberate: removing is not something to try.
+- Nothing on this computer is removed. The tool's records and the copies under
+  `.cxt/sessions` stay, and the session's log gets a line.
+- The server remembers the removal. No upload sends the session again, neither
+  `cxt segments push` nor the collector, and the server refuses its report
+  from anyone, until it is allowed again. Archiving, by contrast, only hides a
+  session from lists; an archived session is still opened by its address.
+- Manual notes are not removed.
+- On the server the conversation can no longer be read through any route. The
+  pieces it was stored in stay in the server's storage until the operator
+  removes pieces no document uses; with the file store that is `cxtd repack`,
+  and the PostgreSQL store has no such step yet.
+
+`allow` takes back the removal of one session and uploads it again at once,
+from the tool's records. A session that was removed together with the one that
+spawned it has a removal of its own and is allowed by its own name. When the
+tool no longer holds the session's records, the session is allowed but not
+uploaded, and the command fails saying so.
+
 ### Automatic upload
 
 In a repository cxt is set up in and connected to a server, the same upload
@@ -1591,6 +1637,12 @@ It differs from `cxt segments push` in two ways only:
   is read back and built again when the session's records or their cut changed,
   or when the masking policy or the document identity did, and branch IDs are
   registered again when the branches on origin or their IDs changed.
+
+Like every upload it sends nothing of a session that was removed from the
+server, and it then forgets what it had sent of that session, so that the
+session is sent whole again once it is allowed again. A run with nothing new
+still makes no request at all: the server is asked which sessions are removed
+only by a run that is about to send something.
 
 One collector runs per repository at a time, detached from the hook that woke
 it. A wake that arrives while one runs is answered by one more run afterwards.

@@ -79,6 +79,8 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 		domain.ProviderClaude: memory.NewClaudeMemorySource(),
 		domain.ProviderCodex:  memory.NewCodexMemorySource(),
 	}, memory.NewRuleDistiller(), capture.ScrubNativeMemory))
+	// Sessions that were removed from the server are not sent again.
+	service.WithRemovals(remote)
 	// A copy of what is sent for each session, and a log of the uploads, is
 	// kept in the repository's .cxt folder, where cxt is set up.
 	service.WithUploadRecords(storage.NewSessionUploadFiles(gitctx.ContextRoot), time.Now)
@@ -120,6 +122,17 @@ func newSegmentCollector(cfg config) (inbound.SegmentCollector, *gitctx.Collecto
 // folder. It needs no server and no reader of the tools' records.
 func newSegmentCare() *app.SegmentCareService {
 	return app.NewSegmentCareService(storage.NewSessionUploadFiles(gitctx.ContextRoot))
+}
+
+// newSegmentCareWithServer adds the repository's server and the uploader,
+// for what changes a session there.
+func newSegmentCareWithServer(cfg config) (*app.SegmentCareService, error) {
+	uploader, err := newSegmentUploader(cfg, "")
+	if err != nil {
+		return nil, err
+	}
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
+	return newSegmentCare().WithServer(remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, uploader, time.Now), nil
 }
 
 // segmentPositionals returns the arguments of cxt segments that are not

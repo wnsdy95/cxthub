@@ -180,15 +180,19 @@ func Run(c *Container, args []string) error {
 		if c != nil {
 			reporter, uploader = c.Segments, c.SegmentUpload
 		}
+		var care inbound.SegmentCare
+		if c != nil {
+			care = c.SegmentCare
+		}
 		switch parsed.first() {
 		case "push":
-			return RunSegmentsPush(ctx, uploader, cwd, parsed.has("--json"), os.Stdout)
+			return RunSegmentsPush(ctx, uploader, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
 		case "log":
-			var care inbound.SegmentCare
-			if c != nil {
-				care = c.SegmentCare
-			}
 			return RunSegmentsLog(ctx, care, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
+		case "remove":
+			return RunSegmentsRemove(ctx, care, cwd, parsed.positionals[1:], parsed.has("--yes"), parsed.has("--json"), os.Stdout)
+		case "allow":
+			return RunSegmentsAllow(ctx, care, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
 		}
 		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
@@ -1496,7 +1500,12 @@ usage: cxt <command> [flags]
                             pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
   segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
-  segments push [--json]    upload that report to the server, one report per session; a copy of what was sent is kept under .cxt/sessions
+  segments push [claude|codex <session>] [--json]
+                            upload that report to the server, one report per session, or the one session named; a copy of what was sent is kept under .cxt/sessions
+  segments remove claude|codex <session> --yes [--json]
+                            remove a session from the server for every reader, with the sessions it spawned; it is not uploaded again until it is allowed again
+  segments allow claude|codex <session> [--json]
+                            take back the removal of a session and upload it again
   segments log [claude|codex <session>] [--json]
                             show what .cxt/sessions keeps about the uploads: every session with its last upload, or one session's whole log
   branch operations         inspect durable local operations (--json available)

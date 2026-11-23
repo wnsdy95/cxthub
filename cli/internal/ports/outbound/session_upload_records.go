@@ -17,7 +17,8 @@ type SessionUploadRecords interface {
 	// when it is eventful, when a file changed, or when nothing was logged
 	// yet, unless it only repeats the last line.
 	KeepSessionUpload(ctx context.Context, cwd string, upload domain.AnchoredSessionUpload, conversation *domain.CIRDocument, entry domain.SessionUploadLogEntry) error
-	// LogSessionAction appends a line that is not an upload.
+	// LogSessionAction appends a line that is not an upload, unless it only
+	// repeats the last line.
 	LogSessionAction(ctx context.Context, cwd string, key domain.SessionUploadKey, entry domain.SessionUploadLogEntry) error
 	// ListSessionUploads names every session a record is kept for.
 	ListSessionUploads(ctx context.Context, cwd string) ([]domain.SessionUploadKey, error)
