@@ -23,25 +23,6 @@ type docSpoolWorkPGTrace struct {
 	unboundWrites   int
 }
 
-type docSpoolWorkPGRead struct {
-	offset int
-	length int
-}
-
-type docSpoolWorkPGSource struct {
-	spool *legacyDocSpool
-	reads []docSpoolWorkPGRead
-}
-
-func (source *docSpoolWorkPGSource) Append(ctx context.Context, body []byte) error {
-	return source.spool.Append(ctx, body)
-}
-
-func (source *docSpoolWorkPGSource) Read(ctx context.Context, offset, length int) ([]byte, error) {
-	source.reads = append(source.reads, docSpoolWorkPGRead{offset: offset, length: length})
-	return source.spool.Read(ctx, offset, length)
-}
-
 func (trace *docSpoolWorkPGTrace) TraceQueryStart(ctx context.Context, connection *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
 	if strings.Contains(strings.ReplaceAll(query.SQL, "octet_length(source.bytes)", ""), "source.bytes") {
 		trace.sourceReads.Add(1)

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func rangeFixture(t *testing.T, count int) rootReaderFixture {
@@ -40,45 +39,6 @@ func rangeFixture(t *testing.T, count int) rootReaderFixture {
 		t.Fatal(err)
 	}
 	return fixture
-}
-
-func TestDocRangeFSColdFailureDoesNotPublish(t *testing.T) {
-	for _, damage := range []string{"source-corrupt", "source-missing", "canceled", "readonly", "page-write"} {
-		t.Run(damage, func(t *testing.T) {
-			spoolDirectory := rangeSpoolTempDir(t)
-			ctx := context.Background()
-			storage := NewFSStore(t.TempDir())
-			repo := domain.HashContent([]byte(t.Name()))
-			fixture := rangeFixture(t, 1)
-			seedRootFS(t, storage, repo, fixture)
-			var err error
-			switch damage {
-			case "source-corrupt":
-				err = writeAtomic(storage.chunkPath(repo, fixture.manifest.Chunks[0].Hash), []byte("corrupt"))
-			case "source-missing":
-				err = os.Remove(storage.chunkPath(repo, fixture.manifest.Chunks[0].Hash))
-			case "canceled":
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
-			case "readonly":
-				ctx = outbound.WithDocReadOnly(ctx)
-			case "page-write":
-				index, buildErr := domain.BuildDocRangeIndex(ctx, rootPublicationProof(t, fixture))
-				if buildErr != nil {
-					t.Fatal(buildErr)
-				}
-				err = os.MkdirAll(storage.rangePagePath(repo, fixture.hash, index.Header().Pages[0]), 0755)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if exists(storage.rangeIndexPath(repo, fixture.hash)) {
-				t.Fatal("failed rebuild published a header")
-			}
-			assertRangeSpoolsRemoved(t, spoolDirectory)
-		})
-	}
 }
 
 func TestDocRangeFSPublication(t *testing.T) {

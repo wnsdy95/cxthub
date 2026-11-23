@@ -22,7 +22,10 @@ func TestStoredDocProofRechecksCurrentBytesOwnershipAndExistence(t *testing.T) {
 	}
 	cold := NewFSStore(s.dataDir)
 	for i := 0; i < 2; i++ {
-		_, _ = cold.VerifyStoredDoc(ctx, repo, doc.Hash)
+		p, err := cold.VerifyStoredDoc(ctx, repo, doc.Hash)
+		if err != nil || !p.Valid() || p.DocumentRef() != (domain.DocumentRef{Hash: doc.Hash}) {
+			t.Fatalf("proof %d: %v %v", i, p, err)
+		}
 	}
 	if len(cold.docProofs.proofs) != 1 {
 		t.Fatal("proof was not retained")

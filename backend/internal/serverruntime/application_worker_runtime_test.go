@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -155,56 +153,4 @@ func TestWave48RuntimeExternalWorkersIsFullProfileOnly(test *testing.T) {
 			}
 		})
 	}
-}
-
-type wave48LifecycleAdmission struct {
-	*runtimeProfileAdmission
-	checked    chan struct{}
-	closeCalls atomic.Int32
-	failure    error
-	onClose    func()
-}
-
-func (admission *wave48LifecycleAdmission) Ready() bool {
-	select {
-	case admission.checked <- struct{}{}:
-	default:
-	}
-	return admission.ready.Load()
-}
-
-func (admission *wave48LifecycleAdmission) Err() error {
-	if admission.ctx.Err() != nil {
-		return admission.failure
-	}
-	return nil
-}
-
-func (admission *wave48LifecycleAdmission) Close() error {
-	admission.closeCalls.Add(1)
-	admission.onClose()
-	return admission.runtimeProfileAdmission.Close()
-}
-
-type wave48BindingProbe struct {
-	name        string
-	started     chan context.Context
-	canceled    chan struct{}
-	release     chan struct{}
-	exited      chan struct{}
-	runs        atomic.Int32
-	releaseOnce sync.Once
-}
-
-func (probe *wave48BindingProbe) run(ctx context.Context) {
-	probe.runs.Add(1)
-	defer close(probe.exited)
-	probe.started <- ctx
-	<-ctx.Done()
-	close(probe.canceled)
-	<-probe.release
-}
-
-func (probe *wave48BindingProbe) unblock() {
-	probe.releaseOnce.Do(func() { close(probe.release) })
 }

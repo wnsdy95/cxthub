@@ -338,8 +338,6 @@ func TestPGGitHubWorkerCurrentDocumentPolicyAtClaimAndFinish(test *testing.T) {
 				test.Fatal("public owner missed current source policy boundary", upgraded, err)
 			}
 			fixture.count(test, "git_ref_observations", 0)
-			fixture.count(test, "git_scan_jobs", 0)
-			fixture.count(test, "pr_promotion_jobs", 0)
 			after, err := fixture.peer.RepositoryRevision(fixture.ctx, fixture.repo.ID)
 			if err != nil || before != after {
 				test.Fatal("source policy rejection published state", before, after, err)

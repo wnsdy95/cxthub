@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,12 +10,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
-
-type preparedMemoryScopeFunc func(context.Context, domain.ContentHash, func(context.Context) error) error
-
-func (scope preparedMemoryScopeFunc) WithMemoryReadResources(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
-	return scope(ctx, repo, read)
-}
 
 func assertPreparedMemoryHTTPError(test *testing.T, response *httptest.ResponseRecorder, status int, code, retryAfter, retryCursor string) {
 	test.Helper()

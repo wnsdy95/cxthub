@@ -1,35 +1,14 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-type p9RootPullStore struct {
-	*store.FSStore
-	reads, legacy int
-}
-
-func (s *p9RootPullStore) WithinReadSnapshot(ctx context.Context, fn func(context.Context) error) error {
-	return fn(context.WithValue(ctx, p9ReadBoundaryKey{}, true))
-}
-func (s *p9RootPullStore) WithinRepository(context.Context, domain.ContentHash, func(context.Context) error) error {
-	panic("root pull attempted write")
-}
-func (s *p9RootPullStore) GetDocManifest(context.Context, domain.ContentHash, domain.ContentHash) (domain.DocChunkManifest, error) {
-	s.legacy++
-	return domain.DocChunkManifest{}, errors.New("legacy fallback")
-}
-func (s *p9RootPullStore) GetDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.SessionDoc, error) {
-	s.legacy++
-	return domain.SessionDoc{}, errors.New("full fallback")
-}
 func TestP9RootAdmissionRequiresFlagOptInAndCompatibility(t *testing.T) {
 	for _, mode := range []string{"flag-off", "no-opt-in", "old-peer", "old-binary", "ready"} {
 		t.Run(mode, func(t *testing.T) {

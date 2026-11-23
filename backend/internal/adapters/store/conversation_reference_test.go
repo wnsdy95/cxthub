@@ -23,7 +23,7 @@ func TestStoredConversationReferenceReusableLoader(test *testing.T) {
 		}
 		var buffer []byte
 		calls := 0
-		_, _ = verifyStoredConversationReference(context.Background(), &domain.CanonicalDocVerifier{}, fixture.hash, fixture.manifest, func(_ context.Context, hash domain.ContentHash) ([]byte, error) {
+		proof, err := verifyStoredConversationReference(context.Background(), &domain.CanonicalDocVerifier{}, fixture.hash, fixture.manifest, func(_ context.Context, hash domain.ContentHash) ([]byte, error) {
 			if hash != fixture.manifest.Chunks[calls].Hash {
 				test.Fatal("changed chunk occurrence order")
 			}
@@ -32,6 +32,10 @@ func TestStoredConversationReferenceReusableLoader(test *testing.T) {
 			return buffer, nil
 		})
 		clear(buffer)
+		if err != nil || calls != len(fixture.manifest.Chunks) || !proof.Valid() ||
+			proof.DocumentRef() != (domain.DocumentRef{Hash: fixture.hash, Identity: domain.DocumentIdentityRootV1}) {
+			test.Fatal("stored reference", compressed, calls, proof, err)
+		}
 	}
 }
 

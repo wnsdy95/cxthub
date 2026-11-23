@@ -232,21 +232,7 @@ func TestDocVisibleGenerationRejectsMalformedDescriptors(test *testing.T) {
 			if !errors.Is(candidate.Validate(generation.Hash, generation.RangeGeneration), ErrIntegrity) {
 				test.Fatal("invalid descriptor validated")
 			}
-			_ = docVisibleTestJSON(test, candidate)
 		})
-	}
-	raw, err := generation.Encode()
-	if err != nil {
-		test.Fatal(err)
-	}
-	_ = map[string][]byte{
-		"empty":                   nil,
-		"oversized":               bytes.Repeat([]byte(" "), MaxDocVisibleGenerationBytes+1),
-		"invalid-json":            []byte("{"),
-		"null":                    []byte("null"),
-		"noncanonical-whitespace": append([]byte(" "), raw...),
-		"unknown-field":           append(append([]byte(nil), raw[:len(raw)-1]...), []byte(`,"unknown":0}`)...),
-		"duplicate-field":         append(append([]byte(nil), raw[:len(raw)-1]...), []byte(`,"version":1}`)...),
 	}
 }
 

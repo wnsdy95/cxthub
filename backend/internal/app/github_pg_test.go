@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -43,19 +42,4 @@ func TestPGGitHubSyncContract(t *testing.T) {
 	if err != nil || c.Enabled {
 		t.Fatalf("rollback leaked: %+v %v", c, err)
 	}
-}
-
-type githubObservationRollbackPG struct {
-	*store.PostgresStore
-	rejectRevision bool
-}
-
-func (storage *githubObservationRollbackPG) AdvanceEvidenceRevision(ctx context.Context, repo domain.ContentHash) error {
-	if err := storage.PostgresStore.AdvanceEvidenceRevision(ctx, repo); err != nil {
-		return err
-	}
-	if storage.rejectRevision {
-		return domain.ErrIntegrity
-	}
-	return nil
 }

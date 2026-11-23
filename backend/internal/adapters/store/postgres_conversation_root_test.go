@@ -8,11 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -87,10 +85,10 @@ func TestRootPGReaderCurrentBytesOwnershipAndNoWrites(t *testing.T) {
 		t.Fatalf("unique compressed-byte accounting: got=%d want=%d err=%v", usage.CurrentBytes, wantBytes, err)
 	}
 	for i := 0; i < 2; i++ {
-		if err != nil {
-			t.Fatal(err)
+		ref, err := st.VerifyStoredDoc(ctx, repo, f.hash)
+		if err != nil || !ref.Valid() || ref.DocumentRef() != (domain.DocumentRef{Hash: f.hash, Identity: domain.DocumentIdentityRootV1}) {
+			t.Fatal(ref, err)
 		}
-		_, _ = st.VerifyStoredDoc(ctx, repo, f.hash)
 	}
 	peer, err := NewPostgresStore(ctx, st.pool.Config().ConnString())
 	if err != nil {
@@ -124,9 +122,12 @@ func TestRootPGReaderCurrentBytesOwnershipAndNoWrites(t *testing.T) {
 		if _, err := st.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, chunk.Hash, docCompress(body)); err != nil {
 			t.Fatal(err)
 		}
-		_, _ = st.VerifyStoredDoc(ctx, repo, f.hash)
+		_, proofErr := st.VerifyStoredDoc(ctx, repo, f.hash)
 		if _, err := st.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, chunk.Hash, docCompress(f.bodies[chunk.Hash])); err != nil {
 			t.Fatal(err)
+		}
+		if proofErr == nil {
+			t.Fatal("warm root hid same-length corruption")
 		}
 	}
 	if _, err := st.pool.Exec(ctx, `DELETE FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2`, repo, f.hash); err != nil {
@@ -141,27 +142,6 @@ func TestRootPGReaderCurrentBytesOwnershipAndNoWrites(t *testing.T) {
 		t.Fatal("doc deletion collected root chunks", chunks, err)
 	}
 }
-
-type rootPGReadTracer struct {
-	reads            atomic.Int32
-	paused           atomic.Bool
-	entered, release chan struct{}
-}
-
-func (tr *rootPGReadTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "b.bytes") {
-		tr.reads.Add(1)
-	}
-	if tr.entered != nil && strings.Contains(data.SQL, "rb.kind='chunk'") && tr.paused.CompareAndSwap(false, true) {
-		close(tr.entered)
-		select {
-		case <-tr.release:
-		case <-ctx.Done():
-		}
-	}
-	return ctx
-}
-func (*rootPGReadTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestRootPGProofCannotPublishLegacy(t *testing.T) {
 	for _, text := range []string{"", "root"} {

@@ -31,16 +31,6 @@ func preparedRootResourcesFixture(t *testing.T, events int) *preparedStreamingRo
 	return prepared
 }
 
-type embeddedRootResourcePublication struct {
-	*preparedStreamingRootDoc
-}
-
-func (*embeddedRootResourcePublication) Complete(context.Context, domain.DocFinalizationJob, time.Time) error {
-	return nil
-}
-
-var _ outbound.BoundedRootDocPublication = (*embeddedRootResourcePublication)(nil)
-
 func TestStreamingRootResourcesReportActualSpoolAndMetadata(t *testing.T) {
 	for _, events := range []int{0, 1, domain.DocRangePageEvents + 1} {
 		prepared := preparedRootResourcesFixture(t, events)

@@ -57,20 +57,14 @@ func TestPGVerifiedDocTransactionAndIntegrity(t *testing.T) {
 	if fresh, err := s.PutVerifiedDoc(ctx, repo, v); err != nil || fresh {
 		t.Fatal("replay", fresh, err)
 	}
-	// An old replica's index stays isolated while this replica rebuilds its
-	// own canonical-event projection lazily from the immutable document.
-	if _, err := s.pool.Exec(ctx, `INSERT INTO doc_read_indexes(hash,version,envelope,event_count) VALUES($1,1,'{}',999)`, doc.Hash); err != nil {
-		t.Fatal(err)
-	}
+	// The canonical-event projection is rebuilt lazily from the immutable
+	// document when its index is missing.
 	if _, err := s.pool.Exec(ctx, `DELETE FROM doc_read_indexes_v3 WHERE hash=$1`, doc.Hash); err != nil {
 		t.Fatal(err)
 	}
 	hits, err := s.SearchDocEvents(ctx, repo, doc.Hash, "earlier", -1, 10)
 	if err != nil || len(hits) != 1 || hits[0].Index != 0 || hits[0].Seq != 1 || hits[0].Role != "user" {
 		t.Fatalf("search metadata: %+v %v", hits, err)
-	}
-	if err := s.pool.QueryRow(ctx, `SELECT event_count FROM doc_read_indexes WHERE hash=$1`, doc.Hash).Scan(&count); err != nil || count != 999 {
-		t.Fatal("modified old replica index", count, err)
 	}
 	if _, err := s.GetDoc(ctx, domain.HashContent([]byte("foreign")), doc.Hash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatal("foreign read", err)

@@ -3,7 +3,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -54,17 +53,4 @@ func collaborationPG(t *testing.T) (*Service, *store.PostgresStore, domain.Conte
 		t.Fatal(err)
 	}
 	return NewService(st, st, auth.NewTeamTokenAuth(), st), st, repo
-}
-
-type collaborationGitEvidencePG struct {
-	*store.PostgresStore
-	repo domain.ContentHash
-}
-
-func (storage *collaborationGitEvidencePG) ListRepos(ctx context.Context, _ string) ([]domain.Repo, error) {
-	repo, err := storage.GetRepo(ctx, storage.repo)
-	if err != nil {
-		return nil, err
-	}
-	return []domain.Repo{repo}, nil
 }

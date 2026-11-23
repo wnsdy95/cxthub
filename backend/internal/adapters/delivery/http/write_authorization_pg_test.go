@@ -3,11 +3,8 @@
 package http
 
 import (
-	"context"
 	"strings"
 	"sync"
-
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 type pausedWriteBody struct {
@@ -21,9 +18,3 @@ func (b *pausedWriteBody) Read(p []byte) (int, error) {
 	return b.reader.Read(p)
 }
 func (b *pausedWriteBody) Close() error { return nil }
-
-type snapshotGraftPGPoisonBackend struct{ *repositoryRefPGPoisonBackend }
-
-func (*snapshotGraftPGPoisonBackend) GraftSnapshotParents(context.Context, domain.ContentHash, domain.ContentHash, []domain.ContentHash, uint64) error {
-	panic("graft reached the broad PostgreSQL HTTP backend")
-}

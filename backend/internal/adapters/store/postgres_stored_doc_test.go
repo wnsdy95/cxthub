@@ -53,6 +53,11 @@ func TestPGStoredDocProofOwnershipRollbackAndCorruption(t *testing.T) {
 	if _, err := s.PutVerifiedDoc(ctx, repo, v); err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 2; i++ {
+		if p, err := s.VerifyStoredDoc(ctx, repo, doc.Hash); err != nil || !p.Valid() || p.DocumentRef() != (domain.DocumentRef{Hash: doc.Hash}) {
+			t.Fatal("valid proof", p, err)
+		}
+	}
 	if _, err := s.VerifyStoredDoc(ctx, domain.HashContent([]byte("other")), doc.Hash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatal("cross-repo proof", err)
 	}
@@ -147,8 +152,20 @@ func storedDocChunkFixturePG(t *testing.T) (*PostgresStore, context.Context, dom
 	return s, ctx, repo, doc, plan
 }
 
+func requireStoredDocProofPG(t *testing.T, s *PostgresStore, ctx context.Context, repo, hash domain.ContentHash) {
+	t.Helper()
+	// The first read admits changed physical bytes; the second exercises reuse.
+	for i := 0; i < 2; i++ {
+		proof, err := s.VerifyStoredDoc(ctx, repo, hash)
+		if err != nil || !proof.Valid() || proof.DocumentRef() != (domain.DocumentRef{Hash: hash}) {
+			t.Fatalf("verification %d: proof=%v error=%v", i, proof, err)
+		}
+	}
+}
+
 func TestPGStoredDocChunkProofAcceptsPhysicalRepacking(t *testing.T) {
-	s, ctx, _, doc, plan := storedDocChunkFixturePG(t)
+	s, ctx, repo, doc, plan := storedDocChunkFixturePG(t)
+	requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 	manifest, err := json.Marshal(plan.Manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +202,7 @@ func TestPGStoredDocChunkProofAcceptsPhysicalRepacking(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 		})
 	}
 }
@@ -193,6 +211,7 @@ func TestPGStoredDocChunkProofRechecksCurrentOwnershipAndBytes(t *testing.T) {
 	for _, damage := range []string{"revoked chunk grant", "missing chunk", "uncompressed corrupt chunk", "compressed corrupt chunk", "reordered manifest"} {
 		t.Run(damage, func(t *testing.T) {
 			s, ctx, repo, doc, plan := storedDocChunkFixturePG(t)
+			requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 			// Damage a nonfirst chunk to catch proofs checking just the first body.
 			hash := plan.Order[len(plan.Order)-1]
 			want := domain.ErrIntegrity
@@ -250,6 +269,7 @@ func TestPGStoredDocChunkProofUsesTransactionOwnership(t *testing.T) {
 	t.Run("uncommitted revocation", func(t *testing.T) {
 		s, ctx, repo, doc, plan := storedDocChunkFixturePG(t)
 		hash := plan.Order[len(plan.Order)-1]
+		requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 		stop := errors.New("rollback chunk ownership")
 		// A pooled ownership query would see the committed grant and miss this
 		// transaction's revocation, incorrectly accepting its already warm proof.
@@ -266,6 +286,7 @@ func TestPGStoredDocChunkProofUsesTransactionOwnership(t *testing.T) {
 		if !errors.Is(err, stop) {
 			t.Fatal(err)
 		}
+		requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 	})
 
 	t.Run("rolled back grant", func(t *testing.T) {
@@ -283,9 +304,12 @@ func TestPGStoredDocChunkProofUsesTransactionOwnership(t *testing.T) {
 				return err
 			}
 			for i := 0; i < 2; i++ {
-				_, err := s.VerifyStoredDoc(bound, repo, doc.Hash())
+				proof, err := s.VerifyStoredDoc(bound, repo, doc.Hash())
 				if err != nil {
 					return err
+				}
+				if !proof.Valid() || proof.DocumentRef() != (domain.DocumentRef{Hash: doc.Hash()}) {
+					t.Error("transaction-local grant produced the wrong document proof")
 				}
 			}
 			return stop
@@ -307,11 +331,13 @@ func TestPGStoredDocChunkProofUsesTransactionOwnership(t *testing.T) {
 		if _, _, err := s.PutChunks(ctx, repo, map[domain.ContentHash][]byte{hash: plan.Bodies[hash]}); err != nil {
 			t.Fatal(err)
 		}
+		requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 	})
 }
 
 func TestPGStoredDocChunkProofRequiresChunksOwnedByRequestedRepo(t *testing.T) {
 	s, ctx, repo, doc, plan := storedDocChunkFixturePG(t)
+	requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 	other := domain.HashContent([]byte(string(repo) + " document-only owner"))
 	if _, err := s.PutRepo(ctx, domain.Repo{ID: other}); err != nil {
 		t.Fatal(err)
@@ -337,6 +363,7 @@ func TestPGStoredDocChunkProofRequiresChunksOwnedByRequestedRepo(t *testing.T) {
 	if _, _, err := s.PutChunks(ctx, other, plan.Bodies); err != nil {
 		t.Fatal(err)
 	}
+	requireStoredDocProofPG(t, s, ctx, other, doc.Hash())
 	// Once both repositories are warm, revoking one owner's nonfirst chunk
 	// must not affect the other owner or be masked by its surviving grant.
 	hash := plan.Order[len(plan.Order)-1]
@@ -347,4 +374,5 @@ func TestPGStoredDocChunkProofRequiresChunksOwnedByRequestedRepo(t *testing.T) {
 	if !errors.Is(err, domain.ErrNotFound) || proof.Valid() {
 		t.Fatal("warm foreign proof hid revoked chunk ownership", proof, err)
 	}
+	requireStoredDocProofPG(t, s, ctx, repo, doc.Hash())
 }

@@ -164,8 +164,6 @@ func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
 	}
 }
 
-type p9ReadBoundaryKey struct{}
-
 func TestP9IdentityAdminSupportedPeerAndAuthorization(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	f := makeTeamFixture(t, st)

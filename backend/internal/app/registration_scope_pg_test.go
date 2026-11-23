@@ -66,15 +66,14 @@ func registrationScopeBlocked(test *testing.T, ctx context.Context, observer *pg
 }
 
 type registrationScopeEffects struct {
-	repos           int64
-	revisions       int64
-	refs            int64
-	reflog          int64
-	snapshots       int64
-	settings        int64
-	secrets         int64
-	initializations int64
-	notifications   int64
+	repos         int64
+	revisions     int64
+	refs          int64
+	reflog        int64
+	snapshots     int64
+	settings      int64
+	secrets       int64
+	notifications int64
 }
 
 func registrationScopeImage(test *testing.T, ctx context.Context, observer *pgxpool.Pool, repo domain.ContentHash, repository string) registrationScopeEffects {
@@ -88,9 +87,8 @@ func registrationScopeImage(test *testing.T, ctx context.Context, observer *pgxp
 		(SELECT count(*) FROM snapshots WHERE repo_id=$1),
 		(SELECT count(*) FROM repo_settings WHERE repo_id=$1),
 		(SELECT count(*) FROM repo_secrets WHERE repo_id=$1),
-		(SELECT count(*) FROM repository_initializations WHERE repo_id=$1),
 		(SELECT count(*) FROM notification_outbox WHERE repository_id=$2)`, string(repo), repository).
-		Scan(&image.repos, &image.revisions, &image.refs, &image.reflog, &image.snapshots, &image.settings, &image.secrets, &image.initializations, &image.notifications)
+		Scan(&image.repos, &image.revisions, &image.refs, &image.reflog, &image.snapshots, &image.settings, &image.secrets, &image.notifications)
 	if err != nil {
 		test.Fatal(err)
 	}

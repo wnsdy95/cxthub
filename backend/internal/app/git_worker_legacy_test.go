@@ -15,25 +15,6 @@ var ()
 
 type wave42LegacyGitTransactionKey struct{}
 
-type wave42LegacyPollingScope struct{}
-
-func (wave42LegacyPollingScope) WorkerContext(ctx context.Context) context.Context { return ctx }
-func (wave42LegacyPollingScope) WithinWork(ctx context.Context, work func(context.Context) error) error {
-	return work(ctx)
-}
-func (wave42LegacyPollingScope) ReadRepository(context.Context, domain.ContentHash) (domain.Repo, error) {
-	return domain.Repo{}, domain.ErrNotFound
-}
-func (wave42LegacyPollingScope) WithinEvidenceWrite(ctx context.Context, _ domain.ContentHash, write func(context.Context) error) error {
-	return write(ctx)
-}
-
-type wave42LegacyPollingMetadata struct{}
-
-func (wave42LegacyPollingMetadata) GetRepo(context.Context, domain.ContentHash) (domain.Repo, error) {
-	return domain.Repo{}, domain.ErrNotFound
-}
-
 type wave42LegacyWorkMetadata struct {
 	outbound.MetadataStore
 	repo        domain.Repo

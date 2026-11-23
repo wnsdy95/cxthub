@@ -170,30 +170,3 @@ func TestLegacyNativePublicRejectCostGeneratedSourceOffsets(test *testing.T) {
 		test.Fatal("generated source ignored the current canceled context", len(body), err)
 	}
 }
-
-func BenchmarkLegacyNativePublicRejectMax512MiB(benchmark *testing.B) {
-	if MaxFinalizedDocBytes != 512<<20 || ConversationManifestChunkBytes != 512<<10 {
-		benchmark.Fatal("maximum rejection cost requires the real 512 MiB document and 512 KiB source parts")
-	}
-	source := newLegacyNativePublicRejectCostSource(benchmark, MaxFinalizedDocBytes)
-	benchmark.ReportAllocs()
-	benchmark.SetBytes(int64(source.bytes))
-	benchmark.ResetTimer()
-	var totalSteps, totalLoads, totalEOF int64
-	var totalReadBytes, maxRetained, maxStepReadBytes int64
-	var maxStepLoads int
-	for operation := 0; operation < benchmark.N; operation++ {
-		totalLoads += int64(source.loads)
-		totalEOF += int64(source.zeroEOF + source.oneEOF)
-		totalReadBytes += source.readBytes
-	}
-	benchmark.StopTimer()
-	benchmark.ReportMetric(float64(totalSteps)/float64(benchmark.N), "steps/op")
-	benchmark.ReportMetric(float64(totalReadBytes)/float64(benchmark.N), "readbytes/op")
-	benchmark.ReportMetric(float64(totalLoads)/float64(benchmark.N), "part-loads/op")
-	benchmark.ReportMetric(float64(totalEOF)/float64(benchmark.N), "eof-probes/op")
-	benchmark.ReportMetric(float64(source.bytes), "sourcebytes/op")
-	benchmark.ReportMetric(float64(maxRetained), "max-retained-B")
-	benchmark.ReportMetric(float64(maxStepLoads), "max-part-loads/step")
-	benchmark.ReportMetric(float64(maxStepReadBytes), "max-readbytes/step")
-}

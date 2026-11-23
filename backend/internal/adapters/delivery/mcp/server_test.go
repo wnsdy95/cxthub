@@ -587,15 +587,6 @@ func TestRemoteRepositoryListOutputIsBoundedAndFilterable(t *testing.T) {
 	}
 }
 
-// Exercise the same application projection used by the production composition root.
-type fakeProjectionSource struct{ fakeContextBackend }
-
-func (f fakeProjectionSource) ListSnapshots(ctx context.Context, repo domain.ContentHash, _ string) ([]domain.Snapshot, error) {
-	return f.snapshots[repo], nil
-}
-func (f fakeProjectionSource) GetMemory(ctx context.Context, repo, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	return f.GetMemoryObject(ctx, repo, hash)
-}
 func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
 	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())

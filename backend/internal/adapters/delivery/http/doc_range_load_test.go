@@ -13,11 +13,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -33,19 +30,6 @@ type rangeLoadDocument struct {
 	Manifest     domain.ConversationManifest
 	Events       []rangeLoadEvent
 	StreamSHA256 string
-}
-
-type rangeLoadMemoryRecorder struct {
-	mu    sync.Mutex
-	phase string
-	stop  chan struct{}
-	done  chan error
-}
-
-func (recorder *rangeLoadMemoryRecorder) setPhase(phase string) {
-	recorder.mu.Lock()
-	recorder.phase = phase
-	recorder.mu.Unlock()
 }
 
 func rangeLoadCanonicalEvent(event domain.CIREvent) ([]byte, error) {
@@ -160,19 +144,6 @@ func rangeLoadSave(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, raw, 0600)
-}
-
-type rangeLoadWorkerStore struct {
-	*store.PostgresStore
-	claimed chan time.Time
-}
-
-func (storage *rangeLoadWorkerStore) ClaimDocJob(ctx context.Context, repo domain.ContentHash, now time.Time, lease time.Duration) (domain.DocFinalizationJob, error) {
-	job, err := storage.PostgresStore.ClaimDocJob(ctx, repo, now, lease)
-	if err == nil {
-		storage.claimed <- time.Now()
-	}
-	return job, err
 }
 
 func TestDocRangeLoadFixtureRoundTrip(t *testing.T) {

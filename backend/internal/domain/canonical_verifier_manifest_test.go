@@ -76,15 +76,6 @@ func TestConversationManifestDocIdentityReadPlanAndLegacyFences(t *testing.T) {
 				if got.DocumentRef() != ref || got.Reference().DocumentRef() != ref {
 					t.Fatal("identity lost from proof")
 				}
-				for _, snap := range []Snapshot{
-					{ID: root, DocHash: root, DocIdentity: DocumentIdentityRootV1},
-					{ID: root, DocHash: root},
-					{ID: HashContent(raw), DocHash: root, DocIdentity: DocumentIdentityRootV1},
-					{ID: root, DocHash: HashContent(raw), DocIdentity: DocumentIdentityRootV1},
-					{ID: root, DocHash: root, DocIdentity: "future"},
-				} {
-					_ = snap.ID == root && snap.DocHash == root && snap.DocIdentity == DocumentIdentityRootV1
-				}
 				owned, ok := got.ConversationManifest()
 				if !ok || !reflect.DeepEqual(owned, m) {
 					t.Fatal("root manifest changed")

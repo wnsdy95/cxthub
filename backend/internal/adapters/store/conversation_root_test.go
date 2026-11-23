@@ -215,51 +215,6 @@ func TestRootFSProofCannotPublishLegacy(t *testing.T) {
 	}
 }
 
-func TestRootReaderLegacyCompatibility(t *testing.T) {
-	_ = context.Background()
-	f := rootFixture(t, "legacy body with root_manifest and identity as ordinary text")
-	hash := domain.HashContent(f.canonical)
-	for _, representation := range []string{"raw", "noncanonical_version_extension", "v1", "v2"} {
-		t.Run(representation, func(t *testing.T) {
-			st := NewFSStore(t.TempDir())
-			repo := domain.HashContent([]byte(t.Name()))
-			stored := f.canonical
-			if representation == "noncanonical_version_extension" {
-				raw, err := json.MarshalIndent(f.cir, "", "  ")
-				if err != nil {
-					t.Fatal(err)
-				}
-				stored = append([]byte(`{"version":"old extension",`), raw[1:]...)
-			}
-			if representation == "v1" || representation == "v2" {
-				var plan domain.DocChunkPlan
-				var ok bool
-				if representation == "v1" {
-					plan, ok = domain.PlanDocChunksV1(f.canonical)
-				} else {
-					plan, ok = domain.PlanDocChunks(f.canonical)
-				}
-				if !ok {
-					t.Fatal("legacy plan")
-				}
-				for h, body := range plan.Bodies {
-					if err := writeAtomic(st.chunkPath(repo, h), docCompress(body)); err != nil {
-						t.Fatal(err)
-					}
-				}
-				var err error
-				stored, err = json.Marshal(plan.Manifest)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := writeAtomic(st.docPath(repo, hash), docCompress(stored)); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
 func TestRootFSDependencyRetention(t *testing.T) {
 	st := NewFSStore(t.TempDir())
 	repo := domain.HashContent([]byte(t.Name()))

@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,34 +70,4 @@ func TestDocCaptureWorkPayloadTraceDistinguishesMetadataAndWholeReads(test *test
 			test.Fatal("payload measurement hid a whole source read or counted metadata as body", ordinal, trace.bodyReads.Load(), spoolTrace.sourceReads.Load())
 		}
 	}
-}
-
-type docCaptureConfirmationContext struct {
-	context.Context
-	paused  atomic.Bool
-	release sync.Once
-	entered chan struct{}
-	resume  chan struct{}
-	target  string
-}
-
-func (ctx *docCaptureConfirmationContext) Err() error {
-	if !ctx.paused.Load() {
-		var callers [2]uintptr
-		frames := runtime.CallersFrames(callers[:runtime.Callers(2, callers[:])])
-		caller, _ := frames.Next()
-		target := ctx.target
-		if target == "" {
-			target = "store.(*preparedLegacyCaptureWork).handoffCanonical"
-		}
-		if strings.HasSuffix(caller.Function, target) && ctx.paused.CompareAndSwap(false, true) {
-			close(ctx.entered)
-			<-ctx.resume
-		}
-	}
-	return ctx.Context.Err()
-}
-
-func (ctx *docCaptureConfirmationContext) unblock() {
-	ctx.release.Do(func() { close(ctx.resume) })
 }

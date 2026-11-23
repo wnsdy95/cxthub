@@ -9,7 +9,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type documentNativeAuthorizationFixture struct {
@@ -469,29 +468,4 @@ func TestDocumentAuthorizationTransactionalScopeNeverReusesNativeMarker(test *te
 	}
 	release()
 	assertResourcesReleased(test, fixture.gate)
-}
-
-type documentOwnershipPanicStore struct {
-	outbound.MetadataStore
-	outbound.BlobStore
-}
-
-func (*documentOwnershipPanicStore) GetRepo(context.Context, domain.ContentHash) (domain.Repo, error) {
-	panic("independent full queries dereferenced replacement Service metadata")
-}
-
-func (*documentOwnershipPanicStore) GetSnapshot(context.Context, domain.ContentHash, domain.ContentHash) (domain.Snapshot, error) {
-	panic("independent full queries dereferenced replacement Service snapshots")
-}
-
-func (*documentOwnershipPanicStore) GetDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.SessionDoc, error) {
-	panic("independent full queries dereferenced replacement Service documents")
-}
-
-func (*documentOwnershipPanicStore) GetDocManifest(context.Context, domain.ContentHash, domain.ContentHash) (domain.DocChunkManifest, error) {
-	panic("independent full queries dereferenced replacement Service manifests")
-}
-
-func (*documentOwnershipPanicStore) GetChunk(context.Context, domain.ContentHash, domain.ContentHash) ([]byte, error) {
-	panic("independent full queries dereferenced replacement Service chunks")
 }

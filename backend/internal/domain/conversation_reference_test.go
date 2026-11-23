@@ -29,6 +29,9 @@ func TestConversationReferenceIdentity(test *testing.T) {
 			if err != nil || !proof.Valid() || proof.DocumentRef() != (DocumentRef{Hash: hash, Identity: DocumentIdentityRootV1}) {
 				test.Fatal("root reference", proof, err)
 			}
+			if proof.DocumentRef() != (DocumentRef{Hash: hash, Identity: DocumentIdentityRootV1}) {
+				test.Fatal("reference lost root identity")
+			}
 			for _, body := range bodies {
 				clear(body)
 			}

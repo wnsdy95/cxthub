@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -47,21 +46,6 @@ func docRangeGenerationBuild(test testing.TB, verified VerifiedDocRangeIndex) (D
 		test.Fatal(err)
 	}
 	return generation, objects
-}
-
-func docRangeGenerationObjects(test testing.TB, objects []DocRangeObject) map[ContentHash][]byte {
-	test.Helper()
-	bodies := make(map[ContentHash][]byte, len(objects))
-	for _, object := range objects {
-		if HashContent(object.Bytes) != object.Hash || len(object.Bytes) == 0 || len(object.Bytes) > MaxDocRangeDirectoryBytes {
-			test.Fatalf("invalid generated object %s (%d bytes)", object.Hash, len(object.Bytes))
-		}
-		if previous, exists := bodies[object.Hash]; exists && !bytes.Equal(previous, object.Bytes) {
-			test.Fatalf("inconsistent duplicate object %s", object.Hash)
-		}
-		bodies[object.Hash] = object.Bytes
-	}
-	return bodies
 }
 
 func TestDocRangeGenerationRejectsZeroProofAndCancellation(test *testing.T) {
@@ -165,124 +149,19 @@ func TestDocRangeGenerationDescriptorRejectsInvalidClaims(test *testing.T) {
 	}
 }
 
-func docRangeGenerationSparsePath(test testing.TB, count, position int) (DocRangeDirectoryRoot, map[ContentHash][]byte, []ContentHash, ContentHash) {
-	test.Helper()
-	bodies := make(map[ContentHash][]byte)
-	leaf := HashContent([]byte(fmt.Sprintf("selected-leaf/%d", position)))
-	selected := leaf
-	var path []ContentHash
-	for level, childSpan := 0, 1; ; level, childSpan = level+1, childSpan*DocRangeDirectoryFanout {
-		span := childSpan * DocRangeDirectoryFanout
-		start := position / span * span
-		directory := docRangeDirectory{Level: level, Start: start, Hashes: make([]ContentHash, min(DocRangeDirectoryFanout, (count-start+childSpan-1)/childSpan))}
-		for offset := range directory.Hashes {
-			directory.Hashes[offset] = HashContent([]byte(fmt.Sprintf("unloaded/%d/%d", level, start+offset*childSpan)))
-		}
-		directory.Hashes[(position-start)/childSpan] = selected
-		raw := docRangeGenerationJSON(test, directory)
-		selected = HashContent(raw)
-		bodies[selected] = raw
-		path = append(path, selected)
-		if span >= count {
-			break
-		}
-	}
-	slices.Reverse(path)
-	return DocRangeDirectoryRoot{Hash: selected, Count: count}, bodies, path, leaf
-}
-
-func docRangeGenerationRewritePath(test testing.TB, root DocRangeDirectoryRoot, bodies map[ContentHash][]byte, path []ContentHash, depth int, mutate func([]byte) []byte) (DocRangeDirectoryRoot, map[ContentHash][]byte) {
-	test.Helper()
-	changed := make(map[ContentHash][]byte, len(bodies))
-	for hash, raw := range bodies {
-		changed[hash] = raw
-	}
-	raw := mutate(bytes.Clone(bodies[path[depth]]))
-	replacement := HashContent(raw)
-	changed[replacement] = raw
-	for parent := depth - 1; parent >= 0; parent-- {
-		var directory docRangeDirectory
-		if err := json.Unmarshal(bodies[path[parent]], &directory); err != nil {
-			test.Fatal(err)
-		}
-		slot := slices.Index(directory.Hashes, path[parent+1])
-		if slot < 0 {
-			test.Fatal("fixture parent does not reference selected child")
-		}
-		directory.Hashes[slot] = replacement
-		raw = docRangeGenerationJSON(test, directory)
-		replacement = HashContent(raw)
-		changed[replacement] = raw
-	}
-	root.Hash = replacement
-	return root, changed
-}
-
-func TestDocRangeGenerationDirectoryRejectsAuthenticatedMalformedNodes(test *testing.T) {
-	root, bodies, path, _ := docRangeGenerationSparsePath(test, 16385, 129)
-	mutations := map[string]func(*docRangeDirectory){
-		"wrong-start":    func(value *docRangeDirectory) { value.Start++ },
-		"negative-start": func(value *docRangeDirectory) { value.Start = -1 },
-		"start-overflow": func(value *docRangeDirectory) { value.Start = math.MaxInt },
-		"wrong-level":    func(value *docRangeDirectory) { value.Level++ },
-		"negative-level": func(value *docRangeDirectory) { value.Level = -1 },
-		"level-overflow": func(value *docRangeDirectory) { value.Level = math.MaxInt },
-		"short-count":    func(value *docRangeDirectory) { value.Hashes = value.Hashes[:len(value.Hashes)-1] },
-		"long-count":     func(value *docRangeDirectory) { value.Hashes = append(value.Hashes, value.Hashes[0]) },
-		"empty-count":    func(value *docRangeDirectory) { value.Hashes = []ContentHash{} },
-		"null-count":     func(value *docRangeDirectory) { value.Hashes = nil },
-		"invalid-first":  func(value *docRangeDirectory) { value.Hashes[0] = "not-a-content-hash" },
-		"invalid-last":   func(value *docRangeDirectory) { value.Hashes[len(value.Hashes)-1] = "" },
-	}
-	for depth := range path {
-		for name, mutate := range mutations {
-			test.Run(fmt.Sprintf("depth-%d/%s", depth, name), func(test *testing.T) {
-				_, _ = docRangeGenerationRewritePath(test, root, bodies, path, depth, func(raw []byte) []byte {
-					var directory docRangeDirectory
-					if err := json.Unmarshal(raw, &directory); err != nil {
-						test.Fatal(err)
-					}
-					mutate(&directory)
-					return docRangeGenerationJSON(test, directory)
-				})
-				_ = 0
-			})
-		}
-		for name, mutate := range map[string]func([]byte) []byte{
-			"empty":          func([]byte) []byte { return nil },
-			"huge":           func([]byte) []byte { return bytes.Repeat([]byte{' '}, MaxDocRangeDirectoryBytes+1) },
-			"malformed-json": func([]byte) []byte { return []byte(`{`) },
-			"whitespace":     func(raw []byte) []byte { return append(raw, '\n') },
-			"unknown":        func(raw []byte) []byte { return append([]byte(`{"extra":0,`), raw[1:]...) },
-			"duplicate":      func(raw []byte) []byte { return append([]byte(`{"start":0,`), raw[1:]...) },
-			"case-alias":     func(raw []byte) []byte { return bytes.Replace(raw, []byte(`"level"`), []byte(`"Level"`), 1) },
-			"count-overflow": func(raw []byte) []byte {
-				return bytes.Replace(raw, []byte(`"start":`), []byte(`"start":9223372036854775808,"old_start":`), 1)
-			},
-		} {
-			test.Run(fmt.Sprintf("depth-%d/%s", depth, name), func(test *testing.T) {
-				_, _ = docRangeGenerationRewritePath(test, root, bodies, path, depth, mutate)
-			})
-		}
-	}
-}
-
-func TestDocRangeGenerationConcurrentBuildAndSelectedReads(test *testing.T) {
+func TestDocRangeGenerationConcurrentBuild(test *testing.T) {
 	verified := docRangeGenerationVerified(test, 2*DocRangePageEvents+1)
 	want, wantObjects := docRangeGenerationBuild(test, verified)
-	_ = docRangeGenerationObjects(test, wantObjects)
-	header := verified.Header()
 	var workers sync.WaitGroup
 	failures := make(chan error, 8)
-	for worker := range 8 {
+	for range 8 {
 		workers.Go(func() {
-			for iteration := range 4 {
+			for range 4 {
 				generation, objects, err := BuildDocRangeGeneration(context.Background(), verified)
 				if err != nil || !reflect.DeepEqual(generation, want) || !reflect.DeepEqual(objects, wantObjects) {
 					failures <- fmt.Errorf("concurrent build changed: %w", err)
 					return
 				}
-				_ = (worker + iteration) % len(header.Pages)
 				generation.Envelope[0] = 'x'
 				for offset := range objects {
 					objects[offset].Bytes[0] = 'x'

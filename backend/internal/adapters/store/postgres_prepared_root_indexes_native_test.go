@@ -50,19 +50,6 @@ func pgPreparedRootIndexesNativeAssertOnlySource(test *testing.T, source *docRan
 	}
 }
 
-type pgPreparedRootIndexesNativeContext struct {
-	context.Context
-	check func()
-}
-
-func (observed *pgPreparedRootIndexesNativeContext) Err() error {
-	if err := observed.Context.Err(); err != nil {
-		return err
-	}
-	observed.check()
-	return observed.Context.Err()
-}
-
 func TestPGPreparedRootIndexesNativeFailuresCleanOutput(test *testing.T) {
 	for _, damage := range []string{"nil-preparation", "empty-preparation", "unverified-index", "closed-source", "truncated-source", "corrupt-source", "spool-create"} {
 		test.Run(damage, func(test *testing.T) {

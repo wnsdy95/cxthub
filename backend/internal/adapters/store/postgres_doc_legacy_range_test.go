@@ -36,28 +36,6 @@ func (row legacyRangeTestRow) Scan(destinations ...any) error {
 	return nil
 }
 
-type legacyRangeTestRows struct {
-	pgx.Rows
-	rows     []legacyRangeTestRow
-	position int
-	err      error
-}
-
-func (rows *legacyRangeTestRows) Next() bool {
-	if rows.position >= len(rows.rows) {
-		return false
-	}
-	rows.position++
-	return true
-}
-
-func (rows *legacyRangeTestRows) Scan(destinations ...any) error {
-	return rows.rows[rows.position-1].Scan(destinations...)
-}
-
-func (rows *legacyRangeTestRows) Close()     {}
-func (rows *legacyRangeTestRows) Err() error { return rows.err }
-
 type legacyRangeTestBatchResult struct {
 	pgx.BatchResults
 	err error

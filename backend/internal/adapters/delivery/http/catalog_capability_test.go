@@ -13,13 +13,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-type catalogCapabilityHTTPBackend struct {
-	Backend
-	version int
-}
-
-func (b catalogCapabilityHTTPBackend) CatalogVersion() int { return b.version }
-
 func getCatalogCapabilityRepo(t *testing.T, backend Backend, repo domain.Repo, query string) map[string]json.RawMessage {
 	t.Helper()
 	id := branchPullHTTPIdentity{repo: domain.Repository{ID: repo.RepositoryID}, role: domain.RoleViewer}

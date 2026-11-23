@@ -1,64 +1,20 @@
 package http
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
-
-type admissionReadBackend struct{ Backend }
-
-func admissionReadResult[Result any](ctx context.Context) (Result, error) {
-	var result Result
-	_, release, err := app.AcquireResources(ctx, app.ResourceBulk)
-	if err != nil {
-		return result, err
-	}
-	defer release()
-	return result, nil
-}
-
-func (admissionReadBackend) GetDoc(ctx context.Context, _, _ domain.ContentHash) (domain.SessionDoc, error) {
-	return admissionReadResult[domain.SessionDoc](ctx)
-}
-
-func (admissionReadBackend) ReadDocViewEvents(context.Context, domain.ContentHash, domain.ContentHash, int, int, string) (domain.DocViewPage, error) {
-	return domain.DocViewPage{Next: -1}, nil
-}
 
 type admissionUnreadBody struct{ reads int }
 
 func (body *admissionUnreadBody) Read([]byte) (int, error) { body.reads++; return 0, io.EOF }
 func (*admissionUnreadBody) Close() error                  { return nil }
-
-type admissionResponseWriter struct {
-	*httptest.ResponseRecorder
-	checked  bool
-	err      error
-	writeErr error
-}
-
-func (writer *admissionResponseWriter) Write(payload []byte) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	_, release, err := app.AcquireResources(ctx, app.ResourceBulk)
-	if release != nil {
-		release()
-	}
-	writer.checked, writer.err = true, err
-	if writer.writeErr != nil {
-		return 0, writer.writeErr
-	}
-	return writer.ResponseRecorder.Write(payload)
-}
 
 func TestResourceAdmissionHTTPRetryableErrors(t *testing.T) {
 	for _, sentinel := range []error{domain.ErrResourceOverloaded, domain.ErrDocRangeIndexUnavailable} {

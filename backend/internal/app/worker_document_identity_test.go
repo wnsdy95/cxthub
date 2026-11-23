@@ -247,16 +247,6 @@ func TestWorkerGitHubClaimsAndGrantPublicationPolicy(t *testing.T) {
 	}
 }
 
-type workerEntryStore struct {
-	*store.FSStore
-	seen []context.Context
-}
-
-func (s *workerEntryStore) WakePRSourceJobs(ctx context.Context, _ domain.ContentHash, _ time.Time) error {
-	s.seen = append(s.seen, ctx)
-	return nil
-}
-
 type workerGitHubStore struct {
 	outbound.GitHubStore
 	reads        int

@@ -3,84 +3,10 @@
 package http
 
 import (
-	"context"
-	"errors"
 	"testing"
-	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
-
-type rangeLoadVisibleCost struct {
-	View, Kind                                  string
-	Start                                       time.Time
-	Units, Pages, Chunks, ChunkBytes, Forbidden int
-	Error                                       string `json:",omitempty"`
-}
-
-type rangeLoadVisibleCostKey struct{}
-
-func rangeLoadCost(ctx context.Context) *rangeLoadVisibleCost {
-	cost, _ := ctx.Value(rangeLoadVisibleCostKey{}).(*rangeLoadVisibleCost)
-	return cost
-}
-
-func rangeLoadDenyGather(ctx context.Context) error {
-	if cost := rangeLoadCost(ctx); cost != nil {
-		cost.Forbidden++
-		return errors.New("visible-v1 attempted whole-document or legacy fallback read")
-	}
-	return nil
-}
-
-type rangeLoadVisibleStore struct{ *store.PostgresStore }
-
-func (storage *rangeLoadVisibleStore) ReadConversationChunk(ctx context.Context, repo, hash domain.ContentHash, length int64) ([]byte, error) {
-	if cost := rangeLoadCost(ctx); cost != nil {
-		cost.Chunks++
-		cost.ChunkBytes += int(length)
-		if length <= 0 || length > domain.ConversationManifestChunkBytes || cost.Chunks > 20 || cost.ChunkBytes > 20*domain.ConversationManifestChunkBytes {
-			return nil, domain.ErrDocumentResourceLimit
-		}
-	}
-	return storage.PostgresStore.ReadConversationChunk(ctx, repo, hash, length)
-}
-
-func (storage *rangeLoadVisibleStore) GetDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.SessionDoc, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	return storage.PostgresStore.GetDoc(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedDocReference, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return domain.VerifiedDocReference{}, err
-	}
-	return storage.PostgresStore.VerifyStoredDoc(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) GetChunk(ctx context.Context, repo, hash domain.ContentHash) ([]byte, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return nil, err
-	}
-	return storage.PostgresStore.GetChunk(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) GetDocManifest(ctx context.Context, repo, hash domain.ContentHash) (domain.DocChunkManifest, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return domain.DocChunkManifest{}, err
-	}
-	return storage.PostgresStore.GetDocManifest(ctx, repo, hash)
-}
-
-func (storage *rangeLoadVisibleStore) DocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
-	if err := rangeLoadDenyGather(ctx); err != nil {
-		return domain.DocReadIndex{}, err
-	}
-	return storage.PostgresStore.DocReadIndex(ctx, repo, hash)
-}
 
 func rangeLoadVisibleExpected(doc rangeLoadDocument, view string, start, limit int) ([]domain.DocVisibleUnit, int) {
 	units := []domain.DocVisibleUnit{}

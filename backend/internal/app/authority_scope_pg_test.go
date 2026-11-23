@@ -129,27 +129,6 @@ func (storage *authorityScopeHoldPG) WithinRepositoryMetadata(ctx context.Contex
 	})
 }
 
-type authorityScopeWriteHoldPG struct {
-	*store.PostgresStore
-	ready   chan struct{}
-	release <-chan struct{}
-}
-
-func (storage *authorityScopeWriteHoldPG) WithinRepository(ctx context.Context, repo domain.ContentHash, operation func(context.Context) error) error {
-	return storage.PostgresStore.WithinRepository(ctx, repo, func(bound context.Context) error {
-		if err := operation(bound); err != nil {
-			return err
-		}
-		close(storage.ready)
-		select {
-		case <-storage.release:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	})
-}
-
 func authorityScopeMutation(ctx context.Context, identity *IdentityService, fixture teamFixture, mutation string) error {
 	switch mutation {
 	case "role":
