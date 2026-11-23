@@ -489,6 +489,34 @@ expect "allowing it again uploads it from the tool's records" "$(cxt segments al
 expect "the session's log on this computer says what was done to it" "$(cxt segments log claude e2e-segments --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["sessions"][0]["log"];a=[e["action"] for e in l if e.get("action")];print(a[0],"|",a[1],"|",a[-1])')" "removed from the server | not sent | allowed again on the server"
 expect "one session is uploaded by name" "$(cxt segments push claude e2e-segments --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r["sessions"]),r["sessions"][0]["id"])')" "1 e2e-segments"
 expect "a name the tools did not record fails" "$(cxt segments push claude never-recorded >/dev/null 2>&1; echo "$?")" 1
+# The diagnosis reads this computer and the server, changes nothing, and gives
+# each thing that does not fit with the command that puts it right.
+segdoctor() { cxt segments doctor --json 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+f=[x for x in d["findings"] if x["code"]==sys.argv[1] and (len(sys.argv)<3 or (x.get("session") or {}).get("session_id")==sys.argv[2])]
+print(len(f), f[0].get("fix","") if f else "")' "$@"; }
+expect "the diagnosis looks at this computer and at the server" "$(cxt segments doctor --json | python3 -c 'import json,sys;d=json.load(sys.stdin);c=d["checked"];print(d["version"],"collector" in c,"copies" in c,"server-sessions" in c,"summaries" in c)')" "1 True True True True"
+expect "a session that is on the server as it was sent raises nothing" "$(segdoctor server-behind e2e-segments) $(segdoctor not-on-server e2e-segments) $(segdoctor server-differs e2e-segments) $(segdoctor removed e2e-segments)" "0  0  0  0 "
+# The session goes on and nothing uploads it: the server is behind.
+segappend m11 40
+expect "records the collector has not sent are found, with the command that sends them" "$(segdoctor server-behind e2e-segments)" "1 cxt segments push claude e2e-segments"
+expect "that command puts it right" "$(cxt segments push claude e2e-segments >/dev/null 2>&1; echo "$? $(segdoctor server-behind e2e-segments)")" "0 0 "
+# Archived and removed sessions are found with what brings them back.
+expect "an archived session is found" "$(cxt segments archive claude e2e-segments >/dev/null; segdoctor archived e2e-segments)" "1 cxt segments unarchive claude e2e-segments"
+expect "restoring it clears the finding" "$(cxt segments unarchive claude e2e-segments >/dev/null; segdoctor archived e2e-segments)" "0 "
+expect "a removed session is found" "$(cxt segments remove claude e2e-segments --yes >/dev/null; segdoctor removed e2e-segments)" "1 cxt segments allow claude e2e-segments"
+expect "allowing it again clears the finding" "$(cxt segments allow claude e2e-segments >/dev/null; segdoctor removed e2e-segments) $(segheld)" "0  1"
+# The server lost a session whose records the tool no longer holds: only the
+# copy under .cxt is left, and it is sent again from there.
+mv "$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl" "$TMP/e2e-segments.jsonl.away"
+ccurl -sb "$JA" -o /dev/null -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments"
+ccurl -sb "$JA" -o /dev/null -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/removal"
+expect "a session left only in its copy is found" "$(segdoctor only-in-copy e2e-segments) $(segheld)" "1 cxt segments resend claude e2e-segments 0"
+expect "the copy is sent again: the report, the conversation and the summary" "$(cxt segments resend claude e2e-segments --json | python3 -c 'import json,sys;s=json.load(sys.stdin)["sessions"][0];print(s["state"],s["revision"],s["content"],s.get("summaries"))') $(segheld) $(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "stored 1 stored 1 1 1 1"
+expect "the conversation sent again is read through the session" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c 'import json,sys;p=json.load(sys.stdin);print(len(p["events"])>=5,p["offset"])')" "True 0"
+mv "$TMP/e2e-segments.jsonl.away" "$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"
+# This repository has no Git origin on the server, so there is nothing to read again, and the command says so.
+expect "asking for a fresh read of GitHub says why it cannot be done here" "$(cxt segments refresh 2>&1 >/dev/null | grep -c 'no Git origin to read')" 1
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"

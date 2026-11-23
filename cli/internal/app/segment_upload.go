@@ -513,7 +513,7 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		if s.uploadRecords != nil && s.clock != nil {
 			entry := domain.SessionUploadLogEntry{
 				At: s.clock().UTC().Format(time.RFC3339Nano), Automatic: auto != nil,
-				Report: session.State, Revision: session.Revision, ReportHash: domain.Fingerprint(upload.Body), Reason: session.Reason,
+				Report: session.State, Revision: session.Revision, ReportHash: domain.Fingerprint(upload.Body), ServerHash: receipt.BodyHash, Reason: session.Reason,
 				Content: session.Content, ContentReason: session.ContentReason, Summaries: session.Summaries, SummaryReason: session.SummaryReason,
 			}
 			if content := upload.Body.Content; content != nil {
@@ -643,6 +643,88 @@ func (s *SegmentUploadService) pushSummaries(ctx context.Context, repoID, folder
 	}
 	remembered.Summarized = domain.AnchoredSummaryRemembered(points, done)
 	return written, reason, nil
+}
+
+// ResendSession sends again what was last sent for a session, from the copy
+// kept in the repository's .cxt folder: the conversation document and the
+// report, and the summaries written anew from that conversation. It is for a
+// session whose records the tool no longer holds; nothing is read from the
+// tool, and nothing is computed anew but the summaries.
+func (s *SegmentUploadService) ResendSession(ctx context.Context, cwd string, key domain.SessionUploadKey) (domain.SegmentPushResult, error) {
+	result := domain.SegmentPushResult{Version: 1, Sessions: []domain.SegmentPushSession{}, Unread: []domain.UnreadSessionRecord{}}
+	if s.remote == nil || s.repo == nil || s.uploadRecords == nil || s.clock == nil {
+		return result, fmt.Errorf("session report upload unavailable")
+	}
+	name := string(key.Provider) + " " + key.SessionID
+	record, err := s.uploadRecords.ReadSessionUpload(ctx, cwd, key, true)
+	if err != nil {
+		return result, fmt.Errorf("no copy of %s is kept under .cxt/sessions: %w", name, err)
+	}
+	if record.Report == nil {
+		return result, fmt.Errorf("no copy of the report of %s is kept under .cxt/sessions", name)
+	}
+	repo, err := s.repo(ctx, cwd)
+	if err != nil {
+		return result, err
+	}
+	upload := domain.AnchoredSessionUpload{Provider: key.Provider, SessionID: key.SessionID, Body: *record.Report}
+	session := domain.SegmentPushSession{Provider: key.Provider, ID: key.SessionID}
+	if s.removalRemote != nil {
+		removals, err := s.removalRemote.ListRemovedAnchoredSessions(ctx, string(repo.ID))
+		if err != nil {
+			return result, err
+		}
+		for _, removal := range removals {
+			if removal.Provider == key.Provider && removal.SessionID == key.SessionID {
+				session.State, session.Reason = domain.SegmentPushRemoved, removedSessionReason(removal)
+				result.Removed, result.Sessions = 1, append(result.Sessions, session)
+				return result, nil
+			}
+		}
+	}
+	// The conversation first, as in every upload: the report may only name
+	// a document the repository holds.
+	if content := upload.Body.Content; content != nil {
+		if record.Conversation == nil || s.contentRemote == nil {
+			return result, fmt.Errorf("the report of %s names a conversation, and no copy of it is kept under .cxt/sessions", name)
+		}
+		ref, err := s.contentRemote.PutSessionContent(ctx, string(repo.ID), *record.Conversation)
+		if err != nil {
+			return result, fmt.Errorf("the copy of the conversation of %s was not taken: %w", name, err)
+		}
+		if ref.Hash != content.Doc {
+			return result, fmt.Errorf("the copy of the conversation of %s is not the document its report names; nothing was sent of the report", name)
+		}
+		session.Content = domain.SegmentContentStored
+	}
+	receipt, err := s.remote.PutAnchoredSession(ctx, string(repo.ID), upload)
+	switch {
+	case err == nil && receipt.Changed:
+		session.State, session.Revision, result.Stored = domain.SegmentPushStored, receipt.Revision, 1
+	case err == nil:
+		session.State, session.Revision, result.Unchanged = domain.SegmentPushUnchanged, receipt.Revision, 1
+	case refusedSessionReport(err):
+		session.State, session.Reason, result.Refused = domain.SegmentPushRefused, err.Error(), 1
+	default:
+		return result, err
+	}
+	if s.summaryRemote != nil && s.summarizer != nil && record.Conversation != nil && session.State != domain.SegmentPushRefused {
+		remembered := domain.CollectorSessionState{}
+		written, reason, err := s.pushSummaries(ctx, string(repo.ID), cwd, upload, *record.Conversation, &remembered, false)
+		session.Summaries, session.SummaryReason, result.Summaries = written, reason, written
+		if err != nil {
+			return result, err
+		}
+	}
+	entry := domain.SessionUploadLogEntry{At: s.clock().UTC().Format(time.RFC3339Nano), Report: session.State, Revision: session.Revision,
+		ReportHash: domain.Fingerprint(upload.Body), ServerHash: receipt.BodyHash, Reason: session.Reason, Content: session.Content,
+		Summaries: session.Summaries, SummaryReason: session.SummaryReason, Action: "sent again from the copy"}
+	if content := upload.Body.Content; content != nil {
+		entry.Doc, entry.Events = content.Doc, content.Events
+	}
+	_ = s.uploadRecords.LogSessionAction(context.WithoutCancel(ctx), cwd, key, entry)
+	result.Sessions = append(result.Sessions, session)
+	return result, nil
 }
 
 // removedSessionReason says why a removed session is not sent and what

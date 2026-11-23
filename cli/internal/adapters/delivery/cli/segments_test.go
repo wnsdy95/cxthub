@@ -149,6 +149,27 @@ func TestSegmentsCommandContract(t *testing.T) {
 			t.Fatalf("%v must be rejected before dispatch", args)
 		}
 	}
+	// The diagnosis reads only. Asking the server for a fresh read, archiving
+	// and sending a copy again change what the server holds.
+	if !ReadOnlyInvocation([]string{"cxt", "segments", "doctor"}) || !ReadOnlyInvocation([]string{"cxt", "segments", "doctor", "--json"}) {
+		t.Fatal("segments doctor must be classified as a read-only command")
+	}
+	for _, args := range [][]string{{"cxt", "segments", "refresh"}, {"cxt", "segments", "archive", "claude", "session-1"}, {"cxt", "segments", "unarchive", "codex", "thread-1"},
+		{"cxt", "segments", "resend", "claude", "session-1", "--json"}} {
+		if ReadOnlyInvocation(args) {
+			t.Fatalf("%v must not be classified as a read-only command", args)
+		}
+		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
+			t.Fatalf("%v was rejected: %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"cxt", "segments", "doctor", "claude", "session-1"}, {"cxt", "segments", "doctor", "--yes"}, {"cxt", "segments", "refresh", "now"},
+		{"cxt", "segments", "refresh", "--json"}, {"cxt", "segments", "archive"}, {"cxt", "segments", "archive", "claude", "session-1", "--json"},
+		{"cxt", "segments", "unarchive", "other", "session-1"}, {"cxt", "segments", "resend"}, {"cxt", "segments", "resend", "claude", "../escape"}} {
+		if err := Run(nil, args); err == nil {
+			t.Fatalf("%v must be rejected before dispatch", args)
+		}
+	}
 	// Reading what .cxt keeps is reading, for every session or for one.
 	if !ReadOnlyInvocation([]string{"cxt", "segments", "log"}) || !ReadOnlyInvocation([]string{"cxt", "segments", "log", "codex", "thread-1", "--json"}) {
 		t.Fatal("segments log must be classified as a read-only command")
@@ -179,6 +200,10 @@ func TestSegmentsCommandContract(t *testing.T) {
 type segmentUploaderFunc func(context.Context, string) (domain.SegmentPushResult, error)
 
 func (f segmentUploaderFunc) PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error) {
+	return f(ctx, cwd)
+}
+
+func (f segmentUploaderFunc) ResendSession(ctx context.Context, cwd string, _ domain.SessionUploadKey) (domain.SegmentPushResult, error) {
 	return f(ctx, cwd)
 }
 
@@ -306,6 +331,11 @@ type segmentCareFake struct {
 	removed  domain.SegmentRemoveResult
 	allowed  domain.SegmentAllowResult
 	err      error
+	// diagnosis is what Diagnose answers; refreshed counts RefreshRemote;
+	// archived is what SetArchived was asked.
+	diagnosis domain.SegmentDiagnosis
+	refreshed int
+	archived  *bool
 }
 
 func (f *segmentCareFake) RemoveSession(_ context.Context, _ string, key domain.SessionUploadKey) (domain.SegmentRemoveResult, error) {
@@ -316,6 +346,20 @@ func (f *segmentCareFake) RemoveSession(_ context.Context, _ string, key domain.
 func (f *segmentCareFake) AllowSession(_ context.Context, _ string, key domain.SessionUploadKey) (domain.SegmentAllowResult, error) {
 	f.asked = &key
 	return f.allowed, f.err
+}
+
+func (f *segmentCareFake) Diagnose(context.Context, string) (domain.SegmentDiagnosis, error) {
+	return f.diagnosis, f.err
+}
+
+func (f *segmentCareFake) RefreshRemote(context.Context, string) error {
+	f.refreshed++
+	return f.err
+}
+
+func (f *segmentCareFake) SetArchived(_ context.Context, _ string, key domain.SessionUploadKey, archived bool) error {
+	f.asked, f.archived = &key, &archived
+	return f.err
 }
 
 func (f *segmentCareFake) UploadLog(_ context.Context, _ string, key *domain.SessionUploadKey) ([]domain.SessionUploadListing, error) {
@@ -419,10 +463,16 @@ func TestSegmentsPushOfOneSessionAndWhatWasRemoved(t *testing.T) {
 type segmentNamedUploader struct {
 	result domain.SegmentPushResult
 	asked  *[]domain.SessionUploadKey
+	err    error
 }
 
 func (u segmentNamedUploader) PushSegments(context.Context, string) (domain.SegmentPushResult, error) {
 	return domain.SegmentPushResult{}, errors.New("every session was asked for")
+}
+
+func (u segmentNamedUploader) ResendSession(_ context.Context, _ string, key domain.SessionUploadKey) (domain.SegmentPushResult, error) {
+	*u.asked = []domain.SessionUploadKey{key}
+	return u.result, u.err
 }
 
 func (u segmentNamedUploader) PushSegmentsOf(_ context.Context, _ string, keys []domain.SessionUploadKey) (domain.SegmentPushResult, error) {
@@ -496,5 +546,92 @@ func TestSegmentsAllowSaysWhetherTheSessionWentUpAgain(t *testing.T) {
 	care.err = errors.New("synthetic refusal")
 	if err := RunSegmentsAllow(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err == nil {
 		t.Fatal("a refused allow succeeded")
+	}
+}
+
+func TestSegmentsDoctorPrintsProblemsFirstWithTheirFix(t *testing.T) {
+	key := domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "session-1"}
+	care := &segmentCareFake{diagnosis: domain.SegmentDiagnosis{Version: 1, Checked: []string{"set-up", "collector", "server-sessions"}, Problems: 1, Findings: []domain.SegmentFinding{
+		{Code: "server-behind", Problem: true, Session: &key, What: "the server holds 3 of the 5 records this computer has of claude session-1", Why: "the collector has not sent what was recorded since", Fix: "cxt segments push claude session-1"},
+		{Code: "weak-link", What: "commit aaaaaaaaaa is linked to claude session-1 because a command of that session was running in the same folder", Why: "another session could be the one"},
+	}}}
+	var out strings.Builder
+	if err := RunSegmentsDoctor(context.Background(), care, "/work/app", false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Session upload check: 1 problems, 1 things to know",
+		"Looked at: set-up, collector, server-sessions",
+		"Problems\n  [server-behind] the server holds 3 of the 5 records this computer has of claude session-1\n      why: the collector has not sent what was recorded since\n      fix: cxt segments push claude session-1",
+		"To know\n  [weak-link] commit aaaaaaaaaa is linked to claude session-1",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if strings.Index(out.String(), "Problems") > strings.Index(out.String(), "To know") || strings.Count(out.String(), "fix:") != 1 {
+		t.Fatalf("order or a fix that is not one:\n%s", out.String())
+	}
+	// JSON is the diagnosis itself; a finding is not a failure of the command.
+	out.Reset()
+	if err := RunSegmentsDoctor(context.Background(), care, "/work/app", true, &out); err != nil || !strings.HasPrefix(out.String(), `{"version":1,"checked":["set-up","collector","server-sessions"],"problems":1,"findings":[{"code":"server-behind","problem":true,`) {
+		t.Fatalf("json: %v %s", err, out.String())
+	}
+	care.diagnosis = domain.SegmentDiagnosis{Version: 1, Checked: []string{"set-up"}, Findings: []domain.SegmentFinding{}}
+	out.Reset()
+	if err := RunSegmentsDoctor(context.Background(), care, "/work/app", false, &out); err != nil || !strings.Contains(out.String(), "Everything that was looked at fits.") {
+		t.Fatalf("nothing found: %v %s", err, out.String())
+	}
+	care.err = errors.New("synthetic failure")
+	if err := RunSegmentsDoctor(context.Background(), care, "/work/app", false, &out); err == nil {
+		t.Fatal("a diagnosis that could not run succeeded")
+	}
+	if err := RunSegmentsDoctor(context.Background(), nil, "/work/app", false, &out); err == nil {
+		t.Fatal("a missing service must be an error")
+	}
+}
+
+func TestSegmentsRefreshArchiveAndResendSayWhatWasDone(t *testing.T) {
+	care := &segmentCareFake{}
+	var out strings.Builder
+	if err := RunSegmentsRefresh(context.Background(), care, "/work/app", &out); err != nil || care.refreshed != 1 || !strings.Contains(out.String(), "The server was asked to read the repository from GitHub again.") {
+		t.Fatalf("refresh: %v %d %s", err, care.refreshed, out.String())
+	}
+	out.Reset()
+	if err := RunSegmentsArchive(context.Background(), care, "/work/app", []string{"claude", "session-1"}, true, &out); err != nil || care.archived == nil || !*care.archived ||
+		!strings.Contains(out.String(), "claude session-1 is archived on the server") || !strings.Contains(out.String(), "cxt segments unarchive claude session-1 brings it back.") {
+		t.Fatalf("archive: %v %s", err, out.String())
+	}
+	out.Reset()
+	if err := RunSegmentsArchive(context.Background(), care, "/work/app", []string{"claude", "session-1"}, false, &out); err != nil || *care.archived || !strings.Contains(out.String(), "is restored from the archive on the server.") {
+		t.Fatalf("unarchive: %v %s", err, out.String())
+	}
+	care.err = errors.New("synthetic refusal")
+	if RunSegmentsRefresh(context.Background(), care, "/work/app", &out) == nil || RunSegmentsArchive(context.Background(), care, "/work/app", []string{"claude", "session-1"}, true, &out) == nil {
+		t.Fatal("a refusal was reported as done")
+	}
+
+	var asked []domain.SessionUploadKey
+	key := domain.SessionUploadKey{Provider: domain.ProviderCodex, SessionID: "thread-1"}
+	uploader := segmentNamedUploader{asked: &asked, result: domain.SegmentPushResult{Version: 1, Stored: 1, Sessions: []domain.SegmentPushSession{
+		{Provider: key.Provider, ID: key.SessionID, State: domain.SegmentPushStored, Revision: 1, Content: domain.SegmentContentStored, Summaries: 2}}}}
+	out.Reset()
+	if err := RunSegmentsResend(context.Background(), uploader, "/work/app", []string{"codex", "thread-1"}, false, &out); err != nil || len(asked) != 1 || asked[0] != key ||
+		!strings.Contains(out.String(), "Sent again from the copy under .cxt/sessions: report stored (revision 1), with its conversation, 2 summaries written again") {
+		t.Fatalf("resend: %v asked=%+v %s", err, asked, out.String())
+	}
+	// A removed session and a refused copy fail, saying why.
+	uploader.result = domain.SegmentPushResult{Version: 1, Removed: 1, Sessions: []domain.SegmentPushSession{{Provider: key.Provider, ID: key.SessionID, State: domain.SegmentPushRemoved, Reason: "you removed it from the server"}}}
+	out.Reset()
+	if err := RunSegmentsResend(context.Background(), uploader, "/work/app", []string{"codex", "thread-1"}, false, &out); err == nil || !strings.Contains(out.String(), "Nothing was sent: you removed it from the server") {
+		t.Fatalf("a removed session: %v %s", err, out.String())
+	}
+	uploader.result = domain.SegmentPushResult{Version: 1, Refused: 1, Sessions: []domain.SegmentPushSession{{Provider: key.Provider, ID: key.SessionID, State: domain.SegmentPushRefused, Reason: "synthetic refusal"}}}
+	if err := RunSegmentsResend(context.Background(), uploader, "/work/app", []string{"codex", "thread-1"}, false, &out); err == nil || !strings.Contains(err.Error(), "the server refused the copy of codex thread-1: synthetic refusal") {
+		t.Fatalf("a refused copy: %v", err)
+	}
+	uploader.err = errors.New("no copy is kept")
+	if err := RunSegmentsResend(context.Background(), uploader, "/work/app", []string{"codex", "thread-1"}, false, &out); err == nil {
+		t.Fatal("a missing copy succeeded")
 	}
 }

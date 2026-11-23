@@ -447,6 +447,135 @@ func RunSegmentsAllow(ctx context.Context, care inbound.SegmentCare, cwd string,
 	return nil
 }
 
+// RunSegmentsDoctor reads this computer and the server and prints what does
+// not fit, each with why it matters and the command that puts it right. It
+// changes nothing, and it does not fail because it found something: a
+// finding is its answer.
+func RunSegmentsDoctor(ctx context.Context, care inbound.SegmentCare, cwd string, asJSON bool, w io.Writer) error {
+	if care == nil {
+		return fmt.Errorf("diagnosis unavailable")
+	}
+	diagnosis, err := care.Diagnose(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return json.NewEncoder(w).Encode(diagnosis)
+	}
+	notes := len(diagnosis.Findings) - diagnosis.Problems
+	fmt.Fprintf(w, "Session upload check: %d problems, %d things to know\n", diagnosis.Problems, notes)
+	fmt.Fprintf(w, "Looked at: %s\n", strings.Join(diagnosis.Checked, ", "))
+	if len(diagnosis.Findings) == 0 {
+		fmt.Fprintln(w, "Everything that was looked at fits.")
+		return nil
+	}
+	for _, problem := range []bool{true, false} {
+		title := "\nTo know"
+		if problem {
+			title = "\nProblems"
+		}
+		printed := false
+		for _, finding := range diagnosis.Findings {
+			if finding.Problem != problem {
+				continue
+			}
+			if !printed {
+				fmt.Fprintln(w, title)
+				printed = true
+			}
+			fmt.Fprintf(w, "  [%s] %s\n", finding.Code, finding.What)
+			if finding.Why != "" {
+				fmt.Fprintf(w, "      why: %s\n", finding.Why)
+			}
+			if finding.Fix != "" {
+				fmt.Fprintf(w, "      fix: %s\n", finding.Fix)
+			}
+		}
+	}
+	return nil
+}
+
+// RunSegmentsRefresh asks the server to read the repository from GitHub
+// again soon.
+func RunSegmentsRefresh(ctx context.Context, care inbound.SegmentCare, cwd string, w io.Writer) error {
+	if care == nil {
+		return fmt.Errorf("the repository's server is unavailable")
+	}
+	if err := care.RefreshRemote(ctx, cwd); err != nil {
+		return err
+	}
+	fmt.Fprintln(w, "The server was asked to read the repository from GitHub again. It does so within about a minute; a large repository takes several passes.")
+	fmt.Fprintln(w, "cxt segments doctor says afterwards whether a push is seen.")
+	return nil
+}
+
+// RunSegmentsArchive archives a session on the server or restores it.
+func RunSegmentsArchive(ctx context.Context, care inbound.SegmentCare, cwd string, session []string, archived bool, w io.Writer) error {
+	if care == nil {
+		return fmt.Errorf("the repository's server is unavailable")
+	}
+	if len(session) != 2 {
+		return fmt.Errorf("name the session by its tool and its identifier")
+	}
+	key := domain.SessionUploadKey{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}
+	if err := care.SetArchived(ctx, cwd, key, archived); err != nil {
+		return err
+	}
+	if archived {
+		fmt.Fprintf(w, "%s %s is archived on the server: it is left out of commits, the search and the summaries for every reader, and nothing of it is removed.\n", key.Provider, key.SessionID)
+		fmt.Fprintf(w, "cxt segments unarchive %s %s brings it back.\n", key.Provider, key.SessionID)
+		return nil
+	}
+	fmt.Fprintf(w, "%s %s is restored from the archive on the server.\n", key.Provider, key.SessionID)
+	return nil
+}
+
+// RunSegmentsResend sends the copy kept under .cxt/sessions for a session
+// again. It is for a session the tool no longer holds.
+func RunSegmentsResend(ctx context.Context, uploader inbound.SegmentUploader, cwd string, session []string, asJSON bool, w io.Writer) error {
+	if uploader == nil {
+		return fmt.Errorf("session report upload unavailable")
+	}
+	if len(session) != 2 {
+		return fmt.Errorf("name the session by its tool and its identifier")
+	}
+	key := domain.SessionUploadKey{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}
+	result, err := uploader.ResendSession(ctx, cwd, key)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			return err
+		}
+	}
+	for _, sent := range result.Sessions {
+		switch sent.State {
+		case domain.SegmentPushRemoved:
+			if !asJSON {
+				fmt.Fprintf(w, "Nothing was sent: %s\n", sent.Reason)
+			}
+			return fmt.Errorf("%s %s is removed from the server", key.Provider, key.SessionID)
+		case domain.SegmentPushRefused:
+			return fmt.Errorf("the server refused the copy of %s %s: %s", key.Provider, key.SessionID, sent.Reason)
+		}
+		if !asJSON {
+			fmt.Fprintf(w, "Sent again from the copy under .cxt/sessions: report %s (revision %d)", sent.State, sent.Revision)
+			if sent.Content == domain.SegmentContentStored {
+				fmt.Fprint(w, ", with its conversation")
+			}
+			if sent.Summaries > 0 {
+				fmt.Fprintf(w, ", %d summaries written again", sent.Summaries)
+			}
+			fmt.Fprintln(w)
+			if sent.SummaryReason != "" {
+				fmt.Fprintf(w, "A summary was not stored: %s\n", sent.SummaryReason)
+			}
+		}
+	}
+	return nil
+}
+
 // segmentLogLine says one log entry in words.
 func segmentLogLine(entry domain.SessionUploadLogEntry) string {
 	run := "requested"

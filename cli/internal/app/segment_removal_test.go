@@ -21,6 +21,14 @@ type removalRemoteFake struct {
 	answer  []domain.AnchoredSessionRemoval
 	err     error
 	repo    string
+	// What the diagnosis reads.
+	sessions       []domain.AnchoredSessionListed
+	serverErr      error
+	summaries      map[string][]domain.AnchoredSummary
+	summariesAsked []string
+	syncedAt       string
+	refreshes      int
+	archives       []string
 }
 
 func (f *removalRemoteFake) ListRemovedAnchoredSessions(_ context.Context, repo string) ([]domain.AnchoredSessionRemoval, error) {
@@ -33,6 +41,33 @@ func (f *removalRemoteFake) RemoveAnchoredSession(_ context.Context, repo string
 	f.repo = repo
 	f.removed = append(f.removed, domain.SessionUploadKey{Provider: provider, SessionID: session})
 	return f.answer, f.err
+}
+
+func (f *removalRemoteFake) ListAnchoredSessions(context.Context, string) ([]domain.AnchoredSessionListed, error) {
+	return f.sessions, f.serverErr
+}
+
+func (f *removalRemoteFake) ListAnchoredCommitSummaries(_ context.Context, _ string, commit string) ([]domain.AnchoredSummary, error) {
+	f.summariesAsked = append(f.summariesAsked, commit)
+	return f.summaries[commit], nil
+}
+
+func (f *removalRemoteFake) ReadRemoteGitSyncedAt(context.Context, string) (string, error) {
+	return f.syncedAt, nil
+}
+
+func (f *removalRemoteFake) RequestRemoteGitRefresh(context.Context, string) error {
+	f.refreshes++
+	return f.err
+}
+
+func (f *removalRemoteFake) SetAnchoredSessionArchived(_ context.Context, _ string, provider domain.ProviderKind, session string, archived bool) error {
+	state := "restored"
+	if archived {
+		state = "archived"
+	}
+	f.archives = append(f.archives, string(provider)+"/"+session+" "+state)
+	return f.err
 }
 
 func (f *removalRemoteFake) AllowAnchoredSession(_ context.Context, repo string, provider domain.ProviderKind, session string) error {
@@ -221,5 +256,216 @@ func TestRemoveAndAllowASessionThroughTheService(t *testing.T) {
 	}
 	if _, err := NewSegmentCareService(records).AllowSession(context.Background(), "/work/app", key); err == nil {
 		t.Fatal("an allow without a server succeeded")
+	}
+}
+
+// The diagnosis reads the tools' records, what cxt keeps here and the server,
+// and changes nothing anywhere.
+func TestDiagnoseReadsThisComputerAndTheServer(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	onRemote := true
+	listed := domain.AnchoredSessionListed{Provider: domain.ProviderClaude, SessionID: "with-commit", Revision: 1, BodyHash: "sha256:server", Records: 3, Segments: 1}
+	listed.Commits = append(listed.Commits, struct {
+		SHA      string   `json:"sha"`
+		OnRemote *bool    `json:"on_remote,omitempty"`
+		Copies   []string `json:"copies,omitempty"`
+	}{SHA: sha, OnRemote: &onRemote})
+	removals := &removalRemoteFake{sessions: []domain.AnchoredSessionListed{listed}, syncedAt: "2031-01-02T03:00:00Z",
+		summaries: map[string][]domain.AnchoredSummary{sha: {{Provider: domain.ProviderClaude, SessionID: "with-commit", Commit: sha}}},
+		listed:    []domain.AnchoredSessionRemoval{{Provider: domain.ProviderClaude, SessionID: "without-commit", RemovedAt: "2031-01-02T03:04:05Z", ByYou: true}}}
+	body := domain.AnchoredSessionBody{Records: 3, Segments: []domain.AnchoredSegment{{}}}
+	store := &uploadRecordsStore{records: map[domain.SessionUploadKey]domain.SessionUploadRecord{
+		{Provider: domain.ProviderClaude, SessionID: "with-commit"}: {Provider: domain.ProviderClaude, SessionID: "with-commit", Report: &body,
+			Log: []domain.SessionUploadLogEntry{{At: "2031-01-02T03:00:00Z", Report: domain.SegmentPushStored, ServerHash: "sha256:server"}, {At: "2031-01-02T03:01:00Z", Action: "archived on the server"}}},
+	}}
+	uploader := segmentUploadFixture(&segmentRemoteFake{})
+	repo := func(context.Context, string) (domain.Repo, error) {
+		return domain.Repo{ID: domain.HashContent([]byte("synthetic repository"))}, nil
+	}
+	facts := SegmentLocalFacts{SetUp: true, AutoOn: true, Connected: true}
+	var originAsked []string
+	care := NewSegmentCareService(store).WithServer(removals, repo, uploader, func() time.Time { return time.Date(2031, 1, 2, 4, 0, 0, 0, time.UTC) }).
+		WithLocalFacts(uploader.reports, func(context.Context, string) SegmentLocalFacts { return facts },
+			func(_ context.Context, _ string, commits []string) map[string]bool {
+				originAsked = commits
+				return map[string]bool{sha: true}
+			})
+	diagnosis, err := care.Diagnose(context.Background(), "/work/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]domain.SegmentFinding{}
+	for _, finding := range diagnosis.Findings {
+		found[finding.Code] = finding
+	}
+	// The session that is on the server as it was sent raises nothing; the
+	// removed one is said with what brings it back; the unread record of the
+	// fixture and the collector that never ran are said too.
+	if removed := found["removed"]; removed.Fix != "cxt segments allow claude without-commit" || removed.Session == nil || removed.Session.SessionID != "without-commit" {
+		t.Fatalf("the removed session: %+v (all: %+v)", removed, diagnosis.Findings)
+	}
+	for _, code := range []string{"unread-records", "collector-never-ran"} {
+		if _, ok := found[code]; !ok {
+			t.Fatalf("%s was not found: %+v", code, diagnosis.Findings)
+		}
+	}
+	for _, code := range []string{"server-behind", "server-differs", "not-on-server", "push-not-seen", "summary-missing", "no-copy"} {
+		if finding, ok := found[code]; ok {
+			t.Fatalf("a finding that does not hold: %+v", finding)
+		}
+	}
+	if !reflect.DeepEqual(originAsked, []string{sha}) || !reflect.DeepEqual(removals.summariesAsked, []string{sha}) {
+		t.Fatalf("asked of Git: %v of the server: %v", originAsked, removals.summariesAsked)
+	}
+
+	// The copy's log says the server took another report than it holds now.
+	removals.sessions[0].BodyHash = "sha256:other"
+	if diagnosis, err = care.Diagnose(context.Background(), "/work/app"); err != nil || diagnosisCode(diagnosis, "server-differs") == nil {
+		t.Fatalf("a report changed on the server: %+v %v", diagnosis.Findings, err)
+	}
+	// A server that cannot be read is a finding, and the rest is still said.
+	removals.serverErr = errors.New("server answered 401")
+	diagnosis, err = care.Diagnose(context.Background(), "/work/app")
+	if err != nil || diagnosisCode(diagnosis, "server-not-read") == nil || diagnosisCode(diagnosis, "server-not-read").Fix != "cxt login" || diagnosisCode(diagnosis, "unread-records") == nil {
+		t.Fatalf("an unreadable server: %+v %v", diagnosis.Findings, err)
+	}
+	// Without a server configured nothing is asked of one.
+	facts.Connected = false
+	removals.serverErr = nil
+	removals.summariesAsked = nil
+	if diagnosis, err = care.Diagnose(context.Background(), "/work/app"); err != nil || diagnosisCode(diagnosis, "not-connected") == nil || len(removals.summariesAsked) != 0 {
+		t.Fatalf("not connected: %+v %v", diagnosis.Findings, err)
+	}
+	if _, err := NewSegmentCareService(store).Diagnose(context.Background(), "/work/app"); err == nil {
+		t.Fatal("a diagnosis without readers succeeded")
+	}
+}
+
+func diagnosisCode(diagnosis domain.SegmentDiagnosis, code string) *domain.SegmentFinding {
+	for index := range diagnosis.Findings {
+		if diagnosis.Findings[index].Code == code {
+			return &diagnosis.Findings[index]
+		}
+	}
+	return nil
+}
+
+func TestRefreshAndArchiveThroughTheService(t *testing.T) {
+	removals := &removalRemoteFake{}
+	records := &removalRecordsFake{}
+	repo := func(context.Context, string) (domain.Repo, error) {
+		return domain.Repo{ID: domain.HashContent([]byte("synthetic repository"))}, nil
+	}
+	care := NewSegmentCareService(records).WithServer(removals, repo, segmentUploadFixture(&segmentRemoteFake{}), time.Now)
+	key := domain.SessionUploadKey{Provider: domain.ProviderCodex, SessionID: "thread-1"}
+	if err := care.RefreshRemote(context.Background(), "/work/app"); err != nil || removals.refreshes != 1 {
+		t.Fatalf("refresh: %v %d", err, removals.refreshes)
+	}
+	for _, archived := range []bool{true, false} {
+		if err := care.SetArchived(context.Background(), "/work/app", key, archived); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(removals.archives, []string{"codex/thread-1 archived", "codex/thread-1 restored"}) ||
+		!reflect.DeepEqual(records.actions, []string{"codex/thread-1 requested archived on the server", "codex/thread-1 requested restored from the archive on the server"}) {
+		t.Fatalf("archives: %v actions: %v", removals.archives, records.actions)
+	}
+	// What the server refuses is not logged as done.
+	records.actions, removals.err = nil, errors.New("synthetic refusal")
+	if err := care.SetArchived(context.Background(), "/work/app", key, true); err == nil || len(records.actions) != 0 {
+		t.Fatalf("a refused archive: %v %v", err, records.actions)
+	}
+	if err := care.RefreshRemote(context.Background(), "/work/app"); err == nil {
+		t.Fatal("a refused refresh succeeded")
+	}
+	if err := NewSegmentCareService(records).RefreshRemote(context.Background(), "/work/app"); err == nil {
+		t.Fatal("a refresh without a server succeeded")
+	}
+}
+
+type resendRecords struct {
+	removalRecordsFake
+	record  domain.SessionUploadRecord
+	entries []domain.SessionUploadLogEntry
+}
+
+func (f *resendRecords) ReadSessionUpload(_ context.Context, _ string, key domain.SessionUploadKey, withConversation bool) (domain.SessionUploadRecord, error) {
+	if key.SessionID != f.record.SessionID || !withConversation {
+		return domain.SessionUploadRecord{}, domain.ErrNotFound
+	}
+	return f.record, nil
+}
+
+func (f *resendRecords) LogSessionAction(_ context.Context, _ string, _ domain.SessionUploadKey, entry domain.SessionUploadLogEntry) error {
+	f.entries = append(f.entries, entry)
+	return nil
+}
+
+// The copy kept under .cxt is sent again as it was: the conversation, the
+// report, and the summaries written anew from that conversation. Nothing is
+// read from the tool.
+func TestResendSendsTheKeptCopyAndNothingFromTheTool(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	key := domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "records-gone"}
+	conversation := domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: domain.ProviderClaude, SessionOriginID: key.SessionID},
+		Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "synthetic"}}}, {Seq: 1, Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "done"}}}}}
+	doc := domain.HashContent([]byte(key.SessionID)) // what the content fake answers for this conversation
+	body := domain.AnchoredSessionBody{RuleVersion: 1, Scope: domain.SessionScopeFolder, Records: 2, Content: &domain.AnchoredContent{Doc: doc, Events: 2},
+		Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", LastOrdinal: 1, Events: 2}, Commits: []domain.AnchoredCommit{{SHA: sha, Rule: domain.SegmentLinkPrintedNumber}}}}}
+	records := &resendRecords{record: domain.SessionUploadRecord{Provider: key.Provider, SessionID: key.SessionID, Report: &body, ConversationKept: true, Conversation: &conversation}}
+	remote, source, content := &segmentRemoteFake{}, &segmentContentSourceFake{}, &segmentContentRemoteFake{}
+	summarizer, summaries := &segmentSummarizerFake{}, &segmentSummaryRemoteFake{}
+	removals := &removalRemoteFake{}
+	service := segmentUploadFixture(remote).WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: source}).
+		WithSummaries(summaries, summarizer).WithRemovals(removals).WithUploadRecords(records, func() time.Time { return time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC) })
+
+	result, err := service.ResendSession(context.Background(), "/work/app", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stored != 1 || len(result.Sessions) != 1 || result.Sessions[0].State != domain.SegmentPushStored || result.Sessions[0].Content != domain.SegmentContentStored || result.Sessions[0].Summaries != 1 {
+		t.Fatalf("result: %+v", result)
+	}
+	if len(source.read) != 0 {
+		t.Fatal("the tool's records were read")
+	}
+	if len(content.docs) != 1 || len(content.docs[0].Events) != 2 || len(remote.uploads) != 1 || !reflect.DeepEqual(remote.uploads[0].Body, body) || len(summaries.stored) != 1 {
+		t.Fatalf("sent: documents=%d reports=%+v summaries=%v", len(content.docs), remote.uploads, summaries.stored)
+	}
+	if len(records.entries) != 1 || records.entries[0].Action != "sent again from the copy" || records.entries[0].Report != domain.SegmentPushStored || records.entries[0].Doc != doc {
+		t.Fatalf("log: %+v", records.entries)
+	}
+
+	// A copy of the conversation that is not the document the report names
+	// stops before the report.
+	remote.uploads = nil
+	content.answer = func(domain.CIRDocument) (domain.DocumentRef, error) {
+		return domain.DocumentRef{Hash: domain.HashContent([]byte("another document"))}, nil
+	}
+	if _, err := service.ResendSession(context.Background(), "/work/app", key); err == nil || !strings.Contains(err.Error(), "is not the document its report names") || len(remote.uploads) != 0 {
+		t.Fatalf("another document: %v uploads=%d", err, len(remote.uploads))
+	}
+	content.answer = nil
+	// A removed session is not sent from its copy either.
+	removals.listed = []domain.AnchoredSessionRemoval{{Provider: key.Provider, SessionID: key.SessionID, ByYou: true}}
+	content.docs = nil
+	if result, err := service.ResendSession(context.Background(), "/work/app", key); err != nil || result.Removed != 1 || len(content.docs) != 0 || len(remote.uploads) != 0 {
+		t.Fatalf("a removed session: %+v %v", result, err)
+	}
+	removals.listed = nil
+	// No copy, a copy without its conversation, and a refusal by the server.
+	if _, err := service.ResendSession(context.Background(), "/work/app", domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "never-kept"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("no copy: %v", err)
+	}
+	records.record.Conversation = nil
+	if _, err := service.ResendSession(context.Background(), "/work/app", key); err == nil || !strings.Contains(err.Error(), "no copy of it is kept") {
+		t.Fatalf("no conversation copy: %v", err)
+	}
+	records.record.Conversation = &conversation
+	remote.answer = func(domain.AnchoredSessionUpload) (domain.AnchoredSessionReceipt, error) {
+		return domain.AnchoredSessionReceipt{}, segmentUploadStatus(409)
+	}
+	if result, err := service.ResendSession(context.Background(), "/work/app", key); err != nil || result.Refused != 1 || result.Sessions[0].State != domain.SegmentPushRefused {
+		t.Fatalf("a refused copy: %+v %v", result, err)
 	}
 }

@@ -98,7 +98,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", minArgs: 1, maxArgs: 2, flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
 	"sync":      {usage: "cxt sync status [--json] | cxt sync pause-history | cxt sync resume-history", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
-	"segments":  {usage: "cxt segments [--json] | cxt segments push|log [claude|codex <session>] [--json] | cxt segments remove claude|codex <session> --yes [--json] | cxt segments allow claude|codex <session> [--json]", maxArgs: 3, flags: commandFlags(nil, []string{"--json", "--yes"})},
+	"segments":  {usage: "cxt segments [--json] | cxt segments doctor [--json] | cxt segments push|log [claude|codex <session>] [--json] | cxt segments remove claude|codex <session> --yes [--json] | cxt segments allow|resend claude|codex <session> [--json] | cxt segments archive|unarchive claude|codex <session> | cxt segments refresh", maxArgs: 3, flags: commandFlags(nil, []string{"--json", "--yes"})},
 	"status":    {usage: "cxt status [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"diff":      {usage: "cxt diff [--staged] [--json]", flags: commandFlags(nil, []string{"--staged", "--json"})},
 	"reflog":    {usage: "cxt reflog"},
@@ -394,8 +394,17 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 		case "push", "log":
 			// Every session, or one named by its tool and identifier.
 			valid = len(pos) == 1 || named
-		case "remove", "allow":
+		case "remove", "allow", "resend":
 			valid = named
+		case "archive", "unarchive":
+			_, asJSON := flags["--json"]
+			valid = named && !asJSON
+		case "doctor":
+			// It reads this computer and the server and changes nothing.
+			valid = len(pos) == 1
+		case "refresh":
+			_, asJSON := flags["--json"]
+			valid = len(pos) == 1 && !asJSON
 		default:
 			valid = false
 		}
@@ -403,7 +412,8 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 		if _, yes := flags["--yes"]; yes && sub != "remove" {
 			valid = false
 		}
-		if sub == "push" || sub == "remove" || sub == "allow" {
+		switch sub {
+		case "push", "remove", "allow", "resend", "archive", "unarchive", "refresh":
 			// They change what the server holds, so they are not read-only
 			// invocations.
 			p.effect = commandLocalWrite

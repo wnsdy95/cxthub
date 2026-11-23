@@ -193,6 +193,14 @@ func Run(c *Container, args []string) error {
 			return RunSegmentsRemove(ctx, care, cwd, parsed.positionals[1:], parsed.has("--yes"), parsed.has("--json"), os.Stdout)
 		case "allow":
 			return RunSegmentsAllow(ctx, care, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
+		case "doctor":
+			return RunSegmentsDoctor(ctx, care, cwd, parsed.has("--json"), os.Stdout)
+		case "refresh":
+			return RunSegmentsRefresh(ctx, care, cwd, os.Stdout)
+		case "archive", "unarchive":
+			return RunSegmentsArchive(ctx, care, cwd, parsed.positionals[1:], parsed.first() == "archive", os.Stdout)
+		case "resend":
+			return RunSegmentsResend(ctx, uploader, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
 		}
 		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
@@ -1500,12 +1508,18 @@ usage: cxt <command> [flags]
                             pause or resume background retained-history uploads
   doctor [--json]           inspect the local replica and Git journal without writes
   segments [--json]         read agent session records and Git; show sessions cut at their commits, without writes
+  segments doctor [--json]  read this computer and the server and say what does not fit, each with the command that puts it right; changes nothing
   segments push [claude|codex <session>] [--json]
                             upload that report to the server, one report per session, or the one session named; a copy of what was sent is kept under .cxt/sessions
   segments remove claude|codex <session> --yes [--json]
                             remove a session from the server for every reader, with the sessions it spawned; it is not uploaded again until it is allowed again
   segments allow claude|codex <session> [--json]
                             take back the removal of a session and upload it again
+  segments resend claude|codex <session> [--json]
+                            send the copy kept under .cxt/sessions again, for a session the tool no longer holds
+  segments archive|unarchive claude|codex <session>
+                            hide a session from lists, the search and the summaries on the server, or bring it back
+  segments refresh          ask the server to read the repository from GitHub again, so that a push it has not seen opens what it explains
   segments log [claude|codex <session>] [--json]
                             show what .cxt/sessions keeps about the uploads: every session with its last upload, or one session's whole log
   branch operations         inspect durable local operations (--json available)

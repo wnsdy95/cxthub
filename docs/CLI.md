@@ -1615,6 +1615,78 @@ spawned it has a removal of its own and is allowed by its own name. When the
 tool no longer holds the session's records, the session is allowed but not
 uploaded, and the command fails saying so.
 
+### `cxt segments doctor`
+
+```text
+cxt segments doctor [--json]
+```
+
+Finds what does not fit between the sessions the tools recorded on this
+computer, what cxt keeps here and what the server holds, and gives for each
+thing the command that puts it right. It is made for the coding agent to run
+when something looks wrong: every finding has a code that does not change, a
+sentence that says what is so, why it matters, and, when something can be done,
+the exact command.
+
+It reads everything again at that moment: the tools' records and Git, the
+collector's memory, the copies under `.cxt/sessions`, and, when a server is
+configured, the server. Nothing is taken from a hook having run, and nothing
+is changed anywhere. A finding does not make the command fail; a server that
+cannot be read is itself a finding, and what this computer alone shows is still
+said. `checked` lists what was looked at, so that no finding means something.
+
+| Code | What it says | The command it gives |
+| --- | --- | --- |
+| `not-set-up`, `not-connected` | cxt is not set up here, or no server is configured | `cxt setup` |
+| `collector-off` | automatic upload is turned off | `cxt config segments.auto on` |
+| `collector-never-ran` | the collector has not run here yet | `cxt segments push` |
+| `collector-failing` | its last run failed, with the error | `cxt login` for a missing login, else `cxt segments push` |
+| `collector-behind` | sessions have records newer than its last run, more than 10 minutes old | `cxt segments push` |
+| `unread-records` | records exist that were not read, with the reason | install `sqlite3`, or update cxt, when that is the reason |
+| `weak-link` | a commit is linked to a session by the fallback rule, not by a printed commit number | none: it is something to check |
+| `not-on-server` | a session of this computer is not on the server | `cxt segments push <tool> <session>` |
+| `server-behind` | the server holds fewer records of a session than this computer | `cxt segments push <tool> <session>` |
+| `server-differs` | the report on the server is not the one this computer last sent | `cxt segments push <tool> <session>` |
+| `push-not-seen` | a commit is on origin here, but the server has not seen it on GitHub | `cxt segments refresh` |
+| `summary-missing` | a session has no summary at one of its commits | `cxt segments push <tool> <session>` |
+| `removed` | a session was removed from the server | `cxt segments allow <tool> <session>` |
+| `archived` | a session is archived on the server | `cxt segments unarchive <tool> <session>` |
+| `no-copy` | sessions on the server have no copy under `.cxt/sessions` | `cxt segments push` |
+| `records-gone` | the tool no longer holds the records of sessions uploaded from here | none: the copies are what is left |
+| `only-in-copy` | a session is neither on the server nor among the tool's records | `cxt segments resend <tool> <session>` |
+| `server-not-read` | the server could not be read, with the error | `cxt login` for a missing login |
+
+More than ten sessions that are not on the server are counted, not listed.
+Summaries are asked about for the newest twenty commits of this computer's
+sessions, one request each. Whether a commit is on origin is read from this
+clone's remote-tracking branches, without asking the remote.
+
+What it cannot find: a conversation linked to the wrong commit is not
+detectable from records; `weak-link` only names the links made by the weaker
+rule. Nothing re-links a commit by hand.
+
+### `cxt segments refresh`, `archive`, `unarchive` and `resend`
+
+```text
+cxt segments refresh
+cxt segments archive claude|codex <session id>
+cxt segments unarchive claude|codex <session id>
+cxt segments resend claude|codex <session id> [--json]
+```
+
+- `refresh` asks the server to read the repository from GitHub again soon. A
+  part of a session opens to teammates when the server sees its commit there,
+  which it normally learns within minutes of the push.
+- `archive` and `unarchive` do what the Sessions tab does: an archived session
+  is left out of commits, the search and the summaries for every reader, and
+  nothing of it is removed.
+- `resend` sends again what was last sent for a session, from the copy under
+  `.cxt/sessions`: the conversation document and the report as they were, and
+  the summaries written anew from that conversation. It is for a session whose
+  records the tool no longer holds and that the server lost; nothing is read
+  from the tool. A copy of the conversation that is not the document its
+  report names is not sent, and neither is a session that is removed.
+
 ### Automatic upload
 
 In a repository cxt is set up in and connected to a server, the same upload

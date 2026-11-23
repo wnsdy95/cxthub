@@ -25,3 +25,22 @@ type AnchoredRemovalRemote interface {
 	// AllowAnchoredSession takes back the removal of one session.
 	AllowAnchoredSession(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string) error
 }
+
+// SegmentCareRemote is what the commands that find and put right what is
+// wrong ask of the server, beyond removals.
+type SegmentCareRemote interface {
+	AnchoredRemovalRemote
+	// ListAnchoredSessions lists the sessions the caller may read; the
+	// caller's own are those that are not shared.
+	ListAnchoredSessions(ctx context.Context, repoID string) ([]domain.AnchoredSessionListed, error)
+	// ListAnchoredCommitSummaries lists the summaries at one commit that the
+	// caller may read.
+	ListAnchoredCommitSummaries(ctx context.Context, repoID, commit string) ([]domain.AnchoredSummary, error)
+	// ReadRemoteGitSyncedAt says when the server last finished reading the
+	// repository from GitHub; empty when it never did.
+	ReadRemoteGitSyncedAt(ctx context.Context, repoID string) (string, error)
+	// RequestRemoteGitRefresh asks the server to read GitHub again soon.
+	RequestRemoteGitRefresh(ctx context.Context, repoID string) error
+	// SetAnchoredSessionArchived archives a session or restores it.
+	SetAnchoredSessionArchived(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string, archived bool) error
+}

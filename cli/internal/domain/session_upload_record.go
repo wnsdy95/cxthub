@@ -15,7 +15,11 @@ type SessionUploadLogEntry struct {
 	// ReportHash is the fingerprint of the report that was sent. It is the
 	// fingerprint of report.json as it was after this run.
 	ReportHash string `json:"report_hash,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	// ServerHash is the hash the server answered for the report it stored,
+	// which is what the server's session list shows. It is absent for a run
+	// that sent no report.
+	ServerHash ContentHash `json:"server_hash,omitempty"`
+	Reason     string      `json:"reason,omitempty"`
 	// Content is what happened to the conversation, Doc the document the
 	// report names for it and Events how many events it holds.
 	Content       SegmentContentState `json:"content,omitempty"`

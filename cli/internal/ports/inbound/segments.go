@@ -19,6 +19,9 @@ type SegmentUploader interface {
 	PushSegments(ctx context.Context, cwd string) (domain.SegmentPushResult, error)
 	// PushSegmentsOf uploads only the named sessions.
 	PushSegmentsOf(ctx context.Context, cwd string, keys []domain.SessionUploadKey) (domain.SegmentPushResult, error)
+	// ResendSession sends the copy kept under .cxt for a session again, for
+	// a session the tool no longer holds. Nothing is read from the tool.
+	ResendSession(ctx context.Context, cwd string, key domain.SessionUploadKey) (domain.SegmentPushResult, error)
 }
 
 // SegmentCollector is the upload nobody has to ask for. It reads the same
@@ -43,4 +46,12 @@ type SegmentCare interface {
 	// AllowSession takes back the removal of a session and uploads the
 	// session again from the tool's records.
 	AllowSession(ctx context.Context, cwd string, key domain.SessionUploadKey) (domain.SegmentAllowResult, error)
+	// Diagnose reads this computer and the server and says what does not
+	// fit, each with the command that puts it right. It changes nothing.
+	Diagnose(ctx context.Context, cwd string) (domain.SegmentDiagnosis, error)
+	// RefreshRemote asks the server to read the repository from GitHub
+	// again soon.
+	RefreshRemote(ctx context.Context, cwd string) error
+	// SetArchived archives a session on the server or restores it.
+	SetArchived(ctx context.Context, cwd string, key domain.SessionUploadKey, archived bool) error
 }

@@ -114,15 +114,29 @@ func run(args []string) error {
 		case "log":
 			// What .cxt keeps is read from this computer alone.
 			return delivcli.RunSegmentsLog(ctx, newSegmentCare(), cwd, positionals[1:], asJSON, os.Stdout)
-		case "remove", "allow":
+		case "resend":
+			// The copy under .cxt is read, and nothing of the tools' records.
+			uploader, err := newSegmentUploader(loadConfig(), "")
+			if err != nil {
+				return err
+			}
+			return delivcli.RunSegmentsResend(ctx, uploader, cwd, positionals[1:], asJSON, os.Stdout)
+		case "remove", "allow", "doctor", "refresh", "archive", "unarchive":
 			care, err := newSegmentCareWithServer(loadConfig())
 			if err != nil {
 				return err
 			}
-			if sub == "remove" {
+			switch sub {
+			case "remove":
 				return delivcli.RunSegmentsRemove(ctx, care, cwd, positionals[1:], slices.Contains(args[2:], "--yes"), asJSON, os.Stdout)
+			case "allow":
+				return delivcli.RunSegmentsAllow(ctx, care, cwd, positionals[1:], asJSON, os.Stdout)
+			case "doctor":
+				return delivcli.RunSegmentsDoctor(ctx, care, cwd, asJSON, os.Stdout)
+			case "refresh":
+				return delivcli.RunSegmentsRefresh(ctx, care, cwd, os.Stdout)
 			}
-			return delivcli.RunSegmentsAllow(ctx, care, cwd, positionals[1:], asJSON, os.Stdout)
+			return delivcli.RunSegmentsArchive(ctx, care, cwd, positionals[1:], sub == "archive", os.Stdout)
 		}
 		reporter, err := newSegmentReporter("")
 		if err != nil {

@@ -131,8 +131,29 @@ func newSegmentCareWithServer(cfg config) (*app.SegmentCareService, error) {
 	if err != nil {
 		return nil, err
 	}
+	reporter, err := newSegmentReporter("")
+	if err != nil {
+		return nil, err
+	}
 	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
-	return newSegmentCare().WithServer(remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, uploader, time.Now), nil
+	return newSegmentCare().WithServer(remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, uploader, time.Now).
+		WithLocalFacts(reporter, segmentLocalFacts, gitctx.CommitsOnOrigin), nil
+}
+
+// segmentLocalFacts reads what this computer says about uploading from the
+// repository holding cwd: whether cxt is set up there, whether automatic
+// upload is on, whether a server is configured, and the collector's memory.
+func segmentLocalFacts(ctx context.Context, cwd string) app.SegmentLocalFacts {
+	root, setUp := gitctx.ContextRoot(ctx, cwd)
+	if !setUp {
+		root = cwd
+	}
+	_, origin := remotecfg.Origin(root)
+	facts := app.SegmentLocalFacts{SetUp: setUp, AutoOn: remotecfg.SegmentsAuto(root), Connected: origin || os.Getenv("CXT_REMOTE") != ""}
+	if state, err := gitctx.NewCollectorFiles().LoadCollectorState(ctx, cwd); err == nil && state.Version == domain.CollectorStateVersion && state.EnabledAt != "" {
+		facts.Collector = &state
+	}
+	return facts
 }
 
 // segmentPositionals returns the arguments of cxt segments that are not
