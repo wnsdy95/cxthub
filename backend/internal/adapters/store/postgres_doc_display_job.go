@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -22,6 +23,51 @@ func (s *PostgresStore) EnqueueDocDisplay(ctx context.Context, target domain.Doc
 	ctx, cancel := context.WithTimeout(ctx, docRangeEnqueueTimeout)
 	defer cancel()
 	defer func() { failure = docRangeEnqueueError(parent, failure) }()
+	for attempt := 1; ; attempt++ {
+		queued, failure = s.enqueueDocDisplayOnce(ctx, target, now)
+		if attempt == docDisplayEnqueueAttempts || !docCatalogAdmissionBusy(failure) {
+			return queued, failure
+		}
+		if err := s.awaitDocCatalogAdmission(ctx, target); err != nil {
+			return domain.DocDisplayJob{}, err
+		}
+	}
+}
+
+// docDisplayEnqueueAttempts is one run of the enqueue transaction plus one retry after a busy
+// catalog admission fence has been released.
+//
+// The job triggers only try that fence, an advisory lock, and never wait for it. A transaction
+// that is ending releases its transaction-ID lock, which wakes an enqueue queued behind its row,
+// before its advisory locks (PostgreSQL ProcReleaseLocks), so the woken enqueue can reach the
+// fence while the finished transaction still holds it. Waiting for the release and running the
+// transaction once more keeps that from failing the enqueue; a fence that is taken again on the
+// retry is real contention and is reported as before.
+const docDisplayEnqueueAttempts = 2
+
+func docCatalogAdmissionBusy(err error) bool {
+	var failure *pgconn.PgError
+	return errors.As(err, &failure) && failure.Code == "55P03" && failure.Message == "document catalog admission is busy"
+}
+
+// awaitDocCatalogAdmission waits, within the enqueue lock timeout, until no writer holds the
+// target's catalog admission fence. It keeps nothing: the caller's retry tries the fence again
+// in the same order as any other enqueue.
+func (s *PostgresStore) awaitDocCatalogAdmission(ctx context.Context, target domain.DocDisplayTarget) error {
+	transaction, err := s.beginDocRangeJob(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackPG(transaction)
+	if _, err := transaction.Exec(ctx, `SET LOCAL lock_timeout='250ms'`); err != nil {
+		return err
+	}
+	_, err = transaction.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('cxthub-doc-catalog-affinity:'||$1::text||':'||$2::text,0))`,
+		target.Event.Hash, target.DisplayProfile())
+	return err
+}
+
+func (s *PostgresStore) enqueueDocDisplayOnce(ctx context.Context, target domain.DocDisplayTarget, now time.Time) (queued domain.DocDisplayJob, _ error) {
 	transaction, err := s.beginDocRangeJob(ctx)
 	if err != nil {
 		return queued, err
