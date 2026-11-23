@@ -93,6 +93,15 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 				return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: anchored session: the content document is not in this repository", domain.ErrValidation)
 			}
 		}
+		// A session that was removed from the server is not taken again
+		// until it is allowed again, whoever sends it.
+		if removals, ok := s.meta.(outbound.AnchoredRemovalStore); ok {
+			if _, err := removals.GetAnchoredSessionRemoval(bound, repo, provider, sessionID); err == nil {
+				return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: this session was removed from the server; it is uploaded again only after it is allowed again", domain.ErrConflict)
+			} else if !errors.Is(err, domain.ErrNotFound) {
+				return domain.AnchoredSessionReceipt{}, err
+			}
+		}
 		now := time.Now().UTC()
 		next := domain.AnchoredSession{RepoID: repo, Provider: provider, SessionID: sessionID, Uploader: actor,
 			Revision: 1, BodyHash: hash, CreatedAt: now, UpdatedAt: now, Body: body}
@@ -110,6 +119,14 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 		}
 		if err := store.PutAnchoredSession(bound, next); err != nil {
 			return domain.AnchoredSessionReceipt{}, err
+		}
+		// The document the earlier report named is no longer the session's
+		// conversation: a session that grew, or was masked another way, has a
+		// new one. It is deleted when nothing else uses it. A deletion that
+		// fails does not fail the report; the document then stays until the
+		// session is removed.
+		if earlier := existing.Body.Content; earlier != nil && (body.Content == nil || body.Content.Doc != earlier.Doc) {
+			_ = s.dropAnchoredContent(bound, store, repo, earlier.Doc)
 		}
 		// What the report explains may already be on the remote.
 		if err := openAnchoredSessions(bound, s.meta, repo, &anchoredKey{provider, sessionID}, now); err != nil {
@@ -410,6 +427,191 @@ func (s *Service) SetAnchoredSessionArchived(ctx context.Context, repo domain.Co
 		return receipt, err
 	}
 	return repositoryWrite(writeAction(ctx, "manage"), s, repo, func(bound context.Context) (domain.AnchoredSessionArchive, error) { return set(bound, false) })
+}
+
+// dropAnchoredContent deletes a conversation document that no stored report
+// of the repository names and no snapshot holds. A document still in use is
+// left as it is.
+func (s *Service) dropAnchoredContent(ctx context.Context, store outbound.AnchoredSessionStore, repo, doc domain.ContentHash) error {
+	if doc == "" {
+		return nil
+	}
+	used, err := store.AnchoredContentInUse(ctx, repo, doc)
+	if err != nil || used {
+		return err
+	}
+	return s.blobs.DeleteDoc(ctx, repo, doc)
+}
+
+func (s *Service) anchoredRemovalStore() (outbound.AnchoredRemovalStore, error) {
+	store, ok := s.meta.(outbound.AnchoredRemovalStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: removal storage unavailable", domain.ErrConflict)
+	}
+	return store, nil
+}
+
+// RemoveAnchoredSession removes a session from the server: its report with
+// its commit links, its summaries and its open ranges, and its conversation
+// document when nothing else in the repository uses it. The sessions it
+// spawned, as far as they belong to the same account, are removed with it.
+// The session's uploader may, and so may whoever manages the repository.
+//
+// A removal is remembered for every removed session: no report is taken for
+// it again until it is allowed again. Removing what is already removed
+// changes nothing and answers the removal that stands.
+func (s *Service) RemoveAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredSessionRemovalReceipt, error) {
+	none := domain.AnchoredSessionRemovalReceipt{}
+	if err := anchoredSessionKey(repo, provider, sessionID); err != nil {
+		return none, err
+	}
+	remove := func(bound context.Context, own bool) (domain.AnchoredSessionRemovalReceipt, error) {
+		store, err := s.anchoredSessionStore()
+		if err != nil {
+			return none, err
+		}
+		removals, err := s.anchoredRemovalStore()
+		if err != nil {
+			return none, err
+		}
+		actor, err := anchoredSessionActor(bound)
+		if err != nil {
+			return none, err
+		}
+		session, err := store.GetAnchoredSession(bound, repo, provider, sessionID)
+		if errors.Is(err, domain.ErrNotFound) {
+			standing, standingErr := removals.GetAnchoredSessionRemoval(bound, repo, provider, sessionID)
+			switch {
+			case standingErr == nil && (!own || standing.Uploader == actor):
+				return domain.AnchoredSessionRemovalReceipt{Removed: []domain.AnchoredSessionRemovalView{standing.View(actor)}}, nil
+			case standingErr != nil && !errors.Is(standingErr, domain.ErrNotFound):
+				return none, standingErr
+			case own:
+				// Whether the session exists is not said to a caller who is
+				// not its uploader before that caller is known to manage
+				// the repository.
+				return none, errAnchoredArchiveNotOwn
+			}
+			return none, err
+		}
+		if err != nil {
+			return none, err
+		}
+		if own && session.Uploader != actor {
+			return none, errAnchoredArchiveNotOwn
+		}
+		// The session, then the sessions it spawned, each after its parent.
+		owned, err := store.ListAnchoredSessions(bound, repo, session.Uploader)
+		if err != nil {
+			return none, err
+		}
+		doomed := []domain.AnchoredSession{session}
+		for index := 0; index < len(doomed); index++ {
+			for _, candidate := range owned {
+				if candidate.Provider == provider && candidate.Body.Sub && candidate.Body.Parent == doomed[index].SessionID && candidate.SessionID != sessionID {
+					seen := false
+					for _, already := range doomed {
+						seen = seen || already.SessionID == candidate.SessionID
+					}
+					if !seen {
+						doomed = append(doomed, candidate)
+					}
+				}
+			}
+		}
+		now := time.Now().UTC()
+		receipt := domain.AnchoredSessionRemovalReceipt{Removed: make([]domain.AnchoredSessionRemovalView, 0, len(doomed))}
+		for _, each := range doomed {
+			if err := store.DeleteAnchoredSession(bound, repo, each.Provider, each.SessionID); err != nil {
+				return none, err
+			}
+			removal := domain.AnchoredSessionRemoval{RepoID: repo, Provider: each.Provider, SessionID: each.SessionID, Uploader: each.Uploader, RemovedBy: actor, RemovedAt: now}
+			if err := removals.PutAnchoredSessionRemoval(bound, removal); err != nil {
+				return none, err
+			}
+			receipt.Removed = append(receipt.Removed, removal.View(actor))
+		}
+		// The documents go after every report that named them is gone. One
+		// that cannot be deleted fails the removal as a whole, so that what
+		// the caller asked to be removed is never reported as removed while
+		// its conversation is still stored.
+		for _, each := range doomed {
+			if content := each.Body.Content; content != nil {
+				if err := s.dropAnchoredContent(bound, store, repo, content.Doc); err != nil {
+					return none, err
+				}
+			}
+		}
+		return receipt, nil
+	}
+	ctx = context.WithValue(auditOperation(ctx, "anchored_session.removed"), revisionScopeKey{}, "none")
+	receipt, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredSessionRemovalReceipt, error) { return remove(bound, true) })
+	if !errors.Is(err, errAnchoredArchiveNotOwn) {
+		return receipt, err
+	}
+	return repositoryWrite(writeAction(ctx, "manage"), s, repo, func(bound context.Context) (domain.AnchoredSessionRemovalReceipt, error) { return remove(bound, false) })
+}
+
+// AllowAnchoredSession takes back the removal of a session, so that it is
+// uploaded again by the next run of a CLI that still holds the tool's
+// records. Nothing comes back by itself. The account the session belonged to
+// may, and so may whoever manages the repository.
+func (s *Service) AllowAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error {
+	if err := anchoredSessionKey(repo, provider, sessionID); err != nil {
+		return err
+	}
+	allow := func(bound context.Context, own bool) (struct{}, error) {
+		removals, err := s.anchoredRemovalStore()
+		if err != nil {
+			return struct{}{}, err
+		}
+		actor, err := anchoredSessionActor(bound)
+		if err != nil {
+			return struct{}{}, err
+		}
+		standing, err := removals.GetAnchoredSessionRemoval(bound, repo, provider, sessionID)
+		if own && (errors.Is(err, domain.ErrNotFound) || (err == nil && standing.Uploader != actor)) {
+			return struct{}{}, errAnchoredArchiveNotOwn
+		}
+		if err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, removals.DeleteAnchoredSessionRemoval(bound, repo, provider, sessionID)
+	}
+	ctx = context.WithValue(auditOperation(ctx, "anchored_session.allowed"), revisionScopeKey{}, "none")
+	_, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (struct{}, error) { return allow(bound, true) })
+	if !errors.Is(err, errAnchoredArchiveNotOwn) {
+		return err
+	}
+	_, err = repositoryWrite(writeAction(ctx, "manage"), s, repo, func(bound context.Context) (struct{}, error) { return allow(bound, false) })
+	return err
+}
+
+// ListAnchoredSessionRemovals lists the caller's own sessions that were
+// removed from the server and not allowed again.
+func (s *Service) ListAnchoredSessionRemovals(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSessionRemovalView, error) {
+	if err := validateHashes(repo); err != nil {
+		return nil, err
+	}
+	return repositoryRead(ctx, s, func(bound context.Context) ([]domain.AnchoredSessionRemovalView, error) {
+		removals, err := s.anchoredRemovalStore()
+		if err != nil {
+			return nil, err
+		}
+		actor, err := anchoredSessionActor(bound)
+		if err != nil {
+			return nil, err
+		}
+		stored, err := removals.ListAnchoredSessionRemovals(bound, repo, actor)
+		if err != nil {
+			return nil, err
+		}
+		views := make([]domain.AnchoredSessionRemovalView, 0, len(stored))
+		for _, removal := range stored {
+			views = append(views, removal.View(actor))
+		}
+		return views, nil
+	})
 }
 
 // AnchoredSessionContentAccess says what the caller may read of a session's

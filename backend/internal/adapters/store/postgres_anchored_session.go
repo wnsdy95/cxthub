@@ -191,3 +191,108 @@ func (s *PostgresStore) ListAnchoredCommitLinks(ctx context.Context, repo domain
 	}
 	return links, nil
 }
+
+// DeleteAnchoredSession removes a session's report. Its commit index entries,
+// summaries and open ranges are rows that reference it and go with it.
+func (s *PostgresStore) DeleteAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error {
+	if err := validateHash(repo); err != nil {
+		return err
+	}
+	if !domain.ValidAnchoredSessionKey(provider, sessionID) {
+		return fmt.Errorf("%w: anchored session key", domain.ErrValidation)
+	}
+	tag, err := s.db(ctx).Exec(ctx, `DELETE FROM anchored_sessions WHERE repo_id=$1 AND provider=$2 AND session_id=$3`, repo, provider, sessionID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// AnchoredContentInUse reports whether a stored report names the document as
+// its content, or a snapshot of the repository holds it.
+func (s *PostgresStore) AnchoredContentInUse(ctx context.Context, repo, doc domain.ContentHash) (bool, error) {
+	if err := validateHashes(repo, doc); err != nil {
+		return false, err
+	}
+	var used bool
+	err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM anchored_sessions WHERE repo_id=$1 AND body->'content'->>'doc'=$2)
+ OR EXISTS (SELECT 1 FROM snapshots WHERE repo_id=$1 AND doc_hash=$2)`, repo, doc).Scan(&used)
+	return used, err
+}
+
+var _ outbound.AnchoredRemovalStore = (*PostgresStore)(nil)
+
+func (s *PostgresStore) PutAnchoredSessionRemoval(ctx context.Context, removal domain.AnchoredSessionRemoval) error {
+	if err := validateHash(removal.RepoID); err != nil {
+		return err
+	}
+	if err := removal.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db(ctx).Exec(ctx, `INSERT INTO anchored_session_removals(repo_id,provider,session_id,uploader,removed_by,removed_at)
+ VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (repo_id,provider,session_id) DO NOTHING`,
+		removal.RepoID, removal.Provider, removal.SessionID, removal.Uploader, removal.RemovedBy, removal.RemovedAt.UTC())
+	return err
+}
+
+func scanAnchoredSessionRemoval(row pgx.Row) (domain.AnchoredSessionRemoval, error) {
+	var removal domain.AnchoredSessionRemoval
+	if err := row.Scan(&removal.RepoID, &removal.Provider, &removal.SessionID, &removal.Uploader, &removal.RemovedBy, &removal.RemovedAt); err != nil {
+		return domain.AnchoredSessionRemoval{}, err
+	}
+	removal.RemovedAt = removal.RemovedAt.UTC()
+	if err := removal.Validate(); err != nil {
+		return domain.AnchoredSessionRemoval{}, fmt.Errorf("%w: invalid stored removal", domain.ErrIntegrity)
+	}
+	return removal, nil
+}
+
+func (s *PostgresStore) GetAnchoredSessionRemoval(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredSessionRemoval, error) {
+	if err := validateHash(repo); err != nil {
+		return domain.AnchoredSessionRemoval{}, err
+	}
+	removal, err := scanAnchoredSessionRemoval(s.db(ctx).QueryRow(ctx, `SELECT repo_id,provider,session_id,uploader,removed_by,removed_at
+ FROM anchored_session_removals WHERE repo_id=$1 AND provider=$2 AND session_id=$3`, repo, provider, sessionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AnchoredSessionRemoval{}, domain.ErrNotFound
+	}
+	return removal, err
+}
+
+func (s *PostgresStore) DeleteAnchoredSessionRemoval(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error {
+	if err := validateHash(repo); err != nil {
+		return err
+	}
+	tag, err := s.db(ctx).Exec(ctx, `DELETE FROM anchored_session_removals WHERE repo_id=$1 AND provider=$2 AND session_id=$3`, repo, provider, sessionID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListAnchoredSessionRemovals(ctx context.Context, repo domain.ContentHash, uploader string) ([]domain.AnchoredSessionRemoval, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	rows, err := s.db(ctx).Query(ctx, `SELECT repo_id,provider,session_id,uploader,removed_by,removed_at
+ FROM anchored_session_removals WHERE repo_id=$1 AND uploader=$2 ORDER BY provider,session_id`, repo, uploader)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	removals := []domain.AnchoredSessionRemoval{}
+	for rows.Next() {
+		removal, err := scanAnchoredSessionRemoval(rows)
+		if err != nil {
+			return nil, err
+		}
+		removals = append(removals, removal)
+	}
+	return removals, rows.Err()
+}

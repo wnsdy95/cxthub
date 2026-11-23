@@ -43,4 +43,6 @@ type ProductionStore interface {
 	RemoteGitStore
 	RemotePushStore
 	AnchoredPublicationStore
+	AnchoredSummaryStore
+	AnchoredRemovalStore
 }

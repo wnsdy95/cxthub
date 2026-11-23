@@ -23,6 +23,15 @@ type AnchoredSessions interface {
 	// SetAnchoredSessionArchived archives a session or restores it: its
 	// uploader may, and whoever manages the repository.
 	SetAnchoredSessionArchived(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, archived bool) (domain.AnchoredSessionArchive, error)
+	// RemoveAnchoredSession removes a session and the sessions it spawned
+	// from the server and remembers the removal: its uploader may, and
+	// whoever manages the repository.
+	RemoveAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) (domain.AnchoredSessionRemovalReceipt, error)
+	// AllowAnchoredSession takes back a removal, so that the session is
+	// taken again when a CLI uploads it.
+	AllowAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error
+	// ListAnchoredSessionRemovals lists the caller's own removed sessions.
+	ListAnchoredSessionRemovals(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSessionRemovalView, error)
 }
 
 // AnchoredSearch looks for a query in what the sessions tab shows: pull

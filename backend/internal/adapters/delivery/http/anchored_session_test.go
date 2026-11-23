@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -71,6 +72,23 @@ func (backend *anchoredSessionHTTPBackend) SetAnchoredSessionArchived(ctx contex
 	backend.seen(ctx)
 	backend.provider, backend.session, backend.archived = provider, session, &archived
 	return domain.AnchoredSessionArchive{Archived: archived}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) RemoveAnchoredSession(ctx context.Context, _ domain.ContentHash, provider domain.ProviderKind, session string) (domain.AnchoredSessionRemovalReceipt, error) {
+	backend.seen(ctx)
+	backend.provider, backend.session = provider, session
+	return domain.AnchoredSessionRemovalReceipt{Removed: []domain.AnchoredSessionRemovalView{{Provider: provider, SessionID: session, RemovedAt: time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC), ByYou: true}}}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) AllowAnchoredSession(ctx context.Context, _ domain.ContentHash, provider domain.ProviderKind, session string) error {
+	backend.seen(ctx)
+	backend.provider, backend.session = provider, session
+	return backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) ListAnchoredSessionRemovals(ctx context.Context, _ domain.ContentHash) ([]domain.AnchoredSessionRemovalView, error) {
+	backend.seen(ctx)
+	return []domain.AnchoredSessionRemovalView{}, backend.err
 }
 
 func (backend *anchoredSessionHTTPBackend) ReadAnchoredMemory(ctx context.Context, _ domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error) {
@@ -312,6 +330,58 @@ func TestAnchoredSessionArchiveHTTP(t *testing.T) {
 			}
 			if test.status == 200 && strings.TrimSpace(response.Body.String()) != map[bool]string{true: `{"archived":true}`, false: `{"archived":false}`}[test.archived] {
 				t.Fatalf("answer: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+// A member removes a session, allows it again and lists their own removals.
+// Whether the member may do so for that session is the service's to say.
+func TestAnchoredSessionRemovalHTTP(t *testing.T) {
+	const session = "/anchored-sessions/claude/session-1"
+	for _, test := range []struct {
+		name         string
+		method, path string
+		role         domain.MemberRole
+		authed       bool
+		status       int
+		answer       string
+		serviceError error
+	}{
+		{"remove_anonymous", http.MethodDelete, session, domain.RoleOwner, false, 401, "", nil},
+		{"remove_viewer", http.MethodDelete, session, domain.RoleViewer, true, 403, "", nil},
+		{"remove", http.MethodDelete, session, domain.RoleMember, true, 200, `{"removed":[{"provider":"claude","session_id":"session-1","removed_at":"2031-01-02T03:04:05Z","by_you":true}]}`, nil},
+		{"remove_neither_uploader_nor_manager", http.MethodDelete, session, domain.RoleMember, true, 403, "", domain.ErrForbidden},
+		{"remove_not_stored", http.MethodDelete, session, domain.RoleMaintainer, true, 404, "", domain.ErrNotFound},
+		{"allow_anonymous", http.MethodDelete, session + "/removal", domain.RoleOwner, false, 401, "", nil},
+		{"allow_viewer", http.MethodDelete, session + "/removal", domain.RoleViewer, true, 403, "", nil},
+		{"allow", http.MethodDelete, session + "/removal", domain.RoleMember, true, 204, "", nil},
+		{"allow_not_removed", http.MethodDelete, session + "/removal", domain.RoleMaintainer, true, 404, "", domain.ErrNotFound},
+		{"list_anonymous", http.MethodGet, "/anchored-removals", domain.RoleOwner, false, 401, "", nil},
+		{"list_viewer", http.MethodGet, "/anchored-removals", domain.RoleViewer, true, 403, "", nil},
+		{"list", http.MethodGet, "/anchored-removals", domain.RoleMember, true, 200, `[]`, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
+			backend.err = test.serviceError
+			response := bpHTTP(t, handler, test.method, base+test.path, "", test.authed)
+			if response.Code != test.status {
+				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.status >= 400 && test.serviceError == nil {
+				if backend.calls != 0 {
+					t.Fatal("a refused request reached the service")
+				}
+				return
+			}
+			if backend.calls != 1 || backend.actor != "actor" {
+				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if test.path != "/anchored-removals" && (backend.provider != domain.ProviderClaude || backend.session != "session-1") {
+				t.Fatalf("the session that reached the service: %s %s", backend.provider, backend.session)
+			}
+			if test.status < 300 && strings.TrimSpace(response.Body.String()) != test.answer {
+				t.Fatalf("answer: %q", response.Body.String())
 			}
 		})
 	}

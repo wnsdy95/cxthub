@@ -195,3 +195,40 @@ func (s *Server) setAnchoredSessionArchive(w http.ResponseWriter, r *http.Reques
 	receipt, err := service.SetAnchoredSessionArchived(r.Context(), s.repoID(r), domain.ProviderKind(r.PathValue("provider")), r.PathValue("sessionID"), *request.Archived)
 	s.respond(w, receipt, err)
 }
+
+// removeAnchoredSession removes a session, and the sessions it spawned, from
+// the server and answers what was removed. A removal is remembered: no report
+// is taken for a removed session until it is allowed again.
+func (s *Server) removeAnchoredSession(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.anchoredSessions(w)
+	if !ok {
+		return
+	}
+	receipt, err := service.RemoveAnchoredSession(r.Context(), s.repoID(r), domain.ProviderKind(r.PathValue("provider")), r.PathValue("sessionID"))
+	s.respond(w, receipt, err)
+}
+
+// allowAnchoredSession takes back the removal of a session. Nothing comes
+// back by itself: the next upload of a CLI that still holds the tool's
+// records stores the session again.
+func (s *Server) allowAnchoredSession(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.anchoredSessions(w)
+	if !ok {
+		return
+	}
+	if err := service.AllowAnchoredSession(r.Context(), s.repoID(r), domain.ProviderKind(r.PathValue("provider")), r.PathValue("sessionID")); err != nil {
+		s.respond(w, nil, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listAnchoredSessionRemovals lists the caller's own removed sessions.
+func (s *Server) listAnchoredSessionRemovals(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.anchoredSessions(w)
+	if !ok {
+		return
+	}
+	removals, err := service.ListAnchoredSessionRemovals(r.Context(), s.repoID(r))
+	s.respond(w, removals, err)
+}

@@ -1106,6 +1106,23 @@ components:
       properties:
         archived: { type: boolean }
         archived_at: { type: string, format: date-time, description: Since when, for an archived session. }
+    AnchoredSessionRemovalView:
+      type: object
+      description: A removal as the account the session belonged to reads it. No account is named.
+      required: [provider, session_id, removed_at, by_you]
+      properties:
+        provider: { type: string }
+        session_id: { type: string }
+        removed_at: { type: string, format: date-time }
+        by_you: { type: boolean, description: False when someone who manages the repository removed the session. }
+    AnchoredSessionRemovalReceipt:
+      type: object
+      description: What one removal removed. The session asked for comes first, then the sessions it spawned.
+      required: [removed]
+      properties:
+        removed:
+          type: array
+          items: { $ref: '#/components/schemas/AnchoredSessionRemovalView' }
     AnchoredSessionSummary:
       type: object
       description: A stored report without its ranges and agent calls.
@@ -5063,10 +5080,89 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: The identifier is already reported by another account, or storage is unavailable }
+        '409': { description: 'The identifier is already reported by another account, the session was removed from the server and not allowed again, or storage is unavailable' }
         '413': { description: Report exceeds the 4 MiB transport limit }
         '415': { description: Content-Type must be application/json }
         '422': { description: Report is not well formed }
+        '503': { description: Anchored session service unavailable }
+    delete:
+      operationId: removeAnchoredSession
+      summary: Remove a session from the server
+      description: >-
+        Member required, rechecked inside the repository transaction. The account the session belongs to may
+        remove it, and so may a maintainer of the repository; any other member is refused, in the same way for a
+        session that exists and for one that does not. The session's report goes with its commit links, its
+        summaries and its open ranges, and its conversation document is deleted when no other report and no
+        snapshot of the repository uses it. The sessions it spawned, as far as they belong to the same account,
+        are removed with it. A removal is remembered for every removed session: no report is taken for it again
+        until the removal is taken back. Removing a session that is already removed changes nothing and answers
+        the removal that stands. Manual notes are not touched.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: What was removed, the session asked for first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredSessionRemovalReceipt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: Invalid repository or session identity }
+        '503': { description: Anchored session service unavailable }
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/removal:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    delete:
+      operationId: allowAnchoredSession
+      summary: Take back the removal of a session
+      description: >-
+        Member required, rechecked inside the repository transaction. The account the session belonged to may
+        take the removal back, and so may a maintainer of the repository; any other member is refused, in the
+        same way for a session that was removed and for one that was not. Nothing comes back by itself: the
+        session is stored again when a CLI that still holds the tool's records uploads it.
+      tags: [anchored-sessions]
+      responses:
+        '204': { description: The session may be uploaded again }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: Invalid repository or session identity }
+        '503': { description: Anchored session service unavailable }
+  /repos/{repoID}/anchored-removals:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: listAnchoredSessionRemovals
+      summary: List the caller's own sessions that were removed from the server
+      description: >-
+        Member required. Lists the removals that stand for sessions that belonged to the caller, by tool then
+        identifier. A CLI reads it before it uploads, so that it sends nothing of a removed session.
+      tags: [anchored-sessions]
+      responses:
+        '200':
+          description: The caller's removed sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnchoredSessionRemovalView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: Invalid repository identity }
         '503': { description: Anchored session service unavailable }
 
   /repos/{repoID}/anchored-commits/{sha}:

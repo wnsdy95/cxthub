@@ -61,6 +61,14 @@ type noAnchoredPublications struct {
 	productionFixture
 	PutAnchoredPublication int
 }
+type noAnchoredSummaries struct {
+	productionFixture
+	PutAnchoredSummary int
+}
+type noAnchoredRemovals struct {
+	productionFixture
+	PutAnchoredSessionRemoval int
+}
 
 func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 	for _, row := range []struct {
@@ -74,6 +82,7 @@ func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 		{noAnchoredSessions{}, "anchored session reports"}, {noBranchLedger{}, "branch ledger"},
 		{noAnchoredNotes{}, "manual notes"}, {noReportedWorktrees{}, "reported worktrees"},
 		{noRemoteGit{}, "remote Git cache"}, {noRemotePushes{}, "remote push record"}, {noAnchoredPublications{}, "session publications"},
+		{noAnchoredSummaries{}, "session summaries"}, {noAnchoredRemovals{}, "session removals"},
 		{store.NewFSStore(t.TempDir()), "repository write/read transactions"},
 	} {
 		if err := ValidateProductionStore(row.value); err == nil || !strings.Contains(err.Error(), row.want) {

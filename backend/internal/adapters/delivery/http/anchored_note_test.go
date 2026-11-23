@@ -104,6 +104,18 @@ func (backend *anchoredNoteHTTPBackend) SetAnchoredSessionArchived(context.Conte
 	return domain.AnchoredSessionArchive{}, backend.err
 }
 
+func (backend *anchoredNoteHTTPBackend) RemoveAnchoredSession(context.Context, domain.ContentHash, domain.ProviderKind, string) (domain.AnchoredSessionRemovalReceipt, error) {
+	return domain.AnchoredSessionRemovalReceipt{}, backend.err
+}
+
+func (backend *anchoredNoteHTTPBackend) AllowAnchoredSession(context.Context, domain.ContentHash, domain.ProviderKind, string) error {
+	return backend.err
+}
+
+func (backend *anchoredNoteHTTPBackend) ListAnchoredSessionRemovals(context.Context, domain.ContentHash) ([]domain.AnchoredSessionRemovalView, error) {
+	return nil, backend.err
+}
+
 func anchoredNoteHTTPFixture(t *testing.T, role domain.MemberRole) (*anchoredNoteHTTPBackend, http.Handler, string) {
 	t.Helper()
 	backend := &anchoredNoteHTTPBackend{repo: domain.Repo{ID: domain.HashContent([]byte(t.Name())), RepositoryID: "ws_" + strings.Repeat("c", 32)}}
