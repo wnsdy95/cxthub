@@ -34,9 +34,41 @@ func docCatalogEnqueueBlockedPG(test *testing.T, fixture docDisplayPGFixture, bl
 	return 0
 }
 
+// docCatalogEnqueueInheritFencePG queues a second transaction behind the holder's affinity fence. When the
+// holder ends, PostgreSQL hands the fence to that waiter in the same release, so it is never observed free.
+// The returned channel yields the waiter's result once and is then closed.
+func docCatalogEnqueueInheritFencePG(test *testing.T, fixture docDisplayPGFixture, holder int32, target domain.DocDisplayTarget) (pgx.Tx, int32, <-chan error) {
+	test.Helper()
+	heir, err := fixture.storage.pool.Begin(fixture.ctx)
+	if err != nil {
+		test.Fatal(err)
+	}
+	var heirPID int32
+	if err := heir.QueryRow(fixture.ctx, `SELECT pg_backend_pid()`).Scan(&heirPID); err != nil {
+		rollbackPG(heir)
+		test.Fatal(err)
+	}
+	inherited := make(chan error, 1)
+	go func() {
+		defer close(inherited)
+		_, err := heir.Exec(fixture.ctx, `SELECT pg_advisory_xact_lock(
+ hashtextextended('cxthub-doc-catalog-affinity:'||$1::text||':'||$2::text,0))`, target.Event.Hash, target.DisplayProfile())
+		inherited <- err
+	}()
+	test.Cleanup(func() {
+		for range inherited {
+		}
+		rollbackPG(heir)
+	})
+	if blocked := docCatalogEnqueueBlockedPG(test, fixture, holder, "SELECT pg_advisory_xact_lock(%"); blocked != heirPID {
+		test.Fatal("different fence waiter", blocked, heirPID)
+	}
+	return heir, heirPID, inherited
+}
+
 func TestDocDisplayCatalogEnqueuePGAbsentJobConflict(test *testing.T) {
 	for _, profile := range []string{domain.DocDisplayStringProfile, domain.DocDisplayProjectionProfile} {
-		for _, outcome := range []string{"commit", "rollback", "committed_locked", "changed_target", "timeout", "deleted"} {
+		for _, outcome := range []string{"commit", "rollback", "rollback_fence_outlives_winner", "committed_locked", "changed_target", "timeout", "deleted"} {
 			test.Run(profile+"/"+outcome, func(test *testing.T) {
 				fixture := docDisplayPG(test)
 				target := docCatalogAdmissionTargetPG(fixture, 0, profile)
@@ -68,9 +100,17 @@ func TestDocDisplayCatalogEnqueuePGAbsentJobConflict(test *testing.T) {
 					job, err := fixture.storage.EnqueueDocDisplay(fixture.ctx, target, time.Now())
 					done <- result{job, err}
 				}()
+				var heir pgx.Tx
+				var heirPID int32
+				var inherited <-chan error
 				defer func() {
 					rollbackPG(gate)
 					rollbackPG(winner)
+					if heir != nil {
+						for range inherited {
+						}
+						rollbackPG(heir)
+					}
 					if done != nil {
 						<-done
 					}
@@ -115,12 +155,42 @@ func TestDocDisplayCatalogEnqueuePGAbsentJobConflict(test *testing.T) {
 						test.Fatal(err)
 					}
 				}
-				if outcome == "rollback" || outcome == "timeout" {
+				if outcome == "rollback_fence_outlives_winner" {
+					// A finished transaction releases its transaction-ID lock, which wakes the enqueue, before
+					// its advisory locks. The heir stretches that moment until the test ends it, so the woken
+					// enqueue always finds the fence busy instead of only when the scheduler allows it.
+					heir, heirPID, inherited = docCatalogEnqueueInheritFencePG(test, fixture, winnerPID, target)
+				}
+				if outcome == "rollback" || outcome == "rollback_fence_outlives_winner" || outcome == "timeout" {
 					if err := winner.Rollback(fixture.ctx); err != nil {
 						test.Fatal(err)
 					}
 				} else if err := winner.Commit(fixture.ctx); err != nil {
 					test.Fatal(err)
+				}
+				if outcome == "rollback_fence_outlives_winner" {
+					if err := <-inherited; err != nil {
+						test.Fatal(err)
+					}
+					wait, cancel := context.WithTimeout(fixture.ctx, 200*time.Millisecond)
+					for waiting := false; !waiting; time.Sleep(time.Millisecond) {
+						select {
+						case observed := <-done:
+							done = nil
+							cancel()
+							test.Fatal("enqueue returned on the fence of a finished winner instead of waiting for it", observed.job, observed.err)
+						default:
+						}
+						if err := fixture.storage.pool.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+ WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND query LIKE 'SELECT pg_advisory_xact_lock_shared(%')`, heirPID).Scan(&waiting); err != nil {
+							cancel()
+							test.Fatal("expected the enqueue to wait for the held fence", err)
+						}
+					}
+					cancel()
+					if err := heir.Rollback(fixture.ctx); err != nil {
+						test.Fatal(err)
+					}
 				}
 				if outcome == "timeout" {
 					var count int
@@ -138,7 +208,7 @@ func TestDocDisplayCatalogEnqueuePGAbsentJobConflict(test *testing.T) {
 					return
 				}
 				version := int64(17)
-				if outcome == "rollback" {
+				if outcome == "rollback" || outcome == "rollback_fence_outlives_winner" {
 					version = 0
 				} else if outcome == "changed_target" {
 					version++
