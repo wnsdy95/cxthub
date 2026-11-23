@@ -8,10 +8,12 @@ import (
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/codec"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	adaptersession "github.com/wnsdy95/cxthub-cli/internal/adapters/session"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/sessionrecords"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/app"
@@ -156,14 +158,46 @@ func segmentLocalFacts(ctx context.Context, cwd string) app.SegmentLocalFacts {
 	return facts
 }
 
-// segmentPositionals returns the arguments of cxt segments that are not
-// flags. They were validated before this path is reached.
+// segmentValueFlags are the flags of cxt segments that take a value.
+var segmentValueFlags = map[string]bool{"--at": true, "--branch": true, "--to": true}
+
+// segmentPositionals returns the arguments of cxt segments that are neither
+// flags nor the value of one. They were validated before this path is
+// reached.
 func segmentPositionals(args []string) []string {
 	var out []string
-	for _, arg := range args {
-		if len(arg) > 0 && arg[0] != '-' {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case segmentValueFlags[arg]:
+			index++ // its value
+		case len(arg) > 0 && arg[0] != '-':
 			out = append(out, arg)
 		}
 	}
 	return out
+}
+
+// segmentFlagValue returns the value given for a flag, as "--flag value" or
+// "--flag=value"; empty when it was not given.
+func segmentFlagValue(args []string, name string) string {
+	for index, arg := range args {
+		if arg == name && index+1 < len(args) {
+			return args[index+1]
+		}
+		if len(arg) > len(name) && arg[:len(name)+1] == name+"=" {
+			return arg[len(name)+1:]
+		}
+	}
+	return ""
+}
+
+// newSessionFork wires what a fork needs: Git for a branch, and for a
+// continued conversation the repository's server and the writers of each
+// tool's session files.
+func newSessionFork(cfg config) *app.SessionForkService {
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
+	return app.NewSessionForkService(gitctx.NewForkBranches(), remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo,
+		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec(), domain.ProviderCodex: codec.NewCodexCodec()},
+		map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderClaude: adaptersession.NewClaudeMaterializer(), domain.ProviderCodex: adaptersession.NewCodexMaterializer()})
 }

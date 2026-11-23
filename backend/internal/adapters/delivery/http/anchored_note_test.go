@@ -267,3 +267,7 @@ func TestWorktreeReportHTTP(t *testing.T) {
 		})
 	}
 }
+
+func (backend *anchoredNoteHTTPBackend) ReadAnchoredSessionFragments(context.Context, domain.ContentHash, domain.ProviderKind, string, int, int, int, int) (domain.AnchoredFragmentPage, error) {
+	return domain.AnchoredFragmentPage{}, backend.err
+}

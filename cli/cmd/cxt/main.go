@@ -114,6 +114,9 @@ func run(args []string) error {
 		case "log":
 			// What .cxt keeps is read from this computer alone.
 			return delivcli.RunSegmentsLog(ctx, newSegmentCare(), cwd, positionals[1:], asJSON, os.Stdout)
+		case "fork":
+			return delivcli.RunSegmentsFork(ctx, newSessionFork(loadConfig()), cwd, positionals[1:], segmentFlagValue(args[2:], "--at"), segmentFlagValue(args[2:], "--branch"),
+				segmentFlagValue(args[2:], "--to"), asJSON, os.Stdout)
 		case "resend":
 			// The copy under .cxt is read, and nothing of the tools' records.
 			uploader, err := newSegmentUploader(loadConfig(), "")

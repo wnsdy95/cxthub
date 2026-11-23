@@ -517,6 +517,18 @@ expect "the conversation sent again is read through the session" "$(curl -sb "$J
 mv "$TMP/e2e-segments.jsonl.away" "$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"
 # This repository has no Git origin on the server, so there is nothing to read again, and the command says so.
 expect "asking for a fresh read of GitHub says why it cannot be done here" "$(cxt segments refresh 2>&1 >/dev/null | grep -c 'no Git origin to read')" 1
+# Fork, both ways: a Git branch at a commit, and a new session of a tool that
+# continues the conversation up to that commit, read from the server.
+SEGHEADBEFORE="$(git symbolic-ref --short HEAD) $(git rev-parse HEAD)"
+expect "a Git branch is made at a commit" "$(cxt segments fork --at "${SEGSHA:0:10}" --branch e2e-fork --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["branch"],r["commit"],"resume_command" in r)') $(git rev-parse refs/heads/e2e-fork)" "e2e-fork $SEGSHA False $SEGSHA"
+expect "no folder was switched to it" "$(git symbolic-ref --short HEAD) $(git rev-parse HEAD)" "$SEGHEADBEFORE"
+expect "a branch that exists is not made again" "$(cxt segments fork --at "$SEGSHA" --branch e2e-fork >/dev/null 2>&1; echo "$?")" 1
+expect "the conversation is read from the server as its events, by its uploader" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/content?index=0&limit=2" | python3 -c 'import json,sys;p=json.load(sys.stdin);f=p["fragments"];print(len(f),f[0]["event_index"],f[0]["event_complete"],json.loads(f[0]["json_fragment"])["blocks"][0]["text"],p["next_index"])')" "2 0 True commit it 2"
+cxt segments fork claude e2e-segments --at "$SEGSHA" --json >"$TMP/segments-fork.json" 2>"$TMP/segments-fork.err"
+expect "a conversation is continued up to a commit as a new session of the same tool" "$(python3 -c "import json;r=json.load(open('$TMP/segments-fork.json'));print(r['tool'],r['events'],r.get('omitted_events',0),r['same_tool'],r['resume_command'].split()[0],r['commit']=='$SEGSHA')")" "claude 4 0 True claude True"
+expect "the new session's file holds the conversation up to the commit and nothing after it" "$(python3 -c "import json;p=json.load(open('$TMP/segments-fork.json'))['session_path'];raw=open(p).read();print('commit it' in raw,'committed' in raw,'one more thing' in raw)")" "True True False"
+expect "another tool gets the conversation rebuilt for it" "$(cxt segments fork claude e2e-segments --at "$SEGSHA" --to codex --json | python3 -c "import json,sys;r=json.load(sys.stdin);raw=open(r['session_path']).read();print(r['tool'],r.get('same_tool',False),r['resume_command'].split()[0],'commit it' in raw,'one more thing' in raw)")" "codex False codex True False"
+expect "a commit no part of the session ends at is refused" "$(cxt segments fork claude e2e-segments --at "$(git rev-parse "$SEGSHA~1" 2>/dev/null || echo "$SEGSHA")" >/dev/null 2>&1; echo "$?")" 1
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"

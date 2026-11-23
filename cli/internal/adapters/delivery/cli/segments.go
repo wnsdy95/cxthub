@@ -576,6 +576,54 @@ func RunSegmentsResend(ctx context.Context, uploader inbound.SegmentUploader, cw
 	return nil
 }
 
+// RunSegmentsFork starts new work from a commit. Without a session it makes
+// a Git branch at the commit. With a session it continues that session's
+// conversation, up to the commit when one is given, as a new session of a
+// tool in the folder, and also makes the branch when one is named.
+func RunSegmentsFork(ctx context.Context, forker inbound.SessionForker, cwd string, session []string, at, branch, to string, asJSON bool, w io.Writer) error {
+	if forker == nil {
+		return fmt.Errorf("fork unavailable")
+	}
+	in := inbound.SessionForkInput{Cwd: cwd, At: at, Branch: branch, To: domain.ProviderKind(to)}
+	if len(session) == 2 {
+		in.Session = &domain.SessionUploadKey{Provider: domain.ProviderKind(session[0]), SessionID: session[1]}
+	}
+	result, err := forker.Fork(ctx, in)
+	if asJSON && (err == nil || result.ResumeCommand != "") {
+		if encodeErr := json.NewEncoder(w).Encode(result); encodeErr != nil {
+			return encodeErr
+		}
+		return err
+	}
+	if result.ResumeCommand != "" {
+		fmt.Fprintf(w, "A new %s session continues %s %s", result.Tool, result.Session.Provider, result.Session.SessionID)
+		if result.Commit != "" {
+			fmt.Fprintf(w, " up to commit %s", result.Commit)
+		}
+		fmt.Fprintf(w, ": %d events of its conversation.\n", result.Events)
+		if !result.SameTool {
+			fmt.Fprintf(w, "The conversation was recorded by %s and is rebuilt for %s; what only %s can read of it is not carried over.\n", result.Session.Provider, result.Tool, result.Session.Provider)
+		}
+		switch result.OmittedAs {
+		case "summary":
+			fmt.Fprintf(w, "Its first %d events did not fit the tool's context and are left out; the summary the session has at the commit stands in for them.\n", result.Omitted)
+		case "note":
+			fmt.Fprintf(w, "Its first %d events did not fit the tool's context and are left out; no summary of them was found, and a line in the new session says so.\n", result.Omitted)
+		}
+		if result.NotReadable > 0 {
+			fmt.Fprintf(w, "%d events up to there are not open to this account and are not in the new session.\n", result.NotReadable)
+		}
+		fmt.Fprintf(w, "Start it in this folder with:\n  %s\n", result.ResumeCommand)
+	}
+	if result.Branch != "" {
+		fmt.Fprintf(w, "The Git branch %s was made at commit %s. No folder was switched to it:\n  git switch %s\n", result.Branch, result.Commit, result.Branch)
+		if result.ResumeCommand == "" {
+			fmt.Fprintln(w, "A session started on it is given the most recent summary along the branch.")
+		}
+	}
+	return err
+}
+
 // segmentLogLine says one log entry in words.
 func segmentLogLine(entry domain.SessionUploadLogEntry) string {
 	run := "requested"

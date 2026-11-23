@@ -232,3 +232,45 @@ func (s *Server) listAnchoredSessionRemovals(w http.ResponseWriter, r *http.Requ
 	removals, err := service.ListAnchoredSessionRemovals(r.Context(), s.repoID(r))
 	s.respond(w, removals, err)
 }
+
+const (
+	// anchoredContentEvents is the most events one page of a conversation's
+	// content holds, and the default.
+	anchoredContentEvents = 50
+	// anchoredContentBudget is the size of a page in bytes of event JSON: the
+	// default, and the most a request may ask for. It is the most the
+	// document read underneath gives at once.
+	anchoredContentBudget = 64 << 10
+)
+
+// readAnchoredSessionContent reads a session's conversation as the events
+// themselves: whole events where they fit the byte budget, and a part of one
+// event where it alone is larger. It answers only what the caller may read,
+// and where the event asked for is not open, reading goes on at the next open
+// part. It is what a CLI continues a conversation from; the page a browser
+// shows is read with the events route.
+func (s *Server) readAnchoredSessionContent(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.anchoredSessions(w)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	number := func(name string, fallback int) (int, bool) {
+		raw := query.Get(name)
+		if raw == "" {
+			return fallback, true
+		}
+		parsed, err := strconv.Atoi(raw)
+		return parsed, err == nil
+	}
+	index, okIndex := number("index", 0)
+	offset, okOffset := number("offset", 0)
+	limit, okLimit := number("limit", anchoredContentEvents)
+	budget, okBudget := number("budget", anchoredContentBudget)
+	if !okIndex || !okOffset || !okLimit || !okBudget || budget > anchoredContentBudget {
+		s.respond(w, nil, fmt.Errorf("%w: invalid event range", domain.ErrValidation))
+		return
+	}
+	page, err := service.ReadAnchoredSessionFragments(r.Context(), s.repoID(r), domain.ProviderKind(r.PathValue("provider")), r.PathValue("sessionID"), index, offset, limit, budget)
+	s.respond(w, page, err)
+}

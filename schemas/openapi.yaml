@@ -1106,6 +1106,34 @@ components:
       properties:
         archived: { type: boolean }
         archived_at: { type: string, format: date-time, description: Since when, for an archived session. }
+    AnchoredFragmentPage:
+      type: object
+      description: >-
+        A piece of a session's conversation as one reader may read it. `next_index` is the event to go on with
+        and `next_offset` the byte within it; `next_index` is -1 at the end of what is open to that reader.
+      required: [fragments, total_events, open_events, next_index, next_offset]
+      properties:
+        fragments:
+          type: array
+          items:
+            type: object
+            required: [event_index, byte_offset, event_complete, json_fragment]
+            properties:
+              event_index: { type: integer, minimum: 0 }
+              byte_offset: { type: integer, minimum: 0 }
+              event_complete: { type: boolean, description: False when the event goes on in the next fragment. }
+              json_fragment: { type: string, description: The event as JSON, or the part of it from `byte_offset`. }
+        total_events: { type: integer, minimum: 0 }
+        open_events:
+          type: array
+          description: The ranges of events this reader may read, each as its first event and the one after its last.
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: integer, minimum: 0 }
+        next_index: { type: integer, minimum: -1 }
+        next_offset: { type: integer, minimum: 0 }
     AnchoredSessionRemovalView:
       type: object
       description: A removal as the account the session belonged to reads it. No account is named.
@@ -5138,6 +5166,58 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: Storage is unavailable }
         '422': { description: Invalid repository or session identity }
+        '503': { description: Anchored session service unavailable }
+  /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/content:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, codex] }
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' }
+    get:
+      operationId: readAnchoredSessionContent
+      summary: Read a session's conversation as its events
+      description: >-
+        Readable by whoever may view the repository, as far as the session is open to them: all of it for its
+        uploader, the pushed parts for anyone else. The answer holds the events themselves as JSON, whole events
+        where they fit the byte budget and a part of one event where it alone is larger, so that a CLI can
+        continue the conversation in a new session. Where the event asked for is not open, reading goes on at
+        the next open part; a page never crosses into a part that is not open, and the document's hash is never
+        answered. The page a browser shows is read with the events route.
+      tags: [anchored-sessions]
+      parameters:
+        - name: index
+          in: query
+          description: The event to read from. Default 0.
+          schema: { type: integer, minimum: 0 }
+        - name: offset
+          in: query
+          description: The byte within that event to go on from, as `next_offset` gave it. Default 0.
+          schema: { type: integer, minimum: 0 }
+        - name: limit
+          in: query
+          description: The most events in the page. Default 50.
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - name: budget
+          in: query
+          description: The size of the page in bytes of event JSON. Default 65536, which is also the most.
+          schema: { type: integer, minimum: 4, maximum: 65536 }
+      responses:
+        '200':
+          description: A page of the conversation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredFragmentPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid identity or range }
+        '429': { description: Too many document reads at once }
         '503': { description: Anchored session service unavailable }
   /repos/{repoID}/anchored-removals:
     parameters:

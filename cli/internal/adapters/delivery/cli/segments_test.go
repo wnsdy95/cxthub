@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 type segmentReporterFunc func(context.Context, string) (domain.SegmentReport, error)
@@ -166,6 +167,26 @@ func TestSegmentsCommandContract(t *testing.T) {
 	for _, args := range [][]string{{"cxt", "segments", "doctor", "claude", "session-1"}, {"cxt", "segments", "doctor", "--yes"}, {"cxt", "segments", "refresh", "now"},
 		{"cxt", "segments", "refresh", "--json"}, {"cxt", "segments", "archive"}, {"cxt", "segments", "archive", "claude", "session-1", "--json"},
 		{"cxt", "segments", "unarchive", "other", "session-1"}, {"cxt", "segments", "resend"}, {"cxt", "segments", "resend", "claude", "../escape"}} {
+		if err := Run(nil, args); err == nil {
+			t.Fatalf("%v must be rejected before dispatch", args)
+		}
+	}
+	// A fork makes a Git branch at a commit, or continues a session named by
+	// its tool and identifier; it is never read-only.
+	for _, args := range [][]string{{"cxt", "segments", "fork", "--at", "abc1234", "--branch", "topic/again"}, {"cxt", "segments", "fork", "claude", "session-1"},
+		{"cxt", "segments", "fork", "claude", "session-1", "--at=abc1234", "--to", "codex", "--branch", "topic/again", "--json"}} {
+		if ReadOnlyInvocation(args) {
+			t.Fatalf("%v must not be classified as a read-only command", args)
+		}
+		if _, _, err := parseCommand(args[1], args[2:]); err != nil {
+			t.Fatalf("%v was rejected: %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"cxt", "segments", "fork"}, {"cxt", "segments", "fork", "--at", "abc1234"}, {"cxt", "segments", "fork", "--branch", "topic/again"},
+		{"cxt", "segments", "fork", "--at", "abc1234", "--branch", "topic/again", "--to", "codex"}, {"cxt", "segments", "fork", "claude"},
+		{"cxt", "segments", "fork", "claude", "session-1", "--to", "other"}, {"cxt", "segments", "fork", "claude", "session-1", "--branch", "topic/again"},
+		{"cxt", "segments", "fork", "other", "session-1"}, {"cxt", "segments", "push", "--at", "abc1234"}, {"cxt", "segments", "--branch", "topic/again"},
+		{"cxt", "segments", "doctor", "--to", "codex"}} {
 		if err := Run(nil, args); err == nil {
 			t.Fatalf("%v must be rejected before dispatch", args)
 		}
@@ -633,5 +654,85 @@ func TestSegmentsRefreshArchiveAndResendSayWhatWasDone(t *testing.T) {
 	uploader.err = errors.New("no copy is kept")
 	if err := RunSegmentsResend(context.Background(), uploader, "/work/app", []string{"codex", "thread-1"}, false, &out); err == nil {
 		t.Fatal("a missing copy succeeded")
+	}
+}
+
+type segmentForkerFake struct {
+	asked  inbound.SessionForkInput
+	result domain.SessionForkResult
+	err    error
+}
+
+func (f *segmentForkerFake) Fork(_ context.Context, in inbound.SessionForkInput) (domain.SessionForkResult, error) {
+	f.asked = in
+	return f.result, f.err
+}
+
+func TestSegmentsForkSaysWhatWasMadeAndHowToStartIt(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	key := domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "session-1"}
+	// A branch only.
+	forker := &segmentForkerFake{result: domain.SessionForkResult{Version: 1, Branch: "topic/again", Commit: commit}}
+	var out strings.Builder
+	if err := RunSegmentsFork(context.Background(), forker, "/work/app", nil, "aaaaaaa", "topic/again", "", false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if forker.asked.Session != nil || forker.asked.At != "aaaaaaa" || forker.asked.Branch != "topic/again" || forker.asked.Cwd != "/work/app" {
+		t.Fatalf("asked: %+v", forker.asked)
+	}
+	for _, want := range []string{"The Git branch topic/again was made at commit " + commit + ". No folder was switched to it:\n  git switch topic/again",
+		"A session started on it is given the most recent summary along the branch."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	// A continued conversation for another tool, cut at its beginning, with
+	// a part the reader may not read, and a branch.
+	forker.result = domain.SessionForkResult{Version: 1, Branch: "topic/again", Commit: commit, Session: &key, Tool: domain.ProviderCodex, ResumeCommand: "codex resume new",
+		SessionPath: "/sessions/new.jsonl", Events: 40, Omitted: 12, OmittedAs: "summary", NotReadable: 3}
+	out.Reset()
+	if err := RunSegmentsFork(context.Background(), forker, "/work/app", []string{"claude", "session-1"}, commit, "topic/again", "codex", false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if forker.asked.Session == nil || *forker.asked.Session != key || forker.asked.To != domain.ProviderCodex {
+		t.Fatalf("asked: %+v", forker.asked)
+	}
+	for _, want := range []string{
+		"A new codex session continues claude session-1 up to commit " + commit + ": 40 events of its conversation.",
+		"The conversation was recorded by claude and is rebuilt for codex",
+		"Its first 12 events did not fit the tool's context and are left out; the summary the session has at the commit stands in for them.",
+		"3 events up to there are not open to this account and are not in the new session.",
+		"Start it in this folder with:\n  codex resume new",
+		"The Git branch topic/again was made at commit",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "A session started on it is given") {
+		t.Fatalf("the branch-only sentence was printed for a continued conversation:\n%s", out.String())
+	}
+	out.Reset()
+	if err := RunSegmentsFork(context.Background(), forker, "/work/app", []string{"claude", "session-1"}, commit, "", "", true, &out); err != nil ||
+		!strings.HasPrefix(out.String(), `{"version":1,"branch":"topic/again","commit":"`+commit+`","session":{"provider":"claude","session_id":"session-1"},"tool":"codex","resume_command":"codex resume new"`) {
+		t.Fatalf("json: %v %s", err, out.String())
+	}
+	// The session was written and the branch was not made: both are said,
+	// and the command fails.
+	forker.result.Branch, forker.result.OmittedAs, forker.result.Omitted = "", "note", 2
+	forker.err = errors.New("the new session was written (codex resume new), but the branch topic/again already exists")
+	out.Reset()
+	if err := RunSegmentsFork(context.Background(), forker, "/work/app", []string{"claude", "session-1"}, commit, "topic/again", "", false, &out); err == nil ||
+		!strings.Contains(out.String(), "codex resume new") || !strings.Contains(out.String(), "no summary of them was found") || strings.Contains(out.String(), "was made at commit") {
+		t.Fatalf("a branch that was not made: %v\n%s", err, out.String())
+	}
+	// Nothing was made.
+	forker.result, forker.err = domain.SessionForkResult{Version: 1}, errors.New("this clone holds no commit ccccccc; fetch it first")
+	out.Reset()
+	if err := RunSegmentsFork(context.Background(), forker, "/work/app", nil, "ccccccc", "topic/again", "", false, &out); err == nil || out.Len() != 0 {
+		t.Fatalf("nothing made: %v %q", err, out.String())
+	}
+	if err := RunSegmentsFork(context.Background(), nil, "/work/app", nil, "ccccccc", "topic/again", "", false, &out); err == nil {
+		t.Fatal("a missing service must be an error")
 	}
 }

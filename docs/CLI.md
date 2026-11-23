@@ -1687,6 +1687,49 @@ cxt segments resend claude|codex <session id> [--json]
   from the tool. A copy of the conversation that is not the document its
   report names is not sent, and neither is a session that is removed.
 
+### `cxt segments fork`
+
+```text
+cxt segments fork --at <commit> --branch <name> [--json]
+cxt segments fork claude|codex <session id> [--at <commit>] [--to claude|codex] [--branch <name>] [--json]
+```
+
+Starts new work from a commit, in one of two ways or in both at once.
+
+**A Git branch only.** Without a session, the branch `<name>` is made at the
+commit and nothing else happens: no folder is switched to it, and no upstream
+is set. A session started on that branch is given the most recent summary
+along it, like a session on any branch, so the work that led to the commit is
+known to it without the conversation being copied. The commit is named by its
+number, an abbreviation of it or any revision this clone holds.
+
+**A continued conversation.** With a session, its conversation is read from the
+server and written as a new session of a tool in this folder; the command
+prints what starts it (`claude --resume …` or `codex resume …`).
+
+- With `--at`, the new session holds the conversation up to the end of the
+  segment that ends at that commit. Without it, all of the conversation.
+- It is read as far as this account may read it. Your own session is read
+  whole; a teammate's as far as it is pushed, and the result says how many
+  events up to there were not readable. A commit no readable part ends at is
+  refused.
+- `--to` names the tool of the new session; without it, the tool that recorded
+  the conversation. The same tool keeps the conversation as it was. Another
+  tool gets it rebuilt in its own format, which loses what only the first tool
+  can read, such as locked reasoning.
+- A conversation larger than the tool takes at the start of a session is cut to
+  its newest whole turns, by the limit `cxt load` uses. The summary the session
+  has at the commit is put first in place of what was left out; without a
+  summary there, a line says how many events were left out. The result names
+  which of the two it was.
+- With `--branch` the Git branch is made too, after the session was written.
+  When the branch cannot be made, the session is still there and the command
+  says both.
+
+Nothing is uploaded by a fork. The new session is a session of its tool like
+any other: once it is used, the collector reads it and uploads it as yours.
+Reading a long conversation takes one request for every 64 KiB of it.
+
 ### Automatic upload
 
 In a repository cxt is set up in and connected to a server, the same upload

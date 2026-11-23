@@ -126,3 +126,50 @@ type SegmentAllowResult struct {
 	// session when the tool's records are no longer on this computer.
 	Upload SegmentPushResult `json:"upload"`
 }
+
+// AnchoredContentPage is a page of a session's conversation as the server
+// gives it to this reader: events as JSON, whole where they fit and in parts
+// where one alone is larger. NextIndex is the event to go on with and
+// NextOffset the byte within it; NextIndex is -1 at the end of what the
+// reader may read.
+type AnchoredContentPage struct {
+	Fragments []struct {
+		Index    int    `json:"event_index"`
+		Offset   int    `json:"byte_offset"`
+		Complete bool   `json:"event_complete"`
+		JSON     string `json:"json_fragment"`
+	} `json:"fragments"`
+	Total      int      `json:"total_events"`
+	Open       [][2]int `json:"open_events"`
+	NextIndex  int      `json:"next_index"`
+	NextOffset int      `json:"next_offset"`
+}
+
+// SessionForkResult says what a fork made: a Git branch at a commit, a new
+// session of a tool that continues a conversation, or both.
+type SessionForkResult struct {
+	Version int `json:"version"`
+	// Branch is the Git branch that was made at Commit; empty when none was.
+	Branch string `json:"branch,omitempty"`
+	Commit string `json:"commit,omitempty"`
+	// Session is the session whose conversation the new one continues, Tool
+	// the tool the new session is for, and ResumeCommand what starts it.
+	Session       *SessionUploadKey `json:"session,omitempty"`
+	Tool          ProviderKind      `json:"tool,omitempty"`
+	ResumeCommand string            `json:"resume_command,omitempty"`
+	SessionPath   string            `json:"session_path,omitempty"`
+	// Events counts the events the new session holds of the conversation.
+	// Omitted counts the events at its beginning that were left out to fit
+	// the tool's context, and OmittedAs says what stands in for them:
+	// "summary" for the summary the session has at the commit, "note" for a
+	// line that says how many were left out. NotReadable counts events up to
+	// the commit that this reader may not read.
+	Events      int    `json:"events,omitempty"`
+	Omitted     int    `json:"omitted_events,omitempty"`
+	OmittedAs   string `json:"omitted_as,omitempty"`
+	NotReadable int    `json:"not_readable_events,omitempty"`
+	// SameTool is true when the new session is of the tool that recorded
+	// the conversation, which keeps it as it was; another tool gets a
+	// rebuilt conversation.
+	SameTool bool `json:"same_tool,omitempty"`
+}

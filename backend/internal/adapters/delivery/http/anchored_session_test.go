@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -89,6 +90,13 @@ func (backend *anchoredSessionHTTPBackend) AllowAnchoredSession(ctx context.Cont
 func (backend *anchoredSessionHTTPBackend) ListAnchoredSessionRemovals(ctx context.Context, _ domain.ContentHash) ([]domain.AnchoredSessionRemovalView, error) {
 	backend.seen(ctx)
 	return []domain.AnchoredSessionRemovalView{}, backend.err
+}
+
+func (backend *anchoredSessionHTTPBackend) ReadAnchoredSessionFragments(ctx context.Context, _ domain.ContentHash, provider domain.ProviderKind, session string, index, offset, limit, budget int) (domain.AnchoredFragmentPage, error) {
+	backend.seen(ctx)
+	backend.provider, backend.session, backend.limit = provider, session, limit
+	backend.sha = fmt.Sprintf("%d/%d/%d", index, offset, budget)
+	return domain.AnchoredFragmentPage{Fragments: []domain.DocEventFragment{{Index: index, Offset: offset, Complete: true, JSON: `{"kind":"message"}`}}, Total: 9, Open: [][2]int{{0, 9}}, NextIndex: index + 1}, backend.err
 }
 
 func (backend *anchoredSessionHTTPBackend) ReadAnchoredMemory(ctx context.Context, _ domain.ContentHash, branch string, local []string, limit int) (domain.AnchoredMemory, error) {
@@ -329,6 +337,51 @@ func TestAnchoredSessionArchiveHTTP(t *testing.T) {
 				t.Fatalf("what reached the service: %+v", backend)
 			}
 			if test.status == 200 && strings.TrimSpace(response.Body.String()) != map[bool]string{true: `{"archived":true}`, false: `{"archived":false}`}[test.archived] {
+				t.Fatalf("answer: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+// A conversation is read as its events by whoever may view the repository;
+// what of it the caller may read is the service's to say.
+func TestAnchoredSessionContentHTTP(t *testing.T) {
+	const path = "/anchored-sessions/claude/session-1/content"
+	for _, test := range []struct {
+		name         string
+		query        string
+		role         domain.MemberRole
+		authed       bool
+		status       int
+		range_       string
+		limit        int
+		serviceError error
+	}{
+		{"anonymous", "", domain.RoleOwner, false, 401, "", 0, nil},
+		{"viewer_defaults", "", domain.RoleViewer, true, 200, "0/0/65536", 50, nil},
+		{"member_range", "?index=7&offset=120&limit=5&budget=4096", domain.RoleMember, true, 200, "7/120/4096", 5, nil},
+		{"index_not_a_number", "?index=seven", domain.RoleMember, true, 422, "", 0, nil},
+		{"budget_too_large", "?budget=65537", domain.RoleMember, true, 422, "", 0, nil},
+		{"refused_by_the_service", "?limit=51", domain.RoleMember, true, 422, "0/0/65536", 51, domain.ErrValidation},
+		{"not_readable", "", domain.RoleViewer, true, 404, "0/0/65536", 50, domain.ErrNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, handler, base := anchoredSessionHTTPFixture(t, test.role)
+			backend.err = test.serviceError
+			response := bpHTTP(t, handler, http.MethodGet, base+path+test.query, "", test.authed)
+			if response.Code != test.status {
+				t.Fatalf("status=%d expected=%d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.range_ == "" {
+				if backend.calls != 0 {
+					t.Fatal("a refused request reached the service")
+				}
+				return
+			}
+			if backend.calls != 1 || backend.provider != domain.ProviderClaude || backend.session != "session-1" || backend.sha != test.range_ || backend.limit != test.limit {
+				t.Fatalf("what reached the service: %+v", backend)
+			}
+			if test.status == 200 && !strings.Contains(response.Body.String(), `"json_fragment":"{\"kind\":\"message\"}"`) {
 				t.Fatalf("answer: %s", response.Body.String())
 			}
 		})

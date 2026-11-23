@@ -32,6 +32,10 @@ type AnchoredSessions interface {
 	AllowAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string) error
 	// ListAnchoredSessionRemovals lists the caller's own removed sessions.
 	ListAnchoredSessionRemovals(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredSessionRemovalView, error)
+	// ReadAnchoredSessionFragments reads a session's conversation from one
+	// event on, as whole events within a byte budget, within what the
+	// caller may read.
+	ReadAnchoredSessionFragments(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, index, offset, limit, budget int) (domain.AnchoredFragmentPage, error)
 }
 
 // AnchoredSearch looks for a query in what the sessions tab shows: pull

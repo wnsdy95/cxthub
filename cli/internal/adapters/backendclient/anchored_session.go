@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
@@ -151,4 +152,39 @@ func (c *BackendClient) SetAnchoredSessionArchived(ctx context.Context, repoID s
 	return c.doLimited(ctx, http.MethodPut, path+"/archive", struct {
 		Archived bool `json:"archived"`
 	}{archived}, &answer, 1<<10)
+}
+
+// GetAnchoredSessionBody reads how a session is cut, as far as the caller
+// may read it, with GET /repos/{repoID}/anchored-sessions/{provider}/{sessionID}.
+func (c *BackendClient) GetAnchoredSessionBody(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string) (domain.AnchoredSessionBody, error) {
+	var session struct {
+		Body domain.AnchoredSessionBody `json:"body"`
+	}
+	path, err := anchoredSessionPath(c, repoID, provider, sessionID)
+	if err != nil {
+		return session.Body, err
+	}
+	err = c.doLimited(ctx, http.MethodGet, path, nil, &session, 16<<20)
+	return session.Body, err
+}
+
+// anchoredContentBudget is the size of one page of a conversation the CLI
+// asks for, in bytes of event JSON: the most the server gives.
+const anchoredContentBudget = 64 << 10
+
+// ReadAnchoredSessionContent reads a page of a session's conversation as its
+// events, from one event and one byte of it on, with
+// GET /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/content.
+func (c *BackendClient) ReadAnchoredSessionContent(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string, index, offset int) (domain.AnchoredContentPage, error) {
+	var page domain.AnchoredContentPage
+	path, err := anchoredSessionPath(c, repoID, provider, sessionID)
+	if err != nil {
+		return page, err
+	}
+	if index < 0 || offset < 0 {
+		return page, fmt.Errorf("%w: a conversation is read from an event and a byte of it", domain.ErrInvalidRef)
+	}
+	query := url.Values{"index": {strconv.Itoa(index)}, "offset": {strconv.Itoa(offset)}, "budget": {strconv.Itoa(anchoredContentBudget)}}
+	err = c.doLimited(ctx, http.MethodGet, path+"/content?"+query.Encode(), nil, &page, 8<<20)
+	return page, err
 }

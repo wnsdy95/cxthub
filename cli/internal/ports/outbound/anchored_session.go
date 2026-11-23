@@ -44,3 +44,18 @@ type SegmentCareRemote interface {
 	// SetAnchoredSessionArchived archives a session or restores it.
 	SetAnchoredSessionArchived(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string, archived bool) error
 }
+
+// SessionForkRemote is what continuing a conversation reads from the server:
+// how the session is cut, its conversation as far as the caller may read it,
+// and the summaries at a commit.
+type SessionForkRemote interface {
+	GetAnchoredSessionBody(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string) (domain.AnchoredSessionBody, error)
+	ReadAnchoredSessionContent(ctx context.Context, repoID string, provider domain.ProviderKind, sessionID string, index, offset int) (domain.AnchoredContentPage, error)
+	ListAnchoredCommitSummaries(ctx context.Context, repoID, commit string) ([]domain.AnchoredSummary, error)
+}
+
+// ForkBranches resolves a commit in this clone and makes a branch at it.
+type ForkBranches interface {
+	ResolveCommit(ctx context.Context, cwd, revision string) (string, error)
+	CreateBranchAt(ctx context.Context, cwd, name, commit string) error
+}

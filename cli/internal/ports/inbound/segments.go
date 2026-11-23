@@ -55,3 +55,23 @@ type SegmentCare interface {
 	// SetArchived archives a session on the server or restores it.
 	SetArchived(ctx context.Context, cwd string, key domain.SessionUploadKey, archived bool) error
 }
+
+// SessionForker starts new work from a commit: a Git branch at it, a new
+// session of a tool that continues a session's conversation up to it, or
+// both.
+type SessionForker interface {
+	Fork(ctx context.Context, in SessionForkInput) (domain.SessionForkResult, error)
+}
+
+// SessionForkInput says what to fork. Session nil makes a branch only, which
+// needs At and Branch. With a Session its conversation is continued: up to
+// the commit At when one is given, else all of it the caller may read; To is
+// the tool of the new session and is the session's own tool when empty; a
+// Branch, which needs At, is made as well.
+type SessionForkInput struct {
+	Cwd     string
+	Session *domain.SessionUploadKey
+	At      string
+	Branch  string
+	To      domain.ProviderKind
+}

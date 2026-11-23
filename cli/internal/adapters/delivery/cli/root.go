@@ -110,6 +110,9 @@ type Container struct {
 	// SegmentCare finds and puts right what is wrong between the sessions on
 	// the server and the records on this computer.
 	SegmentCare inbound.SegmentCare
+	// SessionFork starts new work from a commit: a Git branch, a session
+	// that continues a conversation, or both.
+	SessionFork inbound.SessionForker
 	// SegmentCollector is the same upload when a hook woke it: sessions since
 	// automatic reading began, and only what changed since its last run.
 	SegmentCollector inbound.SegmentCollector
@@ -201,6 +204,12 @@ func Run(c *Container, args []string) error {
 			return RunSegmentsArchive(ctx, care, cwd, parsed.positionals[1:], parsed.first() == "archive", os.Stdout)
 		case "resend":
 			return RunSegmentsResend(ctx, uploader, cwd, parsed.positionals[1:], parsed.has("--json"), os.Stdout)
+		case "fork":
+			var forker inbound.SessionForker
+			if c != nil {
+				forker = c.SessionFork
+			}
+			return RunSegmentsFork(ctx, forker, cwd, parsed.positionals[1:], parsed.flags["--at"], parsed.flags["--branch"], parsed.flags["--to"], parsed.has("--json"), os.Stdout)
 		}
 		return RunSegments(ctx, reporter, cwd, parsed.has("--json"), os.Stdout)
 	}
@@ -1520,6 +1529,10 @@ usage: cxt <command> [flags]
   segments archive|unarchive claude|codex <session>
                             hide a session from lists, the search and the summaries on the server, or bring it back
   segments refresh          ask the server to read the repository from GitHub again, so that a push it has not seen opens what it explains
+  segments fork --at <commit> --branch <name>
+                            make a Git branch at a commit; a session started on it is given the summaries along it
+  segments fork claude|codex <session> [--at <commit>] [--to claude|codex] [--branch <name>] [--json]
+                            continue a session's conversation, up to the commit, as a new session of a tool in this folder
   segments log [claude|codex <session>] [--json]
                             show what .cxt/sessions keeps about the uploads: every session with its last upload, or one session's whole log
   branch operations         inspect durable local operations (--json available)
