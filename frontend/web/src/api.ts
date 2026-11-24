@@ -5,7 +5,7 @@
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
 import type { StorageUsageReport, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, SettingsUpload, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
-import type { DocFragmentPage } from './types';
+import type { DocFragmentPage, PushOriginView } from './types';
 import { DOCUMENT_DETAIL_BYTES, DOCUMENT_FRAGMENT_BYTES, DOCUMENT_FRAGMENT_RESPONSE_BYTES, DOCUMENT_PAGE_BYTES, readDocumentResponse, scheduleDocumentRead } from './documentReads';
 import { DOCUMENT_VISIBLE_MESSAGES, validateAnchoredEventPage, validateDocFragment, type AnchoredEventPage } from './documentPaging';
 
@@ -162,6 +162,9 @@ export const api = {
   /** The mark that is another one after anything the Sessions tab shows was stored. */
   viewRevision: (repoId: string, signal?: AbortSignal) =>
     call<{ revision: string }>('GET', `/repos/${encodeURIComponent(repoId)}/revision`, undefined, undefined, signal),
+  /** Where the repository's newest pushes came from: a computer where cxt runs, or not. */
+  pushOrigins: (repoId: string, signal?: AbortSignal) =>
+    call<PushOriginView>('GET', `/repos/${encodeURIComponent(repoId)}/push-origins`, undefined, undefined, signal),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.
   exchangeSession: (idpToken: string) => call<SessionResponse>('POST', '/auth/session', undefined, idpToken),
   logout: () => call<{ status: string }>('DELETE', '/auth/session'),

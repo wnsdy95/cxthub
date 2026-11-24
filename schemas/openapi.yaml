@@ -622,6 +622,7 @@ components:
         authored_at: { type: string, format: date-time }
         committed_at: { type: string, format: date-time }
         subject: { type: string, maxLength: 1024, description: The first paragraph of the commit message on one line. }
+        head: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$', description: The newest commit of the push the server was reading when it first stored this commit. The commit came with that push, and `/repos/{repoID}/push-origins` says where that push came from. Absent for a commit that was not stored while reading a push the server had just seen, as every commit of the first read of a repository. }
     RemoteGitCommits:
       type: object
       required: [commits]
@@ -2971,6 +2972,112 @@ paths:
         '409': { description: Storage is unavailable }
         '422': { description: Invalid repository identity }
         '503': { description: View revision unavailable }
+
+  /repos/{repoID}/collector:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    put:
+      operationId: reportCollector
+      summary: Take what the collector on one of the caller's computers says about itself
+      description: For a member, about that member's own computer. A collector is the program of cxt that uploads sessions from one computer without being asked. It sends the newest pushes its clone made, as Git recorded them in that clone, and what went wrong in its last run, empty when nothing did. What it sends replaces what the account stored for the same machine. A push it names stays claimed by the collector that named it first, and becomes clean once a report that names it carries no error. The report moves the mark of `/repos/{repoID}/revision`. A collector sends it when its clone pushed or fetched, or when its run ended otherwise than the last one it reported, and not at every run.
+      tags: [remote-git]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [pushes]
+              properties:
+                machine: { type: string, maxLength: 256 }
+                cxt_version: { type: string, maxLength: 64 }
+                run_error: { type: string, maxLength: 512, description: One line of plain text. Told back to the member whose collector it is and to nobody else. }
+                pushes:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [branch, sha, at]
+                    properties:
+                      branch: { type: string, minLength: 1, maxLength: 1024 }
+                      sha: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' }
+                      at: { type: integer, minimum: 1, description: The clone's own clock, in seconds since 1970. }
+      responses:
+        '200':
+          description: The report was stored
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [heard]
+                properties:
+                  heard: { type: boolean, const: true }
+        '400': { description: Malformed body, or no list of pushes }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '413': { description: The body is larger than 256 KiB }
+        '422': { description: The report is not well formed }
+        '503': { description: Collector reports unavailable }
+
+  /repos/{repoID}/push-origins:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: getPushOrigins
+      summary: Read where the repository's newest pushes came from
+      description: Readable by whoever may view the repository. Answers the collectors of the repository and at most 500 pushes, the newest first. A push is one a collector claimed, dated by the clone that made it, or one the server saw on the Git host and no collector claimed, dated by the moment the server saw it. `cxt` means a computer where cxt runs made the push and its collector has ended a run well since. `cxt_error` means such a computer made it and its collector has reported only failed runs since. `no_cxt` means no collector claims it and every collector heard from in the last 30 days was heard from after it. `unknown` means a collector that has not been heard from since may still claim it. `collector` and `waiting` are positions in `collectors`. A commit of `/repos/{repoID}/remote-git` names with `head` the push it came with. A reader who is not signed in is told neither whose a collector is nor its machine and version. What went wrong in a collector's run is told to the member whose collector it is.
+      tags: [remote-git]
+      responses:
+        '200':
+          description: The collectors and the pushes
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [collectors, pushes]
+                properties:
+                  collectors:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [heard_at, failing, own]
+                      properties:
+                        by: { type: string, description: The public handle of the member. }
+                        machine: { type: string }
+                        cxt_version: { type: string }
+                        heard_at: { type: string, format: date-time }
+                        failing: { type: boolean }
+                        run_error: { type: string }
+                        own: { type: boolean }
+                  pushes:
+                    type: array
+                    maxItems: 500
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [branch, sha, at, state]
+                      properties:
+                        branch: { type: string }
+                        sha: { type: string }
+                        at: { type: string, format: date-time }
+                        state: { type: string, enum: [cxt, cxt_error, no_cxt, unknown] }
+                        collector: { type: integer, minimum: 0 }
+                        claimed_at: { type: string, format: date-time }
+                        waiting: { type: array, items: { type: integer, minimum: 0 } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '503': { description: Collector reports unavailable }
 
   /repos/{repoID}/remote-git:
     parameters:

@@ -96,11 +96,16 @@ type RemoteCommit struct {
 	AuthoredAt  time.Time `json:"authored_at"`
 	CommittedAt time.Time `json:"committed_at"`
 	Subject     string    `json:"subject"`
+	// Head is the newest commit of the push the server was reading when it
+	// first stored this commit: the commit came with that push. It is empty
+	// for a commit the server did not store while reading a push it had
+	// just seen, as every commit of the first read of a repository.
+	Head string `json:"head,omitempty"`
 }
 
 // Validate checks a commit before it is stored.
 func (c RemoteCommit) Validate() error {
-	if !ValidRemoteCommitSHA(c.SHA) {
+	if !ValidRemoteCommitSHA(c.SHA) || (c.Head != "" && !ValidRemoteCommitSHA(c.Head)) {
 		return remoteGitInvalid("commit number")
 	}
 	if len(c.Parents) > remoteGitParentLimit {

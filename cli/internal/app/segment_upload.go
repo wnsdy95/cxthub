@@ -42,6 +42,11 @@ type SegmentUploadService struct {
 	// WithRemoteReadRequests.
 	originBranches    func(ctx context.Context, cwd string) (string, error)
 	requestRemoteRead func(ctx context.Context, repoID string) error
+	// collectorRemote, originPushes and version are set together by
+	// WithCollectorReports.
+	collectorRemote outbound.CollectorReportRemote
+	originPushes    func(ctx context.Context, cwd string) ([]domain.RecordedPush, error)
+	version         string
 	// state, now and contentEpoch are set together by WithCollectorState.
 	state        outbound.CollectorStateStore
 	now          func() time.Time
@@ -235,6 +240,48 @@ func (s *SegmentUploadService) askForRemoteRead(ctx context.Context, cwd, repoID
 	state.OriginBranches = held
 }
 
+// WithCollectorReports makes an automatic run tell the server about the
+// collector itself: the pushes this clone made, as Git recorded them, and
+// what went wrong in the run. The server uses it to say of a push that came
+// without a session whether it was made where cxt runs. pushes reads Git's
+// own records and asks no remote; version is the version of this program.
+func (s *SegmentUploadService) WithCollectorReports(remote outbound.CollectorReportRemote, pushes func(ctx context.Context, cwd string) ([]domain.RecordedPush, error), version string) *SegmentUploadService {
+	s.collectorRemote, s.originPushes, s.version = remote, pushes, version
+	return s
+}
+
+// reportCollector tells the server about the collector when there is
+// something to say that the server was not told yet: this clone pushed or
+// fetched, so origin's branches as it holds them are other ones, or its run
+// ended otherwise than the last one it reported. A run with nothing new
+// sends nothing. It never fails the run; what the server did not take is
+// sent again by the next run.
+func (s *SegmentUploadService) reportCollector(ctx context.Context, cwd, repoID string, state *domain.CollectorState, runErr error) {
+	if s.collectorRemote == nil || s.originPushes == nil || ctx.Err() != nil {
+		return
+	}
+	report := domain.CollectorReport{Machine: s.machine, Version: domain.CollectorLine(s.version, domain.CollectorVersionLimit), RunError: domain.CollectorRunError(runErr)}
+	branches := ""
+	if s.originBranches != nil {
+		branches, _ = s.originBranches(ctx, cwd)
+	}
+	about := domain.Fingerprint(struct {
+		Report   domain.CollectorReport `json:"report"`
+		Branches string                 `json:"branches"`
+	}{report, branches})
+	if about == state.Reported {
+		return
+	}
+	pushes, err := s.originPushes(ctx, cwd)
+	if err != nil {
+		return
+	}
+	report.Pushes = pushes
+	if s.collectorRemote.ReportCollector(ctx, repoID, report) == nil {
+		state.Reported = about
+	}
+}
+
 // noGitHostToRead reports the server's answer that the repository has no Git
 // origin it could read.
 func noGitHostToRead(err error) bool {
@@ -313,7 +360,7 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 	}
 	// What was sent was sent to one repository on one server.
 	if target := string(repo.ID) + "\n" + repo.RemoteURL; state.Target != target {
-		state.Target, state.Sessions, state.Branches, state.Worktrees, state.OriginBranches = target, nil, "", "", ""
+		state.Target, state.Sessions, state.Branches, state.Worktrees, state.OriginBranches, state.Reported = target, nil, "", "", "", ""
 	}
 	if state.Sessions == nil {
 		state.Sessions = map[string]domain.CollectorSessionState{}
@@ -333,6 +380,9 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 		// was just given.
 		s.askForRemoteRead(ctx, cwd, string(repo.ID), &state)
 	}
+	// Whether the run ended well or not: the server is told which pushes
+	// this clone made, and what went wrong.
+	s.reportCollector(ctx, cwd, string(repo.ID), &state, runErr)
 	state.LastRun = &domain.CollectorRun{At: now.Format(time.RFC3339Nano), Millis: s.now().UTC().Sub(now).Milliseconds(), Stored: result.Stored, Unchanged: result.Unchanged, Refused: result.Refused}
 	if runErr != nil {
 		state.LastRun.Error = runErr.Error()

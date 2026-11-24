@@ -468,3 +468,127 @@ func TestCollectorAsksForARemoteReadWhenOriginBranchesChanged(t *testing.T) {
 		t.Fatalf("a failed run: asked %d times, %v", len(asked), err)
 	}
 }
+
+type collectorReportRemoteFake struct {
+	repos   []string
+	reports []domain.CollectorReport
+	failure error
+}
+
+func (f *collectorReportRemoteFake) ReportCollector(_ context.Context, repo string, report domain.CollectorReport) error {
+	f.repos, f.reports = append(f.repos, repo), append(f.reports, report)
+	return f.failure
+}
+
+// The collector tells the server about itself when there is something the
+// server was not told yet: this clone pushed or fetched, or its run ended
+// otherwise than the last one it reported. It says which pushes the clone
+// made and what went wrong.
+func TestCollectorReportsItselfWhenThereIsSomethingToSay(t *testing.T) {
+	f := newCollectorFixture(t)
+	f.began(time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC))
+	branches := "refs/remotes/origin/main " + strings.Repeat("a", 40) + "\n"
+	pushes, unreadable := []domain.RecordedPush{{Branch: "main", SHA: strings.Repeat("a", 40), AtSec: 1_900_000_000}}, error(nil)
+	var readFor []string
+	remote := &collectorReportRemoteFake{}
+	f.service.WithRemoteReadRequests(func(context.Context, string) (string, error) { return branches, nil }, func(context.Context, string) error { return nil })
+	f.service.WithCollectorReports(remote, func(_ context.Context, cwd string) ([]domain.RecordedPush, error) {
+		readFor = append(readFor, cwd)
+		return pushes, unreadable
+	}, "1.2.3\n")
+	said := func() int { return len(remote.reports) }
+
+	// The first run: one report, for this repository, of this machine and
+	// this version, with the pushes Git recorded and nothing that went wrong.
+	f.run(t)
+	want := domain.CollectorReport{Machine: "laptop", Version: "1.2.3", Pushes: pushes}
+	if said() != 1 || remote.repos[0] != string(f.repo.ID) || !reflect.DeepEqual(remote.reports[0], want) || f.state.state.Reported == "" {
+		t.Fatalf("the first report: %+v for %v, remembered %q", remote.reports, remote.repos, f.state.state.Reported)
+	}
+	if !reflect.DeepEqual(readFor, []string{"/work/app"}) {
+		t.Fatalf("the pushes were read for %v", readFor)
+	}
+	// Nothing new: nothing is said, and Git is not asked for the pushes.
+	if f.run(t); said() != 1 || len(readFor) != 1 {
+		t.Fatalf("a run with nothing new: %d reports, pushes read %d times", said(), len(readFor))
+	}
+	// This clone pushed or fetched: origin's branches are other ones.
+	branches = "refs/remotes/origin/main " + strings.Repeat("b", 40) + "\n"
+	pushes = append([]domain.RecordedPush{{Branch: "main", SHA: strings.Repeat("b", 40), AtSec: 1_900_000_100}}, pushes...)
+	if f.run(t); said() != 2 || !reflect.DeepEqual(remote.reports[1].Pushes, pushes) {
+		t.Fatalf("after a push: %+v", remote.reports)
+	}
+	// A report the server did not take is not remembered, does not fail the
+	// run, and is sent again.
+	branches += "refs/remotes/origin/topic " + strings.Repeat("c", 40) + "\n"
+	remembered := f.state.state.Reported
+	remote.failure = errors.New("server unreachable")
+	if result := f.run(t); said() != 3 || f.state.state.Reported != remembered || len(result.Sessions) == 0 {
+		t.Fatalf("a report that was not taken: %d reports, remembered %q (was %q)", said(), f.state.state.Reported, remembered)
+	}
+	remote.failure = nil
+	if f.run(t); said() != 4 || f.state.state.Reported == remembered {
+		t.Fatalf("after a report that was not taken: %d reports", said())
+	}
+	if f.run(t); said() != 4 {
+		t.Fatalf("after it was taken: %d reports", said())
+	}
+	// Pushes that cannot be read: nothing is said, and the next run tries again.
+	branches += "refs/remotes/origin/later " + strings.Repeat("d", 40) + "\n"
+	unreadable = errors.New("not a repository")
+	if f.run(t); said() != 4 {
+		t.Fatalf("unreadable pushes: %d reports", said())
+	}
+	unreadable = nil
+	if f.run(t); said() != 5 {
+		t.Fatalf("after unreadable pushes: %d reports", said())
+	}
+
+	// A run that fails is said, with what went wrong on one line, and so is
+	// the first run that ends well again. The same failure again is not.
+	refused := errors.New("the server\nrefused the upload")
+	f.remote.answer = func(domain.AnchoredSessionUpload) (domain.AnchoredSessionReceipt, error) {
+		return domain.AnchoredSessionReceipt{}, refused
+	}
+	f.claude.batch.Sessions[1].Items = append(f.claude.batch.Sessions[1].Items, domain.RecordedItem{ID: "w2", Turn: "t1", AtMs: collectorDay(11), Folder: "/work/app", Branch: "main"})
+	failed := func() {
+		t.Helper()
+		if _, err := f.service.CollectSegments(context.Background(), "/work/app"); !errors.Is(err, refused) {
+			t.Fatalf("the run did not fail: %v", err)
+		}
+	}
+	failed()
+	if said() != 6 || !strings.HasSuffix(remote.reports[5].RunError, "the server refused the upload") || strings.ContainsAny(remote.reports[5].RunError, "\n") ||
+		!reflect.DeepEqual(remote.reports[5].Pushes, pushes) {
+		t.Fatalf("the report of a failed run: %+v", remote.reports[said()-1])
+	}
+	if failed(); said() != 6 {
+		t.Fatalf("the same failure again: %d reports", said())
+	}
+	f.remote.answer = nil
+	if f.run(t); said() != 7 || remote.reports[6].RunError != "" {
+		t.Fatalf("the first run that ended well again: %+v", remote.reports[said()-1])
+	}
+	// Sending to another server repository starts over: that server was told nothing.
+	f.repo.ID = domain.HashContent([]byte("another repository"))
+	if f.run(t); said() != 8 || remote.repos[7] != string(f.repo.ID) {
+		t.Fatalf("another target: %v", remote.repos)
+	}
+	// A run that was stopped says nothing.
+	f.repo.ID = domain.HashContent([]byte("a third repository"))
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	if _, _ = f.service.CollectSegments(stopped, "/work/app"); said() != 8 {
+		t.Fatalf("a stopped run: %d reports", said())
+	}
+	// Without the reading of origin's branches the collector still reports
+	// itself once, and again when its run ends otherwise.
+	g := newCollectorFixture(t)
+	g.began(time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC))
+	alone := &collectorReportRemoteFake{}
+	g.service.WithCollectorReports(alone, func(context.Context, string) ([]domain.RecordedPush, error) { return nil, nil }, "dev")
+	g.run(t)
+	if g.run(t); len(alone.reports) != 1 || alone.reports[0].Version != "dev" {
+		t.Fatalf("a collector that reads no branches: %+v", alone.reports)
+	}
+}

@@ -1318,3 +1318,67 @@ func TestRemoteGitMergeOfAnOlderSideIsReadThroughTheFrontier(t *testing.T) {
 		t.Fatalf("the pass says something is left to read: %+v", state)
 	}
 }
+
+// A commit is stored with the push it came with: the newest commit of the
+// push the server was reading when it first stored the commit. The commits
+// of the first read came with no push the server saw.
+func TestRemoteGitCommitsAreStoredWithThePushTheyCameWith(t *testing.T) {
+	fixture := newRemoteGitTestFixture(t, 100)
+	provider := fixture.provider
+	old := provider.chain(3, "")
+	provider.heads["main"] = old
+	if _, err := fixture.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	heads := func() map[string]string {
+		t.Helper()
+		with := map[string]string{}
+		for _, commit := range fixture.stored(t) {
+			with[commit.SHA] = commit.Head
+		}
+		return with
+	}
+	for sha, head := range heads() {
+		if head != "" {
+			t.Fatalf("commit %s of the first read came with the push %s", sha, head)
+		}
+	}
+	// Two commits are pushed to main, and a new branch with one commit of
+	// its own on top of the old history.
+	first := provider.commit(old)
+	pushed := provider.commit(first)
+	provider.heads["main"] = pushed
+	topic := provider.commit(old)
+	provider.heads["topic"] = topic
+	fixture.nextPass(t)
+	with := heads()
+	if with[first] != pushed || with[pushed] != pushed || with[topic] != topic {
+		t.Fatalf("what came with the two pushes: main %q %q, topic %q", with[first], with[pushed], with[topic])
+	}
+	if with[old] != "" || len(with) != 6 {
+		t.Fatalf("the old history after the pushes: %v", with)
+	}
+	// A branch that is made of a commit the server holds brings nothing, and
+	// a later push on it brings only what is new.
+	provider.heads["release"] = pushed
+	fixture.nextPass(t)
+	later := provider.commit(pushed)
+	provider.heads["release"] = later
+	fixture.nextPass(t)
+	with = heads()
+	if with[later] != later || with[pushed] != pushed || with[first] != pushed || len(with) != 7 {
+		t.Fatalf("after a branch of a held commit and a push on it: %v", with)
+	}
+	// What the reader is told reaches the page the Sessions tab reads.
+	page, err := fixture.service.ReadRemoteGit(anchoredActor("viewer"), fixture.repo, domain.RemoteCommitCursor{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := map[string]string{}
+	for _, commit := range page.Commits {
+		read[commit.SHA] = commit.Head
+	}
+	if !reflect.DeepEqual(read, with) {
+		t.Fatalf("the page says %v, the store %v", read, with)
+	}
+}

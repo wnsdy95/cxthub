@@ -36,6 +36,8 @@ export interface AnchoredCommitRow extends GitNode {
   /** Pull requests that list this commit, and the one merged as it. */
   pulls: number[];
   merged?: number;
+  /** The newest commit of the push this commit came with, when the server saw that push. */
+  pushHead?: string;
 }
 interface AnchoredWorktreeRow {
   key: string; name: string; machine: string; removed: boolean; sessions: string[]; branches: string[];
@@ -142,7 +144,7 @@ export function buildAnchoredIndex(
   const heldCommits: string[] = [];
   for (const commit of remote?.commits ?? []) {
     commitBySha.set(commit.sha, { sha: commit.sha, parents: commit.parents, at: commit.committed_at, subject: commit.subject, links: [], remote: true,
-      author: commit.author_name ?? '', heads: [], pulls: [] });
+      author: commit.author_name ?? '', heads: [], pulls: [], ...(commit.head ? { pushHead: commit.head } : {}) });
   }
   for (const summary of summaries) {
     for (const commit of summary.commits) {

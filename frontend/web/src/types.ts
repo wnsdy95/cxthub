@@ -439,7 +439,18 @@ export interface AnchoredNote {
 /** A working folder of the repository on one of the caller's machines, by name. */
 export interface ReportedWorktree { machine?: string; name: string; branch?: string; removed: boolean; first_seen_at: string; last_seen_at: string }
 /** Commits, branches and pull requests as the server read them from the hosting provider. */
-export interface RemoteCommit { sha: string; parents: string[]; author_name?: string; authored_at: string; committed_at: string; subject: string }
+/** `head` is the newest commit of the push the server was reading when it first stored the commit; absent when it came with no push the server saw. */
+export interface RemoteCommit { sha: string; parents: string[]; author_name?: string; authored_at: string; committed_at: string; subject: string; head?: string }
+/** A collector is the program of cxt that uploads sessions from one computer. `run_error` is given to its owner only; `by`, `machine` and `cxt_version` to signed-in readers only. */
+export interface PushCollector { by?: string; machine?: string; cxt_version?: string; heard_at: string; failing: boolean; run_error?: string; own: boolean }
+/**
+ * Where a push came from. `cxt`: a computer where cxt runs made it and its collector has ended a run well since.
+ * `cxt_error`: such a computer made it and its collector has only failed since. `no_cxt`: no collector claims it and
+ * every known collector was heard from after it. `unknown`: a collector that has not been heard from since may still claim it.
+ * `collector` and `waiting` are positions in the view's `collectors`.
+ */
+export interface PushOrigin { branch: string; sha: string; at: string; state: 'cxt' | 'cxt_error' | 'no_cxt' | 'unknown'; collector?: number; claimed_at?: string; waiting?: number[] }
+export interface PushOriginView { collectors: PushCollector[]; pushes: PushOrigin[] }
 export interface RemoteBranch { name: string; sha: string }
 export interface RemotePull {
   number: number; title: string; state: 'open' | 'closed' | 'merged'; head_ref: string; head_sha: string; base_ref: string;

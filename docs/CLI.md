@@ -706,6 +706,27 @@ Nothing is asked when the branches are the same, or
 when the clone holds no branch of origin. A server that knows no Git host for
 the repository says so, and is not asked again about the same branches.
 
+A run also tells the server about the collector itself, so that the Sessions
+tab can say of a commit without a session where it was pushed from. Git
+records in a clone each push that clone made, whether or not cxt ran at that
+moment. The collector sends the newest 200 of those pushes (branch, commit and
+the clone's own time), this computer's label, the version of cxt, and what
+went wrong in its run, on one line, when the run failed. It sends this when
+there is something the server was not told yet: the clone pushed or fetched,
+or the run ended otherwise than the last one it reported. From that the server
+says of each push one of four things. A push a collector named was made on a
+computer where cxt runs; once a run of that collector has ended well after
+it, a commit of that push without a session simply had no agent session, and
+until then the cxt on that computer is failing. A push no collector named was
+made on a computer where cxt does not run, once every collector heard from in
+the last thirty days was heard from after the push. Until then it is not known
+yet: a collector that has said nothing since may still name it. What this
+cannot tell apart: a computer whose cxt cannot reach the server at all looks
+like one that is switched off, until it is heard from again. A member is shown
+what went wrong on that member's own computers; other members are shown only
+that it failed. Two clones of one repository on the same computer report as
+one collector.
+
 Like every upload it sends nothing of a session that was removed from the
 server, and it then forgets what it had sent of that session, so that the
 session is sent whole again once it is allowed again. A run with nothing new

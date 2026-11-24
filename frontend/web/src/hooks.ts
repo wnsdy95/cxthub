@@ -457,6 +457,16 @@ export function useDeleteAnchoredNote() {
   });
 }
 /** Commits, branches and pull requests as the server read them from the hosting provider, newest commits first. */
+// Where the pushes came from. A server without the route leaves the tab as it was: commits without a label.
+export function usePushOrigins(repoId: string | null) {
+  return useQuery({
+    queryKey: ['push-origins', repoId],
+    queryFn: ({ signal }) => api.pushOrigins(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: SESSIONS_FALLBACK_MS,
+  });
+}
 export function useRemoteGit(repoId: string | null) {
   return useInfiniteQuery({
     queryKey: ['remote-git', repoId],

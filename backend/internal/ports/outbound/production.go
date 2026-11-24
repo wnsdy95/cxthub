@@ -38,4 +38,5 @@ type ProductionStore interface {
 	AnchoredPublicationStore
 	AnchoredSummaryStore
 	AnchoredRemovalStore
+	CollectorStore
 }

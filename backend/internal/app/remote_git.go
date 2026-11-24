@@ -342,6 +342,8 @@ type remoteGitPass struct {
 	budget int
 	// cut: the budget ran out with work left.
 	cut bool
+	// pushed holds the newest commit of each push this pass saw.
+	pushed map[string]struct{}
 }
 
 // spend takes one provider request from the budget. When none is left there
@@ -427,6 +429,10 @@ func (pass *remoteGitPass) branches(ctx context.Context) ([]string, error) {
 	if len(previous) > 0 || pass.state.SyncedAt != nil {
 		pushes = domain.RemoteBranchPushes(previous, branches, pass.sync.now())
 	}
+	pass.pushed = make(map[string]struct{}, len(pushes))
+	for _, push := range pushes {
+		pass.pushed[push.SHA] = struct{}{}
+	}
 	if err := pass.sync.write(ctx, pass.repo, pass.origin, func(tx context.Context) error {
 		if log, ok := pass.sync.store.(outbound.RemotePushStore); ok {
 			if err := log.RecordRemotePushes(tx, pass.repo, pushes); err != nil {
@@ -467,6 +473,13 @@ func (pass *remoteGitPass) walk(ctx context.Context, sha string) error {
 		}
 		if err != nil {
 			return err
+		}
+		// What is new on the way down from a push this pass saw came with
+		// that push.
+		if _, pushed := pass.pushed[sha]; pushed {
+			for index := range commits {
+				commits[index].Head = sha
+			}
 		}
 		added, err := pass.put(ctx, commits)
 		if err != nil {

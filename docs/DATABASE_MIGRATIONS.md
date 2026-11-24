@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 169-file SQL bundle, from
-`0001_init.sql` through `0169_drop_capture_tables.sql`. Its catalog
+This source release requires the complete 170-file SQL bundle, from
+`0001_init.sql` through `0170_collector_reports.sql`. Its catalog
 digest is
-`661dbe47cec87628d4bec85c68f6c19ed9ba7edb1fe8e83d11d32b43543a1443`, matching
+`966ebba5097862a68be384da53dee4071a26665fcceb58b15fa5d7f21305f004`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current

@@ -612,6 +612,31 @@ func (s *FSStore) ListRemotePushes(ctx context.Context, repo domain.ContentHash,
 	return pushes, nil
 }
 
+func (s *FSStore) ListRecentRemotePushes(ctx context.Context, repo domain.ContentHash, limit int) ([]domain.RemoteBranchPush, error) {
+	stored, err := s.viewRemoteGit(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	pushes := make([]domain.RemoteBranchPush, 0, len(stored.Pushes))
+	for _, push := range stored.Pushes {
+		push.SeenAt = push.SeenAt.UTC()
+		pushes = append(pushes, push)
+	}
+	// Oldest first, then turned round: the same order among pushes seen at
+	// one moment as the other list gives.
+	sortRemotePushes(pushes)
+	for left, right := 0, len(pushes)-1; left < right; left, right = left+1, right-1 {
+		pushes[left], pushes[right] = pushes[right], pushes[left]
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	if len(pushes) > limit {
+		pushes = pushes[:limit]
+	}
+	return pushes, nil
+}
+
 func sortRemotePushes(pushes []domain.RemoteBranchPush) {
 	sort.Slice(pushes, func(left, right int) bool {
 		a, b := pushes[left], pushes[right]

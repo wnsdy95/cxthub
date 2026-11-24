@@ -17,7 +17,7 @@ export const SESSIONS_FALLBACK_MS = 300_000;
 /** The queries of everything the Sessions tab reads for one repository. */
 export const SESSIONS_TAB_QUERIES = [
   'anchored-sessions', 'anchored-session', 'anchored-commit', 'anchored-commit-summaries', 'anchored-search', 'anchored-session-calls',
-  'anchored-notes', 'branch-lifetimes', 'reported-worktrees', 'remote-git',
+  'anchored-notes', 'branch-lifetimes', 'reported-worktrees', 'remote-git', 'push-origins',
 ] as const;
 
 export interface SeenRevision { repo: string; revision: string }

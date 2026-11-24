@@ -92,6 +92,10 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 	// An automatic run asks the server to read the Git host once this clone's
 	// branches of origin changed: after a push or a fetch.
 	service.WithRemoteReadRequests(gitctx.OriginBranches, remote.RequestRemoteGitRefresh)
+	// An automatic run also tells the server which pushes this clone made
+	// and whether the run ended well, so that a push without a session can be
+	// told from one made on a computer where cxt does not run.
+	service.WithCollectorReports(remote, gitctx.OriginPushes, version)
 	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID).WithWorktreeList(remote), nil
 }
 

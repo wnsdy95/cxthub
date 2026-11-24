@@ -28,6 +28,8 @@ function emptyAnswers(request: ApiRequest): ApiResponse | undefined {
   if (resource === 'remote-git') return { body: { commits: [] } };
   // The mark an open Sessions tab follows: it never moves unless a test moves it.
   if (resource === 'revision') return { body: { revision: '0.0.0' } };
+  // Where pushes came from: nothing is known unless a test says so.
+  if (resource === 'push-origins') return { body: { collectors: [], pushes: [] } };
   if (resource && ['anchored-sessions', 'anchored-notes', 'branch-lifetimes', 'worktrees'].includes(resource)) return { body: [] };
   return undefined;
 }

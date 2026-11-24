@@ -282,6 +282,27 @@ expect "the push goes through the hook" "$?" 0
 expect "when the push has ended the collector runs and asks the server about the Git host" "$(until_true 40 asked_remote_read && echo asked) $([ "$(last_run_at)" != "$REWOUND" ] && echo ran)" "asked ran"
 rm -f "$TMP/bare.git/hooks/pre-receive"
 
+echo "── C3. the collector tells the server which pushes this clone made, and the server says where a push came from"
+# Git records in the clone each push the clone made. The run after the push reads that record and tells the server,
+# with the collector's own state: the server can then say of a push that came without a session that it was made on
+# a computer where cxt runs, and that the cxt there ended its run well. The commit pushed above is no session's.
+origin_of() { curl -fsSb "$J" "$B/repos/$RID/push-origins" | python3 -c '
+import json, sys
+view = json.load(sys.stdin)
+push = next((p for p in view["pushes"] if p["sha"] == sys.argv[1] and p["branch"] == sys.argv[2]), None)
+if push is None:
+    sys.exit(1)
+collector = view["collectors"][push["collector"]] if "collector" in push else {}
+print(push["state"], "claimed" if "claimed_at" in push else "unclaimed", "own" if collector.get("own") else "other", "failing" if collector.get("failing") else "well")' "$1" "$2" 2>/dev/null; }
+expect "the push is said to come from a computer where cxt runs and ended its run well" "$(until_true 40 origin_of "$PROBE" probe >/dev/null && origin_of "$PROBE" probe)" "cxt claimed own well"
+heard_at() { curl -fsSb "$J" "$B/repos/$RID/push-origins" | python3 -c 'import json,sys;print(next(c["heard_at"] for c in json.load(sys.stdin)["collectors"] if c["own"]))' 2>/dev/null; }
+HEARD="$(heard_at)"
+quiet
+REWOUND="$(last_run_at)"
+ran_again() { [ "$(last_run_at)" != "$REWOUND" ]; }
+cxt git-hook wake post-commit </dev/null >/dev/null 2>&1
+expect "a run with nothing new tells the server nothing more" "$(until_true 40 ran_again && echo ran) $([ -n "$HEARD" ] && [ "$(heard_at)" = "$HEARD" ] && echo not told)" "ran not told"
+
 echo "── D. a linked worktree shares the hooks"
 quiet
 git worktree add -q "$TMP/linked" -b topic

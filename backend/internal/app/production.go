@@ -56,6 +56,7 @@ func ValidateProductionStore(store any) error {
 		{"session publications", supports[outbound.AnchoredPublicationStore](store)},
 		{"session summaries", supports[outbound.AnchoredSummaryStore](store)},
 		{"session removals", supports[outbound.AnchoredRemovalStore](store)},
+		{"collector reports", supports[outbound.CollectorStore](store)},
 	}
 	var missing []string
 	for _, capability := range required {

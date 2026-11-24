@@ -9,16 +9,17 @@
 // segment begins.
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import { navigate, type AnchoredSelection } from '../route';
-import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, AnchoredSummary, RemotePull, Repo } from '../types';
+import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, AnchoredSummary, PushCollector, RemotePull, Repo } from '../types';
 import {
   useAnchoredCommit, useAnchoredCommitSummaries, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useFollowViewRevision,
-  useMe, useRemoteGit, useReportedWorktrees, useSaveAnchoredNote,
+  useMe, usePushOrigins, useRemoteGit, useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredCompare, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
   type AnchoredBranchUse, type AnchoredCommitRow, type AnchoredIndex, type AnchoredRemote,
 } from '../anchoredSessions';
 import { layoutGitGraph, type GitRow } from '../anchoredGraph';
+import { commitOrigin, ownFailingCollectors, pushOriginsByHead, type CommitOrigin } from '../pushOrigins';
 import { when } from '../snapshotFormat';
 import { useT } from '../i18n';
 import { AppLink } from './AppLink';
@@ -47,6 +48,9 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
   const worktreesQ = useReportedWorktrees(repo.id);
   const notesQ = useAnchoredNotes(repo.id);
   const remoteQ = useRemoteGit(repo.id);
+  // Where the pushes came from. Without an answer the commits carry no label.
+  const originsQ = usePushOrigins(repo.id);
+  const origins = useMemo(() => pushOriginsByHead(originsQ.data), [originsQ.data]);
   const remote = useMemo<AnchoredRemote | undefined>(() => {
     const pages = remoteQ.data?.pages;
     if (!pages?.length) return undefined;
@@ -76,7 +80,7 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
     : shown.kind === 'pull' ? index.pulls.find(pull => pull.number === shown.number)?.commits ?? []
     : shown.kind === 'commit' && base && base !== shown.sha ? anchoredCompare(index, base, shown.sha).shas : [];
   const refresh = () => {
-    void sessionsQ.refetch(); void lifetimesQ.refetch(); void worktreesQ.refetch(); void notesQ.refetch(); void remoteQ.refetch();
+    void sessionsQ.refetch(); void lifetimesQ.refetch(); void worktreesQ.refetch(); void notesQ.refetch(); void remoteQ.refetch(); void originsQ.refetch();
   };
   return (
     <Member.Provider value={member}>
@@ -149,6 +153,12 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
         )}
       </nav>
       <div className="anchor-body">
+        {ownFailingCollectors(originsQ.data).map(collector => (
+          <p key={collector.machine ?? ''} role="alert" className="err" data-own-collector={collector.machine ?? ''}>
+            {t('anchored.ownCollectorFailing', { machine: collector.machine || t('anchored.originThisComputer') })}{collector.run_error ? ` ${collector.run_error}` : ''}{' '}
+            {t('anchored.ownCollectorHint')}
+          </p>
+        ))}
         <div className="anchor-bar">
           <span>
             {t(member ? 'anchored.ownOnly' : 'anchored.openOnly')}{' '}
@@ -190,10 +200,11 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
           <SearchResults key={shown.query} repo={repo} query={shown.query} href={href} />
         ) : (
           <div className="anchor-split">
-            <AnchoredCommits index={index} selected={shown.kind === 'commit' ? shown.sha : ''} base={base} highlighted={highlighted} marked={marked} href={href}
+            <AnchoredCommits index={index} origins={origins} selected={shown.kind === 'commit' ? shown.sha : ''} base={base} highlighted={highlighted} marked={marked} href={href}
               more={remoteQ.hasNextPage ? () => void remoteQ.fetchNextPage() : undefined} loading={remoteQ.isFetchingNextPage} />
             <section className="anchor-detail" aria-label={t('anchored.detailAria')}>
-              {shown.kind === 'commit' && <CommitDetail key={shown.sha} repo={repo} index={index} notes={notes} sha={shown.sha} base={base} href={href} onHighlight={setHighlighted} />}
+              {shown.kind === 'commit' && <CommitDetail key={shown.sha} repo={repo} index={index} notes={notes} sha={shown.sha} base={base} href={href} onHighlight={setHighlighted}
+                origin={commitOrigin(origins, index.commitBySha.get(shown.sha)?.pushHead)} />}
               {shown.kind === 'branch' && <BranchDetail key={shown.name} repo={repo} index={index} notes={notes} name={shown.name} href={href} />}
               {shown.kind === 'worktree' && <WorktreeDetail key={`${shown.machine ?? ''}\n${shown.name}`} repo={repo} index={index} notes={notes} name={shown.name} machine={shown.machine ?? ''} href={href} />}
               {shown.kind === 'pull' && <PullDetail index={index} number={shown.number} href={href} />}
@@ -235,8 +246,10 @@ function Lanes({ row, width, missing }: { row: GitRow<AnchoredCommitRow>; width:
   );
 }
 
-function AnchoredCommits({ index, selected, base, highlighted, marked, href, more, loading }: {
+function AnchoredCommits({ index, origins, selected, base, highlighted, marked, href, more, loading }: {
   index: AnchoredIndex; selected: string; highlighted: string[]; marked: string[]; href: AnchoredHref; more?: () => void; loading: boolean;
+  /** Where each push came from, by its newest commit. */
+  origins: Map<string, CommitOrigin>;
   /** The commit chosen to compare with: every commit opened from the list is compared with it. */
   base?: string;
 }) {
@@ -258,6 +271,8 @@ function AnchoredCommits({ index, selected, base, highlighted, marked, href, mor
           const on = commit.sha === selected;
           // Only once the remote was read can a commit be said to be missing there.
           const missing = index.remoteRead && !commit.remote;
+          // A commit without a session says where it was pushed from, when that is known.
+          const origin = commit.links.length === 0 ? commitOrigin(origins, commit.pushHead) : undefined;
           return (
             <li key={commit.sha}>
               <AppLink className={`anchor-commit${on ? ' on' : ''}${highlighted.includes(commit.sha) ? ' hl' : ''}${marked.includes(commit.sha) ? ' in' : ''}`}
@@ -276,6 +291,7 @@ function AnchoredCommits({ index, selected, base, highlighted, marked, href, mor
                     {commit.links.length > 0
                       ? <span className="count-badge">{t('anchored.segmentCount', { count: commit.links.length })}</span>
                       : <span className="anchor-none">{t('anchored.noContext')}</span>}
+                    {origin && <span className="anchor-none" data-origin={origin.push.state}>{t(`anchored.origin_${origin.push.state}`)}</span>}
                     {missing && <span className="anchor-none">{t('anchored.notPushed')}</span>}
                   </span>
                 </span>
@@ -444,8 +460,29 @@ function Compare({ index, base, sha, href }: { index: AnchoredIndex; base: strin
   );
 }
 
-function CommitDetail({ repo, index, notes, sha, base, href, onHighlight }: {
+/** Whose computer a collector runs on, as far as the reader is told. */
+function collectorName(collector: PushCollector | undefined, t: ReturnType<typeof useT>): string {
+  const parts = [collector?.by, collector?.machine].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : t('anchored.originSomeComputer');
+}
+
+/** Why a commit has no session: where it was pushed from, in a sentence. */
+function OriginNote({ origin }: { origin: CommitOrigin }) {
+  const t = useT();
+  const state = origin.push.state;
+  return (
+    <p className="anchor-card-meta" data-origin-note={state}>
+      {t(`anchored.originDetail_${state}`, { who: state === 'unknown' ? origin.waiting.map(collector => collectorName(collector, t)).join(', ') : collectorName(origin.collector, t) })}
+      {origin.push.claimed_at && <> {t('anchored.originTimes')} <time dateTime={origin.push.at}>{when(origin.push.at, true)}</time> → <time dateTime={origin.push.claimed_at}>{when(origin.push.claimed_at, true)}</time></>}
+      {state === 'cxt_error' && origin.collector?.run_error ? <> {origin.collector.run_error}</> : null}
+    </p>
+  );
+}
+
+function CommitDetail({ repo, index, notes, sha, base, href, onHighlight, origin }: {
   repo: Repo; index: AnchoredIndex; notes: AnchoredNote[]; sha: string; href: AnchoredHref; onHighlight: (shas: string[]) => void;
+  /** Where the commit was pushed from, when the server knows. */
+  origin?: CommitOrigin;
   /** The commit this one is compared with, when one was chosen. */
   base?: string;
 }) {
@@ -480,6 +517,7 @@ function CommitDetail({ repo, index, notes, sha, base, href, onHighlight }: {
       {base && <Compare index={index} base={base} sha={sha} href={href} />}
       <ForkBox sha={sha} sessions={(commit?.links ?? []).map(link => ({ provider: link.provider, id: link.session_id, at: link.copyOf ?? sha }))} />
       {(commit?.links.length ?? 0) === 0 && <p className="empty-box">{t('anchored.noContext')}</p>}
+      {(commit?.links.length ?? 0) === 0 && origin && <OriginNote origin={origin} />}
       <ul className="anchor-cards">
         {(commit?.links ?? []).map(link => {
           const key = anchoredKey(link.provider, link.session_id);

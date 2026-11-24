@@ -209,8 +209,10 @@ type segmentsTestServer struct {
 	requests  int // every request of any kind
 	branches  [][]domain.BranchRegistration
 	worktrees []string
-	answer    func(session string) (int, string)
-	token     string
+	// collectors holds what the collector said about itself.
+	collectors []string
+	answer     func(session string) (int, string)
+	token      string
 }
 
 type segmentsTestRequest struct {
@@ -280,6 +282,9 @@ func (s *segmentsTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/worktrees"):
 		s.worktrees = append(s.worktrees, string(raw))
 		_, _ = w.Write([]byte(`[]`))
+	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/collector"):
+		s.collectors = append(s.collectors, string(raw))
+		_, _ = w.Write([]byte(`{"heard":true}`))
 	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/branch-ids"):
 		var req struct {
 			Branches []domain.BranchRegistration `json:"branches"`
@@ -609,6 +614,13 @@ func TestSegmentCollectorUploadsOnlyWhatChanged(t *testing.T) {
 	// The memory holds what was sent, and no folder of this computer.
 	if strings.Contains(string(raw), base) {
 		t.Fatalf("the state names a path: %s", raw)
+	}
+
+	// The collector also said once who it is: this program's version, the
+	// pushes of this clone, which made none, and nothing that went wrong.
+	if len(fake.collectors) != 1 || !strings.Contains(fake.collectors[0], `"cxt_version":"`+version+`"`) || !strings.Contains(fake.collectors[0], `"pushes":[]`) ||
+		strings.Contains(fake.collectors[0], "run_error") || strings.Contains(fake.collectors[0], base) || state.Reported == "" {
+		t.Fatalf("what the collector said about itself: %q, remembered %q", fake.collectors, state.Reported)
 	}
 
 	// Nothing changed: the server is not asked anything.

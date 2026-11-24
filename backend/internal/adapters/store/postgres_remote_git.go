@@ -219,7 +219,7 @@ func (s *PostgresStore) RequestRemoteGitSync(ctx context.Context, repo domain.Co
 	return tx.Commit(ctx)
 }
 
-const remoteGitCommitColumns = `stored.sha,stored.parents,stored.author_name,stored.author_email,stored.authored_at,stored.committed_at,stored.subject`
+const remoteGitCommitColumns = `stored.sha,stored.parents,stored.author_name,stored.author_email,stored.authored_at,stored.committed_at,stored.subject,stored.head`
 
 func scanRemoteGitCommits(rows pgx.Rows, err error) ([]domain.RemoteCommit, error) {
 	if err != nil {
@@ -229,7 +229,7 @@ func scanRemoteGitCommits(rows pgx.Rows, err error) ([]domain.RemoteCommit, erro
 	commits := []domain.RemoteCommit{}
 	for rows.Next() {
 		var commit domain.RemoteCommit
-		if err := rows.Scan(&commit.SHA, &commit.Parents, &commit.AuthorName, &commit.AuthorEmail, &commit.AuthoredAt, &commit.CommittedAt, &commit.Subject); err != nil {
+		if err := rows.Scan(&commit.SHA, &commit.Parents, &commit.AuthorName, &commit.AuthorEmail, &commit.AuthoredAt, &commit.CommittedAt, &commit.Subject, &commit.Head); err != nil {
 			return nil, err
 		}
 		commit = remoteGitCommit(commit)
@@ -250,6 +250,7 @@ func (s *PostgresStore) PutRemoteCommits(ctx context.Context, repo domain.Conten
 	count := len(commits)
 	shas, parents, names, emails, subjects := make([]string, 0, count), make([]string, 0, count), make([]string, 0, count), make([]string, 0, count), make([]string, 0, count)
 	authored, committed := make([]time.Time, 0, count), make([]time.Time, 0, count)
+	heads := make([]string, 0, count)
 	for _, commit := range commits {
 		if err := commit.Validate(); err != nil {
 			return 0, err
@@ -257,15 +258,16 @@ func (s *PostgresStore) PutRemoteCommits(ctx context.Context, repo domain.Conten
 		shas, parents = append(shas, commit.SHA), append(parents, strings.Join(commit.Parents, ","))
 		names, emails, subjects = append(names, commit.AuthorName), append(emails, commit.AuthorEmail), append(subjects, commit.Subject)
 		authored, committed = append(authored, commit.AuthoredAt.UTC()), append(committed, commit.CommittedAt.UTC())
+		heads = append(heads, commit.Head)
 	}
 	if count == 0 {
 		return 0, nil
 	}
-	tag, err := s.db(ctx).Exec(ctx, `INSERT INTO remote_git_commits(repo_id,sha,parents,author_name,author_email,authored_at,committed_at,subject)
- SELECT $1, listed.sha, string_to_array(listed.parents, ','), listed.author_name, listed.author_email, listed.authored_at, listed.committed_at, listed.subject
- FROM unnest($2::text[],$3::text[],$4::text[],$5::text[],$6::timestamptz[],$7::timestamptz[],$8::text[])
-  AS listed(sha,parents,author_name,author_email,authored_at,committed_at,subject)
- ON CONFLICT (repo_id,sha) DO NOTHING`, repo, shas, parents, names, emails, authored, committed, subjects)
+	tag, err := s.db(ctx).Exec(ctx, `INSERT INTO remote_git_commits(repo_id,sha,parents,author_name,author_email,authored_at,committed_at,subject,head)
+ SELECT $1, listed.sha, string_to_array(listed.parents, ','), listed.author_name, listed.author_email, listed.authored_at, listed.committed_at, listed.subject, listed.head
+ FROM unnest($2::text[],$3::text[],$4::text[],$5::text[],$6::timestamptz[],$7::timestamptz[],$8::text[],$9::text[])
+  AS listed(sha,parents,author_name,author_email,authored_at,committed_at,subject,head)
+ ON CONFLICT (repo_id,sha) DO NOTHING`, repo, shas, parents, names, emails, authored, committed, subjects, heads)
 	if err != nil {
 		return 0, err
 	}
@@ -568,6 +570,30 @@ func (s *PostgresStore) ListRemotePushes(ctx context.Context, repo domain.Conten
 		branches = []string{}
 	}
 	rows, err := s.db(ctx).Query(ctx, `SELECT branch, sha, seen_at FROM remote_git_pushes WHERE repo_id=$1 AND branch = ANY($2::text[]) ORDER BY seen_at, branch, sha`, repo, branches)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	pushes := []domain.RemoteBranchPush{}
+	for rows.Next() {
+		var push domain.RemoteBranchPush
+		if err := rows.Scan(&push.Branch, &push.SHA, &push.SeenAt); err != nil {
+			return nil, err
+		}
+		push.SeenAt = push.SeenAt.UTC()
+		pushes = append(pushes, push)
+	}
+	return pushes, rows.Err()
+}
+
+func (s *PostgresStore) ListRecentRemotePushes(ctx context.Context, repo domain.ContentHash, limit int) ([]domain.RemoteBranchPush, error) {
+	if err := validateHash(repo); err != nil {
+		return nil, err
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	rows, err := s.db(ctx).Query(ctx, `SELECT branch, sha, seen_at FROM remote_git_pushes WHERE repo_id=$1 ORDER BY seen_at DESC, branch DESC, sha DESC LIMIT $2`, repo, limit)
 	if err != nil {
 		return nil, err
 	}

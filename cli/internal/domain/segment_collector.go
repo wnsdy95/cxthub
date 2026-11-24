@@ -30,8 +30,12 @@ type CollectorState struct {
 	Worktrees string `json:"worktrees,omitempty"`
 	// OriginBranches is the fingerprint of origin's branches as this clone
 	// held them when the server was last asked to read the remote.
-	OriginBranches string        `json:"origin_branches,omitempty"`
-	LastRun        *CollectorRun `json:"last_run,omitempty"`
+	OriginBranches string `json:"origin_branches,omitempty"`
+	// Reported is the fingerprint of what the collector last told the
+	// server about itself, and of origin's branches as this clone held them
+	// then.
+	Reported string        `json:"reported,omitempty"`
+	LastRun  *CollectorRun `json:"last_run,omitempty"`
 }
 
 // CollectorSessionState is what was last sent for one session.

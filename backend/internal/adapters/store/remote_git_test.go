@@ -122,6 +122,8 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 
 	// Commits are stored once and never changed.
 	first, second, third, fourth := remoteGitStoreCommit("a", 10), remoteGitStoreCommit("b", 20, a), remoteGitStoreCommit("c", 20, b), remoteGitStoreCommit("d", 30, c, e)
+	// The second and the fourth came with a push; the others with none.
+	second.Head, fourth.Head = c, d
 	if added, err := storage.PutRemoteCommits(ctx, repo, []domain.RemoteCommit{first, second}); err != nil || added != 2 {
 		t.Fatalf("first page: %d %v", added, err)
 	}
@@ -129,7 +131,7 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 		t.Fatalf("a page that overlaps the first: %d %v", added, err)
 	}
 	rewritten := second
-	rewritten.Subject, rewritten.Parents = "rewritten", []string{}
+	rewritten.Subject, rewritten.Parents, rewritten.Head = "rewritten", []string{}, ""
 	if added, err := storage.PutRemoteCommits(ctx, repo, []domain.RemoteCommit{first, rewritten}); err != nil || added != 0 {
 		t.Fatalf("a page of stored commits: %d %v", added, err)
 	}
@@ -152,6 +154,11 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 	invalid.AuthoredAt = time.Time{}
 	if _, err := storage.PutRemoteCommits(ctx, repo, []domain.RemoteCommit{remoteGitStoreCommit("9", 40), invalid}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a commit without an author time: %v", err)
+	}
+	invalid = remoteGitStoreCommit("f", 40)
+	invalid.Head = "main"
+	if _, err := storage.PutRemoteCommits(ctx, repo, []domain.RemoteCommit{remoteGitStoreCommit("9", 40), invalid}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a commit that came with what is no commit: %v", err)
 	}
 	if missing, err := storage.MissingRemoteCommits(ctx, repo, []string{remoteGitStoreSHA("9")}); err != nil || len(missing) != 1 {
 		t.Fatalf("a refused page stored something: %v %v", missing, err)

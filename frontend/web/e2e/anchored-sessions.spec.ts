@@ -524,3 +524,70 @@ test('an open sessions tab reads its lists again when the mark of the repository
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+test('a commit without a session says where it was pushed from, and the owner of a failing cxt is told', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const member = fixture('member', []);
+  const commit = (letter: string, parent: string | undefined, head?: string) => ({
+    sha: sha(letter), parents: parent ? [sha(parent)] : [], author_name: 'Alice', authored_at: at(10), committed_at: at(10), subject: `commit ${letter}`, ...(head ? { head: sha(head) } : {}),
+  });
+  const unexpected = await installApiFixture(page, request => {
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/anchored-sessions') return { body: [] };
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/remote-git') {
+      return { body: { default_branch: 'main', synced_at: at(20), branches: [{ name: 'main', sha: sha('1') }], pulls: [],
+        // The newest came with a push of its own; the two below it with one push; the oldest with none the server saw.
+        commits: [commit('1', '2', '1'), commit('2', '3', '2'), commit('3', '4', '3'), commit('4', '5', '3'), commit('6', '5', '6'), commit('5', undefined)] } };
+    }
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/push-origins') {
+      return { body: {
+        collectors: [
+          { by: 'alice', machine: 'laptop', cxt_version: '1.2.3', heard_at: at(30), failing: true, run_error: 'the upload was refused', own: true },
+          { by: 'bob', machine: 'desk', heard_at: at(5), failing: false, own: false },
+        ],
+        pushes: [
+          { branch: 'main', sha: sha('1'), at: at(12), state: 'cxt_error', collector: 0, claimed_at: at(13) },
+          { branch: 'main', sha: sha('2'), at: at(11), state: 'no_cxt' },
+          { branch: 'main', sha: sha('3'), at: at(10), state: 'unknown', waiting: [1] },
+          { branch: 'topic', sha: sha('6'), at: at(9), state: 'cxt', collector: 1, claimed_at: at(9) },
+        ],
+      } };
+    }
+    return member(request);
+  });
+  await page.goto('/alice/app?tab=sessions&show=all');
+  const row = (letter: string) => page.locator(`[data-commit="${sha(letter)}"]`);
+  await expect(row('1')).toContainText('No context');
+  await expect(row('1').locator('[data-origin]')).toHaveText('cxt failed');
+  await expect(row('2').locator('[data-origin]')).toHaveText('pushed without cxt');
+  // Two commits that came with one push say the same.
+  await expect(row('3').locator('[data-origin]')).toHaveText('origin not known yet');
+  await expect(row('4').locator('[data-origin]')).toHaveText('origin not known yet');
+  await expect(row('6').locator('[data-origin]')).toHaveText('no agent session');
+  // A commit that came with no push the server saw says nothing more.
+  await expect(row('5')).toContainText('No context');
+  await expect(row('5').locator('[data-origin]')).toHaveCount(0);
+
+  // The member whose cxt failed is told so, with what went wrong.
+  const notice = page.locator('[data-own-collector="laptop"]');
+  await expect(notice).toContainText('cxt on your computer laptop reported that its last run failed.');
+  await expect(notice).toContainText('the upload was refused');
+  await expect(notice).toContainText('cxt segments doctor');
+
+  // The commit itself says it in a sentence.
+  await row('1').click();
+  const failed = page.locator('[data-origin-note="cxt_error"]');
+  await expect(failed).toContainText('alice · laptop');
+  await expect(failed).toContainText('failed on every run since');
+  await expect(failed).toContainText('the upload was refused');
+  await row('2').click();
+  await expect(page.locator('[data-origin-note="no_cxt"]')).toContainText('a computer where cxt does not run');
+  await row('4').click();
+  await expect(page.locator('[data-origin-note="unknown"]')).toContainText('bob · desk');
+  await row('6').click();
+  await expect(page.locator('[data-origin-note="cxt"]')).toContainText('bob · desk');
+  await row('5').click();
+  await expect(page.locator('[data-origin-note]')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

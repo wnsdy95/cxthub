@@ -16,11 +16,14 @@ func TestMigrationCatalogMatchesOnlyReleasedBundle(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	if len(manifest) != 169 {
-		test.Fatal("released source catalog must contain all 169 SQL files", len(manifest))
+	if len(manifest) != 170 {
+		test.Fatal("released source catalog must contain all 170 SQL files", len(manifest))
 	}
 	if err := verifyMigrationCatalog(manifest); err != nil {
 		test.Fatal("complete source catalog does not match the compiled release digest", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:169]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("the bundle without the collector tables was accepted for the current image", err)
 	}
 	if err := verifyMigrationCatalog(manifest[:168]); !errors.Is(err, ErrSchemaMismatch) {
 		test.Fatal("the bundle that still holds the capture tables was accepted for the current image", err)

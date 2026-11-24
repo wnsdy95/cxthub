@@ -28,6 +28,12 @@ type WorktreeListRemote interface {
 	ReportWorktrees(ctx context.Context, repoID, machine string, worktrees []domain.WorktreeRegistration) error
 }
 
+// CollectorReportRemote takes what the collector of this computer says about
+// itself.
+type CollectorReportRemote interface {
+	ReportCollector(ctx context.Context, repoID string, report domain.CollectorReport) error
+}
+
 // CollectorStateStore keeps what the automatic collector last sent for the
 // repository holding cwd. It is a memory, never a source of facts: a lost
 // state only makes the next run send more.

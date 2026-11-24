@@ -102,4 +102,7 @@ type RemotePushStore interface {
 	RecordRemotePushes(ctx context.Context, repo domain.ContentHash, pushes []domain.RemoteBranchPush) error
 	// ListRemotePushes lists the pushes of the named branches, oldest first.
 	ListRemotePushes(ctx context.Context, repo domain.ContentHash, branches []string) ([]domain.RemoteBranchPush, error)
+	// ListRecentRemotePushes lists at most limit pushes of any branch, the
+	// one seen last first.
+	ListRecentRemotePushes(ctx context.Context, repo domain.ContentHash, limit int) ([]domain.RemoteBranchPush, error)
 }
