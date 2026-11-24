@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -103,7 +104,24 @@ func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Re
 	if err != nil {
 		return domain.Repo{}, err
 	}
-	return s.meta.PutRepo(ctx, repo)
+	existing, err := s.meta.GetRepo(ctx, repo.ID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return domain.Repo{}, err
+	}
+	read := err == nil && existing.GitRemoteURL != ""
+	stored, err := s.meta.PutRepo(ctx, repo)
+	if err != nil {
+		return domain.Repo{}, err
+	}
+	// A repository that just got its Git origin was never read. Its first
+	// read is asked for here, so that it starts when this registration is
+	// committed and not at the reader's next look for due repositories.
+	if !read && stored.GitRemoteURL != "" {
+		if err := requestRemoteGitSync(ctx, s.meta, stored.ID, time.Now().UTC()); err != nil {
+			return domain.Repo{}, err
+		}
+	}
+	return stored, nil
 }
 
 // Resolving identity/authorization does not register or infer a new repository.

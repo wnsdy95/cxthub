@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +28,13 @@ type githubWebhookBackend struct {
 	Backend
 	repositories int
 	calls        []githubWebhookPush
+	// pulls are the origins a pull request delivery asked a read for.
+	pulls []string
+}
+
+func (backend *githubWebhookBackend) ObserveRemotePullRequest(_ context.Context, origin string) (int, error) {
+	backend.pulls = append(backend.pulls, origin)
+	return backend.repositories, nil
 }
 
 type githubWebhookPush struct {
@@ -126,15 +135,18 @@ func githubWebhookRequest(t *testing.T, handler http.Handler, secret, event stri
 	return rec
 }
 
-// The plain webhook is told about pushes: a push to a branch is handed on, so
-// that the branch ledger learns it and the remote is read again. A pull
-// request event is not acted on: the push that comes with a merge is.
+// The plain webhook is told about pushes and pull requests. A push to a
+// branch is handed on, so that the branch ledger learns it and the remote is
+// read again. A pull request delivery asks for that read only: a pull request
+// that was opened, closed or retitled moves no branch, so no push tells of it.
 func TestGitHubWebhookSecurityAndPushes(t *testing.T) {
 	const secret = "test-webhook-secret"
 	head := strings.Repeat("a", 40)
 	push := []byte(`{"ref":"refs/heads/topic","before":"` + strings.Repeat("0", 40) + `","after":"` + head + `","forced":false,
 		"repository":{"html_url":"https://github.com/acme/project","clone_url":"https://github.com/acme/project.git"}}`)
-	merged := []byte(`{"action":"closed","number":7,"pull_request":{"merged":true},"repository":{"full_name":"acme/project"}}`)
+	opened := []byte(`{"action":"opened","number":7,"pull_request":{"merged":false,"title":"never read from a delivery"},
+		"repository":{"full_name":"acme/project","html_url":"https://github.com/acme/project","clone_url":"https://github.com/acme/project.git"}}`)
+	unnamed := []byte(`{"action":"closed","number":7,"pull_request":{"merged":true},"repository":{"full_name":"acme/project"}}`)
 
 	t.Run("disabled when secret is unset", func(t *testing.T) {
 		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", "")
@@ -162,7 +174,7 @@ func TestGitHubWebhookSecurityAndPushes(t *testing.T) {
 	for _, event := range []struct {
 		name string
 		body []byte
-	}{{"ping", []byte(`{"zen":"safe"}`)}, {"pull_request", merged}} {
+	}{{"ping", []byte(`{"zen":"safe"}`)}, {"pull_request", unnamed}, {"issues", opened}, {"", opened}} {
 		t.Run("ignores "+event.name, func(t *testing.T) {
 			t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
 			backend := &githubWebhookBackend{}
@@ -171,11 +183,40 @@ func TestGitHubWebhookSecurityAndPushes(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			if rec.Code != http.StatusOK || response["status"] != "ignored" || len(backend.calls) != 0 {
-				t.Fatalf("status = %d, response = %#v, calls = %#v", rec.Code, response, backend.calls)
+			if rec.Code != http.StatusOK || response["status"] != "ignored" || len(backend.calls) != 0 || len(backend.pulls) != 0 {
+				t.Fatalf("status = %d, response = %#v, calls = %#v, pulls = %#v", rec.Code, response, backend.calls, backend.pulls)
 			}
 		})
 	}
+
+	t.Run("a pull request asks for a read of its repository", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{repositories: 2}
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", opened)
+		var response map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		// Only the origin is taken from the delivery, and no push is made of it.
+		if rec.Code != http.StatusOK || response["status"] != "accepted" || response["queued"] != float64(2) ||
+			!reflect.DeepEqual(backend.pulls, []string{"https://github.com/acme/project.git"}) || len(backend.calls) != 0 {
+			t.Fatalf("status = %d, response = %#v, pulls = %#v, calls = %#v", rec.Code, response, backend.pulls, backend.calls)
+		}
+		// The page address stands in when the delivery names no clone address.
+		backend = &githubWebhookBackend{}
+		paged := bytes.Replace(opened, []byte(`,"clone_url":"https://github.com/acme/project.git"`), nil, 1)
+		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", paged); rec.Code != http.StatusOK ||
+			!reflect.DeepEqual(backend.pulls, []string{"https://github.com/acme/project"}) {
+			t.Fatalf("status = %d, pulls = %#v", rec.Code, backend.pulls)
+		}
+		// A body that is no object is refused, and a wrong signature is as for a push.
+		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", []byte(`[]`)); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("a pull request delivery that is no object: status = %d", rec.Code)
+		}
+		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "another secret", "pull_request", opened); rec.Code != http.StatusUnauthorized || len(backend.pulls) != 1 {
+			t.Fatalf("a pull request delivery with a wrong signature: status = %d, pulls = %#v", rec.Code, backend.pulls)
+		}
+	})
 
 	t.Run("ignores a push that is not to a branch", func(t *testing.T) {
 		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
@@ -1094,5 +1135,85 @@ func TestPublicPullerCannotManageRepositoryOrTeamAssets(t *testing.T) {
 	secretsURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/secrets"
 	if code := doJSONAs(t, outsider, "PUT", secretsURL, map[string]any{"fingerprint": "fp"}, nil); code != http.StatusForbidden {
 		t.Fatalf("public puller secrets write code %d, want 403", code)
+	}
+}
+
+// A repository that gets its Git origin was never read from the Git host.
+// Registering it asks for that first read, so that it starts with the
+// registration and not at the reader's next look for due repositories. A
+// registration that changes nothing, which every `cxt setup` sends, asks for
+// nothing.
+func TestRegisteringARepositoryWithAGitOriginAsksForItsFirstRead(t *testing.T) {
+	st := store.NewFSStore(t.TempDir())
+	svc := app.NewService(st, st, st)
+	delivery := NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st))
+	setServiceDocumentEventQueries(t, delivery, svc)
+	ts := httptest.NewServer(delivery.Handler())
+	defer ts.Close()
+	var mu sync.Mutex
+	var told []domain.ContentHash
+	stop, err := st.ListenRemoteGitRequests(func(repo domain.ContentHash) {
+		mu.Lock()
+		defer mu.Unlock()
+		told = append(told, repo)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	asked := func() []domain.ContentHash {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]domain.ContentHash{}, told...)
+	}
+
+	var me struct {
+		Username string `json:"username"`
+	}
+	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != 200 || me.Username == "" {
+		t.Fatalf("me lookup failed (code %d)", code)
+	}
+	slugs := map[string]string{}
+	register := func(name, gitURL string) (domain.ContentHash, int) {
+		t.Helper()
+		if slugs[name] == "" {
+			var repositoryRecord struct {
+				Slug string `json:"slug"`
+			}
+			if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": name}, &repositoryRecord); code != 200 || repositoryRecord.Slug == "" {
+				t.Fatalf("repository %s was not created (code %d)", name, code)
+			}
+			slugs[name] = repositoryRecord.Slug
+		}
+		remoteURL := "http://cxthub.test/" + me.Username + "/" + slugs[name]
+		rid := repoIDForRemoteURLForTest(remoteURL)
+		return rid, doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remoteURL, "default_branch": "main", "git_remote_url": gitURL}, nil)
+	}
+	// A repository without a Git origin has nothing to read.
+	bare, code := register("Bare", "")
+	if code != 200 || len(asked()) != 0 {
+		t.Fatalf("a registration without a Git origin: code %d, asked %v", code, asked())
+	}
+	// It gets its origin: the first read is asked for.
+	if _, code := register("Bare", "https://github.com/acme/bare.git"); code != 200 || !reflect.DeepEqual(asked(), []domain.ContentHash{bare}) {
+		t.Fatalf("the registration that set the Git origin: code %d, asked %v", code, asked())
+	}
+	// A repository registered with its origin at once.
+	app1, code := register("App", "https://github.com/acme/app.git")
+	if code != 200 || !reflect.DeepEqual(asked(), []domain.ContentHash{bare, app1}) {
+		t.Fatalf("a first registration with a Git origin: code %d, asked %v", code, asked())
+	}
+	// The same registration again, in either form of the address, and a
+	// registration that is refused, ask for nothing.
+	for _, gitURL := range []string{"https://github.com/acme/app.git", "git@github.com:acme/app.git"} {
+		if _, code := register("App", gitURL); code != 200 {
+			t.Fatalf("registering %s again: code %d", gitURL, code)
+		}
+	}
+	if _, code := register("App", "https://github.com/evil/other.git"); code != http.StatusConflict {
+		t.Fatalf("a registration with another origin: code %d", code)
+	}
+	if got := asked(); !reflect.DeepEqual(got, []domain.ContentHash{bare, app1}) {
+		t.Fatalf("registrations that changed nothing asked for a read: %v", got)
 	}
 }

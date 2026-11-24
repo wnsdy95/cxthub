@@ -193,6 +193,26 @@ create an App, issue credentials, or run `terraform apply`.
    only where the actor has local organization management authority. Enterprise
    membership does not grant repository access.
 
+## Two ways GitHub tells the server
+
+There are two, and they are not the same thing.
+
+| | Repository webhook | GitHub App (the connections of this document) |
+| --- | --- | --- |
+| Set up | one webhook on one GitHub repository (`scripts/github-webhook.sh`) | one installation on an account or organization |
+| Route | `/api/v1/hooks/github`, secret `CXT_GITHUB_WEBHOOK_SECRET` | `/api/v1/github/webhook`, secret `CXT_GITHUB_APP_WEBHOOK_SECRET` |
+| Tells of | a push to a branch, a change of a pull request | the same, for every repository of the installation |
+| Lets the server read | nothing | the installed repositories, private ones too |
+
+Either one only tells: what the server stores of commits, branches and pull
+requests it reads from GitHub itself. With a repository webhook alone the
+server reads with `CXT_GITHUB_TOKEN` when that is set and without a credential
+when it is not. Without a credential GitHub answers for public repositories
+only and allows 60 requests an hour for each address the server sends from;
+the first read of a repository with a few hundred pull requests needs several
+hundred. The Terraform files of this repository set the webhook secret and no
+`CXT_GITHUB_TOKEN`.
+
 ## Operational behavior and limits
 
 - One installation is linked to one CXTHub owner namespace. Multiple repository

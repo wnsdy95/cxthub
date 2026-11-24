@@ -3339,14 +3339,19 @@ paths:
   /hooks/github:
     post:
       operationId: githubWebhook
-      summary: Receive GitHub webhook (merged PR → context promotion) with HMAC verification
+      summary: Receive the webhook of a GitHub repository with HMAC verification
       description: |
-        On a closed and merged `pull_request`, durably queue the exact head revision for the base
-        branch with a lossless graft. This provides server-side coverage when squash or
-        rebase merges remove the local [git sha] mapping. Repositories are matched by
-        normalized Git origin (GitRemoteURL). Instead of user authentication, the endpoint
-        verifies X-Hub-Signature-256 using HMAC-SHA256 and CXT_GITHUB_WEBHOOK_SECRET. It
-        returns 404 when the secret is unset and the receiver is disabled.
+        A `push` to a branch records in the branch ledger that the branch name is alive or
+        gone, and asks for the repository to be read from GitHub again. A `pull_request`
+        delivery asks for that read only: a pull request that was opened, closed or retitled
+        moves no branch, so no push tells of it. Nothing of a commit or a pull request is
+        taken from a delivery; the read of GitHub is what the server stores. Any other event
+        is answered as ignored. Repositories are matched by normalized Git origin
+        (GitRemoteURL). Instead of user authentication, the endpoint verifies
+        X-Hub-Signature-256 using HMAC-SHA256 and CXT_GITHUB_WEBHOOK_SECRET. It returns 404
+        when the secret is unset and the receiver is disabled. The webhook gives the server
+        no credential to read with: a private repository also needs a GitHub App
+        connection or CXT_GITHUB_TOKEN.
       tags: [actions]
       responses:
         "200": { description: "accepted with queued repository count (including duplicate deliveries), or ignored" }

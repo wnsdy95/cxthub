@@ -407,3 +407,34 @@ func TestRemoteGitLookForDueRepositoriesComesBackLikeAnAnswer(t *testing.T) {
 		t.Fatalf("after a due pass with a request during it the reader was told of %v", told)
 	}
 }
+
+// A pull request the Git host delivered moves no branch. It asks for a read
+// of every repository of its origin, which the reader is told of like a push.
+func TestRemoteGitReaderIsToldOfADeliveredPullRequest(t *testing.T) {
+	fixture := remoteGitAskedFixture(t, 10*time.Minute)
+	for _, origin := range []string{remoteGitTestOrigin, remoteGitTestOrigin + ".git", "git@github.com:example/project.git"} {
+		before := fixture.state(t)
+		if n, err := fixture.service.ObserveRemotePullRequest(systemTestContext(), origin); err != nil || n != 1 {
+			t.Fatalf("a pull request of %s: %d repositories, %v", origin, n, err)
+		}
+		state := fixture.state(t)
+		if told := fixture.told(); !reflect.DeepEqual(told, []domain.ContentHash{fixture.repo}) || state.RequestedAt == nil || (before.RequestedAt != nil && !state.RequestedAt.After(*before.RequestedAt)) {
+			t.Fatalf("a pull request of %s: the reader was told of %v; state %+v", origin, told, state)
+		}
+	}
+	// Another origin, and none, are no repository of this server.
+	asked := fixture.state(t)
+	for _, origin := range []string{"https://github.com/example/another", ""} {
+		if n, err := fixture.service.ObserveRemotePullRequest(systemTestContext(), origin); err != nil || n != 0 {
+			t.Fatalf("a pull request of %q: %d repositories, %v", origin, n, err)
+		}
+	}
+	if told := fixture.told(); len(told) != 0 || !reflect.DeepEqual(fixture.state(t), asked) {
+		t.Fatalf("a pull request of another origin: the reader was told of %v", told)
+	}
+	// A repository whose origin changed since the list was read is left alone.
+	fixture.setOrigin("https://github.com/example/moved")
+	if n, err := fixture.service.ObserveRemotePullRequest(systemTestContext(), remoteGitTestOrigin); err != nil || n != 0 || len(fixture.told()) != 0 {
+		t.Fatalf("a pull request of an origin the repository no longer has: %d repositories, %v", n, err)
+	}
+}

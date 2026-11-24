@@ -146,6 +146,10 @@ func TestViewRevisionMovesWithEverythingTheSessionsTabShows(t *testing.T) {
 
 	// What changes nothing a page shows leaves the mark.
 	stays("a request for a read", func() error { return service.RequestRemoteGitRefresh(alice, repo) })
+	stays("a pull request the Git host delivered", func() error {
+		_, err := service.ObserveRemotePullRequest(systemTestContext(), remoteGitTestOrigin)
+		return err
+	})
 	stays("reading the lists", func() error {
 		if _, err := service.ListAnchoredSessions(viewer, repo); err != nil {
 			return err

@@ -209,7 +209,7 @@ func (s *Server) Handler() http.Handler {
 	// Push pending (unsync) pointer: Key = (authenticated user, branch) — write/delete only by owner.
 	// {name...}: Branch names can include slashes like in git (feature/login, etc.) — full matching of the rest.
 
-	// GitHub webhook reception (PR merged → context promotion). HMAC signature verification instead of authentication — inactive (404) if secret (CXT_GITHUB_WEBHOOK_SECRET) is not set.
+	// GitHub webhook reception (a push or a pull request asks for a read). HMAC signature verification instead of authentication — inactive (404) if secret (CXT_GITHUB_WEBHOOK_SECRET) is not set.
 	mux.HandleFunc("POST /api/v1/hooks/github", s.githubWebhook)
 
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/negotiate", s.guard(domain.RoleMember, s.pushNegotiate))
@@ -589,7 +589,9 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
-// githubWebhook converts a merged GitHub PR event into context promotion (audit finding #14).
+// githubWebhook receives the webhook of one GitHub repository: a push to a
+// branch and a change of a pull request each ask for the repository to be
+// read again; any other event is ignored.
 // Signature (X-Hub-Signature-256, HMAC-SHA256) verification — secret is server environment variable
 // CXT_GITHUB_WEBHOOK_SECRET (deployment setting). If unset, 404 (feature disabled).
 func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
@@ -613,8 +615,12 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, _ := s.documentIdentityCapabilities()
 	r = r.WithContext(outbound.WithDocumentIdentityCompatibility(inbound.WithDocumentIdentities(r.Context(), ids), ids, ids))
-	if r.Header.Get("X-GitHub-Event") == "push" {
+	switch r.Header.Get("X-GitHub-Event") {
+	case "push":
 		s.githubPush(w, r, body)
+		return
+	case "pull_request":
+		s.githubPullRequest(w, r, body)
 		return
 	}
 	s.respond(w, map[string]string{"status": "ignored", "event": r.Header.Get("X-GitHub-Event")}, nil)
