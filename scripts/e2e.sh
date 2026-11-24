@@ -460,8 +460,10 @@ print("cxthub branch summary" in text, sys.argv[1][:12] in text)' "$SEGSHA"
 }
 expect "a prompt hook gives another session the summary along its branch" "$(hooksummary e2e-reader)" "True True"
 expect "the same session is not given it a second time" "$(hooksummary e2e-reader)" "False False"
+# A collector a hook started holds the collector lock within a moment and until it has run: wait for the lock to be
+# free before asking whether a run happened, so that a run still going is not taken for none.
 sleep 1
-expect "a prompt hook woke no collector" "$(segran) $(segquiet && echo quiet)" "did not run quiet"
+expect "a prompt hook woke no collector" "$(segquiet && echo quiet) $(segran)" "quiet did not run"
 # The end of a turn wakes it: a commit and a push happen in the middle of a turn, and the rest is recorded afterwards.
 segquiet; segrewind
 printf '{"session_id":"e2e-reader","cwd":"%s"}' "$PWD" | cxt hook --provider claude --event Stop 2>"$TMP/hook-stop.err"
