@@ -40,6 +40,10 @@ type eventPrefixLocalScope struct {
 	calls         []eventPrefixCall
 	before        func(context.Context, eventPrefixCall) error
 	afterError    error
+	// authorized counts how often a read asked whether its caller may read;
+	// refusal, when set, is the answer it gets.
+	authorized int
+	refusal    error
 }
 
 func (scope *eventPrefixLocalScope) record(ctx context.Context, stage string, repo, hash domain.ContentHash) error {
@@ -70,6 +74,10 @@ func (scope *eventPrefixLocalScope) port(ctx context.Context, stage string, repo
 }
 
 func (scope *eventPrefixLocalScope) AuthorizeDocumentRead(ctx context.Context, _ domain.ContentHash) (context.Context, error) {
+	scope.authorized++
+	if scope.refusal != nil {
+		return ctx, scope.refusal
+	}
 	return ctx, ctx.Err()
 }
 
@@ -92,10 +100,20 @@ func (scope *eventPrefixLocalScope) WithinDocumentRead(ctx context.Context, repo
 	return scope.afterError
 }
 
+// WithinDocumentSnapshot is entered inside a document read, or on its own by
+// the paged reads, which are admitted before they come here. On its own it is
+// the read scope of the document ports, as in the server's scope.
 func (scope *eventPrefixLocalScope) WithinDocumentSnapshot(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
-	scope.requireBound(ctx, repo)
+	if scope.active {
+		scope.requireBound(ctx, repo)
+	}
 	if err := scope.record(ctx, "snapshot", repo, ""); err != nil {
 		return err
+	}
+	if !scope.active {
+		scope.repo, scope.active = repo, true
+		defer func() { scope.active = false }()
+		ctx = context.WithValue(ctx, eventPrefixScopeKey{}, scope)
 	}
 	scope.snapshotDepth++
 	defer func() { scope.snapshotDepth-- }()

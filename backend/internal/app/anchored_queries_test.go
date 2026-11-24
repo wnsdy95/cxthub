@@ -178,3 +178,65 @@ func TestConversationIsReadInPiecesWithinWhatIsOpen(t *testing.T) {
 		t.Fatalf("without a metadata store: %v", err)
 	}
 }
+
+// The page read and the record-part read of the session routes, through the
+// service and the store as they are composed in the server: what was stored is
+// what is read.
+func TestStoredConversationIsPagedThroughTheService(t *testing.T) {
+	fixture := anchoredPublicationFixture(t)
+	texts := []string{"Plan the parser.", "The parser is committed.", "\ud55c\uae00 \ub300\ud654 🌿", "Still here.", "Leftovers."}
+	hash := anchoredSearchDoc(t, fixture, texts...)
+	ctx := systemTestContext()
+	page, err := fixture.service.ReadDocViewEvents(ctx, fixture.repo, hash, 0, 20, "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Hash != hash || page.Total != len(texts) || page.Offset != 0 || page.Next != -1 || len(page.Events) != len(texts) {
+		t.Fatalf("the page: %+v", page)
+	}
+	for index, event := range page.Events {
+		if event.Index != index || event.Deferred || len(event.Event.Blocks) != 1 || event.Event.Blocks[0].Text != texts[index] || event.Event.Seq != index {
+			t.Fatalf("event %d: %+v", index, event)
+		}
+	}
+	// Two at a time, to the end.
+	var walked []string
+	for offset := 0; offset != -1; {
+		page, err := fixture.service.ReadDocViewEvents(ctx, fixture.repo, hash, offset, 2, "all")
+		if err != nil || len(page.Events) == 0 || len(page.Events) > 2 {
+			t.Fatalf("page at %d: %+v %v", offset, page, err)
+		}
+		for _, event := range page.Events {
+			walked = append(walked, event.Event.Blocks[0].Text)
+		}
+		offset = page.Next
+	}
+	if !reflect.DeepEqual(walked, texts) {
+		t.Fatalf("walked %q", walked)
+	}
+	// One record in parts of a few bytes: the parts add up to the record.
+	whole, err := fixture.service.ReadDocViewFragment(ctx, fixture.repo, hash, 2, 0, 64<<10)
+	if err != nil || whole.Next != -1 || whole.Index != 2 {
+		t.Fatalf("the record whole: %+v %v", whole, err)
+	}
+	var record domain.CIREvent
+	if err := json.Unmarshal([]byte(whole.JSON), &record); err != nil || record.Blocks[0].Text != texts[2] {
+		t.Fatalf("the record does not read back: %q %v", whole.JSON, err)
+	}
+	var parts strings.Builder
+	for offset := 0; offset != -1; {
+		part, err := fixture.service.ReadDocViewFragment(ctx, fixture.repo, hash, 2, offset, 5)
+		if err != nil || part.Total != len(whole.JSON) {
+			t.Fatalf("part at %d: %+v %v", offset, part, err)
+		}
+		parts.WriteString(part.JSON)
+		offset = part.Next
+	}
+	if parts.String() != whole.JSON {
+		t.Fatalf("the parts do not add up: %q", parts.String())
+	}
+	// A document the repository does not hold.
+	if _, err := fixture.service.ReadDocViewEvents(ctx, fixture.repo, domain.HashContent([]byte("no such document")), 0, 20, "all"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a document that is not there: %v", err)
+	}
+}
