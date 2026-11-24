@@ -393,3 +393,130 @@ func TestFSRemoteGitPersistence(t *testing.T) {
 		t.Fatalf("the state beside it: %v", err)
 	}
 }
+
+// checkRemoteGitRequestsAreHeard is what both stores promise a reader that
+// listens: from when listening began to when it was stopped, every request
+// for a read that is stored is told, once to each listener.
+func checkRemoteGitRequestsAreHeard(t *testing.T, ctx context.Context, storage outbound.RemoteGitStore, repo domain.ContentHash) {
+	t.Helper()
+	if stop, err := storage.ListenRemoteGitRequests(nil); !errors.Is(err, domain.ErrValidation) || stop != nil {
+		t.Fatalf("listening with nothing to tell: %v", err)
+	}
+	heard := make(chan string, 32)
+	listen := func(name string) func() {
+		t.Helper()
+		// Another test's repository can be announced to the same listeners.
+		stop, err := storage.ListenRemoteGitRequests(func(asked domain.ContentHash) {
+			if asked == repo {
+				heard <- name
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stop
+	}
+	hear := func(what string, listeners ...string) {
+		t.Helper()
+		told := map[string]int{}
+		for range listeners {
+			select {
+			case name := <-heard:
+				told[name]++
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s: heard by %v, expected %v", what, told, listeners)
+			}
+		}
+		select {
+		case name := <-heard:
+			t.Fatalf("%s: told once more, to %s", what, name)
+		case <-time.After(200 * time.Millisecond):
+		}
+		for _, name := range listeners {
+			if told[name] != 1 {
+				t.Fatalf("%s: heard by %v, expected each of %v once", what, told, listeners)
+			}
+		}
+	}
+	stopFirst, stopSecond := listen("first"), listen("second")
+	// A repository never read has no state to change. The request is told
+	// all the same: its first pass is due and can start.
+	if err := storage.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(1)); err != nil {
+		t.Fatal(err)
+	}
+	hear("a request for a repository never read", "first", "second")
+	if _, err := storage.GetRemoteGitState(ctx, repo); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a request made a state: %v", err)
+	}
+	// A repository that was read.
+	claimed, err := storage.ClaimRemoteGitSync(ctx, repo, remoteGitStoreOrigin, remoteGitStoreTime(10), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.FinishRemoteGitSync(ctx, claimed.Ended(remoteGitStoreTime(10), false, false)); err != nil {
+		t.Fatal(err)
+	}
+	hear("a claim and its end")
+	if err := storage.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(100)); err != nil {
+		t.Fatal(err)
+	}
+	hear("a request for a repository that was read", "first", "second")
+	if state, err := storage.GetRemoteGitState(ctx, repo); err != nil || state.RequestedAt == nil || !state.RequestedAt.Equal(remoteGitStoreTime(100)) {
+		t.Fatalf("the state after the request: %+v %v", state, err)
+	}
+	// A listener that stopped is told nothing more; the other still is.
+	stopFirst()
+	if err := storage.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(200)); err != nil {
+		t.Fatal(err)
+	}
+	hear("a request after one listener stopped", "second")
+	stopSecond()
+	if err := storage.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(300)); err != nil {
+		t.Fatal(err)
+	}
+	hear("a request after every listener stopped")
+}
+
+func TestFSRemoteGitRequestsAreHeard(t *testing.T) {
+	directory := t.TempDir()
+	storage := NewFSStore(directory)
+	repo := domain.HashContent([]byte(t.Name()))
+	ctx := context.Background()
+	checkRemoteGitRequestsAreHeard(t, ctx, storage, repo)
+
+	// The development store is told by the request itself, in this process:
+	// a store opened on the same directory hears it, one on another does not,
+	// and the listener is called when the request is already stored.
+	var here, elsewhere []domain.RemoteGitState
+	stopHere, err := NewFSStore(directory).ListenRemoteGitRequests(func(asked domain.ContentHash) {
+		state, err := storage.GetRemoteGitState(ctx, asked)
+		if err != nil {
+			t.Errorf("the state when the listener is told: %v", err)
+		}
+		here = append(here, state)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopHere()
+	stopElsewhere, err := NewFSStore(t.TempDir()).ListenRemoteGitRequests(func(asked domain.ContentHash) {
+		elsewhere = append(elsewhere, domain.RemoteGitState{RepoID: asked})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopElsewhere()
+	if err := storage.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(400)); err != nil {
+		t.Fatal(err)
+	}
+	if len(here) != 1 || here[0].RequestedAt == nil || !here[0].RequestedAt.Equal(remoteGitStoreTime(400)) || len(elsewhere) != 0 {
+		t.Fatalf("heard on the same directory %+v, on another %+v", here, elsewhere)
+	}
+	// A request the store refuses is told to nobody.
+	if err := storage.RequestRemoteGitSync(ctx, "not a repository", remoteGitStoreTime(500)); err == nil {
+		t.Fatal("a request for what is no repository was stored")
+	}
+	if len(here) != 1 {
+		t.Fatalf("a refused request was told: %+v", here)
+	}
+}

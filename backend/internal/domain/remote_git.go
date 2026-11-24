@@ -43,8 +43,11 @@ const (
 	// RemoteGitSyncRetry is that time after a pass that failed.
 	RemoteGitSyncRetry = 2 * time.Minute
 	// RemoteGitRequestSpacing is the least time from the start of a pass to a
-	// pass somebody asked for.
-	RemoteGitRequestSpacing = 30 * time.Second
+	// pass somebody asked for. A read that is asked for runs at once, so this
+	// is what a second request waits when it comes right after the first: a
+	// pull request opened seconds after its push. It bounds what a repository
+	// that is pushed to without pause costs: six passes a minute.
+	RemoteGitRequestSpacing = 10 * time.Second
 	// RemoteGitLookSpacing is the time from the start of a pass after which
 	// a look at what was read asks for another one. A push from a computer
 	// that tells the server nothing is read then, when somebody looks, and

@@ -340,7 +340,8 @@ viewers, and in a public repository also a visitor who is not signed in:
 
 The server decides this from its own read of the Git hosting provider, never
 from what a CLI says. The time of a push is the time the server saw the branch
-changed, which can be a few minutes after the push itself, and the first read
+changed: seconds after the push where the server was told of it, by the host
+or by the collector, and later where nothing told it. The first read
 of a repository says nothing about when its branches were pushed. What was
 opened stays open: a forced push that removes the commit, or cutting the
 session another way, takes nothing back.

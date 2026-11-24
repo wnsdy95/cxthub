@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -139,7 +140,8 @@ var _ inbound.RemoteGit = (*Service)(nil)
 
 // requestRemoteGitSync asks for a fresh read of the provider inside the
 // transaction that stored a push observation, so that what was pushed is read
-// soon. A store without the cache asks for nothing.
+// at once: the store tells the readers that listen when the transaction is
+// committed. A store without the cache asks for nothing.
 func requestRemoteGitSync(tx context.Context, meta any, repo domain.ContentHash, at time.Time) error {
 	store, ok := meta.(outbound.RemoteGitStore)
 	if !ok {
@@ -162,7 +164,7 @@ type RemoteGitSyncConfig struct {
 }
 
 // RemoteGitSync reads repositories' Git hosting providers into the server's
-// own store. It owns no context ref and never moves the repository revision.
+// own store. It owns no context ref.
 type RemoteGitSync struct {
 	work   *repositoryWork
 	store  outbound.RemoteGitStore
@@ -170,7 +172,24 @@ type RemoteGitSync struct {
 	// budget is the number of provider requests one pass makes.
 	budget int
 	now    func() time.Time
+	// asked holds the repositories whose read was asked for, as the store
+	// tells of them. They are read at once, not at the next look for
+	// repositories that are due.
+	asked chan domain.ContentHash
+	// later runs a function after a time; a test puts its own clock here.
+	later func(time.Duration, func())
 }
+
+const (
+	// remoteGitAskedQueue is how many requests wait to be answered. One that
+	// finds the queue full is not lost: its repository is due, and the look
+	// for due repositories reads it.
+	remoteGitAskedQueue = 256
+	// remoteGitAnswerers is how many reads that were asked for run at a
+	// time in one process, so that a long first read of one repository does
+	// not hold up the others.
+	remoteGitAnswerers = 4
+)
 
 func NewRemoteGitSync(config RemoteGitSyncConfig) (*RemoteGitSync, error) {
 	store, _ := config.Metadata.(outbound.RemoteGitStore)
@@ -179,7 +198,41 @@ func NewRemoteGitSync(config RemoteGitSyncConfig) (*RemoteGitSync, error) {
 		return nil, domain.ErrValidation
 	}
 	work := newRepositoryWork(config.Metadata, config.Repositories, ReadDocumentIdentities(config.Metadata, config.Blobs))
-	return &RemoteGitSync{work: work, store: store, reader: config.Reader, budget: remoteGitPassBudget, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &RemoteGitSync{work: work, store: store, reader: config.Reader, budget: remoteGitPassBudget, now: func() time.Time { return time.Now().UTC() },
+		asked: make(chan domain.ContentHash, remoteGitAskedQueue), later: func(wait time.Duration, run func()) { time.AfterFunc(wait, run) }}, nil
+}
+
+// Ask says that a read of the repository was asked for. It never waits: the
+// read runs in Run.
+func (worker *RemoteGitSync) Ask(repo domain.ContentHash) {
+	if worker == nil {
+		return
+	}
+	select {
+	case worker.asked <- repo:
+	default:
+	}
+}
+
+// answer runs the pass of a repository and then looks when its next one is
+// due. A request that came less than the spacing of requests after a pass
+// began, or while one ran, is due within that spacing: the answer comes back
+// for it then, so that it does not wait for the next look for due
+// repositories. A pass that failed is due later than that and is left to
+// that look.
+func (worker *RemoteGitSync) answer(ctx context.Context, repo domain.ContentHash) {
+	ran := worker.SyncRemoteGit(ctx, repo) == nil
+	state, err := worker.store.GetRemoteGitState(worker.workerContext(ctx), repo)
+	if err != nil {
+		return
+	}
+	switch wait := state.NextAt.Sub(worker.now()); {
+	case wait > 0 && wait <= domain.RemoteGitRequestSpacing:
+		worker.later(wait, func() { worker.Ask(repo) })
+	case wait <= 0 && ran:
+		// A request came while this pass ran, after the spacing: it is due now.
+		worker.Ask(repo)
+	}
 }
 
 func (worker *RemoteGitSync) workerContext(ctx context.Context) context.Context {
@@ -393,8 +446,12 @@ func (pass *remoteGitPass) branches(ctx context.Context) ([]string, error) {
 var errRemoteGitUnreadable = errors.New("the provider does not list the commit")
 
 // walk reads the commits that lead to sha, a page at a time, and stores each
-// page. It stops when the provider has no more, when every commit of a page
-// was stored before the page was, or when the budget is gone.
+// page. It stops when the provider has no more, when the budget is gone, or
+// when a page held a commit that was stored before: the walk has then come to
+// history the store holds, and the page after it would mostly repeat that.
+// What may still be missing behind such a page, a side of a merge that the
+// provider lists further down, is named as a parent by a stored commit, and
+// the frontier reads from there.
 func (pass *remoteGitPass) walk(ctx context.Context, sha string) error {
 	for page := 1; ; page++ {
 		if !pass.spend() {
@@ -412,7 +469,7 @@ func (pass *remoteGitPass) walk(ctx context.Context, sha string) error {
 		if err != nil {
 			return err
 		}
-		if added == 0 || !more {
+		if added < len(commits) || !more {
 			return nil
 		}
 	}
@@ -620,17 +677,39 @@ func (worker *RemoteGitSync) Process(ctx context.Context) error {
 			continue
 		}
 		// A pass that failed was logged with its class and has its retry time.
-		_ = worker.SyncRemoteGit(ctx, repo.ID)
+		worker.answer(ctx, repo.ID)
 	}
 	return nil
 }
 
 // Run reads the providers of the repositories whose pass is due until ctx
-// ends.
+// ends. It listens to the store, which tells of every request for a read
+// that was committed, in this process or another, and reads those at once.
+// Every remoteGitTick it looks for all repositories that are due, which finds
+// a request the store could not tell of, a pass to try again and the pass
+// nobody asked for.
 func (worker *RemoteGitSync) Run(ctx context.Context) {
+	answering := worker.answerAsked(ctx)
+	defer answering.Wait()
+	var stop func()
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
 	ticker := time.NewTicker(remoteGitTick)
 	defer ticker.Stop()
 	for {
+		// Listening begins before the look, so that nothing asked for while
+		// the look runs is missed; when it could not begin it is tried again
+		// at the next look.
+		if stop == nil {
+			listening, err := worker.store.ListenRemoteGitRequests(worker.Ask)
+			if err != nil {
+				log.Printf("Remote Git worker: requests are not heard: class=%s", gitObservationFailureClass(err))
+			}
+			stop = listening
+		}
 		if err := worker.Process(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Remote Git worker: class=%s", gitObservationFailureClass(err))
 		}
@@ -640,4 +719,23 @@ func (worker *RemoteGitSync) Run(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (worker *RemoteGitSync) answerAsked(ctx context.Context) *sync.WaitGroup {
+	var answering sync.WaitGroup
+	for range remoteGitAnswerers {
+		answering.Add(1)
+		go func() {
+			defer answering.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case repo := <-worker.asked:
+					worker.answer(ctx, repo)
+				}
+			}
+		}()
+	}
+	return &answering
 }

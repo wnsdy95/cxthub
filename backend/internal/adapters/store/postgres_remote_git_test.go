@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -152,5 +153,130 @@ func TestPGRemoteGitClaimFollowsItsTransaction(t *testing.T) {
 	// The claim is free again, so the other origin can still start over.
 	if _, err := st.ClaimRemoteGitSync(ctx, repo, remoteGitStoreOrigin+"-moved", remoteGitStoreTime(11), time.Minute); err != nil {
 		t.Fatalf("the claim after the failed transaction: %v", err)
+	}
+}
+
+func TestPGRemoteGitRequestsAreHeard(t *testing.T) {
+	st, ctx, repo := sessionArchivePG(t)
+	checkRemoteGitRequestsAreHeard(t, ctx, st, repo)
+
+	heard := make(chan domain.ContentHash, 16)
+	stop, err := st.ListenRemoteGitRequests(func(asked domain.ContentHash) {
+		if asked == repo {
+			heard <- asked
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	silence := func(what string) {
+		t.Helper()
+		select {
+		case <-heard:
+			t.Fatalf("%s was heard", what)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	// The database announces a request when its transaction is committed:
+	// not while the transaction is open, and never when it is given up.
+	abort := errors.New("abort the transaction")
+	if err := st.WithinRepository(ctx, repo, func(tx context.Context) error {
+		if err := st.RequestRemoteGitSync(tx, repo, remoteGitStoreTime(600)); err != nil {
+			return err
+		}
+		silence("a request in an open transaction")
+		return abort
+	}); !errors.Is(err, abort) {
+		t.Fatalf("the transaction: %v", err)
+	}
+	silence("a request whose transaction was given up")
+	if err := st.WithinRepository(ctx, repo, func(tx context.Context) error {
+		if err := st.RequestRemoteGitSync(tx, repo, remoteGitStoreTime(700)); err != nil {
+			return err
+		}
+		silence("a request in an open transaction")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-heard:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a request whose transaction was committed was not heard")
+	}
+	// What is announced on the channel and names no repository is not passed on.
+	var unnamed []domain.ContentHash
+	stopUnnamed, err := st.ListenRemoteGitRequests(func(asked domain.ContentHash) {
+		if domain.ValidateContentHash(asked) != nil {
+			unnamed = append(unnamed, asked)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []string{"", "not a repository", "sha256:short"} {
+		if _, err := st.pool.Exec(ctx, `SELECT pg_notify($1, $2)`, remoteGitRequestChannel, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The request after them is heard, so they were delivered before it.
+	if err := st.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(750)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-heard:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request after the unnamed announcements was not heard")
+	}
+	stopUnnamed()
+	if len(unnamed) != 0 {
+		t.Fatalf("announcements that name no repository were passed on: %q", unnamed)
+	}
+	// A store on another connection pool, another process in effect, hears
+	// what this one stores.
+	other, err := NewPostgresStore(ctx, os.Getenv("CXT_TEST_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(800)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-heard:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a request another process stored was not heard")
+	}
+
+	// The connection that listens is lost: the store opens another after its
+	// pause and hears again. What was asked in between is not told later.
+	pause := remoteGitListenRetry
+	remoteGitListenRetry = 50 * time.Millisecond
+	defer func() { remoteGitListenRetry = pause }()
+	var ended int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+ WHERE datname=current_database() AND pid<>pg_backend_pid() AND query='LISTEN `+remoteGitRequestChannel+`') ended`).Scan(&ended); err != nil || ended == 0 {
+		t.Fatalf("the listening connections were not ended: %d %v", ended, err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for again := false; !again; {
+		if time.Now().After(deadline) {
+			t.Fatal("after its connection was lost the store did not hear again")
+		}
+		if err := st.RequestRemoteGitSync(ctx, repo, remoteGitStoreTime(900)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-heard:
+			again = true
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	// Stopping ends the connection that listens, and stop returns.
+	stop()
+	var listening int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND query='LISTEN `+remoteGitRequestChannel+`'`).Scan(&listening); err != nil || listening != 0 {
+		t.Fatalf("%d connections still listen after stop (%v)", listening, err)
 	}
 }

@@ -77,8 +77,20 @@ A GitHub push delivery records which branch name is alive or gone in the
 branch ledger and asks for a read of the remote. A pull-request delivery asks
 for that read, and so do a member's cxt after a push or a fetch and a look at
 the Sessions tab whose last read started five minutes ago or more. Applying a
-delivery reads nothing from GitHub; the remote Git worker does the reading,
-when it is asked and otherwise every six hours.
+delivery reads nothing from GitHub; the remote Git reader does the reading. A
+read that is asked for runs at once: the store tells the reader of every
+request that is committed. On PostgreSQL the database does the telling
+(`NOTIFY` in the transaction of the request, `LISTEN` on a connection the
+reader keeps for it), so the reader hears of a request whichever process
+stored it, and no process runs background work that is not its own. A claim
+in the store keeps two readers from reading one repository at a time. Two
+reads of a repository start at least ten seconds apart. Every thirty seconds
+the reader also looks for every repository that is due, which finds what it
+did not hear (its listening connection was down), a read to try again, and
+the read nobody asked for, every six hours. The listening connection is one
+more than the pool holds, for each process that runs the reader. A connection
+pooler that hands a connection out for one transaction at a time passes no
+notification on: behind one, the reader hears nothing and reads at its look.
 
 ## Ownership
 

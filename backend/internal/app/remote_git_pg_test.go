@@ -118,7 +118,7 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err = storage.GetRemoteGitState(ctx, repo)
-	if err != nil || state.RequestedAt == nil || !state.NextAt.Equal(clock.Add(30*time.Second)) {
+	if err != nil || state.RequestedAt == nil || !state.NextAt.Equal(clock.Add(domain.RemoteGitRequestSpacing)) {
 		t.Fatalf("state after a request: %+v %v", state, err)
 	}
 	requested := *state.RequestedAt
@@ -131,7 +131,7 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 	if after, err := storage.RepositoryRevision(ctx, repo); err != nil || after.Graph != before.Graph {
 		t.Fatalf("a request moved the graph revision from %+v to %+v (%v)", before, after, err)
 	}
-	clock = clock.Add(30 * time.Second)
+	clock = clock.Add(domain.RemoteGitRequestSpacing)
 	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil || !reflect.DeepEqual(provider.requests, []string{"default", "heads:1", "heads:2", "pulls:1"}) {
 		t.Fatalf("the pass that was asked for: %v %v", provider.requests, err)
 	}
@@ -202,4 +202,150 @@ func TestPGRemoteGitLookAsksForARead(t *testing.T) {
 	if state, err := storage.GetRemoteGitState(ctx, repo); err != nil || !reflect.DeepEqual(state, finished) {
 		t.Fatalf("a look right after a pass changed the state:\n got %+v\nwant %+v (%v)", state, finished, err)
 	}
+}
+
+// On PostgreSQL a request for a read is announced by the database itself when
+// the transaction that stored it is committed, to every connection that
+// listens: the reader hears of it in whichever process it runs, and what it
+// then reads through its own connection already holds the request.
+func TestPGRemoteGitRequestsAreHeardWhenTheyAreCommitted(t *testing.T) {
+	service, storage, repo := remoteGitPG(t)
+	ctx := systemTestContext()
+	provider := newRemoteGitTestProvider(100)
+	provider.heads["main"] = provider.chain(2, "")
+	worker, err := NewRemoteGitSync(RemoteGitSyncConfig{Metadata: storage, Blobs: storage, Repositories: storage, Reader: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	worker.now = func() time.Time { return clock }
+	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := storage.GetRepo(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heard := make(chan domain.RemoteGitState, 16)
+	stop, err := storage.ListenRemoteGitRequests(func(asked domain.ContentHash) {
+		// Other tests' repositories are announced on the same channel.
+		if asked != repo {
+			return
+		}
+		state, err := storage.GetRemoteGitState(ctx, asked)
+		if err != nil {
+			t.Errorf("the state of a repository that was announced: %v", err)
+		}
+		heard <- state
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hear := func(what string) domain.RemoteGitState {
+		t.Helper()
+		select {
+		case state := <-heard:
+			return state
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s was not heard", what)
+			return domain.RemoteGitState{}
+		}
+	}
+	silence := func(what string) {
+		t.Helper()
+		select {
+		case state := <-heard:
+			t.Fatalf("%s was heard: %+v", what, state)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	silence("nothing")
+	last := time.Time{}
+	for _, request := range []struct {
+		name string
+		ask  func() error
+	}{
+		{"a member's request", func() error { return service.RequestRemoteGitRefresh(ctx, repo) }},
+		{"a push the host delivered", func() error {
+			_, err := service.ObserveRemotePush(ctx, stored.GitRemoteURL, "refs/heads/main", "", strings.Repeat("1", 40), false, "heard-when-committed")
+			return err
+		}},
+		{"a look at an old read", func() error {
+			// The requests before made a pass due; the look asks only when
+			// none is, so the state is put back to that of the pass alone.
+			state := mustRemoteGitState(t, storage, repo)
+			state.RequestedAt = nil
+			if err := storage.FinishRemoteGitSync(ctx, state.Ended(clock, false, false)); err != nil {
+				return err
+			}
+			_, err := service.ReadRemoteGit(ctx, repo, domain.RemoteCommitCursor{}, 2)
+			return err
+		}},
+	} {
+		if err := request.ask(); err != nil {
+			t.Fatalf("%s: %v", request.name, err)
+		}
+		state := hear(request.name)
+		if state.RequestedAt == nil || state.RequestedAt.Before(last) || state.RequestedAt.Equal(last) {
+			t.Fatalf("%s was heard before its request could be read: %+v", request.name, state)
+		}
+		last = *state.RequestedAt
+		silence("a second announcement of " + request.name)
+	}
+	// A request whose transaction is not committed is announced to nobody.
+	if err := storage.WithinRepository(ctx, repo, func(tx context.Context) error {
+		if err := storage.RequestRemoteGitSync(tx, repo, time.Now().UTC()); err != nil {
+			return err
+		}
+		return errors.New("the transaction is given up")
+	}); err == nil {
+		t.Fatal("the transaction was committed")
+	}
+	silence("a request that was rolled back")
+	// After stop nothing is told, and stop returns.
+	stop()
+	if err := service.RequestRemoteGitRefresh(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	silence("a request after listening stopped")
+	// The reader's own loop listens the same way: told of a request, it reads.
+	read := make(chan struct{}, 4)
+	provider.before = func(request string) {
+		if request == "pulls:1" {
+			read <- struct{}{}
+		}
+	}
+	clock = time.Now().UTC().Truncate(time.Second).Add(time.Second)
+	running, cancel := context.WithCancel(context.Background())
+	ended := make(chan struct{})
+	go func() { defer close(ended); worker.Run(running) }()
+	select {
+	case <-read:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop did not read the repository that was due when it started")
+	}
+	clock = clock.Add(domain.RemoteGitRequestSpacing)
+	if err := service.RequestRemoteGitRefresh(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-read:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop did not read when a request was committed")
+	}
+	cancel()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop went on after its context ended")
+	}
+}
+
+func mustRemoteGitState(t *testing.T, storage *store.PostgresStore, repo domain.ContentHash) domain.RemoteGitState {
+	t.Helper()
+	state, err := storage.GetRemoteGitState(systemTestContext(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
 }

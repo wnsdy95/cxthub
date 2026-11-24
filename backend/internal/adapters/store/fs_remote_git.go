@@ -25,6 +25,49 @@ func (s *FSStore) remoteGitLock(repo domain.ContentHash) *sync.Mutex {
 	return lock.(*sync.Mutex)
 }
 
+// fsRemoteGitListeners holds, for each data directory, what listens for
+// requests for a read. The development store is one process, so the request
+// itself calls its listeners.
+var fsRemoteGitListeners = struct {
+	sync.Mutex
+	next  int
+	byDir map[string]map[int]func(domain.ContentHash)
+}{byDir: map[string]map[int]func(domain.ContentHash){}}
+
+func (s *FSStore) ListenRemoteGitRequests(asked func(domain.ContentHash)) (func(), error) {
+	if asked == nil {
+		return nil, domain.ErrValidation
+	}
+	fsRemoteGitListeners.Lock()
+	defer fsRemoteGitListeners.Unlock()
+	fsRemoteGitListeners.next++
+	id := fsRemoteGitListeners.next
+	if fsRemoteGitListeners.byDir[s.dataDir] == nil {
+		fsRemoteGitListeners.byDir[s.dataDir] = map[int]func(domain.ContentHash){}
+	}
+	fsRemoteGitListeners.byDir[s.dataDir][id] = asked
+	return func() {
+		fsRemoteGitListeners.Lock()
+		defer fsRemoteGitListeners.Unlock()
+		delete(fsRemoteGitListeners.byDir[s.dataDir], id)
+		if len(fsRemoteGitListeners.byDir[s.dataDir]) == 0 {
+			delete(fsRemoteGitListeners.byDir, s.dataDir)
+		}
+	}, nil
+}
+
+func (s *FSStore) tellRemoteGitListeners(repo domain.ContentHash) {
+	fsRemoteGitListeners.Lock()
+	listeners := make([]func(domain.ContentHash), 0, len(fsRemoteGitListeners.byDir[s.dataDir]))
+	for _, asked := range fsRemoteGitListeners.byDir[s.dataDir] {
+		listeners = append(listeners, asked)
+	}
+	fsRemoteGitListeners.Unlock()
+	for _, asked := range listeners {
+		asked(repo)
+	}
+}
+
 // The development store keeps everything read from a repository's provider
 // in one file.
 func (s *FSStore) remoteGitPath(repo domain.ContentHash) string {
@@ -264,14 +307,20 @@ func (s *FSStore) FinishRemoteGitSync(ctx context.Context, state domain.RemoteGi
 }
 
 func (s *FSStore) RequestRemoteGitSync(ctx context.Context, repo domain.ContentHash, now time.Time) error {
-	return s.changeRemoteGit(ctx, repo, func(stored *fsRemoteGit) (bool, error) {
+	if err := s.changeRemoteGit(ctx, repo, func(stored *fsRemoteGit) (bool, error) {
 		if stored.State == nil {
 			return false, nil
 		}
 		next := stored.State.Request(now)
 		stored.State = &next
 		return true, nil
-	})
+	}); err != nil {
+		return err
+	}
+	// A repository never read has no state to change, and its first pass is
+	// due: the listeners are told of it all the same, so that it starts.
+	s.tellRemoteGitListeners(repo)
+	return nil
 }
 
 func (s *FSStore) PutRemoteCommits(ctx context.Context, repo domain.ContentHash, commits []domain.RemoteCommit) (int, error) {

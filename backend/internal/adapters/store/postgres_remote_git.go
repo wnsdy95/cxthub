@@ -18,6 +18,69 @@ import (
 
 var _ outbound.RemoteGitStore = (*PostgresStore)(nil)
 
+// remoteGitRequestChannel is the notification channel a request for a read is
+// announced on. PostgreSQL delivers a notification when the transaction that
+// sent it is committed, to every connection that listens, in any process.
+const remoteGitRequestChannel = "cxt_remote_git_asked"
+
+// remoteGitListenRetry is the pause before a lost listening connection is
+// opened again.
+var remoteGitListenRetry = 5 * time.Second
+
+// remoteGitListener takes a connection out of the pool for good and listens
+// on it: a connection that waits for notifications serves nothing else.
+func (s *PostgresStore) remoteGitListener(ctx context.Context) (*pgx.Conn, error) {
+	acquired, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn := acquired.Hijack()
+	if _, err := conn.Exec(ctx, "LISTEN "+remoteGitRequestChannel); err != nil {
+		_ = conn.Close(context.Background())
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (s *PostgresStore) ListenRemoteGitRequests(asked func(domain.ContentHash)) (func(), error) {
+	if asked == nil {
+		return nil, domain.ErrValidation
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := s.remoteGitListener(ctx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			for {
+				notification, err := conn.WaitForNotification(ctx)
+				if err != nil {
+					break
+				}
+				if repo := domain.ContentHash(notification.Payload); domain.ValidateContentHash(repo) == nil {
+					asked(repo)
+				}
+			}
+			_ = conn.Close(context.Background())
+			// The connection was lost, or listening was stopped. What is asked
+			// until it is back is found by the look for due repositories.
+			for conn = nil; conn == nil; {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(remoteGitListenRetry):
+				}
+				conn, _ = s.remoteGitListener(ctx)
+			}
+		}
+	}()
+	return func() { cancel(); <-done }, nil
+}
+
 func decodeRemoteGitState(body []byte, repo domain.ContentHash) (domain.RemoteGitState, error) {
 	var state domain.RemoteGitState
 	if err := json.Unmarshal(body, &state); err != nil {
@@ -131,20 +194,26 @@ func (s *PostgresStore) RequestRemoteGitSync(ctx context.Context, repo domain.Co
 	}
 	defer tx.Rollback(ctx)
 	var body []byte
-	if err := tx.QueryRow(ctx, `SELECT body FROM remote_git_state WHERE repo_id=$1 FOR UPDATE`, repo).Scan(&body); errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	} else if err != nil {
+	err = tx.QueryRow(ctx, `SELECT body FROM remote_git_state WHERE repo_id=$1 FOR UPDATE`, repo).Scan(&body)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	state, err := decodeRemoteGitState(body, repo)
-	if err != nil {
-		return err
+	// A repository never read has no state to change, and its first pass is
+	// due: the listeners are told of it all the same, so that it starts.
+	if err == nil {
+		state, err := decodeRemoteGitState(body, repo)
+		if err != nil {
+			return err
+		}
+		state = state.Request(now)
+		if body, err = json.Marshal(state); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE remote_git_state SET body=$2, next_at=$3 WHERE repo_id=$1`, repo, body, state.NextAt); err != nil {
+			return err
+		}
 	}
-	state = state.Request(now)
-	if body, err = json.Marshal(state); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE remote_git_state SET body=$2, next_at=$3 WHERE repo_id=$1`, repo, body, state.NextAt); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, remoteGitRequestChannel, string(repo)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

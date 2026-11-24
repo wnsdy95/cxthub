@@ -214,8 +214,15 @@ create an App, issue credentials, or run `terraform apply`.
 - Team members returned by GitHub include child-team membership according to the
   GitHub API. This does not create or mirror a nested CXTHub team hierarchy.
 - A push or pull-request delivery only asks for a read of the remote; the
-  remote Git worker reads branch heads, commits and pull requests from GitHub.
-  That worker also reads without being asked, every six hours, which makes up
+  remote Git reader reads branch heads, commits and pull requests from GitHub,
+  at once: it hears from the store that a read was asked for. A second read of the same
+  repository starts no sooner than ten seconds after the first, so a pull
+  request opened right after its push is read up to ten seconds later. A read
+  with nothing new costs three requests; one after a push of up to a hundred
+  commits costs four. The first read of a repository goes through every pull
+  request, forty requests at a time with a minute between: a repository with
+  a few hundred pull requests takes about ten minutes.
+  The reader also reads without being asked, every six hours, which makes up
   for a delivery that never arrived; a member's cxt asks for a read after it
   pushed or fetched, and so does a look at the Sessions tab once the last read
   started five minutes ago or more. That look is what reads a push made where

@@ -850,7 +850,7 @@ func TestRemoteGitReadAskedForDuringAPassIsNotLost(t *testing.T) {
 	// A push arrives after the pass read the branches.
 	provider.before = func(request string) {
 		if request == "pulls:1" {
-			if err := fixture.storage.RequestRemoteGitSync(context.Background(), fixture.repo, start.Add(10*time.Second)); err != nil {
+			if err := fixture.storage.RequestRemoteGitSync(context.Background(), fixture.repo, start.Add(4*time.Second)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -860,14 +860,14 @@ func TestRemoteGitReadAskedForDuringAPassIsNotLost(t *testing.T) {
 	}
 	provider.before = nil
 	state := fixture.state(t)
-	if state.RequestedAt == nil || !state.RequestedAt.Equal(start.Add(10*time.Second)) || !state.NextAt.Equal(start.Add(30*time.Second)) || !state.SyncedAt.Equal(start) {
+	if state.RequestedAt == nil || !state.RequestedAt.Equal(start.Add(4*time.Second)) || !state.NextAt.Equal(start.Add(domain.RemoteGitRequestSpacing)) || !state.SyncedAt.Equal(start) {
 		t.Fatalf("state after a request during the pass: %+v", state)
 	}
-	fixture.clock = start.Add(29 * time.Second)
+	fixture.clock = start.Add(domain.RemoteGitRequestSpacing - time.Second)
 	if _, err := fixture.pass(t); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a pass closer to the last one than the spacing: %v", err)
 	}
-	fixture.clock = start.Add(30 * time.Second)
+	fixture.clock = start.Add(domain.RemoteGitRequestSpacing)
 	if _, err := fixture.pass(t); err != nil {
 		t.Fatalf("the pass that was asked for: %v", err)
 	}
@@ -1249,4 +1249,72 @@ func TestRemoteGitLookAsksForARead(t *testing.T) {
 			t.Fatalf("a request that failed changed the state:\n got %+v\nwant %+v", state, read)
 		}
 	})
+}
+
+// A walk from a branch head stops at the first page that reaches commits the
+// store holds: the page after it would repeat them. A push of a few commits
+// onto stored history costs one request for its commits, not two.
+func TestRemoteGitWalkStopsWhereStoredHistoryBegins(t *testing.T) {
+	fixture := newRemoteGitTestFixture(t, 3)
+	provider := fixture.provider
+	provider.heads["main"] = provider.chain(4, "")
+	// Four commits, three to a page: two pages, and the second is the last.
+	if requests, err := fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "commits:4:1", "commits:4:2", "pulls:1"}) {
+		t.Fatalf("the first read: %v %v", requests, err)
+	}
+	// Two commits are pushed on top. Their page also holds a commit that is
+	// stored, and nothing more is asked about that head.
+	provider.heads["main"] = provider.chain(2, provider.heads["main"])
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
+	if requests, err := fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "commits:6:1", "pulls:1"}) {
+		t.Fatalf("the read after a push of two commits: %v %v", requests, err)
+	}
+	if commits := fixture.stored(t); len(commits) != 6 {
+		t.Fatalf("%d commits are stored, the provider holds 6", len(commits))
+	}
+	// A page of new commits only is followed by the next one.
+	provider.heads["main"] = provider.chain(4, provider.heads["main"])
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
+	if requests, err := fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "commits:a:1", "commits:a:2", "pulls:1"}) {
+		t.Fatalf("the read after a push of four commits: %v %v", requests, err)
+	}
+	if commits := fixture.stored(t); len(commits) != 10 {
+		t.Fatalf("%d commits are stored, the provider holds 10", len(commits))
+	}
+}
+
+// What lies behind the page a walk stopped at is not lost. The provider lists
+// history newest first, so the side of a merge that is older than the stored
+// commits comes pages later. A stored commit names it as its parent, and the
+// frontier reads from there.
+func TestRemoteGitMergeOfAnOlderSideIsReadThroughTheFrontier(t *testing.T) {
+	fixture := newRemoteGitTestFixture(t, 3)
+	provider := fixture.provider
+	side := provider.chain(3, "")
+	provider.heads["main"] = provider.chain(4, "")
+	if requests, err := fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "commits:7:1", "commits:7:2", "pulls:1"}) {
+		t.Fatalf("the first read: %v %v", requests, err)
+	}
+	if commits := fixture.stored(t); len(commits) != 4 {
+		t.Fatalf("%d commits are stored before the merge, the branch holds 4", len(commits))
+	}
+	// The merge is the newest commit; the side it brings in is the oldest.
+	provider.heads["main"] = provider.commit(provider.heads["main"], side)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
+	requests, err := fixture.pass(t)
+	if err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "commits:8:1", "pulls:1", "commits:3:1", "commits:3:2"}) {
+		t.Fatalf("the read after the merge: %v %v", requests, err)
+	}
+	stored := map[string]bool{}
+	for _, commit := range fixture.stored(t) {
+		stored[commit.SHA] = true
+	}
+	for number := 1; number <= 8; number++ {
+		if !stored[remoteGitTestSHA(number)] {
+			t.Fatalf("commit %d is not stored after the merge was read: %v", number, stored)
+		}
+	}
+	if state := fixture.state(t); state.Remaining {
+		t.Fatalf("the pass says something is left to read: %+v", state)
+	}
 }

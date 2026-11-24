@@ -294,9 +294,11 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 			failed    bool
 			next      int
 		}{
-			{"asked early in the pass", 5, false, 30},
+			// Never closer to the start of the pass than ten seconds.
+			{"asked early in the pass", 5, false, 10},
+			{"asked ten seconds into the pass", 10, false, 10},
 			{"asked late in the pass", 45, false, 45},
-			{"asked while a pass failed", 5, true, 30},
+			{"asked while a pass failed", 5, true, 10},
 		} {
 			asked := started.Request(at(test.requested))
 			if got := asked.Ended(at(0), test.failed, false); !got.NextAt.Equal(at(test.next)) || !got.RequestedAt.Equal(at(test.requested)) {
@@ -317,8 +319,10 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 			now  int
 			next int
 		}{
-			{"right after a pass started", 10, 30},
-			{"at the spacing", 30, 30},
+			{"right after a pass started", 4, 10},
+			{"a second before the spacing", 9, 10},
+			{"at the spacing", 10, 10},
+			{"a second after the spacing", 11, 11},
 			{"well after the last pass", 100, 100},
 			{"hours after the last pass", 20000, 20000},
 			{"after the next pass is due anyway", 21700, 21600},
@@ -330,8 +334,8 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 		}
 		// Asking never pushes the next pass further away.
 		soon := idle
-		soon.NextAt = at(20)
-		if got := soon.Request(at(10)); !got.NextAt.Equal(at(20)) {
+		soon.NextAt = at(6)
+		if got := soon.Request(at(4)); !got.NextAt.Equal(at(6)) {
 			t.Fatalf("a request moved the next pass from %s to %s", soon.NextAt, got.NextAt)
 		}
 		// A repository whose first pass never started is read at the request.
@@ -415,8 +419,8 @@ func TestRemoteGitLookAsksWhenTheLastPassIsOld(t *testing.T) {
 		{"right after a look asked", read.Request(at(300)), at(300), false},
 		{"a minute after a look asked", read.Request(at(300)), at(360), false},
 		// A request that came too soon after the start of the pass is due
-		// thirty seconds after that start, and until then nothing is due.
-		{"before a request that came too soon is due", read.Request(at(10)), at(20), false},
+		// ten seconds after that start, and until then nothing is due.
+		{"before a request that came too soon is due", read.Request(at(4)), at(6), false},
 		// A state nothing was ever read into has no pass to go by.
 		{"never read, due at once", NewRemoteGitState(repo, origin, at(0)), at(0), false},
 		{"never read, with its first pass still ahead", NewRemoteGitState(repo, origin, at(600)), at(400), false},

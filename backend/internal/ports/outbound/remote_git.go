@@ -42,6 +42,14 @@ type RemoteGitStore interface {
 	ClaimRemoteGitSync(ctx context.Context, repo domain.ContentHash, origin string, now time.Time, lease time.Duration) (domain.RemoteGitState, error)
 	// FinishRemoteGitSync stores the state and releases the claim.
 	FinishRemoteGitSync(ctx context.Context, state domain.RemoteGitState) error
+	// ListenRemoteGitRequests begins to listen: from when it returns, asked
+	// is called with the repository of every request for a read that is
+	// committed, whichever process stored it, until stop is called. stop
+	// returns when nothing is told any more. asked must not wait. A request
+	// stored while nothing listened, or while the store had lost what it
+	// listens with, is not told later: its repository is due, and the look
+	// for due repositories finds it.
+	ListenRemoteGitRequests(asked func(domain.ContentHash)) (stop func(), err error)
 	// RequestRemoteGitSync records that a fresh read was asked for at now. It
 	// does nothing when the repository was never read.
 	RequestRemoteGitSync(ctx context.Context, repo domain.ContentHash, now time.Time) error
