@@ -75,6 +75,11 @@ type Container struct {
 	// WithSegmentCollectorLock lets one collector run per repository and
 	// keeps one request for another run.
 	WithSegmentCollectorLock func(ctx context.Context, cwd string, use func(another func() bool) error) (bool, error)
+	// NoteSegmentCollectorPush notes that a push of this clone has ended, and
+	// TakeSegmentCollectorPush answers whether one was noted and forgets it:
+	// the collector reads a push without its pause between runs.
+	NoteSegmentCollectorPush func(ctx context.Context, cwd string)
+	TakeSegmentCollectorPush func(ctx context.Context, cwd string) bool
 	// SegmentCollectorState reads what the collector last did.
 	SegmentCollectorState func(ctx context.Context, cwd string) (domain.CollectorState, error)
 }

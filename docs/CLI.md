@@ -695,7 +695,9 @@ fetched. Git runs `pre-push` before the push and has no hook after it. So that
 hook does not wake the collector at once: its script names the Git process
 that runs it, the one that pushes, and the collector is woken when that
 process has ended, however long the push took. That run finds the branches
-changed. A push still going after thirty minutes is no longer waited for, and
+changed, and it does not wait out the collector's pause between two runs: a
+push of this clone ends the pause, because what was pushed is what the team
+is shown. A push still going after thirty minutes is no longer waited for, and
 is read at the next wake. Two kinds of push start no wait, because Git runs no
 `pre-push` hook for them: one made by a graphical Git program that does not
 call the `git` command but pushes with an implementation of its own (a

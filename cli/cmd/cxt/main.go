@@ -304,6 +304,8 @@ func buildContainer(cfg config) container {
 		clictr.SegmentCollectorState = files.LoadCollectorState
 		clictr.WakeSegmentCollector = delivcli.SpawnSegmentCollector
 		clictr.WakeSegmentCollectorAfterPush = delivcli.SpawnWakeAfterPush
+		clictr.NoteSegmentCollectorPush = files.MarkPush
+		clictr.TakeSegmentCollectorPush = files.TakePush
 	}
 
 	return container{

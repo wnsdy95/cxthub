@@ -671,9 +671,15 @@ func segmentLogLine(entry domain.SessionUploadLogEntry) string {
 // about a second for a 6 MB session file and ten seconds for an 80 MB one.
 // After a run that failed for a reason that holds for every session, and at
 // most in any case, the next one waits segmentCollectorBackoff.
+//
+// A push of this clone is not held back by any of this. What was pushed is
+// what the team is shown, and pushes are few: when one has ended, the pause
+// ends too, and while a collector waits it looks for that every
+// segmentCollectorPushPoll.
 var (
 	segmentCollectorInterval = 10 * time.Second
 	segmentCollectorBackoff  = 10 * time.Minute
+	segmentCollectorPushPoll = 500 * time.Millisecond
 )
 
 const segmentCollectorShare = 6
@@ -766,7 +772,28 @@ func runWakeAfterPush(ctx context.Context, c *Container, cwd, pushing string) er
 		case <-time.After(wakeAfterPushPoll):
 		}
 	}
+	// The push is noted before the collector is woken, so that the run this
+	// wake leads to finds it.
+	if c.NoteSegmentCollectorPush != nil {
+		c.NoteSegmentCollectorPush(context.WithoutCancel(ctx), cwd)
+	}
 	c.WakeSegmentCollector(cwd)
+	return nil
+}
+
+// segmentCollectorPause waits out the pause before a run, and ends it when a
+// push of this clone has ended. It takes the note of a push in either case:
+// the run that follows answers it.
+func segmentCollectorPause(ctx context.Context, wait time.Duration, pushed func() bool) error {
+	for arrived := pushed(); wait > 0 && !arrived; arrived = pushed() {
+		step := min(wait, segmentCollectorPushPoll)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(step):
+		}
+		wait -= step
+	}
 	return nil
 }
 
@@ -814,18 +841,17 @@ func runSegmentCollector(ctx context.Context, c *Container, cwd string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+	pushed := func() bool { return c.TakeSegmentCollectorPush != nil && c.TakeSegmentCollectorPush(ctx, cwd) }
 	_, _ = c.WithSegmentCollectorLock(ctx, cwd, func(another func() bool) error {
 		for {
+			wait := time.Duration(0)
 			if c.SegmentCollectorState != nil {
 				if state, err := c.SegmentCollectorState(ctx, cwd); err == nil {
-					if wait := segmentCollectorWait(state, time.Now()); wait > 0 {
-						select {
-						case <-ctx.Done():
-							return ctx.Err()
-						case <-time.After(wait):
-						}
-					}
+					wait = segmentCollectorWait(state, time.Now())
 				}
+			}
+			if err := segmentCollectorPause(ctx, wait, pushed); err != nil {
+				return err
 			}
 			_, _ = c.SegmentCollector.CollectSegments(ctx, cwd)
 			if ctx.Err() != nil {

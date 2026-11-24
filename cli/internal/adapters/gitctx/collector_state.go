@@ -24,6 +24,7 @@ const (
 	collectorStateFile   = "collector-v1.json"
 	collectorLockFile    = "collector.lock"
 	collectorRequestFile = "collector.again"
+	collectorPushedFile  = "collector.pushed"
 )
 
 func collectorDir(ctx context.Context, cwd string) (string, error) {
@@ -124,6 +125,29 @@ func (*CollectorFiles) WithCollectorLock(ctx context.Context, cwd string, use fu
 	// A request left before this collector started is answered by its first run.
 	another()
 	return true, use(another)
+}
+
+// MarkPush notes for the repository's collector that a push of this clone
+// has ended. The run that answers it does not wait out the pause between two
+// runs: what was pushed is what the team is shown.
+func (*CollectorFiles) MarkPush(ctx context.Context, cwd string) {
+	dir, err := collectorDir(ctx, cwd)
+	if err != nil {
+		return
+	}
+	if file, err := os.OpenFile(filepath.Join(dir, collectorPushedFile), os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600); err == nil {
+		file.Close()
+	}
+}
+
+// TakePush answers whether a push was noted since it was last asked, and
+// forgets it.
+func (*CollectorFiles) TakePush(ctx context.Context, cwd string) bool {
+	dir, err := collectorDir(ctx, cwd)
+	if err != nil {
+		return false
+	}
+	return os.Remove(filepath.Join(dir, collectorPushedFile)) == nil
 }
 
 // RequestRunIfBusy reports whether a collector is running in the repository,

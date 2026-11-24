@@ -116,6 +116,53 @@ func TestSegmentCollectorRunsOnceAndOnceMoreForEachRequest(t *testing.T) {
 	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 || time.Since(started) < 15*time.Millisecond {
 		t.Fatalf("spacing: runs=%d waited=%s err=%v", runs, time.Since(started), err)
 	}
+	// A push of this clone has ended: the pause is not waited out, however
+	// long it is, and the note of the push is taken by the run that answers it.
+	poll := segmentCollectorPushPoll
+	segmentCollectorPushPoll = 5 * time.Millisecond
+	defer func() { segmentCollectorPushPoll = poll }()
+	segmentCollectorInterval = time.Hour
+	var pushes atomic.Int32
+	c.TakeSegmentCollectorPush = func(_ context.Context, where string) bool {
+		if where != cwd {
+			t.Errorf("asked for the pushes of %q", where)
+		}
+		return pushes.Load() > 0 && pushes.Add(-1) >= 0
+	}
+	runs = 0
+	state.LastRun = &domain.CollectorRun{At: time.Now().UTC().Format(time.RFC3339Nano)}
+	pushes.Store(1)
+	started = time.Now()
+	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 || time.Since(started) > 5*time.Second || pushes.Load() != 0 {
+		t.Fatalf("a push before the pause: runs=%d waited=%s notes left=%d err=%v", runs, time.Since(started), pushes.Load(), err)
+	}
+	// A push that ends while the collector waits ends the wait.
+	runs = 0
+	state.LastRun = &domain.CollectorRun{At: time.Now().UTC().Format(time.RFC3339Nano)}
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		pushes.Store(1)
+	}()
+	started = time.Now()
+	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 || time.Since(started) < 50*time.Millisecond || time.Since(started) > 5*time.Second {
+		t.Fatalf("a push during the pause: runs=%d waited=%s err=%v", runs, time.Since(started), err)
+	}
+	// Without a push the pause is waited out: nothing runs in the meantime.
+	runs = 0
+	state.LastRun = &domain.CollectorRun{At: time.Now().UTC().Format(time.RFC3339Nano)}
+	waiting, stop := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	if err := runSegmentCollector(waiting, c, cwd); err != nil || runs != 0 {
+		t.Fatalf("no push during the pause: runs=%d err=%v", runs, err)
+	}
+	stop()
+	// A push noted when no pause is due is taken by the run all the same,
+	// so that it does not end a later pause.
+	runs, state.LastRun = 0, nil
+	pushes.Store(1)
+	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 || pushes.Load() != 0 {
+		t.Fatalf("a push when no pause is due: runs=%d notes left=%d err=%v", runs, pushes.Load(), err)
+	}
+	c.TakeSegmentCollectorPush = nil
 	// Cancelled while waiting: no run.
 	runs = 0
 	segmentCollectorInterval = time.Hour
@@ -123,6 +170,39 @@ func TestSegmentCollectorRunsOnceAndOnceMoreForEachRequest(t *testing.T) {
 	cancel()
 	if err := runSegmentCollector(ctx, c, cwd); err != nil || runs != 0 {
 		t.Fatalf("cancelled: runs=%d err=%v", runs, err)
+	}
+}
+
+// The pause itself, without the programs around it: it is waited out to its
+// end, a push that has ended ends it, and the note of a push is asked for
+// also when no pause is due.
+func TestSegmentCollectorPauseIsWaitedOutUnlessAPushEnded(t *testing.T) {
+	poll := segmentCollectorPushPoll
+	segmentCollectorPushPoll = 10 * time.Millisecond
+	defer func() { segmentCollectorPushPoll = poll }()
+	asked := 0
+	never := func() bool { asked++; return false }
+	started := time.Now()
+	if err := segmentCollectorPause(context.Background(), 120*time.Millisecond, never); err != nil || time.Since(started) < 110*time.Millisecond || asked < 6 {
+		t.Fatalf("a pause without a push: waited %s, looked for a push %d times, err=%v", time.Since(started), asked, err)
+	}
+	// A push at the third look: the pause ends there, long before its end.
+	asked = 0
+	third := func() bool { asked++; return asked == 3 }
+	started = time.Now()
+	if err := segmentCollectorPause(context.Background(), time.Hour, third); err != nil || asked != 3 || time.Since(started) > 5*time.Second {
+		t.Fatalf("a push at the third look: waited %s, looked %d times, err=%v", time.Since(started), asked, err)
+	}
+	// No pause is due: the note is asked for once, and nothing is waited.
+	asked = 0
+	if err := segmentCollectorPause(context.Background(), 0, never); err != nil || asked != 1 {
+		t.Fatalf("no pause due: looked %d times, err=%v", asked, err)
+	}
+	// Stopped while it waits: it says so, and the collector does not run.
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	if err := segmentCollectorPause(stopped, time.Hour, never); err == nil {
+		t.Fatal("a stopped pause ended as if it had been waited out")
 	}
 }
 
@@ -237,12 +317,22 @@ func TestWakeAfterPushWaitsForThePushingProcessToEnd(t *testing.T) {
 	t.Cleanup(func() { wakeAfterPushPoll, wakeAfterPushLimit = poll, limit })
 	wakeAfterPushPoll = 5 * time.Millisecond
 	repo := t.TempDir()
-	var woken atomic.Int32
+	var woken, noted atomic.Int32
 	c := &Container{WakeSegmentCollector: func(cwd string) {
 		if cwd != repo {
 			t.Errorf("woke the collector of %q", cwd)
 		}
+		// The push is noted before the collector is woken: the run this
+		// wake leads to must find the note.
+		if noted.Load() != woken.Load()+1 {
+			t.Errorf("the collector was woken for the %d. time after %d pushes were noted", woken.Load()+1, noted.Load())
+		}
 		woken.Add(1)
+	}, NoteSegmentCollectorPush: func(_ context.Context, cwd string) {
+		if cwd != repo || woken.Load() != noted.Load() {
+			t.Errorf("noted the %d. push of %q after %d wakes", noted.Load()+1, cwd, woken.Load())
+		}
+		noted.Add(1)
 	}}
 
 	// A process that goes on until it is told to end stands in for a push.
@@ -277,8 +367,8 @@ func TestWakeAfterPushWaitsForThePushingProcessToEnd(t *testing.T) {
 		t.Fatalf("the wait ended while the push went on: %v", err)
 	default:
 	}
-	if got := woken.Load(); got != 0 {
-		t.Fatalf("the collector was woken %d times while the push went on", got)
+	if got := woken.Load() + noted.Load(); got != 0 {
+		t.Fatalf("the collector was woken or the push noted %d times while the push went on", got)
 	}
 	if err := end.Close(); err != nil {
 		t.Fatal(err)
@@ -295,8 +385,8 @@ func TestWakeAfterPushWaitsForThePushingProcessToEnd(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the wait went on after the push had ended")
 	}
-	if got := woken.Load(); got != 1 {
-		t.Fatalf("the collector was woken %d times after the push", got)
+	if woken.Load() != 1 || noted.Load() != 1 {
+		t.Fatalf("after the push the collector was woken %d times and the push noted %d times", woken.Load(), noted.Load())
 	}
 	if processRuns(process) {
 		t.Fatal("a process that has ended is said to run")

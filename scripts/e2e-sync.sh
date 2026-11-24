@@ -303,6 +303,23 @@ ran_again() { [ "$(last_run_at)" != "$REWOUND" ]; }
 cxt git-hook wake post-commit </dev/null >/dev/null 2>&1
 expect "a run with nothing new tells the server nothing more" "$(until_true 40 ran_again && echo ran) $([ -n "$HEARD" ] && [ "$(heard_at)" = "$HEARD" ] && echo not told)" "ran not told"
 
+echo "── C5. a push is read at once, however long the collector's pause is"
+# The collector pauses six times as long as its last run took, up to ten minutes: a long session costs a long run.
+# A push of this clone ends that pause, because what was pushed is what the team is shown. The last run is
+# recorded here as one that began just now and took a minute and a half, which makes the pause nine minutes.
+quiet
+python3 -c 'import json, sys, datetime
+state = json.load(open(sys.argv[1]))
+state["last_run"]["at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+state["last_run"]["millis"] = 90000
+json.dump(state, open(sys.argv[1], "w"))' "$STATE"
+LONG="$(last_run_at)"
+ran_after_long() { [ "$(last_run_at)" != "$LONG" ]; }
+PROBE2="$(git commit-tree "$(git rev-parse 'HEAD^{tree}')" -m "no session made this either" </dev/null)"
+git push -q origin "$PROBE2:refs/heads/probe2" 2>"$TMP/push2.err"
+expect "the collector runs within seconds of the push although its pause is nine minutes" "$(until_true 30 ran_after_long && echo ran)" "ran"
+expect "that run tells the server of the push" "$(until_true 30 origin_of "$PROBE2" probe2 >/dev/null && origin_of "$PROBE2" probe2)" "cxt claimed own well"
+
 echo "── C4. the Git remote cxt follows need not be named origin"
 # What cxt reads of a Git remote is read of one remote: origin, unless setup is told another name or the repository
 # has no origin and exactly one remote. Nothing here talks to the server, and nothing here is committed: these are

@@ -55,6 +55,49 @@ func TestCollectorStateIsAMemoryThatMayBeLost(t *testing.T) {
 	}
 }
 
+// A push that ended is noted once and taken once, however often it is noted.
+func TestCollectorPushIsNotedAndTakenOnce(t *testing.T) {
+	repo := branchIDTestRepo(t)
+	ctx := context.Background()
+	files := NewCollectorFiles()
+	if files.TakePush(ctx, repo) {
+		t.Fatal("a push was taken before any was noted")
+	}
+	files.MarkPush(ctx, repo)
+	files.MarkPush(ctx, repo)
+	if !files.TakePush(ctx, repo) {
+		t.Fatal("a noted push was not taken")
+	}
+	if files.TakePush(ctx, repo) {
+		t.Fatal("one push was taken twice")
+	}
+	// The note is kept beside Git's own files, where the collector keeps its
+	// state, and nowhere in the working tree.
+	files.MarkPush(ctx, repo)
+	dir, err := collectorDir(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, collectorPushedFile)); err != nil {
+		t.Fatalf("the note is not where the collector keeps its files: %v", err)
+	}
+	// The note of a push is not a request for one more run: a collector that
+	// starts takes the requests left for it and leaves the note where it is.
+	requested := true
+	if ran, err := files.WithCollectorLock(ctx, repo, func(another func() bool) error { requested = another(); return nil }); err != nil || !ran || requested {
+		t.Fatalf("a collector beside the note of a push: ran=%v asked again=%v err=%v", ran, requested, err)
+	}
+	if !files.TakePush(ctx, repo) {
+		t.Fatal("the collector's lock took the note of a push")
+	}
+	// Outside a repository there is no collector: nothing is noted or taken.
+	outside := t.TempDir()
+	files.MarkPush(ctx, outside)
+	if files.TakePush(ctx, outside) {
+		t.Fatal("a push was taken outside a repository")
+	}
+}
+
 func TestCollectorLockLetsOneRunAndKeepsOneRequest(t *testing.T) {
 	repo := branchIDTestRepo(t)
 	ctx := context.Background()
