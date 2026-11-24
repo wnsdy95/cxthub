@@ -92,6 +92,17 @@ more than the pool holds, for each process that runs the reader. A connection
 pooler that hands a connection out for one transaction at a time passes no
 notification on: behind one, the reader hears nothing and reads at its look.
 
+An open Sessions tab stays current by following one mark of the repository
+(`GET /api/v1/repos/{repoID}/revision`). The mark is another one after
+anything the tab shows was stored: a session's report, summary, archive or
+removal, a note, a worktree list, a branch registration, a push the Git host
+delivered, and the end of a read of the Git host. The tab asks for it every
+three seconds while it is in view and reads its lists again only when it is
+another one; as a fallback it reads them every five minutes whatever the mark
+says. The mark is the repository's revision counters, which each of those
+writes moves in its own transaction. What a read of the Git host stores on
+its way does not move them, so a page never reads half a pass.
+
 ## Ownership
 
 - **Domain:** the rules that cut a session at its commits and link it to them,

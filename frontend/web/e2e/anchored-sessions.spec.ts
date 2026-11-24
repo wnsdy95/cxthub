@@ -482,3 +482,45 @@ test('two commits are compared: a base is set, and another commit shows what lie
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+test('an open sessions tab reads its lists again when the mark of the repository is another one, and not before', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const member = fixture('member', []);
+  const later = { ...summaries[0], session_id: 'later-session', revision: 1, commits: [], uncommitted: undefined };
+  const state = { revision: '1.0.0', sessions: [summaries[0]] as unknown[], marks: 0, lists: 0 };
+  const unexpected = await installApiFixture(page, request => {
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/revision') {
+      state.marks++;
+      return { body: { revision: state.revision } };
+    }
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/anchored-sessions') {
+      state.lists++;
+      return { body: state.sessions };
+    }
+    return member(request);
+  });
+  await page.goto('/alice/app?tab=sessions&show=all');
+  const all = page.getByRole('navigation', { name: 'Worktrees and branches' }).getByRole('link', { name: /All sessions/ });
+  await expect(all).toContainText('1');
+  // Opening the tab reads the lists; what it read by the time it is at rest is where this test starts.
+  await page.waitForLoadState('networkidle');
+  const opened = { marks: state.marks, lists: state.lists };
+
+  // The tab asks for the mark every few seconds. While the mark stays the
+  // same nothing is read again, whatever the server holds by then.
+  state.sessions = [summaries[0], later];
+  await expect.poll(() => state.marks, { timeout: 20_000 }).toBeGreaterThanOrEqual(opened.marks + 2);
+  expect(state.lists).toBe(opened.lists);
+  await expect(all).toContainText('1');
+
+  // The mark is another one: the lists are read again, once, and the tab shows what was stored.
+  state.revision = '2.0.0';
+  await expect(all).toContainText('2', { timeout: 20_000 });
+  expect(state.lists).toBe(opened.lists + 1);
+  const marks = state.marks;
+  await expect.poll(() => state.marks, { timeout: 20_000 }).toBeGreaterThanOrEqual(marks + 2);
+  expect(state.lists).toBe(opened.lists + 1);
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

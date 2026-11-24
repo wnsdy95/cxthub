@@ -104,8 +104,12 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 	if err != nil || len(rest.Commits) != 5 || rest.Next != nil || len(rest.Branches) != 0 || rest.Commits[4].SHA != remoteGitTestSHA(1) {
 		t.Fatalf("the following page: %+v %v", rest, err)
 	}
-	if after, err := storage.RepositoryRevision(ctx, repo); err != nil || !reflect.DeepEqual(after, before) {
-		t.Fatalf("revision moved from %+v to %+v (%v)", before, after, err)
+	// Each of the two passes moved the revision twice, when it ended and
+	// when sessions were opened after it. Nothing a pass stores on its way
+	// moves it: the commits of ten requests moved it no further.
+	read, err := storage.RepositoryRevision(ctx, repo)
+	if err != nil || read.Graph != before.Graph+4 || read.Pending != before.Pending || read.Evidence != before.Evidence {
+		t.Fatalf("two passes moved the revision from %+v to %+v (%v)", before, read, err)
 	}
 
 	// No pass is due; a member's request and a delivered push each pull the
@@ -128,8 +132,10 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 	if state, err = storage.GetRemoteGitState(ctx, repo); err != nil || !state.RequestedAt.After(requested) {
 		t.Fatalf("state after a push: %+v %v", state, err)
 	}
-	if after, err := storage.RepositoryRevision(ctx, repo); err != nil || after.Graph != before.Graph {
-		t.Fatalf("a request moved the graph revision from %+v to %+v (%v)", before, after, err)
+	// The request changes nothing a page shows; the delivered push is an
+	// observation of the branch ledger, which moves the evidence counter.
+	if after, err := storage.RepositoryRevision(ctx, repo); err != nil || after.Graph != read.Graph || after.Pending != read.Pending || after.Evidence != read.Evidence+1 {
+		t.Fatalf("a request and a delivered push moved the revision from %+v to %+v (%v)", read, after, err)
 	}
 	clock = clock.Add(domain.RemoteGitRequestSpacing)
 	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil || !reflect.DeepEqual(provider.requests, []string{"default", "heads:1", "heads:2", "pulls:1"}) {
@@ -348,4 +354,62 @@ func mustRemoteGitState(t *testing.T, storage *store.PostgresStore, repo domain.
 		t.Fatal(err)
 	}
 	return state
+}
+
+// On PostgreSQL the mark a page follows is read in a snapshot, and the end of
+// a read of the Git host moves it in the transaction that stores that end.
+func TestPGViewRevisionMovesWhenAReadOfTheGitHostEnds(t *testing.T) {
+	service, storage, repo := remoteGitPG(t)
+	ctx := systemTestContext()
+	provider := newRemoteGitTestProvider(100)
+	provider.heads["main"] = provider.chain(2, "")
+	worker, err := NewRemoteGitSync(RemoteGitSyncConfig{Metadata: storage, Blobs: storage, Repositories: storage, Reader: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	worker.now = func() time.Time { return clock }
+	mark := func() string {
+		t.Helper()
+		revision, err := service.ViewRevision(ctx, repo)
+		if err != nil || revision == "" {
+			t.Fatalf("the mark: %q %v", revision, err)
+		}
+		return revision
+	}
+	first := mark()
+	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	read := mark()
+	if read == first {
+		t.Fatalf("the end of a read left the mark at %q", first)
+	}
+	// A look at the old read asks for another and moves nothing by itself.
+	if _, err := service.ReadRemoteGit(ctx, repo, domain.RemoteCommitCursor{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := storage.GetRemoteGitState(ctx, repo); err != nil || state.RequestedAt == nil {
+		t.Fatalf("the look did not ask: %+v %v", state, err)
+	}
+	if err := service.RequestRemoteGitRefresh(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	if after := mark(); after != read {
+		t.Fatalf("a look and a request moved the mark from %q to %q", read, after)
+	}
+	clock = time.Now().UTC().Truncate(time.Second).Add(time.Second)
+	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	if after := mark(); after == read || after == first {
+		t.Fatalf("the read that was asked for left the mark at %q", after)
+	}
+	if _, err := service.ViewRevision(ctx, hh("a repository nobody registered "+t.Name())); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the mark of a repository this server does not hold: %v", err)
+	}
+	// What is no repository identifier is refused as such on this store too.
+	if _, err := service.ViewRevision(ctx, "not a repository"); !errors.Is(err, domain.ErrIntegrity) || errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the mark of what is no repository: %v", err)
+	}
 }

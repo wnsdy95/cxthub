@@ -54,8 +54,8 @@ func branchLedgerLookup(ctx context.Context, store outbound.BranchLedgerStore, r
 // CLI reports as present on the remote. A report is a claim by a member, not
 // proof: it can open a lifetime or join one, and it never closes one.
 //
-// The ledger does not move the repository revision: nothing a browser shows
-// reads it yet.
+// A registration moves the repository revision: the Sessions tab shows the
+// lifetimes of branch names.
 func (s *Service) RegisterBranchIDs(ctx context.Context, repo domain.ContentHash, branches []domain.BranchRegistration) ([]domain.BranchRegistrationResult, error) {
 	if err := validateHashes(repo); err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func (s *Service) RegisterBranchIDs(ctx context.Context, repo domain.ContentHash
 			return nil, err
 		}
 	}
-	ctx = context.WithValue(auditOperation(ctx, "branch_ledger.registered"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "branch_ledger.registered")
 	return repositoryWrite(ctx, s, repo, func(bound context.Context) ([]domain.BranchRegistrationResult, error) {
 		store, err := s.branchLedgerStore()
 		if err != nil {

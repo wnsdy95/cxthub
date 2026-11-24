@@ -159,6 +159,9 @@ export const api = {
     call<import('./types').RemoteGitView>('GET', `/repos/${encodeURIComponent(repoId)}/remote-git${before ? `?before=${encodeURIComponent(before)}` : ''}`, undefined, undefined, signal),
   refreshRemoteGit: (repoId: string) =>
     call<{ requested: boolean }>('POST', `/repos/${encodeURIComponent(repoId)}/remote-git/refresh`, {}),
+  /** The mark that is another one after anything the Sessions tab shows was stored. */
+  viewRevision: (repoId: string, signal?: AbortSignal) =>
+    call<{ revision: string }>('GET', `/repos/${encodeURIComponent(repoId)}/revision`, undefined, undefined, signal),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.
   exchangeSession: (idpToken: string) => call<SessionResponse>('POST', '/auth/session', undefined, idpToken),
   logout: () => call<{ status: string }>('DELETE', '/auth/session'),

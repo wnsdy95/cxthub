@@ -46,7 +46,7 @@ func (s *Service) PutAnchoredSummary(ctx context.Context, repo domain.ContentHas
 	if err != nil {
 		return domain.AnchoredSummaryReceipt{}, err
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_summary.stored"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_summary.stored")
 	return repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredSummaryReceipt, error) {
 		sessions, err := s.anchoredSessionStore()
 		if err != nil {

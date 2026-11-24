@@ -114,7 +114,8 @@ func (s *Service) ReadRemoteGit(ctx context.Context, repo domain.ContentHash, be
 
 // RequestRemoteGitRefresh asks for the provider to be read again soon. It
 // reads nothing itself: the worker that reads the provider does. The request
-// does not move the repository revision.
+// does not move the repository revision: it changes nothing a page shows, and
+// the pass it leads to moves the revision when it ends.
 func (s *Service) RequestRemoteGitRefresh(ctx context.Context, repo domain.ContentHash) error {
 	if err := validateHashes(repo); err != nil {
 		return err
@@ -164,7 +165,9 @@ type RemoteGitSyncConfig struct {
 }
 
 // RemoteGitSync reads repositories' Git hosting providers into the server's
-// own store. It owns no context ref.
+// own store. It owns no context ref. What a pass stores on its way does not
+// move the repository revision; the end of the pass does, once, and so does
+// the opening of sessions that follows it.
 type RemoteGitSync struct {
 	work   *repositoryWork
 	store  outbound.RemoteGitStore
@@ -301,7 +304,7 @@ func (worker *RemoteGitSync) SyncRemoteGit(ctx context.Context, repo domain.Cont
 // started, or the cache was started over. A read asked for while the pass ran
 // is carried over from what the store holds.
 func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, failed bool) error {
-	return repositoryWriteErrorWithWork(context.WithValue(ctx, revisionScopeKey{}, "none"), worker.work, pass.repo, func(tx context.Context) error {
+	return repositoryWriteErrorWithWork(ctx, worker.work, pass.repo, func(tx context.Context) error {
 		stored, err := worker.store.GetRemoteGitState(tx, pass.repo)
 		if err != nil {
 			return err
@@ -324,7 +327,7 @@ func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, fa
 func (worker *RemoteGitSync) openSessions(ctx context.Context, repo domain.ContentHash) error {
 	work, done := context.WithTimeout(context.WithoutCancel(ctx), remoteGitOpenTimeout)
 	defer done()
-	return repositoryWriteErrorWithWork(context.WithValue(work, revisionScopeKey{}, "none"), worker.work, repo, func(tx context.Context) error {
+	return repositoryWriteErrorWithWork(work, worker.work, repo, func(tx context.Context) error {
 		return openAnchoredSessions(tx, worker.work.meta, repo, nil, worker.now())
 	})
 }

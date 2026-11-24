@@ -26,6 +26,8 @@ function emptyAnswers(request: ApiRequest): ApiResponse | undefined {
   if (/^\/api\/v1\/repositories\/[^/]+\/notifications$/.test(request.pathname)) return { body: [] };
   const resource = request.pathname.match(/^\/api\/v1\/repos\/[^/]+\/(.+)$/)?.[1];
   if (resource === 'remote-git') return { body: { commits: [] } };
+  // The mark an open Sessions tab follows: it never moves unless a test moves it.
+  if (resource === 'revision') return { body: { revision: '0.0.0' } };
   if (resource && ['anchored-sessions', 'anchored-notes', 'branch-lifetimes', 'worktrees'].includes(resource)) return { body: [] };
   return undefined;
 }

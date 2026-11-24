@@ -58,8 +58,8 @@ func anchoredOwn(reader, account string) bool { return reader != "" && reader ==
 // session, replacing that session's earlier report. A session belongs to the
 // account that first reported it. The same content again changes nothing.
 //
-// A report does not move the repository revision: nothing a browser shows
-// reads it yet, so there is nothing for an open page to refetch.
+// A report that is stored moves the repository revision: the Sessions tab
+// shows it, and an open page follows the revision to know when to read again.
 func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, body domain.AnchoredSessionBody) (domain.AnchoredSessionReceipt, error) {
 	if err := anchoredSessionKey(repo, provider, sessionID); err != nil {
 		return domain.AnchoredSessionReceipt{}, err
@@ -72,7 +72,7 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 	if err != nil {
 		return domain.AnchoredSessionReceipt{}, err
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_session.reported"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_session.reported")
 	return repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredSessionReceipt, error) {
 		store, err := s.anchoredSessionStore()
 		if err != nil {
@@ -421,7 +421,7 @@ func (s *Service) SetAnchoredSessionArchived(ctx context.Context, repo domain.Co
 		}
 		return domain.AnchoredSessionArchive{Archived: archived, ArchivedAt: at}, nil
 	}
-	ctx = context.WithValue(auditOperation(ctx, action), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, action)
 	receipt, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredSessionArchive, error) { return set(bound, true) })
 	if !errors.Is(err, errAnchoredArchiveNotOwn) {
 		return receipt, err
@@ -544,7 +544,7 @@ func (s *Service) RemoveAnchoredSession(ctx context.Context, repo domain.Content
 		}
 		return receipt, nil
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_session.removed"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_session.removed")
 	receipt, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredSessionRemovalReceipt, error) { return remove(bound, true) })
 	if !errors.Is(err, errAnchoredArchiveNotOwn) {
 		return receipt, err
@@ -578,7 +578,7 @@ func (s *Service) AllowAnchoredSession(ctx context.Context, repo domain.ContentH
 		}
 		return struct{}{}, removals.DeleteAnchoredSessionRemoval(bound, repo, provider, sessionID)
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_session.allowed"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_session.allowed")
 	_, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (struct{}, error) { return allow(bound, true) })
 	if !errors.Is(err, errAnchoredArchiveNotOwn) {
 		return err

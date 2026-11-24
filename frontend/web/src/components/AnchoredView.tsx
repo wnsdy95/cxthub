@@ -11,8 +11,8 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
 import { navigate, type AnchoredSelection } from '../route';
 import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, AnchoredSummary, RemotePull, Repo } from '../types';
 import {
-  useAnchoredCommit, useAnchoredCommitSummaries, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useMe, useRemoteGit,
-  useReportedWorktrees, useSaveAnchoredNote,
+  useAnchoredCommit, useAnchoredCommitSummaries, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useFollowViewRevision,
+  useMe, useRemoteGit, useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredCompare, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
@@ -41,6 +41,7 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
   manage?: boolean;
 }) {
   const t = useT();
+  useFollowViewRevision(repo.id);
   const sessionsQ = useAnchoredSessions(repo.id);
   const lifetimesQ = useBranchLifetimes(repo.id);
   const worktreesQ = useReportedWorktrees(repo.id);

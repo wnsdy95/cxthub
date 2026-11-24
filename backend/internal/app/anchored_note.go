@@ -111,7 +111,9 @@ func (s *Service) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash
 // stored. A note names a lifetime of a branch name only when the ledger holds
 // that lifetime under that name.
 //
-// A note does not move the repository revision: only its author reads it.
+// A note moves the repository revision, like everything the Sessions tab
+// shows: its author may have the tab open in another window. The revision
+// says that something changed, never what.
 func (s *Service) CreateAnchoredNote(ctx context.Context, repo domain.ContentHash, target domain.AnchoredNoteTarget, body string) (domain.AnchoredNote, error) {
 	if err := validateHashes(repo); err != nil {
 		return domain.AnchoredNote{}, err
@@ -123,7 +125,7 @@ func (s *Service) CreateAnchoredNote(ctx context.Context, repo domain.ContentHas
 	if err != nil {
 		return domain.AnchoredNote{}, err
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_note.created"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_note.created")
 	return repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredNote, error) {
 		store, err := s.anchoredNoteStore()
 		if err != nil {
@@ -185,7 +187,7 @@ func (s *Service) UpdateAnchoredNote(ctx context.Context, repo domain.ContentHas
 	if err != nil {
 		return domain.AnchoredNote{}, err
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_note.updated"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_note.updated")
 	return repositoryWrite(ctx, s, repo, func(bound context.Context) (domain.AnchoredNote, error) {
 		store, err := s.anchoredNoteStore()
 		if err != nil {
@@ -217,7 +219,7 @@ func (s *Service) DeleteAnchoredNote(ctx context.Context, repo domain.ContentHas
 	if !domain.ValidAnchoredNoteID(id) {
 		return fmt.Errorf("%w: note identifier", domain.ErrValidation)
 	}
-	ctx = context.WithValue(auditOperation(ctx, "anchored_note.deleted"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "anchored_note.deleted")
 	_, err := repositoryWrite(ctx, s, repo, func(bound context.Context) (struct{}, error) {
 		store, err := s.anchoredNoteStore()
 		if err != nil {
@@ -241,7 +243,7 @@ func (s *Service) ReportWorktrees(ctx context.Context, repo domain.ContentHash, 
 	if err := report.Validate(); err != nil {
 		return nil, err
 	}
-	ctx = context.WithValue(auditOperation(ctx, "worktrees.reported"), revisionScopeKey{}, "none")
+	ctx = auditOperation(ctx, "worktrees.reported")
 	return repositoryWrite(ctx, s, repo, func(bound context.Context) ([]domain.ReportedWorktree, error) {
 		store, err := s.reportedWorktreeStore()
 		if err != nil {

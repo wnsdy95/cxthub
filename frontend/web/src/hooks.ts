@@ -2,6 +2,7 @@
 //
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
+import { useEffect, useRef } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api } from './api';
 import { documentReadRetry } from './readRetry';
@@ -11,6 +12,7 @@ import { useT } from './i18n';
 import { useDocumentReadScope } from './documentReadScope';
 import { useDocumentEventReader } from './documentEventReader';
 import { documentBodyKey } from './documentPageCache';
+import { followRevision, SESSIONS_FALLBACK_MS, VIEW_REVISION_MS, type SeenRevision } from './viewRevision';
 
 // ── Authentication/Query ─────────────────────────────────────────
 // me: Called once on boot to check cookie session validity. A 401 is normal (not logged in), so no retry.
@@ -295,21 +297,40 @@ export function useCreateInvite() {
     onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.repositoryId] }),
   });
 }
-// The Sessions tab reads its lists again this often while it is in view. A
-// report does not move the repository revision, so nothing else tells the tab
-// that there is something new. A session is uploaded at a Git hook and at the
-// end of a turn, not as it is typed, so a minute is soon enough.
-const SESSIONS_REFRESH_MS = 60_000;
+/**
+ * Keeps the Sessions tab current while it is in view: asks for the
+ * repository's mark every few seconds and reads everything the tab shows
+ * again when the mark is another one. Nothing is read again while the mark
+ * stays the same, so an open tab costs one short request every few seconds.
+ */
+export function useFollowViewRevision(repoId: string | null) {
+  const qc = useQueryClient();
+  const seen = useRef<SeenRevision | null>(null);
+  const revision = useQuery({
+    queryKey: ['view-revision', repoId],
+    queryFn: ({ signal }) => api.viewRevision(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: VIEW_REVISION_MS,
+  }).data?.revision;
+  useEffect(() => {
+    if (!repoId || !revision) return;
+    const next = followRevision(seen.current, repoId, revision);
+    seen.current = next.seen;
+    for (const key of next.readAgain) void qc.invalidateQueries({ queryKey: [key, repoId] });
+  }, [qc, repoId, revision]);
+}
 
-// Anchored sessions — the caller's own reports. A report does not move the
-// repository revision, so the lists are read again on a timer and on request.
+// Anchored sessions — the caller's own reports. The lists are read again when
+// the repository's mark moved (useFollowViewRevision), on request, and as a
+// fallback every SESSIONS_FALLBACK_MS.
 export function useAnchoredSessions(repoId: string | null) {
   return useQuery({
     queryKey: ['anchored-sessions', repoId],
     queryFn: ({ signal }) => api.anchoredSessions(repoId as string, signal),
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: SESSIONS_REFRESH_MS,
+    refetchInterval: SESSIONS_FALLBACK_MS,
   });
 }
 export function useBranchLifetimes(repoId: string | null) {
@@ -318,7 +339,7 @@ export function useBranchLifetimes(repoId: string | null) {
     queryFn: ({ signal }) => api.branchLifetimes(repoId as string, signal),
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: SESSIONS_REFRESH_MS,
+    refetchInterval: SESSIONS_FALLBACK_MS,
   });
 }
 /** One report in full. `revision` is the report's revision in the list, so a report that was replaced is read again. */
@@ -397,7 +418,7 @@ export function useReportedWorktrees(repoId: string | null) {
     queryFn: ({ signal }) => api.reportedWorktrees(repoId as string, signal),
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: SESSIONS_REFRESH_MS,
+    refetchInterval: SESSIONS_FALLBACK_MS,
   });
 }
 // Manual notes — the caller's own. A write stores the note the server
@@ -444,7 +465,7 @@ export function useRemoteGit(repoId: string | null) {
     getNextPageParam: page => page.next || undefined,
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: SESSIONS_REFRESH_MS,
+    refetchInterval: SESSIONS_FALLBACK_MS,
   });
 }
 // Invite list/redemption — only maintainers can view (403 is disabled).

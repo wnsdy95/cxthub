@@ -2943,6 +2943,35 @@ paths:
         '415': { description: Content-Type must be application/json }
         '422': { description: A name is a path, is listed twice, or there are too many }
         '503': { description: Worktree service unavailable }
+  /repos/{repoID}/revision:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: getViewRevision
+      summary: Read the mark that tells an open page when to read its lists again
+      description: Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. The mark is another one after anything the Sessions tab shows was stored. That is a report or summary of a session, its archive or removal, a note, a worktree list, a branch registration, a push the Git host delivered, and the end of a read of the Git host. It says that something changed and never what. Two marks can be compared for being the same and for nothing else. The answer is never cached. A page asks for it every few seconds and reads its lists only when it is another one.
+      tags: [remote-git]
+      responses:
+        '200':
+          description: The mark
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [revision]
+                properties:
+                  revision: { type: string, minLength: 1, maxLength: 128 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Storage is unavailable }
+        '422': { description: Invalid repository identity }
+        '503': { description: View revision unavailable }
+
   /repos/{repoID}/remote-git:
     parameters:
       - $ref: '#/components/parameters/repoID'
@@ -2982,7 +3011,7 @@ paths:
     post:
       operationId: refreshRemoteGit
       summary: Ask the server to read the Git hosting provider again soon
-      description: Member required and rechecked inside the repository transaction. JSON Content-Type required. The body is not read. The request is recorded and the worker that reads the provider serves it. Nothing is read while the request is answered. Two reads of one repository start at least 30 seconds apart. The request does not advance the repository revision.
+      description: Member required and rechecked inside the repository transaction. JSON Content-Type required. The body is not read. The request is recorded and the worker that reads the provider serves it. Nothing is read while the request is answered. The reader is told of the request when it is stored and reads at once. Two reads of one repository start at least 10 seconds apart. The request does not advance the repository revision. The end of the read it leads to does.
       tags: [remote-git]
       responses:
         '202':
