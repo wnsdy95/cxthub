@@ -33,7 +33,6 @@ type repositoryTx struct {
 	readOnly    bool
 	identity    bool
 	docRange    *postgresDocRangeGenerationRead
-	readLive    func() error
 }
 
 // Inner storage operations use savepoints; releasing one never commits the
@@ -143,14 +142,7 @@ func (s *PostgresStore) WithinReadSnapshot(ctx context.Context, fn func(context.
 	}
 	defer rollbackPG(tx)
 	bound := &repositoryTx{Tx: tx, owner: s, readOnly: true}
-	bound.readLive = func() error {
-		connection := tx.Conn()
-		if connection == nil || connection.IsClosed() || connection.PgConn().TxStatus() != 'T' {
-			return domain.ErrConflict
-		}
-		return nil
-	}
-	defer func() { bound.docRange, bound.readLive = nil, nil }()
+	defer func() { bound.docRange = nil }()
 	if err = fn(context.WithValue(ctx, repositoryTxKey{}, bound)); err != nil {
 		return err
 	}
