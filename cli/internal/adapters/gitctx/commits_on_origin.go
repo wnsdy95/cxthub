@@ -11,6 +11,7 @@ import (
 // a full commit number, or that Git does not have, is not among the answer.
 func CommitsOnOrigin(ctx context.Context, cwd string, commits []string) map[string]bool {
 	held := map[string]bool{}
+	branches, _ := followedBranches(ctx, cwd)
 	for _, sha := range commits {
 		if !fullCommitNumber(sha) || held[sha] {
 			continue
@@ -18,7 +19,7 @@ func CommitsOnOrigin(ctx context.Context, cwd string, commits []string) map[stri
 		if ctx.Err() != nil {
 			return held
 		}
-		out, err := gitRead(ctx, cwd, nil, "for-each-ref", "--count=1", "--contains", sha, "--format=%(refname)", "refs/remotes/origin")
+		out, err := gitRead(ctx, cwd, nil, "for-each-ref", "--count=1", "--contains", sha, "--format=%(refname)", branches)
 		if err == nil && strings.TrimSpace(string(out)) != "" {
 			held[sha] = true
 		}

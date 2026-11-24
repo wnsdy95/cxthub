@@ -7,7 +7,8 @@ import "context"
 // their names. It reads Git's own records and asks no remote. The list is
 // different after this computer pushed or fetched.
 func OriginBranches(ctx context.Context, cwd string) (string, error) {
-	out, err := gitRead(ctx, cwd, nil, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/origin")
+	branches, _ := followedBranches(ctx, cwd)
+	out, err := gitRead(ctx, cwd, nil, "for-each-ref", "--format=%(refname) %(objectname)", branches)
 	if err != nil {
 		return "", err
 	}

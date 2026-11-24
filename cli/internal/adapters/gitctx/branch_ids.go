@@ -32,11 +32,12 @@ func NewBranchIDs() *BranchIDs { return &BranchIDs{} }
 func (*BranchIDs) LocalBranches(ctx context.Context, cwd string) ([]domain.LocalBranch, error) {
 	// One listing gives the local branches with their configured upstream and
 	// the remote-tracking branches of origin.
-	refs, err := gitRead(ctx, cwd, nil, "for-each-ref", "--format=%(refname)%00%(upstream)", "refs/heads", "refs/remotes/origin")
+	branches, tracked := followedBranches(ctx, cwd)
+	refs, err := gitRead(ctx, cwd, nil, "for-each-ref", "--format=%(refname)%00%(upstream)", "refs/heads", branches)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
-	const local, tracked = "refs/heads/", "refs/remotes/origin/"
+	const local = "refs/heads/"
 	byName := map[string]*domain.LocalBranch{}
 	onOrigin := map[string]struct{}{}
 	var names []string

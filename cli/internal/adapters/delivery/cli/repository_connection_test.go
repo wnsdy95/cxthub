@@ -68,6 +68,29 @@ func TestLoginTargetBeforeConnection(t *testing.T) {
 	}
 }
 
+// The Git remote to follow is named with a flag, in either form; its value is
+// never taken for the address of the server repository.
+func TestSetupReadsTheGitRemoteToFollow(t *testing.T) {
+	for _, row := range []struct {
+		args  []string
+		name  string
+		given bool
+		first string
+	}{
+		{[]string{"https://example.test/a/b", "--no-login"}, "", false, "https://example.test/a/b"},
+		{[]string{"--git-remote", "upstream", "https://example.test/a/b"}, "upstream", true, "https://example.test/a/b"},
+		{[]string{"https://example.test/a/b", "--git-remote=team/main", "--no-login"}, "team/main", true, "https://example.test/a/b"},
+		{[]string{"--git-remote", "upstream"}, "upstream", true, ""},
+		{[]string{"--git-remote="}, "", true, ""},
+		{[]string{"--git-remote"}, "", true, ""},
+	} {
+		name, given := setupGitRemote(row.args)
+		if name != row.name || given != row.given || firstPositional(row.args) != row.first {
+			t.Errorf("%v: remote %q given=%v, server repository %q", row.args, name, given, firstPositional(row.args))
+		}
+	}
+}
+
 func TestSetupRecognizesMigratedDisplayAddress(t *testing.T) {
 	const original = "https://cxthub.example/acme/platform/backend"
 	const display = "https://cxthub.example/acme/backend"

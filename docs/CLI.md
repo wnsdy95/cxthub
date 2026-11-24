@@ -45,12 +45,12 @@ For installation and first-run setup, see
 ### `cxt setup`
 
 ```text
-cxt setup [remote-url] [--no-login]
+cxt setup [remote-url] [--no-login] [--git-remote <name>]
 ```
 
 Runs the complete, idempotent onboarding sequence:
 
-1. make the repository's `.cxt` directory and its mark (`.cxt/HEAD`) when they are absent;
+1. decide which Git remote of the clone cxt follows (`origin`, the one named with `--git-remote`, or the repository's only remote when it has no `origin`; what is read of it is said where the automatic upload is described) and make the repository's `.cxt` directory and its mark (`.cxt/HEAD`) when they are absent;
 2. log in and verify the repository remote when one is supplied (`--no-login` uses existing credentials);
 3. register the connection with the server;
 4. install the managed Git hooks;
@@ -726,6 +726,18 @@ like one that is switched off, until it is heard from again. A member is shown
 what went wrong on that member's own computers; other members are shown only
 that it failed. Two clones of one repository on the same computer report as
 one collector.
+
+All of this reads one Git remote of the clone: its address names the
+repository, and its branches say what was pushed. That remote is the one named
+`origin`. A repository whose remote has another name is told once:
+`cxt setup --git-remote <name>` checks that the repository has a remote of
+that name and keeps the name in the repository's own Git configuration
+(`cxt.gitremote`), which every worktree of the clone shares. Without the flag
+`cxt setup` follows the repository's only remote when it has exactly one and
+none named `origin`; with several remotes and no `origin` it follows none and
+says how to choose. Because the address of the followed remote names the
+repository, choosing another remote in a clone that is already connected
+makes it another repository to the server.
 
 Like every upload it sends nothing of a session that was removed from the
 server, and it then forgets what it had sent of that session, so that the

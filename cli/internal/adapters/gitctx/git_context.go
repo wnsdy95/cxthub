@@ -43,7 +43,7 @@ func (a *GitContextAdapter) CurrentRepo(ctx context.Context, cwd string) (domain
 	top := roots.WorktreeRoot
 
 	repo := domain.Repo{LocalPath: roots.SharedRoot, DefaultBranch: a.defaultBranch(ctx, top)}
-	if raw, err := git(ctx, top, "config", "--get", "remote.origin.url"); err == nil && raw != "" {
+	if raw, err := git(ctx, top, "config", "--get", "remote."+FollowedRemote(ctx, top)+".url"); err == nil && raw != "" {
 		safeRemote := SanitizeRemoteURL(raw)
 		repo.RemoteURL = safeRemote
 		repo.GitRemoteURL = safeRemote // credential-free code repo origin — for web "connected" link
@@ -62,8 +62,9 @@ func (a *GitContextAdapter) CurrentRepo(ctx context.Context, cwd string) (domain
 // defaultBranch reads the actual default branch from the .git (not the checked-out branch):
 // origin/HEAD (recorded during clone) → init.defaultBranch setting → current branch → "main".
 func (a *GitContextAdapter) defaultBranch(ctx context.Context, top string) string {
-	if ref, err := git(ctx, top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && ref != "" {
-		return strings.TrimPrefix(ref, "origin/")
+	remote := FollowedRemote(ctx, top)
+	if ref, err := git(ctx, top, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD"); err == nil && ref != "" {
+		return strings.TrimPrefix(ref, remote+"/")
 	}
 	if b, err := git(ctx, top, "config", "--get", "init.defaultbranch"); err == nil && b != "" {
 		return b

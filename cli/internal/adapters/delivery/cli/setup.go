@@ -1,6 +1,6 @@
 // setup.go — cxt setup: single command for new team member onboarding (idempotent — re-run = status check).
 //
-//	cxt setup [remote-url] [--no-login]
+//	cxt setup [remote-url] [--no-login] [--git-remote <name>]
 //
 // Completes in one go after cloning: .cxt → login (device flow) → verified remote registration → git hooks
 // → agent hooks (Claude repo setup, Codex global merge) → team basic settings pull.
@@ -102,11 +102,37 @@ func mergeAgentHooks(path, provider string) (bool, error) {
 }
 
 // runSetup runs the cxt setup.
+// setupGitRemote returns the value of --git-remote among the arguments, and
+// whether the flag was given.
+func setupGitRemote(args []string) (string, bool) {
+	for index, arg := range args {
+		name, value, inline := splitFlagValue(arg)
+		if name != "--git-remote" {
+			continue
+		}
+		if !inline && index+1 < len(args) {
+			value = args[index+1]
+		}
+		return value, true
+	}
+	return "", false
+}
+
 func runSetup(ctx context.Context, c *Container, cwd string, rest []string) error {
 	remoteURL := firstPositional(rest)
 	ok := func(f string, a ...interface{}) { fmt.Printf("  ✓ "+f+"\n", a...) }
 	bad := func(f string, a ...interface{}) { fmt.Printf("  ✗ "+f+"\n", a...) }
 	warn := func(f string, a ...interface{}) { fmt.Printf("  ⚠ "+f+"\n", a...) }
+
+	// 0) The Git remote cxt follows, before anything reads it: its address
+	// names the repository. It is the one named with --git-remote, else the
+	// one set before, else origin, else the repository's only remote.
+	if name, named := setupGitRemote(rest); named {
+		if err := gitctx.FollowRemote(ctx, cwd, name); err != nil {
+			return err
+		}
+	}
+	followed, followedExists := gitctx.FollowOnlyRemote(ctx, cwd)
 
 	// 1) .cxt store (git repo required — otherwise, fail here).
 	var out inbound.InitOutput
@@ -122,6 +148,11 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		return fmt.Errorf(".cxt initialization failed: %w", err)
 	}
 	ok(".cxt store (repo %s)", shortHash(out.RepoID))
+	if followedExists {
+		ok("Git remote %s (cxt reads from it what was pushed)", followed)
+	} else {
+		warn("this repository has no Git remote named %s, so cxt cannot see what was pushed — name the one to follow: cxt setup --git-remote <name>", followed)
+	}
 	_, _ = githooks.EnsureGitignore(cwd)
 	_ = githooks.EnsureExcluded(cwd)
 

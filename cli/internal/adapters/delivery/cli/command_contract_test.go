@@ -74,6 +74,7 @@ func TestCommandContractAcceptsSupportedArguments(t *testing.T) {
 		{"hook", "--provider", "codex", "--event", "stop"},
 		{"config", "secrets.redact", ""}, {"config", "segments.auto"}, {"config", "capture.identity", "default"},
 		{"setup"}, {"setup", "https://example.test/a/b", "--no-login"}, {"init", "--no-hooks"},
+		{"setup", "--git-remote", "upstream", "https://example.test/a/b"}, {"setup", "--git-remote=upstream", "--no-login"},
 		{"segments"}, {"segments", "--json"},
 		{"push"}, {"push", "--json"}, {"push", "codex", contractSession},
 		{"log"}, {"log", "claude", contractSession, "--json"},

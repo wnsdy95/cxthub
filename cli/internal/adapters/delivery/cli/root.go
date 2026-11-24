@@ -732,7 +732,7 @@ usage: cxt <command> [flags]
 
   Getting started:
   setup [remote-url]        set everything up in this folder: .cxt → login → repository connection → Git hooks → agent hooks → team settings
-                            (safe to rerun; use --no-login to skip login)
+                            (safe to rerun; use --no-login to skip login, --git-remote <name> when the Git remote to follow is not origin)
   init [--no-hooks] [--remote <url>]
                             set up .cxt in this folder and install the Git hooks
   repo create <url>         set up .cxt and connect a server repository

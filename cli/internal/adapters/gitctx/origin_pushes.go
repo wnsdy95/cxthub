@@ -21,7 +21,7 @@ const originPushNote = "update by push"
 // a push made while cxt was not working is still read here later. A clone
 // that pushed nothing, or that holds no branch of origin, has none.
 func OriginPushes(ctx context.Context, cwd string) ([]domain.RecordedPush, error) {
-	const branches = "refs/remotes/origin/"
+	_, branches := followedBranches(ctx, cwd)
 	out, err := gitRead(ctx, cwd, nil, "log", "--walk-reflogs", "--date=unix", "--format=%H%x09%gD%x09%gs", "--glob="+branches+"*")
 	if err != nil {
 		return nil, err

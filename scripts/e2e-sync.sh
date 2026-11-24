@@ -303,6 +303,20 @@ ran_again() { [ "$(last_run_at)" != "$REWOUND" ]; }
 cxt git-hook wake post-commit </dev/null >/dev/null 2>&1
 expect "a run with nothing new tells the server nothing more" "$(until_true 40 ran_again && echo ran) $([ -n "$HEARD" ] && [ "$(heard_at)" = "$HEARD" ] && echo not told)" "ran not told"
 
+echo "── C4. the Git remote cxt follows need not be named origin"
+# What cxt reads of a Git remote is read of one remote: origin, unless setup is told another name or the repository
+# has no origin and exactly one remote. Nothing here talks to the server.
+( mkdir -p "$TMP/named" && cd "$TMP/named" && git init -q && git commit -q --allow-empty -m "first" && git remote add upstream "$TMP/bare.git"
+  cxt setup --no-login >"$TMP/named.out" 2>&1 )
+expect "setup follows the repository's only remote" "$(grep -c 'Git remote upstream' "$TMP/named.out") $(git -C "$TMP/named" config --get cxt.gitremote)" "1 upstream"
+( cd "$TMP/named" && git remote add mirror "$TMP/bare.git" && cxt setup --git-remote mirror --no-login >"$TMP/named2.out" 2>&1 )
+expect "setup follows the remote it is told" "$(grep -c 'Git remote mirror' "$TMP/named2.out") $(git -C "$TMP/named" config --get cxt.gitremote)" "1 mirror"
+( cd "$TMP/named" && cxt setup --git-remote nowhere --no-login >"$TMP/named3.out" 2>&1 ); NAMED=$?
+expect "a name that is no remote of the repository stops setup and names the remotes" "$([ "$NAMED" -ne 0 ] && echo stopped) $(grep -c 'upstream' "$TMP/named3.out") $(git -C "$TMP/named" config --get cxt.gitremote)" "stopped 1 mirror"
+( mkdir -p "$TMP/two" && cd "$TMP/two" && git init -q && git commit -q --allow-empty -m "first" && git remote add alpha "$TMP/bare.git" && git remote add beta "$TMP/bare.git"
+  cxt setup --no-login >"$TMP/two.out" 2>&1 )
+expect "with two remotes and no origin setup chooses none and says how to choose" "$(grep -c 'no Git remote named origin' "$TMP/two.out") $(grep -c -- '--git-remote' "$TMP/two.out") $(git -C "$TMP/two" config --get cxt.gitremote || echo unset)" "1 1 unset"
+
 echo "── D. a linked worktree shares the hooks"
 quiet
 git worktree add -q "$TMP/linked" -b topic

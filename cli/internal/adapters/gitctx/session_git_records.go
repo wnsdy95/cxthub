@@ -51,7 +51,7 @@ func (*SessionGitRecords) ReadGitRecords(ctx context.Context, cwd string) (domai
 		return domain.GitRecords{}, nil, err
 	}
 	records := domain.GitRecords{Root: roots.SharedRoot}
-	if raw, err := gitRead(ctx, roots.WorktreeRoot, nil, "config", "--get", "remote.origin.url"); err == nil {
+	if raw, err := gitRead(ctx, roots.WorktreeRoot, nil, "config", "--get", "remote."+FollowedRemote(ctx, roots.WorktreeRoot)+".url"); err == nil {
 		records.Origin = NormalizeRemoteURL(string(raw))
 	} else if ctx.Err() != nil {
 		return domain.GitRecords{}, nil, ctx.Err()

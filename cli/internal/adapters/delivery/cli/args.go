@@ -60,7 +60,7 @@ func commandFlags(values, bools []string) map[string]commandFlagKind {
 // Subcommand-dependent constraints below operate on its typed parse, never on a
 // global option dictionary or the unparsed argv.
 var commandArgSpecs = map[string]commandArgSpec{
-	"setup":     {usage: "cxt setup [remote-url] [--no-login]", maxArgs: 1, flags: commandFlags(nil, []string{"--no-login"})},
+	"setup":     {usage: "cxt setup [remote-url] [--no-login] [--git-remote <name>]", maxArgs: 1, flags: commandFlags([]string{"--git-remote"}, []string{"--no-login"})},
 	"init":      {usage: "cxt init [--no-hooks] [--remote <url>]", flags: commandFlags([]string{"--remote"}, []string{"--no-hooks"})},
 	"repo":      {usage: "cxt repo create <url>", minArgs: 2, maxArgs: 2},
 	"remote":    {usage: "cxt remote [-v] | add <name> <url> | remove <name> | set-endpoint <name> <api-url>", maxArgs: 3, flags: commandFlags(nil, []string{"-v"})},
