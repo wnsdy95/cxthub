@@ -2,45 +2,17 @@ package app
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 const docViewBytes = 128 << 10
-const docViewScanEvents = 512
-
-var errDocViewGenerationNeedsPreparation = fmt.Errorf("%w: document generation is not ready", domain.ErrDocRangeIndexUnavailable)
-
-type docRangeRequirement uint8
-
-const (
-	docRangeRootOnly docRangeRequirement = iota
-	docRangeLegacyMetadata
-	docRangeLegacyBytes
-)
 
 type docViewSource struct {
-	envelope    domain.CIREnvelope
-	total       int
-	root        bool
-	streamBytes int64
-	chunk       func(int) (domain.ConversationManifestChunk, error)
-	block       func(int) (domain.ContentHash, error)
-	entry       func(int) (domain.DocRangeEntry, error)
-	location    func(int) (domain.DocEventIndex, error)
-	read        func(int, int) ([]byte, error)
-}
-
-type docViewRange struct {
-	envelope    json.RawMessage
-	total       int
-	streamBytes int64
-	readPage    func(int) ([]domain.DocRangeEntry, error)
-	block       func(int) (domain.ContentHash, error)
-	chunk       func(int) (domain.ConversationManifestChunk, error)
+	total    int
+	block    func(int) (domain.ContentHash, error)
+	location func(int) (domain.DocEventIndex, error)
 }
 
 func reauthorizeDocumentRead(ctx context.Context, repo domain.ContentHash) (context.Context, error) {

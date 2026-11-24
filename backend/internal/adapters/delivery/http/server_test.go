@@ -60,7 +60,7 @@ func (p policyDownIdentity) RoleOf(context.Context, string, string) (domain.Memb
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	delivery := NewServer(svc, idSvc)
 	setServiceDocumentEventQueries(t, delivery, svc)
@@ -863,7 +863,7 @@ func TestRateLimitDoesNotCountRejectedRequests(t *testing.T) {
 
 func TestCookieUnsafeMethodsRequireTrustedOriginAndCSRFHeader(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	user := domain.User{ID: "cookie-user", Email: "cookie@example.com", Name: "Cookie", Username: "cookie"}
 	if err := st.UpsertUser(systemTestContext(), user); err != nil {
@@ -921,7 +921,7 @@ func TestConfiguredProxyOriginPassesCookieCSRF(t *testing.T) {
 	t.Setenv("CXT_CORS_ORIGINS", "https://cxthub.com")
 
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	user := domain.User{ID: "proxy-user", Email: "proxy@example.com", Name: "Proxy", Username: "proxy"}
 	if err := st.UpsertUser(systemTestContext(), user); err != nil {
@@ -955,7 +955,7 @@ func TestConfiguredProxyOriginPassesCookieCSRF(t *testing.T) {
 
 func TestUnboundRepoHiddenAndRejected(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	ts := httptest.NewServer(NewServer(svc, idSvc).Handler())
 	defer ts.Close()
@@ -1029,7 +1029,7 @@ func TestAboutWebsiteRejectsUnsafeScheme(t *testing.T) {
 
 func TestRepositoryPolicyLookupFailureBlocksAction(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	id := policyDownIdentity{
 		IdentityService: idSvc,

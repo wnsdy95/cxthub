@@ -14,7 +14,7 @@ func TestDeviceFlowCrossesInstancesAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	server := func() *httptest.Server {
 		st := store.NewFSStore(dir)
-		svc := app.NewService(st, st, nil, st)
+		svc := app.NewService(st, st, st)
 		return httptest.NewServer(NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st)).Handler())
 	}
 	a := server()

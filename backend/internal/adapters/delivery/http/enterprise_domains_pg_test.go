@@ -45,7 +45,7 @@ func TestPGEnterpriseDomainHTTPVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewServer(app.NewService(st, st, nil, st), ids).Handler()
+	handler := NewServer(app.NewService(st, st, st), ids).Handler()
 	post := func(suffix string, body any, contentType string) (int, app.EnterpriseDomainView) {
 		t.Helper()
 		raw, _ := json.Marshal(body)

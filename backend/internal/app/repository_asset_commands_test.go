@@ -42,10 +42,6 @@ func (ports *wave56AssetStore) PutSettingsBundle(ctx context.Context, repo domai
 	return ports.putSettings(ctx, repo, bundle)
 }
 
-func (ports *wave56AssetStore) PutSettingsObject(ctx context.Context, repo, hash domain.ContentHash, bundle domain.SettingsBundle) error {
-	return ports.putObject(ctx, repo, hash, bundle)
-}
-
 func (ports *wave56AssetStore) GetSecretsEnvelope(ctx context.Context, repo domain.ContentHash) ([]byte, error) {
 	return ports.getSecrets(ctx, repo)
 }

@@ -14,12 +14,10 @@ import (
 
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
-	memoryReadRepos []domain.ContentHash
 	rootPublication bool // configured before serving; cannot override release readiness
 	docVerifier     domain.CanonicalDocVerifier
 	meta            outbound.MetadataStore
 	blobs           outbound.BlobStore
-	auth            outbound.AuthProvider
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
 	repositories       outbound.RepositoryStore
@@ -27,17 +25,9 @@ type Service struct {
 }
 
 // NewService creates a Service with an outbound port injected.
-func NewService(meta outbound.MetadataStore, blobs outbound.BlobStore, auth outbound.AuthProvider, repositories outbound.RepositoryStore) *Service {
-	return &Service{meta: meta, blobs: blobs, auth: auth, repositories: repositories}
+func NewService(meta outbound.MetadataStore, blobs outbound.BlobStore, repositories outbound.RepositoryStore) *Service {
+	return &Service{meta: meta, blobs: blobs, repositories: repositories}
 }
-
-// Inbound port implementations are guaranteed at compile time.
-var (
-	_ inbound.CommitSnapshot = (*Service)(nil)
-	_ inbound.PushReceive    = (*Service)(nil)
-	_ inbound.StoreChunks    = (*Service)(nil)
-	_ inbound.Authenticate   = (*Service)(nil)
-)
 
 // --- Helper ---
 
@@ -55,14 +45,6 @@ func difference(all, have []domain.ContentHash) []domain.ContentHash {
 	return out
 }
 
-func short(h domain.ContentHash) string {
-	hx := strings.TrimPrefix(string(h), "sha256:")
-	if len(hx) > 8 {
-		return hx[:8]
-	}
-	return hx
-}
-
 func validateHashes(hashes ...domain.ContentHash) error {
 	for _, h := range hashes {
 		if err := domain.ValidateContentHash(h); err != nil {
@@ -70,31 +52,6 @@ func validateHashes(hashes ...domain.ContentHash) error {
 		}
 	}
 	return nil
-}
-
-func validateOptionalHashes(hashes ...domain.ContentHash) error {
-	for _, h := range hashes {
-		if err := domain.ValidateOptionalContentHash(h); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func equalHashList(left, right []domain.ContentHash) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func settingsObjectHash(bundle domain.SettingsBundle) (domain.ContentHash, error) {
-	return domain.SettingsObjectHash(bundle)
 }
 
 // --- push/pull use-cases ---
@@ -138,19 +95,6 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 			ChunkWants:                      chunkWants,
 		}, nil
 	})
-}
-
-// Authenticate: Token → Team interpretation (v1: identity enhancement). Invalid tokens result in an error from AuthProvider.
-func (s *Service) Authenticate(ctx context.Context, in inbound.AuthInput) (inbound.AuthOutput, error) {
-	team, err := s.auth.ResolveTeam(ctx, in.TeamToken)
-	if err != nil {
-		return inbound.AuthOutput{}, err
-	}
-	id := in.Identity
-	if id.Team == "" {
-		id.Team = team
-	}
-	return inbound.AuthOutput{Team: team, Identity: id}, nil
 }
 
 // --- HTTP read pass-through (auxiliary methods for inbound ports) ---

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
@@ -20,15 +19,6 @@ func (service *Service) ProcessNotification(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return worker.Process(ctx)
-}
-
-func (service *Service) RunNotificationWorker(ctx context.Context) {
-	worker, err := service.notificationWorker(notificationworker.Compatibility)
-	if err != nil {
-		log.Printf("notification worker: %v", err)
-		return
-	}
-	worker.Run(ctx)
 }
 
 func (s *IdentityService) notificationManager(ctx context.Context, user, repository string) (domain.Repository, error) {

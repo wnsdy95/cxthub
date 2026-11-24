@@ -136,14 +136,6 @@ func (s *Server) resolveRepository(ctx context.Context, user domain.User, select
 	return domain.Repo{}, fmt.Errorf("repository not found or not authorized")
 }
 
-func (s *Server) toolRepositoryList(ctx context.Context, user domain.User, query string, limit int) (string, error) {
-	repos, err := s.visibleRepositories(ctx, user)
-	if err != nil {
-		return "", err
-	}
-	return formatRepositoryList(repos, query, limit)
-}
-
 func formatRepositoryList(repos []listedRepository, query string, limit int) (string, error) {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if len([]rune(query)) > 128 {
@@ -180,16 +172,6 @@ func defaultBranch(repo domain.Repo) string {
 		return "main"
 	}
 	return repo.DefaultBranch
-}
-
-func eventText(event domain.CIREvent) string {
-	var parts []string
-	for _, block := range event.Blocks {
-		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			parts = append(parts, strings.TrimSpace(block.Text))
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 func shortHash(hash domain.ContentHash) string {

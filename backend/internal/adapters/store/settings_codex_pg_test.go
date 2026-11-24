@@ -12,10 +12,8 @@ import (
 )
 
 const (
-	settingsCodexMigrationPG   = "0152_settings_codex.sql"
-	settingsCodexPredecessorPG = "0151_legacy_byte_header_accounting.sql"
-	settingsCodexCatalog151PG  = "5ccf1e9041446edf410205a978616aad20acbd3e07dac491fe80185d3a561994"
-	settingsCodexCatalog152PG  = "42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b"
+	settingsCodexMigrationPG  = "0152_settings_codex.sql"
+	settingsCodexCatalog152PG = "42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b"
 )
 
 func settingsCodexRequireCurrentPG(test *testing.T) int {

@@ -16,7 +16,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 type fixedVerifier struct{ user domain.User }
@@ -32,44 +31,8 @@ type fakeContextBackend struct {
 func (f fakeContextBackend) ListRepos(context.Context, string) ([]domain.Repo, error) {
 	return f.repos, nil
 }
-func (f fakeContextBackend) GetSnapshot(_ context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
-	for _, snapshot := range f.snapshots[repoID] {
-		if snapshot.ID == id {
-			return snapshot, nil
-		}
-	}
-	return domain.Snapshot{}, domain.ErrNotFound
-}
 func (fakeContextBackend) GetDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.SessionDoc, error) {
 	return domain.SessionDoc{}, domain.ErrNotFound
-}
-func (f fakeContextBackend) GetMemoryObject(_ context.Context, _ domain.ContentHash, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	if memory, ok := f.memories[hash]; ok {
-		return memory, nil
-	}
-	return domain.MemoryDigest{}, domain.ErrNotFound
-}
-
-func (f fakeContextBackend) GetMemoryDigest(ctx context.Context, repo, snapshot domain.ContentHash) (domain.MemoryDigest, error) {
-	selected, err := f.GetSnapshot(ctx, repo, snapshot)
-	if err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	return f.GetMemoryObject(ctx, repo, selected.MemoryHash)
-}
-
-func (fakeContextBackend) WithMemoryReadResources(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
-	if authorize := inbound.DocumentReadAuthorizer(ctx); authorize != nil {
-		var err error
-		ctx, err = authorize(ctx, repo)
-		if err != nil {
-			return err
-		}
-	}
-	return read(ctx)
-}
-func (fakeContextBackend) ListRefs(context.Context, domain.ContentHash) ([]domain.Ref, error) {
-	return nil, nil
 }
 
 func mcpRequest(t *testing.T, handler http.Handler, method, target string, body io.Reader, headers map[string]string) *httptest.ResponseRecorder {

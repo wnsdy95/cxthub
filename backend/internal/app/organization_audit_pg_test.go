@@ -23,7 +23,7 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken := failedInvitationAuditStore{st}
-	svc := NewService(broken, broken, nil, broken)
+	svc := NewService(broken, broken, broken)
 	actor := inbound.WithCorrelation(inbound.WithRepositoryActor(context.Background(), f.owner.ID), "req_write")
 	next := "next"
 	if err := svc.UpdateRepoConfig(actor, repo.ID, &next, nil); err == nil {
@@ -45,7 +45,7 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 	if err != nil || currentRepo.OwnerNamespaceID != f.repository.OwnerNamespaceID {
 		t.Fatal("transfer escaped rollback")
 	}
-	svc = NewService(st, st, nil, st)
+	svc = NewService(st, st, st)
 	if err = svc.UpdateRepoConfig(actor, repo.ID, &next, nil); err != nil {
 		t.Fatal(err)
 	}

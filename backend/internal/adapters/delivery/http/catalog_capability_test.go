@@ -48,7 +48,7 @@ func TestCatalogCapabilityHTTPGetRepoFS(t *testing.T) {
 	if _, err := st.PutRepo(context.Background(), repo); err != nil {
 		t.Fatal(err)
 	}
-	service := app.NewService(st, st, nil, nil)
+	service := app.NewService(st, st, nil)
 	wire := getCatalogCapabilityRepo(t, service, repo, "")
 	if _, present := wire["catalog_version"]; present {
 		t.Fatalf("FS advertised catalog support: %s", wire["catalog_version"])

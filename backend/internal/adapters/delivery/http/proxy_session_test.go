@@ -25,7 +25,7 @@ func TestProductionProxySessionBoundary(t *testing.T) {
 	t.Setenv("CXT_COOKIE_SAMESITE", "")
 	t.Setenv("CXT_COOKIE_DOMAIN", "")
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	identity := app.NewIdentityService(auth.NewDevVerifier(), st)
 	handler := NewServer(svc, identity).Handler()
 

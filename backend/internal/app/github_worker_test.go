@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -15,7 +14,7 @@ func githubPRObservationFixture(t *testing.T) (*GitHubConnections, *store.FSStor
 	t.Helper()
 	worker, storage, fixture, remote := githubFixture(t)
 	ctx := context.Background()
-	worker.core = NewService(storage, storage, auth.NewTeamTokenAuth(), storage)
+	worker.core = NewService(storage, storage, storage)
 	remote.repos = []domain.GitHubRepository{{ID: 91, AccountID: 456, FullName: "acme/api"}}
 	state := startGitHub(t, worker, fixture.owner.ID, fixture.organization.NamespaceID)
 	if _, err := worker.Complete(ctx, fixture.owner.ID, state, "code"); err != nil {

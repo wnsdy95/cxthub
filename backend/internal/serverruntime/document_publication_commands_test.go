@@ -87,7 +87,7 @@ func TestDocumentPublicationRuntimeConfigurationClearsIncompleteBindings(test *t
 	}{
 		{name: "nil runtime", runtime: func() *Runtime { return nil }},
 		{name: "missing Context", runtime: func() *Runtime { return &Runtime{} }},
-		{name: "incomplete Service", runtime: func() *Runtime { return &Runtime{Context: app.NewService(nil, nil, nil, nil)} }},
+		{name: "incomplete Service", runtime: func() *Runtime { return &Runtime{Context: app.NewService(nil, nil, nil)} }},
 	} {
 		for _, previousBinding := range []bool{false, true} {
 			name := fixture.name + "/unbound"

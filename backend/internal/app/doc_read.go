@@ -5,19 +5,7 @@ import (
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
-
-func (s *Service) legacyDocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
-	if indexed, ok := s.blobs.(outbound.DocReadStore); ok {
-		return indexed.DocReadIndex(ctx, repo, hash)
-	}
-	doc, err := s.blobs.GetDoc(ctx, repo, hash)
-	if err != nil {
-		return domain.DocReadIndex{}, err
-	}
-	return domain.BuildDocReadIndex(doc)
-}
 
 func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.ContentHash, q string, after, limit int) ([]domain.DocEventIndex, error) {
 	queries, err := s.DocumentEventQueries()
@@ -25,22 +13,6 @@ func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 		return nil, err
 	}
 	return queries.SearchDocEvents(ctx, repo, hash, q, after, limit)
-}
-
-func searchReadIndex(ctx context.Context, idx domain.DocReadIndex, q string, after, limit int) ([]domain.DocEventIndex, error) {
-	out := []domain.DocEventIndex{}
-	for _, e := range idx.Events {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if e.Index > after && e.Text != "" && strings.Contains(strings.ToLower(e.Text), q) {
-			out = append(out, e)
-			if len(out) == limit {
-				break
-			}
-		}
-	}
-	return out, nil
 }
 
 // A nil candidate set means the adapter searches each indexed document. An empty

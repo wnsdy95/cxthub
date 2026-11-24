@@ -114,13 +114,6 @@ func (s *Server) repositoryPage(ctx context.Context, user domain.User, a toolArg
 	return pageJSON(map[string]any{"notice": archiveNotice, "repositories": rows, "next_cursor": next})
 }
 
-type eventFragment struct {
-	Index    int    `json:"event_index"`
-	Offset   int    `json:"byte_offset"`
-	Complete bool   `json:"event_complete"`
-	JSON     string `json:"json_fragment"`
-}
-
 func fragmentEnd(raw []byte, offset, budget int) int {
 	end := min(len(raw), offset+budget)
 	for end < len(raw) && end > offset && !utf8.RuneStart(raw[end]) {

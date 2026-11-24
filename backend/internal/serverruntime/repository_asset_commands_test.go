@@ -56,7 +56,7 @@ func TestRepositoryAssetRuntimeActualOwnerAndMCPIsolation(test *testing.T) {
 }
 
 func TestRepositoryAssetRuntimeConfigurationRejectsIncompleteDependencies(test *testing.T) {
-	for _, runtime := range []*Runtime{nil, {}, {Context: app.NewService(nil, nil, nil, nil)}} {
+	for _, runtime := range []*Runtime{nil, {}, {Context: app.NewService(nil, nil, nil)}} {
 		if err := runtime.ConfigureRepositoryAssetCommands(); err == nil {
 			test.Fatal("incomplete runtime silently configured repository commands")
 		}

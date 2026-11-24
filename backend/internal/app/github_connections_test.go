@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -136,9 +135,6 @@ func (f *githubFake) TeamMembers(context.Context, int64, string, string) ([]int6
 		f.onMembers()
 	}
 	return f.members, nil
-}
-func (f *githubFake) MergedPullRequests(context.Context, int64, domain.GitHubRepository, int) ([]domain.PullRequestMerge, bool, error) {
-	return nil, false, nil
 }
 
 func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, remote *githubFake) {
@@ -327,7 +323,7 @@ func TestGitHubDeliveryAsksOnlyTheBoundRepositoryAndSurvivesWorkerRestart(t *tes
 	g, st, f, remote := githubFixture(t)
 	ctx := context.Background()
 	ns := f.organization.NamespaceID
-	g.core = NewService(st, st, auth.NewTeamTokenAuth(), st)
+	g.core = NewService(st, st, st)
 	remote.repos = []domain.GitHubRepository{{ID: 91, AccountID: 456, FullName: "acme/api"}}
 	state := startGitHub(t, g, f.owner.ID, ns)
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {

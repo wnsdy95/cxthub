@@ -14,7 +14,7 @@ import (
 
 func TestDocJobHTTPDurabilityAndAuthorization(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	svc := app.NewService(st, st, st)
 	id := app.NewIdentityService(auth.NewDevVerifier(), st)
 	server := httptest.NewServer(NewServer(svc, id).Handler())
 	defer server.Close()

@@ -288,30 +288,6 @@ func TestBoundedExecutionProcessPGChild(test *testing.T) {
 	}
 }
 
-func (fixture *executionProcessFixture) waitRejectedBulkConnectionClosed(test *testing.T, ctx context.Context, role outbound.ProcessRole) {
-	test.Helper()
-	deadline, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		var remaining int
-		err := fixture.observer.QueryRow(deadline, `SELECT count(*) FROM pg_stat_activity
- WHERE datname=current_database() AND application_name=$1`, "cxthub/bounded-documents-v1/"+string(role)+"/bulk").Scan(&remaining)
-		if err != nil {
-			test.Fatal("observe rejected request's discarded bulk connection", role, err)
-		}
-		if remaining == 0 {
-			return
-		}
-		select {
-		case <-deadline.Done():
-			test.Fatal("rejected request's bulk connection survived the original one-second discard bound", role, remaining)
-		case <-ticker.C:
-		}
-	}
-}
-
 func TestBoundedExecutionProcessesPGControlLossAndKill(test *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

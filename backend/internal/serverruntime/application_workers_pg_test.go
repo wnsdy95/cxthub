@@ -542,35 +542,6 @@ func (fixture *wave48PGFixture) assertQueued(test *testing.T, job domain.DocFina
 	}
 }
 
-func (fixture *wave48PGFixture) waitCompleted(test *testing.T, job domain.DocFinalizationJob) domain.DocFinalizationJob {
-	test.Helper()
-	ctx, cancel := context.WithTimeout(wave48PGSystemContext(context.Background()), 15*time.Second)
-	defer cancel()
-	for {
-		current, err := fixture.storage.GetDocJob(ctx, fixture.repo, job.ID)
-		if err != nil {
-			test.Fatal("read original durable receipt", err)
-		}
-		if current.State == "completed" {
-			if current.Attempts < 1 || current.Version < 1 || current.DocumentRef() != job.DocumentRef() {
-				test.Fatal("actual full worker completion lost the original identity or lease/version fence", current)
-			}
-			if present, err := fixture.storage.HasDocs(ctx, fixture.repo, []domain.ContentHash{job.DocHash}); err != nil || len(present) != 1 {
-				test.Fatal("completed full worker receipt has no useful durable publication", err)
-			}
-			return current
-		}
-		if current.State == "rejected" {
-			test.Fatal("actual full worker rejected the useful fixture document", current)
-		}
-		select {
-		case <-ctx.Done():
-			test.Fatal("actual compatible full worker Run did not process its durable job", current.State)
-		case <-time.After(25 * time.Millisecond):
-		}
-	}
-}
-
 func (fixture *wave48PGFixture) assertAdmissionFamily(test *testing.T, fingerprints map[outbound.ProcessRole]string) {
 	test.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

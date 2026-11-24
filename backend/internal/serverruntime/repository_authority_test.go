@@ -95,7 +95,7 @@ func TestWave59RuntimeCommandConfigurationRejectsAuthorityBeforeIO(test *testing
 		{name: "typed nil authority", repositories: (*store.FSStore)(nil), want: domain.ErrValidation},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
-			runtime := &Runtime{Context: app.NewService(storage, storage, nil, scenario.repositories)}
+			runtime := &Runtime{Context: app.NewService(storage, storage, scenario.repositories)}
 			if err := runtime.ConfigureRepositoryAssetCommands(); !errors.Is(err, scenario.want) || runtime.RepositoryAssets != nil {
 				test.Fatal("runtime published an asset owner without complete authority", err)
 			}

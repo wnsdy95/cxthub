@@ -86,7 +86,7 @@ func TestWave59PublicCommandFactoriesRequireCompleteAuthorityBeforeExecution(tes
 		{name: "typed nil metadata", metadata: (*wave42WorkStore)(nil), repositories: storage, want: domain.ErrValidation},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
-			service := NewService(scenario.metadata, storage, nil, scenario.repositories)
+			service := NewService(scenario.metadata, storage, scenario.repositories)
 			assets, err := service.RepositoryAssetCommands()
 			if !errors.Is(err, scenario.want) || rootAdapterPresent(assets) != (scenario.want == nil) {
 				work := service.repositoryWork()
@@ -118,7 +118,7 @@ func TestWave59CompatibilityCommandsPreserveExplicitAbsentAuthorityCapabilities(
 	storage := store.NewFSStore(test.TempDir())
 	repository, secretsInput := seedSecretsRepo(test, storage, storage)
 	repositories := struct{ outbound.RepositoryStore }{storage}
-	service := NewService(storage, storage, nil, repositories)
+	service := NewService(storage, storage, repositories)
 	if commands, err := service.RepositoryAssetCommands(); !errors.Is(err, domain.ErrCatalogUnsupported) || rootAdapterPresent(commands) {
 		test.Fatal("Complete asset factory silently selected compatibility", err)
 	}
@@ -160,7 +160,7 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 	if _, err := storage.PutRepo(systemTestContext(), domain.Repo{ID: repo, RepositoryID: fixture.repository.ID, DefaultBranch: "main"}); err != nil {
 		test.Fatal(err)
 	}
-	service := NewService(storage, storage, nil, storage)
+	service := NewService(storage, storage, storage)
 	assetPort, err := service.RepositoryAssetCommands()
 	if err != nil {
 		test.Fatal(err)

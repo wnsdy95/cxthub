@@ -723,12 +723,6 @@ func (s *IdentityService) issueGrantedSession(ctx context.Context, userID, prefi
 	return stored, nil
 }
 
-// IsPublicRepository returns the public status (used for bypassing membership checks in query paths).
-func (s *IdentityService) IsPublicRepository(ctx context.Context, repositoryID string) bool {
-	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
-	return err == nil && repositoryRecord.IsPublic()
-}
-
 // CreateRepository creates a repository and registers its creator as an owner member.
 // It derives the URL slug from the name, making it unique within the owner via -2, -3, and so on.
 func (s *IdentityService) mutateCreateRepository(ctx context.Context, owner domain.User, name string) (domain.Repository, error) {

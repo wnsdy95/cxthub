@@ -37,7 +37,7 @@ func TestIndexedFragmentsBoundOversizedUnicodeEventAndPreserveBytes(t *testing.T
 		t.Fatal(err)
 	}
 	spy := &countedReadStore{FSStore: fs}
-	svc := NewService(fs, spy, nil, nil)
+	svc := NewService(fs, spy, nil)
 	var result strings.Builder
 	index, offset := 0, 0
 	for calls := 0; calls < 1000; calls++ {

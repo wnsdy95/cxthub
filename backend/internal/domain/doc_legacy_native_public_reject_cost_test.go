@@ -109,12 +109,6 @@ func (source *legacyNativePublicRejectCostSource) Read(ctx context.Context, offs
 	return body, err
 }
 
-func (source *legacyNativePublicRejectCostSource) reset() {
-	clear(source.visited)
-	source.readBytes, source.coveredBytes = 0, 0
-	source.loads, source.zeroEOF, source.oneEOF, source.unexpectedReads = 0, 0, 0, 0
-}
-
 func TestLegacyNativePublicRejectCostGeneratedSourceOffsets(test *testing.T) {
 	const extent = 2*ConversationManifestChunkBytes + 37
 	source := newLegacyNativePublicRejectCostSource(test, extent)

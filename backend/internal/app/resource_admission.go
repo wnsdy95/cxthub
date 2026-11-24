@@ -98,10 +98,6 @@ func acquireResources(ctx context.Context, class ResourceClass, wait bool) (cont
 	return gate.acquireWithWait(ctx, class, wait)
 }
 
-func (gate *resourceAdmission) acquire(ctx context.Context, class ResourceClass) (context.Context, func(), error) {
-	return gate.acquireWithWait(ctx, class, true)
-}
-
 func (gate *resourceAdmission) acquireWithWait(ctx context.Context, class ResourceClass, wait bool) (context.Context, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return ctx, nil, err

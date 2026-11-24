@@ -4,7 +4,6 @@
 //
 //   - MetadataStore: repo/branch/ref/snapshot meta/manifest metadata (PostgreSQL in production; filesystem in development).
 //   - BlobStore:     content-addressed body (CIR doc / memory; v1 Postgres BYTEA, later S3).
-//   - AuthProvider:  team token ↔ team mapping, repo visibility (sync protocol).
 //   - GitEngine:     git semantic engine (commit/branch/fork/diff/ref; CIR/hash-based, format-agnostic).
 package outbound
 
@@ -61,17 +60,6 @@ type BlobStore interface {
 	HasChunks(ctx context.Context, repoID domain.ContentHash, hashes []domain.ContentHash) (have []domain.ContentHash, err error)
 	GetChunk(ctx context.Context, repoID, hash domain.ContentHash) ([]byte, error)
 	GetDocManifest(ctx context.Context, repoID, hash domain.ContentHash) (domain.DocChunkManifest, error)
-}
-
-// AuthProvider validates team tokens and determines visibility boundaries (sync protocol).
-//
-// Visibility unit = team (v1 simple model): Team members can read-write all team repos.
-// Implementation (impl step): Token store (e.g., Postgres team_tokens table). Current stub.
-type AuthProvider interface {
-	// ResolveTeam: Opaque bearer team token → team identifier. Invalid token returns error (401 unauthenticated).
-	ResolveTeam(ctx context.Context, token string) (team string, err error)
-	// RepoVisible: Whether the team can access the repo (403 forbidden reason).
-	RepoVisible(ctx context.Context, team string, repoID domain.ContentHash) (bool, error)
 }
 
 // IdentityVerifier verifies authentication token (Firebase ID token or dev token) and returns User.

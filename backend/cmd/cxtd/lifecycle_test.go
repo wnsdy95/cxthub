@@ -227,7 +227,7 @@ func TestAPILifecycleJoinsActualGitHubWorkerBeforeRuntimeClose(test *testing.T) 
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	remote := apiLifecycleGitHubRemote{started: started, canceled: canceled, release: release}
-	service := app.NewService(storage, storage, nil, storage)
+	service := app.NewService(storage, storage, storage)
 	github := app.NewGitHubConnections(identity, service, storage, remote)
 	githubWorker, err := app.NewGitHubWorker(github.GitHubWorkerConfig(app.GitHubWorkerCompatibility))
 	if err != nil || githubWorker == nil {

@@ -22,7 +22,7 @@ func TestP9RootWorkerStoredDecoderBoundary(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			st := store.NewFSStore(dir)
-			svc := NewService(st, st, nil, st)
+			svc := NewService(st, st, st)
 			ctx := systemTestContext()
 			repo := hh(t.Name())
 			bindCommitTestRepo(t, st, repo)
@@ -100,7 +100,7 @@ func TestP9RootWorkerLoaderErrorControls(t *testing.T) {
 	for _, mode := range []string{"transient", "missing", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			st := store.NewFSStore(t.TempDir())
-			svc := NewService(st, st, nil, st)
+			svc := NewService(st, st, st)
 			ctx := systemTestContext()
 			repo := hh(t.Name())
 			bindCommitTestRepo(t, st, repo)

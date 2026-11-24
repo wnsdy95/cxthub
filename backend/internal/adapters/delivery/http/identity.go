@@ -28,13 +28,11 @@ type IdentityBackend interface {
 	Logout(ctx context.Context, sessionToken string) error
 	ResolveUser(ctx context.Context, bearer string) (domain.User, error)
 
-	Authenticate(ctx context.Context, idToken string) (domain.User, error)
 	UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error)
 	CreateCLIToken(ctx context.Context, userID, label string) (domain.Session, error)
 	CreateRepository(ctx context.Context, owner domain.User, name string) (domain.Repository, error)
 	UpdateRepositorySettings(ctx context.Context, userID, repositoryID string, p app.RepositoryPatch) (domain.Repository, error)
 	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
-	IsPublicRepository(ctx context.Context, repositoryID string) bool
 	IsOwner(ctx context.Context, repositoryID, userID string) bool
 	CanTransferOwnership(ctx context.Context, repositoryID, userID string) bool
 	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
@@ -45,7 +43,6 @@ type IdentityBackend interface {
 	RevokeCLIToken(ctx context.Context, userID, suffix string) error
 	ListWebSessions(ctx context.Context, userID string) ([]app.CLITokenInfo, error)
 	RevokeWebSession(ctx context.Context, userID, suffix string) error
-	PublicRepository(ctx context.Context, username, slug string) (domain.Repository, error)
 	ReadableRepository(ctx context.Context, namespace, slug, viewerID string) (domain.Repository, error)
 	PublicUser(ctx context.Context, username, viewerID string) (domain.User, []domain.Repository, error)
 	ListRepositories(ctx context.Context, userID string) ([]domain.Repository, error)

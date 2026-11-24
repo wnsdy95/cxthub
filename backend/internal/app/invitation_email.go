@@ -57,13 +57,6 @@ func (s *IdentityService) enqueueInvitationEmail(ctx context.Context, i domain.C
 	return s.repositories.(outbound.InvitationEmailStore).PutInvitationEmail(ctx, domain.InvitationEmail{InvitationID: i.ID, State: "queued", NextAttempt: i.CreatedAt, Message: domain.EmailMessage{From: s.invitationEmail.from, To: []string{i.Email}, Subject: "CXTHub invitation", Text: text, HTML: body}})
 }
 
-func (s *IdentityService) claimInvitationEmail(ctx context.Context) (domain.InvitationEmail, error) {
-	return s.invitationEmailWorker().claimInvitationEmail(ctx)
-}
-
 func (s *IdentityService) ProcessInvitationEmail(ctx context.Context) (bool, error) {
 	return s.invitationEmailWorker().ProcessInvitationEmail(ctx)
-}
-func (s *IdentityService) RunInvitationEmailWorker(ctx context.Context) {
-	s.invitationEmailWorker().RunInvitationEmailWorker(ctx)
 }

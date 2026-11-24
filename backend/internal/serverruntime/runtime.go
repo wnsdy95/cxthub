@@ -24,7 +24,6 @@ import (
 type Runtime struct {
 	Store                  store.Store
 	Context                *app.Service
-	DocumentEvents         inbound.DocumentEventQueries
 	DocumentQueries        inbound.DocumentQueries
 	DocumentQueryProfile   inbound.DocumentQueryProfile
 	DocumentIdentities     []domain.DocumentIdentity
@@ -154,7 +153,7 @@ func openRuntime(ctx context.Context, addr, dataDir string, requirePostgres, que
 		}
 		return r, nil
 	}
-	r.Context = app.NewService(st, st, auth.NewTeamTokenAuth(), st)
+	r.Context = app.NewService(st, st, st)
 	if err = r.Context.ConfigureConversationRootPublication(rootPublication); err != nil {
 		return nil, err
 	}
@@ -204,7 +203,6 @@ func (runtime *Runtime) ConfigureDocumentQueries() error {
 		return fmt.Errorf("configure document queries: %w", err)
 	}
 	runtime.DocumentQueries = queries
-	runtime.DocumentEvents = queries
 	return nil
 }
 

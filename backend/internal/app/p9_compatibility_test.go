@@ -176,7 +176,7 @@ func TestP9IdentityAdminSupportedPeerAndAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	archived := true
-	svc := NewService(st, st, nil, st)
+	svc := NewService(st, st, st)
 	_, err := f.identity.UpdateRepositorySettings(ctx, f.owner.ID, f.repository.ID, RepositoryPatch{Archived: &archived})
 	if hasDocumentIdentity(svc.DocumentIdentitiesSupported(), domain.DocumentIdentityRootV1) {
 		if err != nil {

@@ -139,9 +139,7 @@ func TestWave46InvitationEmailActualOwnerHasExactPortsNoReverseDependencyOrAutos
 		"InvitationEmailWorker.Run":                    {"InvitationEmailWorker.RunInvitationEmailWorker", "InvitationEmailWorker.ProcessInvitationEmail", "InvitationEmailWorker.claimInvitationEmail"},
 		"InvitationEmailWorker.claimInvitationEmail":   {"identityResultWithTransactions", "withIdentityTransactions", "invitationAuthority.authorizeInvitation"},
 		"InvitationEmailWorker.ProcessInvitationEmail": {"InvitationEmailWorker.claimInvitationEmail", "withIdentityTransactions"},
-		"IdentityService.claimInvitationEmail":         {"InvitationEmailWorker.claimInvitationEmail"},
 		"IdentityService.ProcessInvitationEmail":       {"InvitationEmailWorker.ProcessInvitationEmail"},
-		"IdentityService.RunInvitationEmailWorker":     {"InvitationEmailWorker.RunInvitationEmailWorker"},
 		"IdentityService.authorizeInvitation":          {"invitationAuthority.authorizeInvitation"},
 		"IdentityService.withIdentity":                 {"withIdentityTransactions"},
 		"identityResult":                               {"identityResultWithTransactions", "withIdentityTransactions"},
@@ -175,7 +173,7 @@ func TestWave46InvitationEmailActualOwnerHasExactPortsNoReverseDependencyOrAutos
 			}
 		}
 	}
-	for _, entry := range []string{"IdentityService.claimInvitationEmail", "IdentityService.ProcessInvitationEmail", "IdentityService.RunInvitationEmailWorker", "IdentityService.authorizeInvitation", "IdentityService.withIdentity", "identityResult"} {
+	for _, entry := range []string{"IdentityService.ProcessInvitationEmail", "IdentityService.authorizeInvitation", "IdentityService.withIdentity", "identityResult"} {
 		if function := set.methods[entry]; function != nil && (function.Body == nil || len(function.Body.List) > 2) {
 			test.Error("legacy invitation email or identity entry is not a thin facade", entry)
 		}

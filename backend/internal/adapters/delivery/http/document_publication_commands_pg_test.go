@@ -78,7 +78,7 @@ func TestPGDocumentPublicationHTTPUsesActualCompleteOwner(test *testing.T) {
 	}
 	identity := app.NewIdentityService(auth.NewDevVerifier(), storage)
 	revoker := app.NewIdentityService(auth.NewDevVerifier(), peer)
-	service := app.NewService(storage, storage, nil, storage)
+	service := app.NewService(storage, storage, storage)
 	commands, err := service.DocumentPublicationCommands()
 	if err != nil {
 		test.Fatal("actual Complete document publication factory failed", err)

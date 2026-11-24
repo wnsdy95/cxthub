@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -209,7 +208,7 @@ type remoteGitTestFixture struct {
 func newRemoteGitTestFixture(t *testing.T, pageSize int) *remoteGitTestFixture {
 	t.Helper()
 	storage := &remoteGitTestStore{FSStore: store.NewFSStore(t.TempDir()), origins: map[domain.ContentHash]string{}}
-	service := NewService(storage, storage, auth.NewTeamTokenAuth(), storage)
+	service := NewService(storage, storage, storage)
 	ctx := systemTestContext()
 	repository := domain.Repository{ID: domain.NewID("ws_"), Name: "test", OwnerID: "owner", Visibility: domain.VisibilityPrivate, CreatedAt: time.Now().UTC()}
 	if err := storage.CreateRepository(ctx, repository); err != nil {

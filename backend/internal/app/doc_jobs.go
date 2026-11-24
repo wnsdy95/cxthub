@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app/documentworker"
@@ -13,10 +12,6 @@ import (
 )
 
 const docJobLease = documentworker.Lease
-
-// This bound is for background work, independent of the 30s HTTP deadline. It
-// prevents a pathological body from holding a worker indefinitely.
-const docJobWorkLimit = documentworker.WorkLimit
 
 func (s *Service) docJobs() (outbound.DocJobStore, error) {
 	st, ok := s.blobs.(outbound.DocJobStore)
@@ -128,18 +123,6 @@ func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error 
 		return err
 	}
 	return finalizer.Process(ctx, limit)
-}
-
-// One worker per process bounds resident large bodies. Database claims also
-// serialize a repository across instances; no request spawns its own worker.
-func (s *Service) RunDocFinalizationWorker(ctx context.Context) {
-	storage, _ := s.blobs.(outbound.DocJobStore)
-	finalizer, err := s.documentFinalizer(storage)
-	if err != nil {
-		log.Printf("document finalization: %v", err)
-		return
-	}
-	finalizer.Run(ctx)
 }
 
 func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {

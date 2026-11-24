@@ -4,39 +4,8 @@
 package inbound
 
 import (
-	"context"
-
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
-
-// CommitSnapshot validates and atomically stores a content-addressed snapshot
-// and document batch after recalculating every object hash.
-type CommitSnapshot interface {
-	Commit(ctx context.Context, in CommitInput) (CommitOutput, error)
-}
-
-// PushReceive performs push negotiation (sync protocol step A). Responds with the missing parts (want) after subtracting what the server already has from the client's haves.
-type PushReceive interface {
-	Negotiate(ctx context.Context, in PushNegotiateInput) (PushNegotiateOutput, error)
-}
-
-// StoreChunks is the upload phase of bounded chunk transport. First, it stores content-addressed chunks idempotently. Then, it validates and confirms the existing Commit with the manifest. Partial failures are retryable in the next negotiate, excluding already stored chunks.
-type StoreChunks interface {
-	StoreChunks(ctx context.Context, in StoreChunksInput) (StoreChunksOutput, error)
-}
-
-// PromoteSnapshot promotes the message of a hook label snapshot to a commit message (one-way).
-// Content-hash deduplication allows hook capture leaves to commit, recovering lost [git sha] links —
-// Inventory-only push requires a dedicated metadata update path since it does not resend existing objects.
-type PromoteSnapshot interface {
-	PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error
-}
-
-// Authenticate verifies team token + user identity (sync protocol).
-// It checks token-to-team mapping, identity consistency, and repository visibility.
-type Authenticate interface {
-	Authenticate(ctx context.Context, in AuthInput) (AuthOutput, error)
-}
 
 // --- DTO (name/type only; derive from sync protocol wire form) ---
 
@@ -110,17 +79,4 @@ type PushNegotiateOutput struct {
 	// Absence from an old server means CIR v1 only.
 	CIRVersionsSupported []string             `json:"cir_versions_supported,omitempty"`
 	ChunkWants           []domain.ContentHash `json:"chunk_wants,omitempty"`
-}
-
-// AuthInput: Bearer team token + X-Cxt-Identity header parsing result (sync protocol).
-type AuthInput struct {
-	TeamToken string
-	Identity  domain.TeamIdentity
-	RepoID    domain.ContentHash // Visibility check target (empty value means repo-agnostic call)
-}
-
-// AuthOutput: Empirically verified team context.
-type AuthOutput struct {
-	Team     string
-	Identity domain.TeamIdentity
 }

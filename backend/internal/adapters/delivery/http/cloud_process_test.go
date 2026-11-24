@@ -28,7 +28,7 @@ func TestCloudLoadProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	svc := app.NewService(st, st, nil, st)
+	svc := app.NewService(st, st, st)
 	id := app.NewIdentityService(auth.NewDevVerifier(), st)
 	var handler http.Handler
 	if os.Getenv("CXT_LOAD_PROCESS_KIND") == "mcp" {

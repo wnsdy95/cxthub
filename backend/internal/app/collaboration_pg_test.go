@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -52,5 +51,5 @@ func collaborationPG(t *testing.T) (*Service, *store.PostgresStore, domain.Conte
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/proj.git"}); err != nil {
 		t.Fatal(err)
 	}
-	return NewService(st, st, auth.NewTeamTokenAuth(), st), st, repo
+	return NewService(st, st, st), st, repo
 }

@@ -35,8 +35,6 @@ type Backend interface {
 	EnsureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
-	// About + team default settings bundle (web editing).
-	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
 	PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error)
 	PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettings(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
@@ -44,8 +42,6 @@ type Backend interface {
 	GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
 	// GitHub public state sync (GHVisibilitySync enabled repository — GitHub → cxthub unidirectional).
 	SyncRepositoryVisibility(ctx context.Context, repositoryID string) (domain.Repository, error)
-	// Repository structure setup (default branch, protected branch) — for maintainers and above.
-	UpdateRepoConfig(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error
 }
 
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/repository).

@@ -131,12 +131,3 @@ func (storage *PostgresStore) applyMigrations(ctx context.Context, dir string, p
 	}
 	return n, nil
 }
-
-func containsMigration(files []string, name string) bool {
-	for _, f := range files {
-		if f == name {
-			return true
-		}
-	}
-	return false
-}

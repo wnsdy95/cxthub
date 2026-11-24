@@ -48,14 +48,6 @@ func ValidateOptionalContentHash(h ContentHash) error {
 	return ValidateContentHash(h)
 }
 
-// ContentHashHex returns only the hex part of the validated content hash.
-func ContentHashHex(h ContentHash) (string, error) {
-	if err := ValidateContentHash(h); err != nil {
-		return "", err
-	}
-	return string(h)[len(contentHashPrefix):], nil
-}
-
 // ProviderKind is the type of the original/target provider (schemas/cir.schema.json $defs/providerKind).
 //
 // The backend does not interpret provider raw formats but stores and projects the provider type as is in the CIR envelope and Snapshot metadata.
@@ -66,8 +58,6 @@ const (
 	ProviderClaude ProviderKind = "claude"
 	// ProviderCodex identifies a Codex CLI session source.
 	ProviderCodex ProviderKind = "codex"
-	// ProviderUnknown represents an unknown provider (the third enum value required by compatibility rules).
-	ProviderUnknown ProviderKind = "unknown"
 )
 
 // FidelityTier is the restoration-fidelity tier (schemas/cir.schema.json $defs/fidelityTier).
@@ -82,10 +72,6 @@ type FidelityTier string
 const (
 	// FidelityFull is a lossless original.
 	FidelityFull FidelityTier = "full"
-	// FidelityReconstructed is a cross-provider reconstruction.
-	FidelityReconstructed FidelityTier = "reconstructed"
-	// FidelityMemory contains only a distilled summary.
-	FidelityMemory FidelityTier = "memory"
 )
 
 // RefKind identifies a ref type (schemas/manifest.schema.json $defs/refKind).

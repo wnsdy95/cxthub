@@ -103,7 +103,7 @@ func newSAMLFlow(t *testing.T) *samlFlow {
 		t.Fatal(err)
 	}
 	f.settings.EntityID, f.settings.ACS = view.EntityID, view.ACS
-	handler := delivery.NewServer(app.NewService(st, st, nil, st), ids).Handler()
+	handler := delivery.NewServer(app.NewService(st, st, st), ids).Handler()
 	return &samlFlow{st, ids, p, f, user, sess, ep, view, handler, d}
 }
 func (f *samlFlow) start(t *testing.T, assertionID string) (string, []byte) {

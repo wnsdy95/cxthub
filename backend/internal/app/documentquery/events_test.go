@@ -81,10 +81,6 @@ func (scope *eventPrefixLocalScope) AuthorizeDocumentRead(ctx context.Context, _
 	return ctx, ctx.Err()
 }
 
-func (scope *eventPrefixLocalScope) AuthorizeDocumentPreparation(ctx context.Context, _ domain.ContentHash) (context.Context, error) {
-	return ctx, ctx.Err()
-}
-
 func (scope *eventPrefixLocalScope) WithinDocumentRead(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
 	if scope.active {
 		scope.test.Fatal("nested document admission replaced the original read scope")
@@ -177,17 +173,6 @@ type eventPrefixSnapshots struct {
 	scope     *eventPrefixLocalScope
 	repo      domain.ContentHash
 	snapshots map[domain.ContentHash]domain.Snapshot
-}
-
-func (snapshots *eventPrefixSnapshots) GetSnapshot(ctx context.Context, repo, hash domain.ContentHash) (domain.Snapshot, error) {
-	if err := snapshots.scope.port(ctx, "metadata", repo, hash); err != nil {
-		return domain.Snapshot{}, err
-	}
-	snapshot, exists := snapshots.snapshots[hash]
-	if repo != snapshots.repo || !exists {
-		return domain.Snapshot{}, domain.ErrNotFound
-	}
-	return snapshot, nil
 }
 
 type eventPrefixDocument struct {

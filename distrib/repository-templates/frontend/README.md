@@ -26,10 +26,8 @@ npm run build
 ```
 
 CI runs standalone unit and configuration checks and the production build,
-which includes TypeScript checking. `npm test` additionally invokes Go graph
-contract tests and requires the monorepo. The explicit `test:unit` command
-reports those contract suites separately; it does not replace source CI, which
-still runs every graph contract against the real backend. CI here also does
+which includes TypeScript checking. `npm test` and `npm run test:unit` run the
+same unit suites. CI here does
 **not** run full-stack Playwright E2E: that harness
 needs the real API and MCP binaries, a disposable PostgreSQL database, and the
 monorepo layout. Full-stack E2E stays in the monorepo and must pass before

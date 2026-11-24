@@ -122,17 +122,6 @@ type Snapshot struct {
 	CompactionCount int `json:"compaction_count,omitempty"`
 }
 
-// Branch is a read-only view of a ref (kind=branch) in a domain-friendly manner
-// (data model, sync protocol).
-//
-// The source of truth is Ref(branch).Target (the save/sync unit is a ref), and Branch.Head must always
-// match Ref(branch, Name).Target (invariant B1, duplicates are OQ-2).
-type Branch struct {
-	Name   string      `json:"name"`
-	RepoID ContentHash `json:"repo_id"`
-	Head   ContentHash `json:"head"`
-}
-
 // Ref is a mutable name pointing to a snapshot (data model, schemas/manifest.schema.json $defs/ref).
 //
 // Kind unifies head/branch/session/tag representations.

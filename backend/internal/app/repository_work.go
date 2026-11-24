@@ -11,7 +11,6 @@ import (
 
 type repositoryWork struct {
 	meta               outbound.MetadataStore
-	repositories       outbound.RepositoryStore
 	supported          []domain.DocumentIdentity
 	authority          *RepositoryAuthority
 	transactions       outbound.RepositoryTransactions
@@ -30,7 +29,7 @@ func newRepositoryWork(metadata outbound.MetadataStore, repositories outbound.Re
 			err = domain.ErrValidation
 		}
 	}
-	return &repositoryWork{meta: metadata, repositories: repositories, supported: append([]domain.DocumentIdentity(nil), supported...),
+	return &repositoryWork{meta: metadata, supported: append([]domain.DocumentIdentity(nil), supported...),
 		authority: authority, transactions: transactions, revisions: revisions, evidenceRevisions: evidence, configurationError: err}
 }
 

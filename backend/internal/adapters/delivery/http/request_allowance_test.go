@@ -134,7 +134,7 @@ func TestRateLimitKeysSignedInUsersSeparately(t *testing.T) {
 
 func TestSessionLoginAllowanceIsPerVerifiedAccount(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, nil, st)
+	svc := app.NewService(st, st, st)
 	ts := httptest.NewServer(NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st)).Handler())
 	defer ts.Close()
 	login := func(token string) *http.Response {
@@ -182,7 +182,7 @@ func TestSessionLoginAllowanceIsPerVerifiedAccount(t *testing.T) {
 
 func TestSessionLoginFailsClosedWithoutSharedAllowance(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, nil, st)
+	svc := app.NewService(st, st, st)
 	s := NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st))
 	s.runtime = nil
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/session", nil)

@@ -11,7 +11,7 @@ import (
 
 func TestDocumentEventQueriesVerifiedProfileRequiresPinnedTransactions(test *testing.T) {
 	filesystem := store.NewFSStore(test.TempDir())
-	service := NewService(filesystem, filesystem, nil, nil)
+	service := NewService(filesystem, filesystem, nil)
 	if queries, err := service.DocumentEventQueriesForProfile(documentquery.VerifiedRoots); queries != nil || !errors.Is(err, domain.ErrCatalogUnsupported) {
 		test.Fatal("verified profile accepted a store without pinned repository transactions", queries, err)
 	}
