@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -35,6 +36,11 @@ func TestPGStoreRefusesToWorkInsideAnotherStoresTransaction(t *testing.T) {
 			"a list": func() error { _, err := storage.HasDocs(bound, repo, []domain.ContentHash{doc}); return err },
 			// Work that opens a transaction of its own.
 			"a transaction": func() error { return storage.DeleteDoc(bound, repo, doc) },
+			// Work that opens one without options: the claim of a read of the Git host.
+			"a plain transaction": func() error {
+				_, err := storage.ClaimRemoteGitSync(bound, repo, "https://github.com/example/project", time.Now().UTC(), time.Minute)
+				return err
+			},
 		} {
 			calls++
 			if err := work(); !errors.Is(err, domain.ErrConflict) {
@@ -50,7 +56,7 @@ func TestPGStoreRefusesToWorkInsideAnotherStoresTransaction(t *testing.T) {
 		}
 		return stop
 	})
-	if !errors.Is(err, stop) || calls != 4 {
+	if !errors.Is(err, stop) || calls != 5 {
 		t.Fatalf("the transaction ended with %v after %d refused calls", err, calls)
 	}
 	// Nothing was written beside the transaction, and what the owner wrote

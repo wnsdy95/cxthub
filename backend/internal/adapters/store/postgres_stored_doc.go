@@ -96,7 +96,6 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 	if err != nil {
 		return domain.VerifiedDocReference{}, err
 	}
-	s.rememberHistoryRootReference(ctx, repo, proof)
 	return proof, nil
 }
 
