@@ -22,7 +22,7 @@ import (
 
 // recordCacheVersion changes whenever a reader would make something else of
 // the same source.
-const recordCacheVersion = 1
+const recordCacheVersion = 2
 
 // sourceStamp is what a source looked like when it was read.
 type sourceStamp struct {
@@ -88,6 +88,21 @@ type claudeFileCache struct {
 	BadLines     int
 	FirstBadLine int
 	BadEntries   int
+	// Where the read ended, for a later read of the same file to go on from
+	// when the file only grew: how many bytes of whole lines were read and
+	// what they hash to, how many lines they were, the turn the last record
+	// belonged to, and the commands that had started and not ended.
+	Offset     int64
+	PrefixHash []byte
+	Lines      int
+	Turn       string
+	Pending    map[string]claudeCachedCommand
+}
+
+// claudeCachedCommand is a command that had started when a read ended.
+type claudeCachedCommand struct {
+	StartedMs int64
+	Folder    string
 }
 
 // codexBatchCache is what the Codex databases gave for one scope, with the

@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,20 +62,50 @@ func (r *ClaudeRecords) read(path string, wanted map[string]struct{}) claudeFile
 	}
 	entry := cacheFile(r.cache, "claude", path)
 	var cached claudeFileCache
-	if !loadCache(entry, &cached) || cached.Version != recordCacheVersion || cached.Stamp != before {
-		file := readClaudeFile(path, nil, true)
+	known := loadCache(entry, &cached) && cached.Version == recordCacheVersion
+	if !known || cached.Stamp != before {
+		// The file is another one than it was. When it only grew, the read
+		// goes on where the last one ended; in every other case, and as the
+		// one fallback, the file is read from its beginning.
+		file, went := claudeFile{}, false
+		if known {
+			file, went = continueClaudeFile(cached.file(path), nil, true)
+		}
+		if !went {
+			file = readClaudeFile(path, nil, true)
+		}
 		if file.openErr != nil || file.readErr != nil {
 			return wantedCalls(file, wanted)
 		}
-		cached = claudeFileCache{Version: recordCacheVersion, Stamp: before, Session: file.session, Items: file.items, Calls: file.calls,
-			BadLines: file.badLines, FirstBadLine: file.firstBadLine, BadEntries: file.badEntries}
+		cached = cacheOfClaudeFile(file, before)
 		// A file that changed while it was read is kept for this run only.
 		if after, ok := stampOf(path); ok && after == before {
 			storeCache(entry, cached)
 		}
 	}
-	return wantedCalls(claudeFile{path: path, session: cached.Session, items: cached.Items, calls: cached.Calls,
-		badLines: cached.BadLines, firstBadLine: cached.FirstBadLine, badEntries: cached.BadEntries}, wanted)
+	return wantedCalls(cached.file(path), wanted)
+}
+
+// cacheOfClaudeFile is what is kept of a read of a session file.
+func cacheOfClaudeFile(file claudeFile, stamp sourceStamp) claudeFileCache {
+	pending := make(map[string]claudeCachedCommand, len(file.end.pending))
+	for id, command := range file.end.pending {
+		pending[id] = claudeCachedCommand{StartedMs: command.startedMs, Folder: command.folder}
+	}
+	return claudeFileCache{Version: recordCacheVersion, Stamp: stamp, Session: file.session, Items: file.items, Calls: file.calls,
+		BadLines: file.badLines, FirstBadLine: file.firstBadLine, BadEntries: file.badEntries,
+		Offset: file.end.offset, PrefixHash: file.end.hash, Lines: file.end.lines, Turn: file.end.turn, Pending: pending}
+}
+
+// file is the read a cache entry was kept of.
+func (c claudeFileCache) file(path string) claudeFile {
+	pending := make(map[string]claudePending, len(c.Pending))
+	for id, command := range c.Pending {
+		pending[id] = claudePending{startedMs: command.StartedMs, folder: command.Folder}
+	}
+	return claudeFile{path: path, session: c.Session, items: c.Items, calls: c.Calls,
+		badLines: c.BadLines, firstBadLine: c.FirstBadLine, badEntries: c.BadEntries,
+		end: claudeEnd{offset: c.Offset, hash: c.PrefixHash, lines: c.Lines, turn: c.Turn, pending: pending}}
 }
 
 // wantedCalls narrows a file read with every tool call to the wanted ones.
@@ -119,6 +150,8 @@ type claudeFile struct {
 	openErr, readErr       error
 	badLines, firstBadLine int
 	badEntries             int
+	// end is where the read ended.
+	end claudeEnd
 }
 
 type claudeSubFile struct {
@@ -344,24 +377,67 @@ type claudePending struct {
 	folder    string
 }
 
+// claudeEnd is where a read of a session file ended: what a later read needs
+// to go on from there when the file only grew.
+type claudeEnd struct {
+	// offset counts the bytes of the whole lines that were read, and hash is
+	// what those bytes hash to.
+	offset int64
+	hash   []byte
+	lines  int
+	turn   string
+	// pending holds the commands that had started and not ended.
+	pending map[string]claudePending
+}
+
 // readClaudeFile reads one session file. Only user and assistant records are
 // conversation; other record types repeat tool calls and results and would
 // count them twice.
 //
 // calls records the tool calls in wanted, or every tool call when all is set.
 func readClaudeFile(path string, wanted map[string]struct{}, all bool) claudeFile {
-	out := claudeFile{path: path, calls: map[string]string{}}
-	file, err := providerfs.OpenRegularFile(path)
+	out, _ := continueClaudeFile(claudeFile{path: path, calls: map[string]string{}}, wanted, all)
+	return out
+}
+
+// continueClaudeFile reads a session file on from where an earlier read of
+// it ended, and from its beginning when earlier holds no such read. A tool
+// only adds records to the end of its file, so what was read before is not
+// read again: it is only checked to be what it was. When it is not, nothing
+// is read and false is returned, and the caller reads the file from its
+// beginning. What comes of going on is what a read of the whole file gives.
+func continueClaudeFile(earlier claudeFile, wanted map[string]struct{}, all bool) (claudeFile, bool) {
+	out := earlier
+	file, err := providerfs.OpenRegularFile(out.path)
 	if err != nil {
 		out.openErr = err
-		return out
+		return out, true
 	}
 	defer file.Close()
+	read := sha256.New()
+	if out.end.offset > 0 {
+		// Fewer bytes than were read before, or other ones, hash to
+		// something else.
+		_, _ = io.CopyN(read, file, out.end.offset)
+		if !bytes.Equal(read.Sum(nil), out.end.hash) {
+			return earlier, false
+		}
+	}
 	reader := bufio.NewReaderSize(file, 1<<16)
-	seen := map[string]struct{}{}
-	pending := map[string]claudePending{}
-	turn := ""
-	for number := 1; ; number++ {
+	seen := make(map[string]struct{}, len(out.items))
+	for _, item := range out.items {
+		seen[item.ID] = struct{}{}
+	}
+	pending := make(map[string]claudePending, len(out.end.pending))
+	for id, command := range out.end.pending {
+		pending[id] = command
+	}
+	turn, offset, lines := out.end.turn, out.end.offset, out.end.lines
+	ended := func() claudeFile {
+		out.end = claudeEnd{offset: offset, hash: read.Sum(nil), lines: lines, turn: turn, pending: pending}
+		return out
+	}
+	for number := lines + 1; ; number++ {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			// A line without its newline is still being written. It is left
@@ -369,8 +445,10 @@ func readClaudeFile(path string, wanted map[string]struct{}, all bool) claudeFil
 			if err != io.EOF {
 				out.readErr = err
 			}
-			return out
+			return ended(), true
 		}
+		read.Write(line)
+		offset, lines = offset+int64(len(line)), number
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
