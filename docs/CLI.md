@@ -695,7 +695,13 @@ hook does not wake the collector at once: its script names the Git process
 that runs it, the one that pushes, and the collector is woken when that
 process has ended, however long the push took. That run finds the branches
 changed. A push still going after thirty minutes is no longer waited for, and
-is read at the next wake. Nothing is asked when the branches are the same, or
+is read at the next wake. Two kinds of push start no wait, because Git runs no
+`pre-push` hook for them: one made by a graphical Git program that does not
+call the `git` command but pushes with an implementation of its own (a
+graphical program that calls `git` runs the hook like a terminal does), and
+`git push --no-verify`. Such a push is read at the collector's next wake: the
+next commit, checkout or merge in that clone, or the end of an agent's turn.
+Nothing is asked when the branches are the same, or
 when the clone holds no branch of origin. A server that knows no Git host for
 the repository says so, and is not asked again about the same branches.
 
