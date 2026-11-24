@@ -81,9 +81,6 @@ func TestDocumentWorkersWithoutServicePublishesAcceptedLegacyJob(test *testing.T
 	if _, err := storage.GetDoc(ctx, foreign, job.DocHash); !errors.Is(err, domain.ErrNotFound) {
 		test.Fatal("published proof granted foreign ownership", err)
 	}
-	if snapshots, err := storage.ListSnapshots(ctx, repo, ""); err != nil || len(snapshots) != 0 {
-		test.Fatal("document finalization created a snapshot", snapshots, err)
-	}
 }
 
 func TestDocumentWorkersRejectInvalidAndIncompleteProductionComposition(test *testing.T) {

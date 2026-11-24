@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,9 +22,7 @@ type fixedVerifier struct{ user domain.User }
 func (v fixedVerifier) Verify(context.Context, string) (domain.User, error) { return v.user, nil }
 
 type fakeContextBackend struct {
-	repos     []domain.Repo
-	snapshots map[domain.ContentHash][]domain.Snapshot
-	memories  map[domain.ContentHash]domain.MemoryDigest
+	repos []domain.Repo
 }
 
 func (f fakeContextBackend) ListRepos(context.Context, string) ([]domain.Repo, error) {
@@ -523,31 +520,6 @@ func TestRequestGateAndProtocolSpecificRateLimitResponses(t *testing.T) {
 	assertLimited(t, s.oauthRateLimit(newRequestGate(1, time.Minute), next), `"temporarily_unavailable"`)
 	assertLimited(t, s.apiRateLimit(newRequestGate(1, time.Minute), next), `"rate_limited"`)
 	assertLimited(t, s.mcpRateLimit(newRequestGate(1, time.Minute), next), `"code":-32002`)
-}
-
-func TestRemoteRepositoryListOutputIsBoundedAndFilterable(t *testing.T) {
-	repositories := make([]listedRepository, 105)
-	for i := range repositories {
-		repositories[i] = listedRepository{Path: fmt.Sprintf("acme/repository-%03d", i), Repo: domain.Repo{
-			ID:            domain.HashContent([]byte(fmt.Sprintf("repository-%03d", i))),
-			RemoteURL:     fmt.Sprintf("https://cxthub.test/acme/platform/repository-%03d", i),
-			DefaultBranch: "main",
-		}}
-	}
-	got, err := formatRepositoryList(repositories, "", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := strings.Count(got, "\n-"); rows != 50 || !strings.Contains(got, "55 additional repositories omitted") {
-		t.Fatalf("bounded repository list rows=%d:\n%s", rows, got)
-	}
-	filtered, err := formatRepositoryList(repositories, "repository-104", 100)
-	if err != nil || !strings.Contains(filtered, "repository-104") || strings.Contains(filtered, "repository-103") {
-		t.Fatalf("filtered repository list = %q, err=%v", filtered, err)
-	}
-	if _, err := formatRepositoryList(repositories, strings.Repeat("q", 129), 10); err == nil {
-		t.Fatal("oversized repository query was accepted")
-	}
 }
 
 func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {

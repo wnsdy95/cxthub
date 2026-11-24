@@ -286,10 +286,6 @@ func TestLegacyFSRepositoryRemainsAddressableBeforeNamespaceBackfill(t *testing.
 	if err := st.CreateRepository(ctx, repository); err != nil {
 		t.Fatal(err)
 	}
-	identity := NewIdentityService(nil, st)
-	if got, err := identity.PublicRepository(ctx, "legacy", "project"); err != nil || got.ID != repository.ID {
-		t.Fatalf("legacy public Repository = %+v err=%v", got, err)
-	}
 	contextService := &Service{repositories: st}
 	if got, err := contextService.repositoryForURL(ctx, "https://cxthub.test/legacy/project"); err != nil || got != repository.ID {
 		t.Fatalf("legacy repository binding = %q err=%v", got, err)

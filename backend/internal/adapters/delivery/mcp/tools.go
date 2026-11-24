@@ -136,48 +136,9 @@ func (s *Server) resolveRepository(ctx context.Context, user domain.User, select
 	return domain.Repo{}, fmt.Errorf("repository not found or not authorized")
 }
 
-func formatRepositoryList(repos []listedRepository, query string, limit int) (string, error) {
-	query = strings.ToLower(strings.TrimSpace(query))
-	if len([]rune(query)) > 128 {
-		return "", fmt.Errorf("repository query must contain at most 128 characters")
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	filtered := make([]listedRepository, 0, min(len(repos), limit+1))
-	for _, repo := range repos {
-		if query == "" || strings.Contains(strings.ToLower(repositoryPath(repo)), query) {
-			filtered = append(filtered, repo)
-		}
-	}
-	if len(filtered) == 0 {
-		return "No accessible repositories", nil
-	}
-	var b strings.Builder
-	b.WriteString("Accessible CXTHub repositories:\n")
-	for _, repo := range filtered[:min(len(filtered), limit)] {
-		fmt.Fprintf(&b, "- %s · default branch %s · id %s\n", repositoryPath(repo), defaultBranch(repo.Repo), shortHash(repo.ID))
-	}
-	if omitted := len(filtered) - limit; omitted > 0 {
-		fmt.Fprintf(&b, "… %d additional repositories omitted; narrow query or raise limit up to 100\n", omitted)
-	}
-	return b.String(), nil
-}
-
 func defaultBranch(repo domain.Repo) string {
 	if strings.TrimSpace(repo.DefaultBranch) == "" {
 		return "main"
 	}
 	return repo.DefaultBranch
-}
-
-func shortHash(hash domain.ContentHash) string {
-	value := strings.TrimPrefix(string(hash), "sha256:")
-	if len(value) > 10 {
-		return value[:10]
-	}
-	return value
 }

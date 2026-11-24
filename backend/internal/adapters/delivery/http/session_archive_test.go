@@ -6,14 +6,11 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
+// sessionArchiveHTTPBackend is a backend that knows one repository and nothing
+// else: the routes under test are answered by a service set beside it.
 type sessionArchiveHTTPBackend struct {
 	Backend
-	repo     domain.Repo
-	calls    int
-	actor    string
-	snapshot domain.ContentHash
-	archived bool
-	err      error
+	repo domain.Repo
 }
 
 func (backend *sessionArchiveHTTPBackend) GetRepo(context.Context, domain.ContentHash) (domain.Repo, error) {

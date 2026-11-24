@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 
@@ -99,44 +98,6 @@ func validateHashes(hashes ...domain.ContentHash) error {
 		if err := domain.ValidateContentHash(h); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func validateSnapshotRefs(snap domain.Snapshot) error {
-	if err := snap.DocIdentity.Validate(); err != nil {
-		return err
-	}
-	if err := validateHashes(snap.RepoID, snap.ID, snap.DocHash); err != nil {
-		return err
-	}
-	if snap.ID != snap.DocHash {
-		return domain.ErrIntegrity
-	}
-	if err := domain.ValidateOptionalContentHash(snap.MemoryHash); err != nil {
-		return err
-	}
-	if err := domain.ValidateOptionalContentHash(snap.ClaudeSettings); err != nil {
-		return err
-	}
-	if err := domain.ValidateOptionalContentHash(snap.AgentsSettings); err != nil {
-		return err
-	}
-	if err := domain.ValidateOptionalContentHash(snap.CodexSettings); err != nil {
-		return err
-	}
-	for _, p := range snap.Parents {
-		if err := validateHash(p); err != nil {
-			return err
-		}
-	}
-	for _, p := range snap.GraftParents {
-		if err := validateHash(p); err != nil {
-			return err
-		}
-	}
-	if snap.GraftSeq > domain.MaxGraftSeq {
-		return fmt.Errorf("%w: graft sequence exceeds persistent range", domain.ErrIntegrity)
 	}
 	return nil
 }
@@ -377,68 +338,6 @@ func (s *FSStore) ListRepos(_ context.Context, _ string) ([]domain.Repo, error) 
 }
 
 // --- Snapshot Metadata ---
-
-func (s *FSStore) snapshotPath(repoID, id domain.ContentHash) string {
-	return filepath.Join(s.repoDir(repoID), "snapshots", hexOf(id))
-}
-
-func (s *FSStore) GetSnapshot(_ context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
-	if err := validateHashes(repoID, id); err != nil {
-		return domain.Snapshot{}, err
-	}
-	data, err := os.ReadFile(s.snapshotPath(repoID, id))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return domain.Snapshot{}, domain.ErrNotFound
-		}
-		return domain.Snapshot{}, err
-	}
-	var snap domain.Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return domain.Snapshot{}, err
-	}
-	if err := validateSnapshotRefs(snap); err != nil {
-		return domain.Snapshot{}, err
-	}
-	if snap.RepoID != repoID || snap.ID != id {
-		return domain.Snapshot{}, domain.ErrIntegrity
-	}
-	return snap, nil
-}
-
-func (s *FSStore) ListSnapshots(_ context.Context, repoID domain.ContentHash, branch string) ([]domain.Snapshot, error) {
-	if err := validateHash(repoID); err != nil {
-		return nil, err
-	}
-	dir := filepath.Join(s.repoDir(repoID), "snapshots")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []domain.Snapshot
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		id, ok := hashFromObjectName(e.Name())
-		if !ok {
-			continue
-		}
-		snap, err := s.GetSnapshot(context.Background(), repoID, id)
-		if err != nil {
-			return nil, err
-		}
-		if branch == "" || snap.Branch == branch {
-			out = append(out, snap)
-		}
-	}
-	// git log meaning: Latest commit first (ReadDir is file name=hash order, unrelated to time).
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	return out, nil
-}
 
 // HasSnapshots returns the snapshots the server has for the given IDs (negotiation).
 func regularObjectExists(path string) (bool, error) {

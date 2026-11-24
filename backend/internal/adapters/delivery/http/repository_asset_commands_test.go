@@ -17,7 +17,6 @@ import (
 
 type repositoryAssetHTTPCommands struct {
 	calls         []string
-	repo          domain.ContentHash
 	hash          domain.ContentHash
 	bundle        domain.SettingsBundle
 	secrets       inbound.SaveSecretsInput
@@ -29,7 +28,6 @@ type repositoryAssetHTTPCommands struct {
 
 func (commands *repositoryAssetHTTPCommands) record(ctx context.Context, repo domain.ContentHash, command string) error {
 	commands.calls = append(commands.calls, command)
-	commands.repo = repo
 	if commands.observe != nil {
 		commands.observe(ctx, repo)
 	}

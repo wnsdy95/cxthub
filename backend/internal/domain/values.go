@@ -83,47 +83,9 @@ const (
 type RefKind string
 
 const (
-	// RefHead is symbolic HEAD.
-	RefHead RefKind = "head"
 	// RefBranch is a branch tip.
 	RefBranch RefKind = "branch"
-	// RefSession is a session-fork tip within one Git branch.
-	RefSession RefKind = "session"
-	// RefTag is an immutable tag.
-	RefTag RefKind = "tag"
 )
-
-// HeadRefName is the fixed head-ref name (invariant REF3, data model).
-const HeadRefName = "HEAD"
-
-// ValidateRefKind restricts the ref kind accepted at wire and ref-path boundaries.
-func ValidateRefKind(kind RefKind) error {
-	switch kind {
-	case RefHead, RefBranch, RefSession, RefTag:
-		return nil
-	default:
-		return fmt.Errorf("%w: invalid ref kind %q", ErrValidation, kind)
-	}
-}
-
-// ValidateRefName validates a ref name by kind. Branch, session, and tag names may contain slash
-// hierarchies, but path traversal and Git-invalid names are rejected.
-func ValidateRefName(kind RefKind, name string) error {
-	if err := ValidateRefKind(kind); err != nil {
-		return err
-	}
-	if kind == RefHead {
-		if name != HeadRefName {
-			return fmt.Errorf("%w: head ref name must be %q", ErrValidation, HeadRefName)
-		}
-		return nil
-	}
-	if kind == RefTag && strings.HasPrefix(name, BranchLifecycleTagPrefix) {
-		_, _, err := parseBranchLifecycleTagName(name)
-		return err
-	}
-	return ValidateBranchName(name)
-}
 
 // ValidateBranchName permits only safe ref paths for branch, session, and tag names.
 func ValidateBranchName(name string) error {
@@ -153,38 +115,6 @@ func ValidateBranchName(name string) error {
 		}
 	}
 	return nil
-}
-
-// ValidateRef performs complete ref validation at backend store and service boundaries.
-func ValidateRef(ref Ref) error {
-	if len(ref.BranchID) > 128 || strings.ContainsAny(ref.BranchID, "\r\n") {
-		return fmt.Errorf("invalid branch identity")
-	}
-	if err := ValidateContentHash(ref.RepoID); err != nil {
-		return err
-	}
-	if err := ValidateRefName(ref.Kind, ref.Name); err != nil {
-		return err
-	}
-	if ref.Kind == RefHead {
-		if err := ValidateOptionalContentHash(ref.Target); err != nil {
-			return err
-		}
-		if ref.Symbolic != "" {
-			if ref.Target != "" {
-				return fmt.Errorf("%w: HEAD cannot be symbolic and detached at once", ErrIntegrity)
-			}
-			return ValidateBranchName(strings.TrimPrefix(ref.Symbolic, "refs/heads/"))
-		}
-		if ref.Target == "" {
-			return fmt.Errorf("%w: HEAD target or symbolic branch required", ErrIntegrity)
-		}
-		return nil
-	}
-	if ref.Target == "" {
-		return fmt.Errorf("%w: ref target required", ErrIntegrity)
-	}
-	return ValidateContentHash(ref.Target)
 }
 
 // TeamIdentity identifies a snapshot author (data model table, sync protocol).

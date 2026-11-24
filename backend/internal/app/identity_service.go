@@ -536,16 +536,6 @@ func (s *IdentityService) repositoryByNamespacePath(ctx context.Context, namespa
 	return s.repositories.GetRepositoryByPath(ctx, namespace, slug)
 }
 
-// PublicRepository interprets a public repository by URL path (username/slug) — for anonymous viewing.
-// private repositories return ErrNotFound to avoid leaking existence.
-func (s *IdentityService) PublicRepository(ctx context.Context, username, slug string) (domain.Repository, error) {
-	repositoryRecord, err := s.repositoryByNamespacePath(ctx, username, slug)
-	if err != nil || !repositoryRecord.IsPublic() {
-		return domain.Repository{}, domain.ErrNotFound
-	}
-	return repositoryRecord, nil
-}
-
 // ReadableRepository resolves a public path without leaking private Repository
 // existence. Break-glass is a narrow viewer exception and never creates a
 // durable Repository membership.

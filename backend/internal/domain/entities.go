@@ -2,9 +2,6 @@ package domain
 
 import "time"
 
-// MaxGraftSeq is the upper bound of the graft Lamport version that PostgreSQL BIGINT and FS/CLI JSON replicas can share. Wrapping around at the upper bound could cause removed edges to revive as legacy seq=0, so mutations are fail-closed.
-const MaxGraftSeq uint64 = 1<<63 - 1
-
 // Repo is the root of the session storage space (data model, sync protocol).
 //
 // One per detected code repository. Namespace root for all branch/snapshot/ref names.
@@ -120,73 +117,4 @@ type Snapshot struct {
 	// Compaction does not change sessionId, so the UI draws ◈ on snapshots whose count exceeds their parent's.
 	// It is outside S-ID and avoids a document fetch.
 	CompactionCount int `json:"compaction_count,omitempty"`
-}
-
-// Ref is a mutable name pointing to a snapshot (data model, schemas/manifest.schema.json $defs/ref).
-//
-// Kind unifies head/branch/session/tag representations.
-//   - head:   Name="HEAD" (fixed), Symbolic=current branch name (e.g., "main"), Target is usually empty.
-//     detached HEAD is Symbolic="" + Target=<snap>.
-//   - branch: Name=branch name, Target=latest snapshot of that branch.
-//   - session: Name=the session branch name preserved by join, Target=tip (independent of HEAD/Git branches).
-//   - tag:    Name=tag name, Target=immutable snapshot (REF2).
-//
-// Invariants:
-//   - REF1: branch/session/tag/detached HEAD's Target is an existing Snapshot.ID. Symbolic HEAD is an existing branch.
-//   - REF2: tag is immutable once created (force re-tagging is delete+create).
-//   - REF3: there is exactly one head ref per repo, Name="HEAD".
-//   - REF4: branch tip advancement is only allowed via fast-forward or explicit (fork/conflict handling). Arbitrary rewind is forbidden.
-type Ref struct {
-	BranchID string      `json:"branch_id,omitempty"`
-	Kind     RefKind     `json:"kind"`
-	Name     string      `json:"name"`
-	RepoID   ContentHash `json:"repo_id"`
-	Target   ContentHash `json:"target"`
-	Symbolic string      `json:"symbolic,omitempty"`
-}
-
-// MemoryDigest is the distilled memory from a snapshot (derivative, data model table, sync protocol).
-//
-// Used in memory-form load (FidelityMemory). Attached to SnapshotID, and the target snapshot must exist before the digest upload (422 if not, sync protocol).
-//
-// The backend stores only CIR-neutral digests and does not know provider-native formats.
-type MemoryDigest struct {
-	SnapshotID         ContentHash `json:"snapshot_id"`
-	PreviousMemoryHash ContentHash `json:"previous_memory_hash,omitempty"`
-	Summary            string      `json:"summary"`
-	KeyFacts           []string    `json:"key_facts"`
-	OpenTasks          []string    `json:"open_tasks"`
-	// TasksAuthoritative is a runtime-only projection signal. The durable wire
-	// contract records authority per fragment, so this field must never affect
-	// a content hash.
-	TasksAuthoritative bool                 `json:"-"`
-	Provider           ProviderKind         `json:"provider"`
-	Fragments          []MemoryFragment     `json:"fragments,omitempty"`
-	GraftCoverage      *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
-	ClaimsVersion      uint32               `json:"claims_version,omitempty"`
-}
-
-// MemoryGraftCoverage is the root graft register and transitive lineage state
-// observed when a client projected and attached a digest. ProjectionComplete
-// distinguishes a trusted fingerprint from retained partial data. Nil means
-// legacy/unknown.
-type MemoryGraftCoverage struct {
-	ProjectionVersion  uint32        `json:"projection_version"`
-	ProjectionComplete bool          `json:"projection_complete"`
-	LineageFingerprint ContentHash   `json:"lineage_fingerprint,omitempty"`
-	GraftSeq           uint64        `json:"graft_seq"`
-	GraftParents       []ContentHash `json:"graft_parents,omitempty"`
-	PinnedSources      []ContentHash `json:"pinned_sources,omitempty"`
-}
-
-// MemoryFragment is one snapshot-scoped memory contribution. The backend
-// treats it as CIR-neutral content and preserves it for deterministic client
-// projection across natural and graft parents.
-type MemoryFragment struct {
-	SourceSnapshot     ContentHash   `json:"source_snapshot"`
-	Summary            string        `json:"summary,omitempty"`
-	KeyFacts           []string      `json:"key_facts,omitempty"`
-	OpenTasks          []string      `json:"open_tasks,omitempty"`
-	TasksAuthoritative bool          `json:"tasks_authoritative,omitempty"`
-	Claims             []MemoryClaim `json:"claims,omitempty"`
 }

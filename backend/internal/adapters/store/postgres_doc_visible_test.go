@@ -78,15 +78,3 @@ func TestDocVisiblePublicationBatchBounds(t *testing.T) {
 		t.Fatal("batch failure swallowed", err)
 	}
 }
-
-func TestDocVisiblePublicationRejectsUnverified(t *testing.T) {
-	storage := &PostgresStore{}
-	repo := domain.HashContent([]byte(t.Name()))
-	ctx := context.WithValue(context.Background(), repositoryTxKey{}, &repositoryTx{owner: storage, repo: repo})
-	if err := storage.putVisibleGeneration(ctx, repo, domain.VerifiedDocRangeGeneration{}); !errors.Is(err, domain.ErrIntegrity) {
-		t.Fatal("unverified generation published", err)
-	}
-	if err := storage.putVisibleGeneration(context.Background(), repo, domain.VerifiedDocRangeGeneration{}); !errors.Is(err, domain.ErrConflict) {
-		t.Fatal("unbound publication admitted", err)
-	}
-}

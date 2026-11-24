@@ -38,9 +38,6 @@ func TestRootFSPublicationInterruptedAfterManifest(t *testing.T) {
 			if err != nil || pending.State != "running" || pending.Version != claim.Version {
 				t.Fatal("failed completion lost its durable claim", pending, err)
 			}
-			if snaps, err := reopened.ListSnapshots(ctx, claim.RepoID, ""); err != nil || len(snaps) != 0 {
-				t.Fatal("preparation fabricated a committed snapshot", snaps, err)
-			}
 			for hash := range fixture.bodies {
 				old := time.Now().Add(-time.Hour)
 				if err := os.Chtimes(reopened.chunkPath(claim.RepoID, hash), old, old); err != nil {
