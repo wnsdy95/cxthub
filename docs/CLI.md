@@ -689,9 +689,12 @@ only by a run that is about to send something.
 
 One collector runs per repository at a time, detached from the hook that woke
 it. A wake that arrives while one runs is answered by one more run afterwards.
-Two runs start at least 60 seconds apart, and after a run that failed for a
-reason that holds for every session (no login, no access, a server without
-these routes, no connection) the next one waits 10 minutes. A failed run never
+Two runs start at least 10 seconds apart. A run that took long is followed by
+a longer pause, six times what it took and at most 10 minutes: a run reads a
+session that went on from its beginning, which takes about a second for a
+6 MB session file and about ten seconds for an 80 MB one. After a run that
+failed for a reason that holds for every session (no login, no access, a
+server without these routes, no connection) the next one waits 10 minutes. A failed run never
 fails the hook, Git or the agent.
 
 What it keeps on this computer:

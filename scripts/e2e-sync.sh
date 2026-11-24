@@ -179,7 +179,7 @@ session_goes_on() {
 on_server() { curl -fsSb "$J" "$B/repos/$RID/anchored-sessions/claude/$1"; }
 revision() { on_server "$1" | jget "['revision']"; }
 revision_is() { [ "$(revision "$1" 2>/dev/null)" = "$2" ]; }
-# The collector spaces its runs a minute apart. The suite moves the last run
+# The collector spaces its runs at least ten seconds apart. The suite moves the last run
 # back instead of waiting.
 STATE=""
 rewind() {
@@ -195,7 +195,7 @@ PYREWIND
 collector_idle() { ! pgrep -f "git-hook segment-collect" >/dev/null 2>&1; }
 # quiet — wait until no collector runs or waits, then let the next wake run at
 # once. A wake that arrives while a collector runs is answered by one more run
-# a minute later, so the suite wakes one collector at a time.
+# after the pause between runs, so the suite wakes one collector at a time.
 quiet() { until_true 150 collector_idle; rewind; }
 
 echo "── A. cxt setup: the mark, the hooks and a registered repository"
@@ -288,7 +288,7 @@ git branch from-earlier-hooks >"$TMP/earlier-branch.out" 2>&1
 expect "a branch is created through the earlier hook" "$? $(git show-ref --verify --quiet refs/heads/from-earlier-hooks && echo exists)" "0 exists"
 expect "the earlier reference-transaction hook is gone after its first run" "$([ ! -e .git/hooks/reference-transaction ] && echo yes)" yes
 expect "the earlier post-checkout hook became this version's" "$(grep -c 'git-hook wake </dev/null' .git/hooks/post-checkout)" 1
-# The earlier hook woke cxt more than once for one branch, so one more run follows a minute later.
+# The earlier hook woke cxt more than once for one branch, so one more run follows after the pause between runs.
 quiet
 git checkout -q from-earlier-hooks
 quiet

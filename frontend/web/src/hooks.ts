@@ -295,6 +295,12 @@ export function useCreateInvite() {
     onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.repositoryId] }),
   });
 }
+// The Sessions tab reads its lists again this often while it is in view. A
+// report does not move the repository revision, so nothing else tells the tab
+// that there is something new. Each list is one small request (the list of
+// sessions answered in 20 ms for an 80 MB session when it was measured).
+const SESSIONS_REFRESH_MS = 10_000;
+
 // Anchored sessions — the caller's own reports. A report does not move the
 // repository revision, so the lists are read again on a timer and on request.
 export function useAnchoredSessions(repoId: string | null) {
@@ -303,7 +309,7 @@ export function useAnchoredSessions(repoId: string | null) {
     queryFn: ({ signal }) => api.anchoredSessions(repoId as string, signal),
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: 60_000,
+    refetchInterval: SESSIONS_REFRESH_MS,
   });
 }
 export function useBranchLifetimes(repoId: string | null) {
@@ -312,7 +318,7 @@ export function useBranchLifetimes(repoId: string | null) {
     queryFn: ({ signal }) => api.branchLifetimes(repoId as string, signal),
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: 60_000,
+    refetchInterval: SESSIONS_REFRESH_MS,
   });
 }
 /** One report in full. `revision` is the report's revision in the list, so a report that was replaced is read again. */
@@ -391,7 +397,7 @@ export function useReportedWorktrees(repoId: string | null) {
     queryFn: ({ signal }) => api.reportedWorktrees(repoId as string, signal),
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: 60_000,
+    refetchInterval: SESSIONS_REFRESH_MS,
   });
 }
 // Manual notes — the caller's own. A write stores the note the server
@@ -438,7 +444,7 @@ export function useRemoteGit(repoId: string | null) {
     getNextPageParam: page => page.next || undefined,
     enabled: Boolean(repoId),
     retry: false,
-    refetchInterval: 60_000,
+    refetchInterval: SESSIONS_REFRESH_MS,
   });
 }
 // Invite list/redemption — only maintainers can view (403 is disabled).

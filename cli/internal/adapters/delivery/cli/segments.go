@@ -662,12 +662,19 @@ func segmentLogLine(entry domain.SessionUploadLogEntry) string {
 }
 
 // segmentCollectorInterval is the least time between the starts of two
-// automatic runs in one repository. After a run that failed for a reason that
-// holds for every session, the next one waits segmentCollectorBackoff.
+// automatic runs in one repository. A run that took long is followed by a
+// longer pause: segmentCollectorShare times what it took, so the collector
+// works for at most about one part in segmentCollectorShare of the time. A
+// run reads a session that went on from its beginning, which was measured at
+// about a second for a 6 MB session file and ten seconds for an 80 MB one.
+// After a run that failed for a reason that holds for every session, and at
+// most in any case, the next one waits segmentCollectorBackoff.
 var (
-	segmentCollectorInterval = 60 * time.Second
+	segmentCollectorInterval = 10 * time.Second
 	segmentCollectorBackoff  = 10 * time.Minute
 )
+
+const segmentCollectorShare = 6
 
 // SpawnSegmentCollector starts a detached collector for the repository
 // holding cwd and returns at once. Hooks call it after their own work: a hook
@@ -707,7 +714,10 @@ func segmentCollectorWait(state domain.CollectorState, now time.Time) time.Durat
 		return 0
 	}
 	interval := segmentCollectorInterval
-	if state.LastRun.Error != "" {
+	if took := time.Duration(state.LastRun.Millis) * time.Millisecond; took > 0 && took*segmentCollectorShare > interval {
+		interval = took * segmentCollectorShare
+	}
+	if state.LastRun.Error != "" || interval > segmentCollectorBackoff {
 		interval = segmentCollectorBackoff
 	}
 	if wait := interval - now.Sub(last); wait > 0 {

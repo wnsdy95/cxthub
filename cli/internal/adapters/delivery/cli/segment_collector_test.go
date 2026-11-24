@@ -26,12 +26,18 @@ func TestSegmentCollectorWaitSpacesRunsAndBacksOffAfterAFailure(t *testing.T) {
 	}{
 		"never ran":                  {nil, 0},
 		"ran long ago":               {&domain.CollectorRun{At: at(time.Hour)}, 0},
-		"ran ten seconds ago":        {&domain.CollectorRun{At: at(10 * time.Second)}, 50 * time.Second},
+		"ran four seconds ago":       {&domain.CollectorRun{At: at(4 * time.Second)}, 6 * time.Second},
 		"failed ten seconds ago":     {&domain.CollectorRun{At: at(10 * time.Second), Error: "synthetic"}, 10*time.Minute - 10*time.Second},
 		"failed long ago":            {&domain.CollectorRun{At: at(time.Hour), Error: "synthetic"}, 0},
 		"a time that cannot be read": {&domain.CollectorRun{At: "yesterday"}, 0},
 		"a time in the future":       {&domain.CollectorRun{At: now.Add(time.Hour).Format(time.RFC3339Nano)}, 0},
-		"exactly one interval ago":   {&domain.CollectorRun{At: at(60 * time.Second)}, 0},
+		"exactly one interval ago":   {&domain.CollectorRun{At: at(10 * time.Second)}, 0},
+		// A run that took long is followed by six times what it took.
+		"a quick run adds nothing":            {&domain.CollectorRun{At: at(4 * time.Second), Millis: 1000}, 6 * time.Second},
+		"a ten second run, ten seconds ago":   {&domain.CollectorRun{At: at(10 * time.Second), Millis: 10_000}, 50 * time.Second},
+		"a ten second run, a minute ago":      {&domain.CollectorRun{At: at(time.Minute), Millis: 10_000}, 0},
+		"a five minute run waits the longest": {&domain.CollectorRun{At: at(time.Minute), Millis: 300_000}, 9 * time.Minute},
+		"a failed long run waits the same":    {&domain.CollectorRun{At: at(time.Minute), Millis: 300_000, Error: "synthetic"}, 9 * time.Minute},
 	} {
 		if got := segmentCollectorWait(domain.CollectorState{LastRun: test.last}, now); got != test.want {
 			t.Errorf("%s: %s", name, got)

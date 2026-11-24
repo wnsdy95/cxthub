@@ -280,7 +280,7 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 		run.epoch = s.contentEpoch(ctx, cwd)
 	}
 	result, runErr := s.push(ctx, cwd, run, nil)
-	state.LastRun = &domain.CollectorRun{At: now.Format(time.RFC3339Nano), Stored: result.Stored, Unchanged: result.Unchanged, Refused: result.Refused}
+	state.LastRun = &domain.CollectorRun{At: now.Format(time.RFC3339Nano), Millis: s.now().UTC().Sub(now).Milliseconds(), Stored: result.Stored, Unchanged: result.Unchanged, Refused: result.Refused}
 	if runErr != nil {
 		state.LastRun.Error = runErr.Error()
 	}

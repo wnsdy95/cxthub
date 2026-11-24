@@ -45,6 +45,8 @@ type collectorFixture struct {
 	repo    domain.Repo
 	epoch   string
 	now     time.Time
+	// tick is how far the clock moves each time it is read.
+	tick time.Duration
 }
 
 func collectorDay(second int) int64 {
@@ -72,7 +74,7 @@ func newCollectorFixture(t *testing.T) *collectorFixture {
 	f.git = git
 	f.service = NewSegmentUploadService(NewSegmentReportService(git, f.claude), f.remote, repo, "laptop").
 		WithSessionContent(f.content, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: f.source}).
-		WithCollectorState(f.state, func() time.Time { return f.now }, func(context.Context, string) string { return f.epoch })
+		WithCollectorState(f.state, func() time.Time { at := f.now; f.now = f.now.Add(f.tick); return at }, func(context.Context, string) string { return f.epoch })
 	return f
 }
 
@@ -118,6 +120,22 @@ func TestCollectorBeginsNowAndLeavesEarlierSessionsForARequest(t *testing.T) {
 	asked, err := f.service.PushSegments(context.Background(), "/work/app")
 	if err != nil || asked.Automatic || asked.BeforeAutomatic != 0 || len(f.remote.uploads) != 2 {
 		t.Fatalf("on request: %+v uploads=%d err=%v", asked, len(f.remote.uploads), err)
+	}
+}
+
+// The pause before the next run is measured from how long this one took.
+func TestCollectorRecordsHowLongARunTook(t *testing.T) {
+	f := newCollectorFixture(t)
+	f.run(t)
+	if f.state.state.LastRun == nil || f.state.state.LastRun.Millis != 0 {
+		t.Fatalf("a run on a clock that stands still took time: %+v", f.state.state.LastRun)
+	}
+	f.tick = 3 * time.Second
+	started := f.now
+	f.run(t)
+	run := f.state.state.LastRun
+	if run == nil || run.At != started.Format(time.RFC3339Nano) || run.Millis < 3000 || run.Millis%3000 != 0 {
+		t.Fatalf("the run that began at %s: %+v", started.Format(time.RFC3339Nano), run)
 	}
 }
 

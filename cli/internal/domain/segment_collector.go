@@ -49,7 +49,10 @@ type CollectorSessionState struct {
 // CollectorRun records how the last automatic run ended, so that a collector
 // that does not work is visible.
 type CollectorRun struct {
-	At        string `json:"at"`
+	At string `json:"at"`
+	// Millis is how long the run took. The next run waits in proportion to
+	// it, so that reading long sessions does not keep the computer busy.
+	Millis    int64  `json:"millis,omitempty"`
 	Stored    int    `json:"stored"`
 	Unchanged int    `json:"unchanged"`
 	Refused   int    `json:"refused"`
