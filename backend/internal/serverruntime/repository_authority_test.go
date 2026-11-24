@@ -54,7 +54,8 @@ func TestWave59RuntimeAuthorityOwnersShareOriginalStoreAndCurrentMembership(test
 	}
 	runtime.Context = nil
 	ctx := inbound.WithRepositoryActor(context.Background(), member.ID)
-	if err := assets.UpdateAbout(ctx, repo, "runtime authority", "", nil); err != nil {
+	description := "runtime authority"
+	if _, err := assets.PatchRepoProfile(ctx, repo, inbound.RepoProfilePatch{Description: &description}); err != nil {
 		test.Fatal("actual runtime asset owner lost its original authority", err)
 	}
 	chunk := inbound.ChunkObject{Data: []byte("runtime authority chunk")}
@@ -65,7 +66,8 @@ func TestWave59RuntimeAuthorityOwnersShareOriginalStoreAndCurrentMembership(test
 	if err := originalStore.RemoveMember(system, repository.ID, member.ID); err != nil {
 		test.Fatal(err)
 	}
-	if err := assets.UpdateAbout(ctx, repo, "revoked write", "", nil); !errors.Is(err, domain.ErrForbidden) {
+	description = "revoked write"
+	if _, err := assets.PatchRepoProfile(ctx, repo, inbound.RepoProfilePatch{Description: &description}); !errors.Is(err, domain.ErrForbidden) {
 		test.Fatal("runtime asset owner cached pre-revocation authority", err)
 	}
 	if output, err := publications.StoreChunks(ctx, inbound.StoreChunksInput{RepoID: repo, Chunks: []inbound.ChunkObject{chunk}}); !errors.Is(err, domain.ErrForbidden) || output != (inbound.StoreChunksOutput{}) {

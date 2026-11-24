@@ -108,10 +108,6 @@ func (identity *readAuthSnapshotIdentity) ResolveUserForSnapshot(_ context.Conte
 	return user, nil
 }
 
-func (identity *readAuthSnapshotIdentity) ResolveMCPUserForSnapshot(context.Context, string, ...string) (domain.User, error) {
-	return domain.User{}, domain.ErrUnauthorized
-}
-
 const (
 	readAuthStore      = domain.ContentHash("1111111111111111111111111111111111111111111111111111111111111111")
 	readAuthOtherStore = domain.ContentHash("2222222222222222222222222222222222222222222222222222222222222222")

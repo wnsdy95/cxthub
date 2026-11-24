@@ -529,9 +529,6 @@ func TestRemoteGitPassReadsPullRequestsInPages(t *testing.T) {
 	if err != nil || len(pulls) != 30 || !reflect.DeepEqual(pulls[23], moved) {
 		t.Fatalf("the changed pull request:\n got %+v\nwant %+v\n%v", pulls[23], moved, err)
 	}
-	if listing, err := fixture.storage.RemotePullsListing(context.Background(), fixture.repo, []string{added}); err != nil || !reflect.DeepEqual(listing, map[string][]int{added: {7}}) {
-		t.Fatalf("pull requests that list the new commit: %v %v", listing, err)
-	}
 	// A new title alone is a change too: the update time moved.
 	renamed := provider.pulls[3]
 	renamed.Title, renamed.UpdatedAt = "Another title", remoteGitTestTime(6000)
@@ -1087,7 +1084,7 @@ func TestRemoteGitReadIsAskedForByQualifiedPushDeliveries(t *testing.T) {
 	if err := worker.Receive(ctx, "remote-git-push", "push", body); err != nil {
 		t.Fatal(err)
 	}
-	if err := worker.deliver(ctx, githubHash("remote-git-push")); err != nil {
+	if err := githubWorkerOf(worker).deliver(ctx, githubHash("remote-git-push")); err != nil {
 		t.Fatal(err)
 	}
 	after, err := storage.GetRemoteGitState(ctx, repo.ID)

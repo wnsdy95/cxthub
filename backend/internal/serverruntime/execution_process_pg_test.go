@@ -113,11 +113,7 @@ func TestBoundedExecutionProcessPGChild(test *testing.T) {
 	case outbound.ProcessMCP:
 		runtime, err = serverruntime.OpenMCP(signaled, "127.0.0.1:0", os.Getenv("HOME"), true)
 	case outbound.ProcessWorker:
-		if os.Getenv("CXT_EXECUTION_PROFILE") == outbound.BoundedWorkersProfile {
-			worker, err = workerserver.OpenWorker(signaled)
-		} else {
-			worker, err = serverruntime.OpenDocumentWorker(signaled)
-		}
+		worker, err = workerserver.OpenWorker(signaled)
 	}
 	if err != nil {
 		emit(executionProcessEvent{State: "refused", Code: executionProcessErrorCode(err)})

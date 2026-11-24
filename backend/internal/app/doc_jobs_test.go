@@ -41,16 +41,16 @@ func TestDocFinalizationWarmProofStillChecksCurrentOwnedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.verifyDocJob(ctx, j); err != nil {
+	if _, err := verifyDocJob(ctx, svc, j); err != nil {
 		t.Fatal(err)
 	}
 	other := j
 	other.RepoID = hh("unowned chunks")
-	if proof, err := svc.verifyDocJob(ctx, other); err == nil || proof.Valid() {
+	if proof, err := verifyDocJob(ctx, svc, other); err == nil || proof.Valid() {
 		t.Fatal("proof granted foreign ownership")
 	}
 	svc.blobs = changedFinalizationChunks{st}
-	if proof, err := svc.verifyDocJob(ctx, j); !errors.Is(err, domain.ErrIntegrity) || proof.Valid() {
+	if proof, err := verifyDocJob(ctx, svc, j); !errors.Is(err, domain.ErrIntegrity) || proof.Valid() {
 		t.Fatal("warm proof hid chunk corruption", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := svc.runDocJob(canceled, st, claim); !errors.Is(err, context.Canceled) {
+	if err := runDocJob(canceled, svc, st, claim); !errors.Is(err, context.Canceled) {
 		t.Fatalf("shutdown %v", err)
 	}
 	job, err := st.GetDocJob(ctx, repo, accepted.ID)
@@ -88,7 +88,7 @@ func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runDocJob(ctx, st, recovered); err != nil {
+	if err := runDocJob(ctx, svc, st, recovered); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -77,8 +77,15 @@ func TestPGSmoke(t *testing.T) {
 	if err := st.AddOrganizationMember(ctx, demotedOnlyOwner); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("PostgreSQL allowed the last Organization owner to be demoted: %v", err)
 	}
-	if err := st.RemoveOrganizationMember(ctx, organization.ID, uid); !errors.Is(err, domain.ErrConflict) {
+	removedAudit := domain.OrganizationAuditEvent{
+		ID: domain.NewID("aud_"), OrganizationID: organization.ID, ActorID: uid,
+		Action: "organization.member.removed", TargetType: "user", TargetID: uid, CreatedAt: now,
+	}
+	if err := st.RemoveOrganizationMemberWithAudit(ctx, organization.ID, uid, removedAudit); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("PostgreSQL allowed the last Organization owner to be removed: %v", err)
+	}
+	if membership, err := st.GetOrganizationMembership(ctx, organization.ID, uid); err != nil || membership.Role != domain.OrganizationOwner {
+		t.Fatalf("the refused removal changed the owner's membership: %+v %v", membership, err)
 	}
 	if err := st.UpsertUser(ctx, domain.User{ID: "namespace-collision-user", Email: "collision@t.io", Name: "Collision", Username: organization.Slug}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("cross-table namespace collision = %v, want ErrConflict", err)

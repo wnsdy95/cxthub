@@ -46,7 +46,7 @@ func TestPGDocClaimPoolExhaustionReleasesAdmission(t *testing.T) {
 		}
 	}
 	started := time.Now()
-	err := service.ProcessDocFinalizations(ctx, 1)
+	err := processDocFinalizations(ctx, service, 1)
 	if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || time.Since(started) > 7*time.Second {
 		t.Fatalf("pool claim must expire independently: elapsed=%v error=%v parent=%v", time.Since(started), err, ctx.Err())
 	}

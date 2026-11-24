@@ -36,7 +36,7 @@ func p9Tree(t *testing.T, dir string) map[string]string {
 	return out
 }
 func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
-	modes := []string{"settings", "transfer", "member", "remove-member", "invite", "accept-invite", "revoke-invite", "backfill", "team-grant", "team-revoke", "team-member", "team-remove", "team-delete", "organization-member", "organization-remove", "organization-policy", "offboard", "break-glass", "namespace-rename", "namespace-transfer", "notification-list", "notification-retry"}
+	modes := []string{"settings", "transfer", "member", "remove-member", "invite", "accept-invite", "revoke-invite", "backfill", "team-grant", "team-revoke", "team-member", "team-remove", "team-delete", "organization-member", "offboard-retain", "organization-policy", "offboard-revoke", "break-glass", "namespace-rename", "namespace-transfer", "notification-list", "notification-retry"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
@@ -128,11 +128,11 @@ func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
 				err = s.DeleteTeam(ctx, f.owner.ID, f.organization.ID, f.team.ID)
 			case "organization-member":
 				err = s.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationAdmin)
-			case "organization-remove":
-				err = s.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID)
+			case "offboard-retain":
+				err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain")
 			case "organization-policy":
 				_, err = s.UpdateOrganizationPolicy(ctx, f.owner.ID, policy)
-			case "offboard":
+			case "offboard-revoke":
 				err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "revoke")
 			case "break-glass":
 				_, err = s.CreateBreakGlassGrant(ctx, f.owner.ID, f.organization.ID, f.repository.ID, "synthetic audit", 5)

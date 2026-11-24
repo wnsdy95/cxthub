@@ -5,7 +5,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
 	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -33,7 +32,7 @@ func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) 
 		return nil, fmt.Errorf("configure remote Git worker: %w", err)
 	}
 	notificationWorker, err := app.NewNotificationWorker(app.NotificationWorkerConfig{
-		Profile: notificationworker.Complete, Metadata: storage, Blobs: storage, Repositories: storage,
+		Metadata: storage, Blobs: storage, Repositories: storage,
 		Sender: config.NotificationSender,
 	})
 	if err != nil {

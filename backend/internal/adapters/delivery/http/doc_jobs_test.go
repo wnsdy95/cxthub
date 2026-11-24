@@ -8,6 +8,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
+	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -66,7 +67,11 @@ func TestDocJobHTTPDurabilityAndAuthorization(t *testing.T) {
 	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", status, nil, nil); code != 403 && code != 404 {
 		t.Fatalf("foreign read %d", code)
 	}
-	if err := svc.ProcessDocFinalizations(systemTestContext(), 1); err != nil {
+	workers, err := svc.DocumentWorkersForProfile(documentquery.LegacyCompatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workers.Finalization.Process(systemTestContext(), 1); err != nil {
 		t.Fatal(err)
 	}
 	if code := doJSON(t, "GET", status, nil, &job); code != 200 || job.State != "completed" {

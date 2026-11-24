@@ -203,11 +203,11 @@ func TestBranchLedgerFollowsQualifiedPushDeliveries(t *testing.T) {
 		if err := worker.Receive(ctx, delivery, "push", body); err != nil {
 			t.Fatal(err)
 		}
-		if err := worker.deliver(ctx, githubHash(delivery)); err != nil {
+		if err := githubWorkerOf(worker).deliver(ctx, githubHash(delivery)); err != nil {
 			t.Fatal(err)
 		}
 		// A delivery processed again changes nothing more.
-		if err := worker.applyDelivery(ctx, domain.GitHubDelivery{ID: githubHash(delivery), Kind: "push", Body: body}); err != nil {
+		if err := githubWorkerOf(worker).applyDelivery(ctx, domain.GitHubDelivery{ID: githubHash(delivery), Kind: "push", Body: body}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -21,7 +21,7 @@ func TestFSStoreRejectsTraversalRepoID(t *testing.T) {
 	dataDir := filepath.Join(base, "data")
 	st := NewFSStore(dataDir)
 
-	err := st.PutSecretsEnvelope(ctx, domain.ContentHash("sha256:../../outside"), []byte(`{}`))
+	err := st.CompareAndSwapSecrets(ctx, domain.ContentHash("sha256:../../outside"), nil, []byte(`{}`))
 	if !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("expected ErrIntegrity, got %v", err)
 	}

@@ -24,9 +24,6 @@ type Worker struct {
 }
 
 func New(config Config) (*Worker, error) {
-	if config.Profile != Compatibility && config.Profile != Complete {
-		return nil, fmt.Errorf("%w: notification worker profile is required", domain.ErrValidation)
-	}
 	if absent(config.Scope) {
 		return nil, fmt.Errorf("%w: notification worker scope is required", domain.ErrValidation)
 	}
@@ -39,7 +36,7 @@ func New(config Config) (*Worker, error) {
 		{name: "guard", value: config.Guard},
 		{name: "sender", value: config.Sender},
 	} {
-		if (config.Profile == Complete || dependency.value != nil) && absent(dependency.value) {
+		if absent(dependency.value) {
 			return nil, fmt.Errorf("%w: notification worker %s is required", domain.ErrValidation, dependency.name)
 		}
 	}
@@ -67,12 +64,6 @@ func absent(dependency any) bool {
 
 func (worker *Worker) Process(ctx context.Context) (bool, error) {
 	ctx = worker.scope.WorkerContext(ctx)
-	if worker.jobs == nil || worker.repositories == nil {
-		return false, nil
-	}
-	if worker.sender == nil {
-		return false, domain.ErrCatalogUnsupported
-	}
 	delivery, err := worker.jobs.ClaimNotification(ctx, time.Now().UTC(), notificationLease)
 	if errors.Is(err, domain.ErrNotFound) {
 		return false, nil
@@ -140,9 +131,6 @@ func (worker *Worker) Process(ctx context.Context) (bool, error) {
 	}
 	if absent(request) {
 		return true, fmt.Errorf("%w: prepared notification request is required", domain.ErrValidation)
-	}
-	if worker.guard == nil {
-		return true, domain.ErrForbidden
 	}
 	if err := worker.guard.ValidateNotificationDelivery(sendCtx, delivery, time.Now().UTC()); err != nil {
 		return true, err

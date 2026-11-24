@@ -34,10 +34,6 @@ func (commands *repositoryAssetHTTPCommands) record(ctx context.Context, repo do
 	return commands.err
 }
 
-func (commands *repositoryAssetHTTPCommands) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	return commands.record(ctx, repo, "config")
-}
-
 func (commands *repositoryAssetHTTPCommands) PatchRepoProfile(ctx context.Context, repo domain.ContentHash, patch inbound.RepoProfilePatch) (domain.Repo, error) {
 	commands.profile = patch
 	return commands.profileResult, commands.record(ctx, repo, "profile")
@@ -63,10 +59,6 @@ func (backend *repositoryAssetHTTPBackend) GetRepo(context.Context, domain.Conte
 	return backend.repository, nil
 }
 
-func (backend *repositoryAssetHTTPBackend) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	return backend.repositoryAssetHTTPCommands.UpdateRepoConfig(ctx, repo, defaultBranch, protectDefault)
-}
-
 func (backend *repositoryAssetHTTPBackend) PatchRepoProfile(ctx context.Context, repo domain.ContentHash, patch inbound.RepoProfilePatch) (domain.Repo, error) {
 	return backend.repositoryAssetHTTPCommands.PatchRepoProfile(ctx, repo, patch)
 }
@@ -80,10 +72,6 @@ func (backend *repositoryAssetHTTPBackend) SaveSecrets(ctx context.Context, inpu
 }
 
 type repositoryAssetHTTPPoisonedBackend struct{ *repositoryAssetHTTPBackend }
-
-func (*repositoryAssetHTTPPoisonedBackend) UpdateRepoConfig(context.Context, domain.ContentHash, *string, *bool) error {
-	panic("repository config command reached the legacy HTTP facade")
-}
 
 func (*repositoryAssetHTTPPoisonedBackend) PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error) {
 	panic("profile patch command reached the legacy HTTP facade")

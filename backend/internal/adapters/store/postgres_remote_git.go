@@ -469,31 +469,6 @@ func (s *PostgresStore) ListRemotePulls(ctx context.Context, repo domain.Content
 	return pulls, rows.Err()
 }
 
-func (s *PostgresStore) RemotePullsListing(ctx context.Context, repo domain.ContentHash, shas []string) (map[string][]int, error) {
-	if err := validateHash(repo); err != nil {
-		return nil, err
-	}
-	asked, err := remoteGitSHAs(shas)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.db(ctx).Query(ctx, `SELECT DISTINCT sha,number FROM remote_git_pull_commits WHERE repo_id=$1 AND sha=ANY($2::text[]) ORDER BY sha, number`, repo, asked)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	listing := map[string][]int{}
-	for rows.Next() {
-		var sha string
-		var number int
-		if err := rows.Scan(&sha, &number); err != nil {
-			return nil, err
-		}
-		listing[sha] = append(listing[sha], number)
-	}
-	return listing, rows.Err()
-}
-
 var _ outbound.RemotePushStore = (*PostgresStore)(nil)
 
 func (s *PostgresStore) RecordRemotePushes(ctx context.Context, repo domain.ContentHash, pushes []domain.RemoteBranchPush) error {

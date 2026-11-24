@@ -5,21 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
-
-func (service *Service) ProcessNotification(ctx context.Context) (bool, error) {
-	if _, supported := service.meta.(outbound.NotificationStore); !supported || service.repositories == nil {
-		return false, nil
-	}
-	worker, err := service.notificationWorker(notificationworker.Compatibility)
-	if err != nil {
-		return false, err
-	}
-	return worker.Process(ctx)
-}
 
 func (s *IdentityService) notificationManager(ctx context.Context, user, repository string) (domain.Repository, error) {
 	role, member := s.RoleOf(ctx, repository, user)

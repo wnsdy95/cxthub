@@ -63,8 +63,3 @@ func (service *Service) DocumentWorkersForProfile(profile documentquery.Profile)
 		Metadata: service.meta, Blobs: service.blobs, Verifier: &service.docVerifier, Profile: profile,
 	})
 }
-
-func (service *Service) documentFinalizer(storage outbound.DocJobStore) (*documentworker.Finalizer, error) {
-	scope := newDocumentWorkerScope(service.meta, service.blobs, documentquery.LegacyCompatibility)
-	return documentworker.NewFinalizer(storage, service.blobs, &service.docVerifier, scope)
-}

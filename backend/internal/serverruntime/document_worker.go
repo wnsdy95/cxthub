@@ -40,23 +40,14 @@ func ValidateWorkerExecutionProfile() error {
 	return err
 }
 
-func OpenDocumentWorker(ctx context.Context) (_ *WorkerRuntime, err error) {
-	return openWorker(ctx, true)
-}
-
-func OpenWorker(ctx context.Context, sources ...WorkerSourceFactory) (*WorkerRuntime, error) {
-	return openWorker(ctx, false, sources...)
-}
-
-func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSourceFactory) (_ *WorkerRuntime, err error) {
+// OpenWorker opens the worker process's runtime. Without sources it runs the
+// document worker alone; the complete worker profile needs exactly one source.
+func OpenWorker(ctx context.Context, sources ...WorkerSourceFactory) (_ *WorkerRuntime, err error) {
 	execution, err := executionProfileFromEnvironment(outbound.ProcessWorker, true)
 	if err != nil {
 		return nil, err
 	}
 	complete := execution.budget.Profile == outbound.BoundedWorkersProfile
-	if documentsOnly && complete {
-		return nil, fmt.Errorf("%w: OpenDocumentWorker requires %s; use OpenWorker for %s", domain.ErrValidation, outbound.BoundedDocumentsProfile, outbound.BoundedWorkersProfile)
-	}
 	if complete {
 		if _, err := executionDataDSN(os.Getenv("CXT_POSTGRES_DSN"), execution.role); err != nil {
 			return nil, err

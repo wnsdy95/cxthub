@@ -35,7 +35,6 @@ type MetadataStore interface {
 	PutSettingsBundle(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsBundle(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
 	// Secret ciphertext envelope (E2E — server cannot decrypt, stored as opaque bytes only).
-	PutSecretsEnvelope(ctx context.Context, repoID domain.ContentHash, raw []byte) error
 	GetSecretsEnvelope(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
 }
 
@@ -152,7 +151,6 @@ type OrganizationStore interface {
 	UpdateOrganizationWithAudit(ctx context.Context, organization domain.Organization, audit domain.OrganizationAuditEvent) error
 
 	AddOrganizationMember(ctx context.Context, membership domain.OrganizationMembership) error
-	RemoveOrganizationMember(ctx context.Context, organizationID, userID string) error
 	AddOrganizationMemberWithAudit(ctx context.Context, membership domain.OrganizationMembership, audit domain.OrganizationAuditEvent) error
 	RemoveOrganizationMemberWithAudit(ctx context.Context, organizationID, userID string, audit domain.OrganizationAuditEvent) error
 	GetOrganizationMembership(ctx context.Context, organizationID, userID string) (domain.OrganizationMembership, error)

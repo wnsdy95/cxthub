@@ -215,11 +215,11 @@ func TestWave48PGFullRootCompleteProductionPortsAndClose(test *testing.T) {
 		test.Fatal("enabled Complete worker constructors rejected the current production PostgreSQL ports", err)
 	}
 	wave48PGAssertBindings(test, bindings)
-	if documentOnly, err := OpenDocumentWorker(context.Background()); documentOnly != nil || !errors.Is(err, domain.ErrValidation) {
+	if documentOnly, err := OpenWorker(context.Background()); documentOnly != nil || !errors.Is(err, domain.ErrValidation) {
 		if documentOnly != nil {
 			_ = documentOnly.Close()
 		}
-		test.Fatal("document-only selector did not reject the full profile before role registration", err)
+		test.Fatal("the full profile was opened without its sources", err)
 	}
 	current, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

@@ -82,11 +82,11 @@ func TestWorkerNotificationPolicyBeforeEgressAndAfterSend(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 			})}
-			configureNotificationTestSender(t, svc, client)
+			notifications := notificationTestWorker(t, svc, client)
 			roots := []domain.DocumentIdentity{domain.DocumentIdentityRootV1}
 			ctx = inbound.WithDocumentIdentities(ctx, roots)
 			ctx = outbound.WithDocumentIdentityCompatibility(ctx, roots, roots)
-			worked, e := svc.ProcessNotification(ctx)
+			worked, e := notifications.Process(ctx)
 			if when == "config-revoked" {
 				if !worked || !errors.Is(e, domain.ErrForbidden) {
 					t.Fatal(worked, e)
@@ -179,7 +179,7 @@ func TestWorkerGitHubClaimsAndGrantPublicationPolicy(t *testing.T) {
 			if _, e := g.Complete(ctx, f.owner.ID, state, "code"); e != nil {
 				t.Fatal(e)
 			}
-			if e := g.reconcile(ctx, ns); e != nil {
+			if e := githubWorkerOf(g).reconcile(ctx, ns); e != nil {
 				t.Fatal(e)
 			}
 			if e := f.identity.SetTeamRepository(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.repository.ID, domain.RolePuller); e != nil {
@@ -218,7 +218,7 @@ func TestWorkerGitHubClaimsAndGrantPublicationPolicy(t *testing.T) {
 					t.Fatal(e)
 				}
 				upgrade()
-				if e := g.deliver(ctx, githubHash("synthetic")); !errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
+				if e := githubWorkerOf(g).deliver(ctx, githubHash("synthetic")); !errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
 					t.Fatal(e)
 				}
 				j, e := st.GetGitHubDelivery(ctx, githubHash("synthetic"))
@@ -230,7 +230,7 @@ func TestWorkerGitHubClaimsAndGrantPublicationPolicy(t *testing.T) {
 			if when == "before-reconcile" {
 				upgrade()
 			}
-			if e := g.reconcile(ctx, ns); !errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
+			if e := githubWorkerOf(g).reconcile(ctx, ns); !errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
 				t.Fatal(e)
 			}
 			current, e := st.GetGitHubConnection(ctx, ns)
@@ -280,7 +280,7 @@ func TestWorkerGitHubFinalDeliveryPolicy(t *testing.T) {
 			t.Fatal(e)
 		}
 	}}
-	if e := g.deliver(ctx, githubHash("synthetic-final")); !errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
+	if e := githubWorkerOf(g).deliver(ctx, githubHash("synthetic-final")); !errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
 		t.Fatal(e)
 	}
 	current, e := st.GetGitHubDelivery(ctx, githubHash("synthetic-final"))

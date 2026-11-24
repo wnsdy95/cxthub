@@ -159,7 +159,6 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 	for name, read := range map[string]func() error{
 		"missing": func() error { _, err := storage.MissingRemoteCommits(ctx, repo, []string{"main"}); return err },
 		"get":     func() error { _, err := storage.GetRemoteCommits(ctx, repo, []string{a[:12]}); return err },
-		"listing": func() error { _, err := storage.RemotePullsListing(ctx, repo, []string{""}); return err },
 		"list": func() error {
 			_, err := storage.ListRemoteCommits(ctx, repo, domain.RemoteCommitCursor{}, 0)
 			return err
@@ -302,10 +301,6 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 	if pulls, err := storage.ListRemotePulls(ctx, repo); err != nil || !reflect.DeepEqual(pulls, []domain.RemotePull{two, one}) {
 		t.Fatalf("a replaced pull request:\n got %+v\nwant %+v\n%v", pulls, []domain.RemotePull{two, one}, err)
 	}
-	listing, err := storage.RemotePullsListing(ctx, repo, []string{c, b, f, d, c})
-	if err != nil || !reflect.DeepEqual(listing, map[string][]int{c: {1, 12}, b: {1}, f: {12}}) {
-		t.Fatalf("pull requests listing each commit: %v %v", listing, err)
-	}
 	invalidPull := one
 	invalidPull.Number, invalidPull.State = 3, "draft"
 	if err := storage.PutRemotePull(ctx, repo, invalidPull); !errors.Is(err, domain.ErrValidation) {
@@ -361,9 +356,6 @@ func checkRemoteGitPersistence(t *testing.T, ctx context.Context, storage outbou
 	}
 	if pulls, err := storage.ListRemotePulls(ctx, repo); err != nil || len(pulls) != 0 {
 		t.Fatalf("pull requests of the first origin were kept: %+v %v", pulls, err)
-	}
-	if listing, err := storage.RemotePullsListing(ctx, repo, []string{c}); err != nil || len(listing) != 0 {
-		t.Fatalf("commit lists of the first origin were kept: %v %v", listing, err)
 	}
 	// The new claim is held like any other.
 	if _, err := storage.ClaimRemoteGitSync(ctx, repo, remoteGitStoreOrigin, remoteGitStoreTime(251), lease); !errors.Is(err, domain.ErrNotFound) {

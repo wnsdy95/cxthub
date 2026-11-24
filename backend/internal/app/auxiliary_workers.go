@@ -11,7 +11,6 @@ import (
 )
 
 type NotificationWorkerConfig struct {
-	Profile      notificationworker.Profile
 	Metadata     outbound.MetadataStore
 	Blobs        outbound.BlobStore
 	Repositories outbound.RepositoryStore
@@ -27,29 +26,14 @@ func (scope notificationWorkerScope) WorkerContext(ctx context.Context) context.
 }
 
 func NewNotificationWorker(config NotificationWorkerConfig) (*notificationworker.Worker, error) {
-	if !rootAdapterPresent(config.Metadata) || (config.Blobs != nil || config.Profile == notificationworker.Complete) && !rootAdapterPresent(config.Blobs) {
+	if !rootAdapterPresent(config.Metadata) || !rootAdapterPresent(config.Blobs) {
 		return nil, domain.ErrValidation
 	}
 	jobs, _ := config.Metadata.(outbound.NotificationStore)
 	guard, _ := config.Metadata.(outbound.NotificationDeliveryGuard)
 	return notificationworker.New(notificationworker.Config{
-		Profile: config.Profile, Scope: notificationWorkerScope{supported: ReadDocumentIdentities(config.Metadata, config.Blobs)},
-		Jobs: jobs, Repositories: config.Repositories, Guard: guard, Sender: config.Sender,
-	})
-}
-
-func (service *Service) ConfigureNotificationSender(sender outbound.NotificationSender) error {
-	if !rootAdapterPresent(sender) {
-		return domain.ErrValidation
-	}
-	service.notificationSender = sender
-	return nil
-}
-
-func (service *Service) notificationWorker(profile notificationworker.Profile) (*notificationworker.Worker, error) {
-	return NewNotificationWorker(NotificationWorkerConfig{
-		Profile: profile, Metadata: service.meta, Blobs: service.blobs,
-		Repositories: service.repositories, Sender: service.notificationSender,
+		Scope: notificationWorkerScope{supported: ReadDocumentIdentities(config.Metadata, config.Blobs)},
+		Jobs:  jobs, Repositories: config.Repositories, Guard: guard, Sender: config.Sender,
 	})
 }
 

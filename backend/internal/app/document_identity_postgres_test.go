@@ -45,7 +45,7 @@ func TestP6PGQueuedOldWriteSeesCommittedRequirement(t *testing.T) {
 	}()
 	<-locked
 	oldDone := make(chan error, 1)
-	go func() { oldDone <- svc.UpdateAbout(inbound.WithSystemActor(ctx), id, "forbidden-effect", "", nil) }()
+	go func() { oldDone <- patchAbout(inbound.WithSystemActor(ctx), svc, id, "forbidden-effect", "", nil) }()
 	select {
 	case err = <-oldDone:
 		close(release)

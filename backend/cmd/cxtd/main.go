@@ -22,7 +22,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/webhookdelivery"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
 	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"github.com/wnsdy95/cxthub/backend/internal/serverruntime"
@@ -151,7 +150,7 @@ func serve(ctx context.Context, args []string) error {
 	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (auth=%s)\n", addr, runtime.AuthMode)
 	if !runtime.ExternalWorkers() {
 		notificationWorker, err := app.NewNotificationWorker(app.NotificationWorkerConfig{
-			Profile: notificationworker.Complete, Metadata: st, Blobs: st, Repositories: st, Sender: webhookdelivery.New(),
+			Metadata: st, Blobs: st, Repositories: st, Sender: webhookdelivery.New(),
 		})
 		if err != nil {
 			return fmt.Errorf("configure notification worker: %w", err)

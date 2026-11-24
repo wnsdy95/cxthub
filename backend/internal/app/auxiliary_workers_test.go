@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
-	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
 	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -67,7 +66,7 @@ func (storage *wave41NotificationStore) FinishNotification(ctx context.Context, 
 	return storage.FSStore.FinishNotification(ctx, job, now)
 }
 
-func wave41NotificationConfig(test *testing.T, profile notificationworker.Profile) (NotificationWorkerConfig, *wave41NotificationStore, domain.Repository) {
+func wave41NotificationConfig(test *testing.T) (NotificationWorkerConfig, *wave41NotificationStore, domain.Repository) {
 	test.Helper()
 	_, storage, repository := notificationFixture(test)
 	observed := &wave41NotificationStore{FSStore: storage}
@@ -75,87 +74,47 @@ func wave41NotificationConfig(test *testing.T, profile notificationworker.Profil
 		test.Fatal("unexpected notification preparation")
 		return nil, domain.ErrForbidden
 	}}
-	return NotificationWorkerConfig{Profile: profile, Metadata: observed, Blobs: storage, Repositories: observed, Sender: sender}, observed, repository
+	return NotificationWorkerConfig{Metadata: observed, Blobs: storage, Repositories: observed, Sender: sender}, observed, repository
 }
 
-func TestWave41NotificationFactoryProfilesAndMandatoryAdapters(test *testing.T) {
-	for _, profile := range []notificationworker.Profile{notificationworker.Compatibility, notificationworker.Complete} {
-		test.Run(string(profile), func(test *testing.T) {
-			config, storage, _ := wave41NotificationConfig(test, profile)
-			worker, err := NewNotificationWorker(config)
-			if err != nil || worker == nil {
-				test.Fatal("FS notification capabilities rejected", err)
-			}
-			if len(storage.calls) != 0 {
-				test.Fatal("constructor executed notification work", storage.calls)
-			}
-			for _, unknown := range []notificationworker.Profile{"", "future-profile"} {
-				invalid := config
-				invalid.Profile = unknown
-				if result, err := NewNotificationWorker(invalid); result != nil || !errors.Is(err, domain.ErrValidation) {
-					test.Fatal("unknown notification profile accepted", unknown, err)
-				}
-			}
-			if profile != notificationworker.Complete {
-				return
-			}
-			for _, field := range []string{"Metadata", "Blobs", "Repositories", "Sender"} {
-				for _, typed := range []bool{false, true} {
-					invalid := config
-					value := reflect.ValueOf(&invalid).Elem().FieldByName(field)
-					value.Set(reflect.Zero(value.Type()))
-					if typed {
-						missing := any((*store.FSStore)(nil))
-						if field == "Sender" {
-							missing = (*wave41NotificationSender)(nil)
-						}
-						value.Set(reflect.ValueOf(missing))
-						if value.IsNil() || !value.Elem().IsNil() {
-							test.Fatal("typed-nil fixture is not an interface containing a nil pointer", field)
-						}
-					}
-					if result, err := NewNotificationWorker(invalid); result != nil || err == nil {
-						test.Fatal("complete notification accepted missing adapter", field, typed, err)
-					}
-				}
-			}
-			if len(storage.calls) != 0 {
-				test.Fatal("rejected constructor executed notification work", storage.calls)
-			}
-		})
-	}
-}
-
-func TestWave41CompatibilityNotificationAllowsMetadataOnlyDeclaration(test *testing.T) {
-	config, storage, repository := wave41NotificationConfig(test, notificationworker.Compatibility)
-	config.Blobs = nil
-	prepared := false
-	config.Sender = &wave41NotificationSender{prepare: func(bound context.Context, _ outbound.NotificationDelivery) (outbound.NotificationRequest, error) {
-		actor, system := inbound.RepositoryActor(bound)
-		if actor != "caller" || system || !reflect.DeepEqual(inbound.DocumentIdentities(bound), []domain.DocumentIdentity{domain.DocumentIdentityLegacy}) {
-			test.Fatal("metadata-only worker changed actor or declared absent root readers", actor, system, inbound.DocumentIdentities(bound))
-		}
-		prepared = true
-		return &wave41NotificationRequest{send: func(context.Context) (outbound.NotificationResponse, error) {
-			return outbound.NotificationResponse{HTTPStatus: 204}, nil
-		}}, nil
-	}}
+func TestWave41NotificationFactoryRequiresEveryAdapter(test *testing.T) {
+	config, storage, _ := wave41NotificationConfig(test)
 	worker, err := NewNotificationWorker(config)
 	if err != nil || worker == nil {
-		test.Fatal("compatibility rejected original metadata-only support", err)
+		test.Fatal("FS notification capabilities rejected", err)
 	}
-	if err := enqueueRepositoryNotification(systemTestContext(), storage, repository, "synthetic", "metadata only"); err != nil {
-		test.Fatal(err)
+	if len(storage.calls) != 0 {
+		test.Fatal("constructor executed notification work", storage.calls)
 	}
-	if worked, err := worker.Process(inbound.WithRepositoryActor(context.Background(), "caller")); !worked || err != nil || !prepared {
-		test.Fatal("metadata-only notification failed", worked, err, prepared)
+	for _, field := range []string{"Metadata", "Blobs", "Repositories", "Sender"} {
+		for _, typed := range []bool{false, true} {
+			invalid := config
+			value := reflect.ValueOf(&invalid).Elem().FieldByName(field)
+			value.Set(reflect.Zero(value.Type()))
+			if typed {
+				missing := any((*store.FSStore)(nil))
+				if field == "Sender" {
+					missing = (*wave41NotificationSender)(nil)
+				}
+				value.Set(reflect.ValueOf(missing))
+				if value.IsNil() || !value.Elem().IsNil() {
+					test.Fatal("typed-nil fixture is not an interface containing a nil pointer", field)
+				}
+			}
+			if result, err := NewNotificationWorker(invalid); result != nil || err == nil {
+				test.Fatal("notification worker accepted a missing adapter", field, typed, err)
+			}
+		}
+	}
+	if len(storage.calls) != 0 {
+		test.Fatal("rejected constructor executed notification work", storage.calls)
 	}
 }
 
 func TestWave41CompleteNotificationRequiresJobsAndDeliveryGuard(test *testing.T) {
 	for _, missing := range []string{"jobs", "guard"} {
 		test.Run(missing, func(test *testing.T) {
-			config, storage, _ := wave41NotificationConfig(test, notificationworker.Complete)
+			config, storage, _ := wave41NotificationConfig(test)
 			switch missing {
 			case "jobs":
 				config.Metadata = struct {
@@ -178,104 +137,11 @@ func TestWave41CompleteNotificationRequiresJobsAndDeliveryGuard(test *testing.T)
 	}
 }
 
-func TestWave41ServiceNotificationRequiresExplicitSenderBeforeClaim(test *testing.T) {
-	for _, scenario := range []string{"unconfigured", "nil", "typed-nil"} {
-		test.Run(scenario, func(test *testing.T) {
-			service, storage, repository := notificationFixture(test)
-			observed := &wave41NotificationStore{FSStore: storage}
-			service.meta = observed
-			ctx := systemTestContext()
-			if err := enqueueRepositoryNotification(ctx, storage, repository, "synthetic", "metadata only"); err != nil {
-				test.Fatal(err)
-			}
-			before, err := storage.ListNotifications(ctx, repository.ID)
-			if err != nil || len(before) != 1 {
-				test.Fatal(before, err)
-			}
-			if scenario != "unconfigured" {
-				var sender outbound.NotificationSender
-				if scenario == "typed-nil" {
-					sender = (*wave41NotificationSender)(nil)
-				}
-				if err := service.ConfigureNotificationSender(sender); err == nil {
-					test.Fatal("missing explicit sender accepted", scenario)
-				}
-			}
-			if worked, err := service.ProcessNotification(ctx); worked || !errors.Is(err, domain.ErrCatalogUnsupported) {
-				test.Fatal("missing sender did not fail before claim", worked, err)
-			}
-			if len(observed.calls) != 0 {
-				test.Fatal("missing sender touched notification lease", observed.calls)
-			}
-			after, err := storage.ListNotifications(ctx, repository.ID)
-			if err != nil || !reflect.DeepEqual(after, before) || after[0].Attempts != 0 || !after[0].LeaseUntil.IsZero() {
-				test.Fatal("missing sender mutated pending notification", after, err)
-			}
-			prepared, sent := 0, 0
-			sender := &wave41NotificationSender{prepare: func(context.Context, outbound.NotificationDelivery) (outbound.NotificationRequest, error) {
-				prepared++
-				return &wave41NotificationRequest{send: func(context.Context) (outbound.NotificationResponse, error) {
-					sent++
-					return outbound.NotificationResponse{HTTPStatus: 204}, nil
-				}}, nil
-			}}
-			if err := service.ConfigureNotificationSender(sender); err != nil || prepared != 0 || sent != 0 || len(observed.calls) != 0 {
-				test.Fatal("explicit sender configuration executed work", prepared, sent, observed.calls, err)
-			}
-			if worked, err := service.ProcessNotification(ctx); !worked || err != nil || prepared != 1 || sent != 1 {
-				test.Fatal("explicit sender did not enable legacy notification", worked, prepared, sent, err)
-			}
-			after, err = storage.ListNotifications(ctx, repository.ID)
-			if err != nil || len(after) != 1 || after[0].ID != before[0].ID || after[0].State != "delivered" || after[0].HTTPStatus != 204 || after[0].Attempts != 1 || !after[0].LeaseUntil.IsZero() {
-				test.Fatal("explicit sender did not retain the unclaimed event", after, err)
-			}
-		})
-	}
-}
-
-func TestWave41CompatibilityNotificationUnsupportedJobsOrRepositoriesRemainNoop(test *testing.T) {
-	for _, missing := range []string{"jobs", "repositories"} {
-		test.Run(missing, func(test *testing.T) {
-			service, storage, repository := notificationFixture(test)
-			observed := &wave41NotificationStore{FSStore: storage}
-			config := NotificationWorkerConfig{Profile: notificationworker.Compatibility, Metadata: observed, Blobs: storage, Repositories: observed}
-			service.meta = observed
-			if missing == "jobs" {
-				config.Metadata = struct{ outbound.MetadataStore }{MetadataStore: storage}
-				service.meta = config.Metadata
-			} else {
-				config.Repositories = nil
-				service.repositories = nil
-			}
-			ctx := systemTestContext()
-			if err := enqueueRepositoryNotification(ctx, storage, repository, "synthetic", "metadata only"); err != nil {
-				test.Fatal(err)
-			}
-			worker, err := NewNotificationWorker(config)
-			if err != nil || worker == nil {
-				test.Fatal("unsupported compatibility constructor lost no-op", missing, err)
-			}
-			for _, process := range []func(context.Context) (bool, error){worker.Process, service.ProcessNotification} {
-				if worked, err := process(ctx); worked || err != nil {
-					test.Fatal("unsupported compatibility execution lost no-op", missing, worked, err)
-				}
-			}
-			if len(observed.calls) != 0 {
-				test.Fatal("unsupported no-op claimed notification", observed.calls)
-			}
-			jobs, err := storage.ListNotifications(ctx, repository.ID)
-			if err != nil || len(jobs) != 1 || jobs[0].State != "pending" || jobs[0].Attempts != 0 || !jobs[0].LeaseUntil.IsZero() {
-				test.Fatal("unsupported no-op changed pending notification", jobs, err)
-			}
-		})
-	}
-}
-
 func TestWave41NativeNotificationReplacesSupportDeclarationWithoutChangingActor(test *testing.T) {
 	for _, rootRuntime := range []bool{false, true} {
 		for _, actor := range []string{"", "user", "system"} {
 			for _, requested := range []domain.DocumentIdentity{domain.DocumentIdentityLegacy, domain.DocumentIdentityRootV1, "future-unsupported"} {
-				config, storage, _ := wave41NotificationConfig(test, notificationworker.Complete)
+				config, storage, _ := wave41NotificationConfig(test)
 				if !rootRuntime {
 					config.Blobs = struct{ outbound.BlobStore }{BlobStore: storage.FSStore}
 				}
@@ -331,7 +197,7 @@ func TestWave41NativeNotificationReplacesSupportDeclarationWithoutChangingActor(
 
 func TestWave41NativeNotificationPreparesThenGuardsImmediatelyBeforeSend(test *testing.T) {
 	for _, revoked := range []bool{false, true} {
-		config, storage, repository := wave41NotificationConfig(test, notificationworker.Complete)
+		config, storage, repository := wave41NotificationConfig(test)
 		ctx := inbound.WithRepositoryActor(context.Background(), "synthetic")
 		if err := enqueueRepositoryNotification(ctx, storage.FSStore, repository, "synthetic", "queued metadata"); err != nil {
 			test.Fatal(err)
@@ -399,7 +265,7 @@ func TestWave41NativeNotificationPreparesThenGuardsImmediatelyBeforeSend(test *t
 func TestWave41NativeNotificationIdentityTimingKeepsClaimAndReceiptFences(test *testing.T) {
 	for _, rootRuntime := range []bool{false, true} {
 		for _, when := range []string{"before-claim", "before-egress", "after-send", "legacy"} {
-			config, storage, repository := wave41NotificationConfig(test, notificationworker.Complete)
+			config, storage, repository := wave41NotificationConfig(test)
 			if !rootRuntime {
 				config.Blobs = struct{ outbound.BlobStore }{BlobStore: storage.FSStore}
 			}
@@ -495,7 +361,7 @@ func TestWave41NativeNotificationResponsePreservesRetryAfterAndHTTPStatus(test *
 		{delay: -time.Minute, want: 30 * time.Second},
 	} {
 		test.Run(scenario.delay.String(), func(test *testing.T) {
-			config, storage, repository := wave41NotificationConfig(test, notificationworker.Complete)
+			config, storage, repository := wave41NotificationConfig(test)
 			ctx := systemTestContext()
 			if err := enqueueRepositoryNotification(ctx, storage.FSStore, repository, "synthetic", "metadata only"); err != nil {
 				test.Fatal(err)
@@ -536,7 +402,7 @@ func TestWave41NativeNotificationSenderFailuresPreserveOutcomes(test *testing.T)
 		{name: "send-transport", reason: "transport_failed", state: "retrying", onSend: true},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
-			config, storage, repository := wave41NotificationConfig(test, notificationworker.Complete)
+			config, storage, repository := wave41NotificationConfig(test)
 			ctx := systemTestContext()
 			if err := enqueueRepositoryNotification(ctx, storage.FSStore, repository, "synthetic", "metadata only"); err != nil {
 				test.Fatal(err)

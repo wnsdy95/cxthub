@@ -20,7 +20,7 @@ func githubPRObservationFixture(t *testing.T) (*GitHubConnections, *store.FSStor
 	if _, err := worker.Complete(ctx, fixture.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := worker.reconcile(ctx, fixture.organization.NamespaceID); err != nil {
+	if err := githubWorkerOf(worker).reconcile(ctx, fixture.organization.NamespaceID); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh(t.Name()), RepositoryID: fixture.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}

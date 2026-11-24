@@ -5,13 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/app/documentworker"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
-
-const docJobLease = documentworker.Lease
 
 func (s *Service) docJobs() (outbound.DocJobStore, error) {
 	st, ok := s.blobs.(outbound.DocJobStore)
@@ -101,28 +98,6 @@ func (s *Service) GetDocFinalization(ctx context.Context, repo domain.ContentHas
 		j, err := st.GetDocJob(read, repo, id)
 		return docJobStatus(j), err
 	})
-}
-func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob) (domain.VerifiedSessionDoc, error) {
-	finalizer, err := s.documentFinalizer(nil)
-	if err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	return finalizer.Verify(ctx, j)
-}
-func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j domain.DocFinalizationJob) error {
-	finalizer, err := s.documentFinalizer(st)
-	if err != nil {
-		return err
-	}
-	return finalizer.RunJob(ctx, j)
-}
-func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error {
-	storage, _ := s.blobs.(outbound.DocJobStore)
-	finalizer, err := s.documentFinalizer(storage)
-	if err != nil {
-		return err
-	}
-	return finalizer.Process(ctx, limit)
 }
 
 func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {

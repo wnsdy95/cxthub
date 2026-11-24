@@ -65,30 +65,21 @@ func wave48WorkerStartupError(test *testing.T, worker *WorkerRuntime, err error,
 }
 
 func TestWave48WorkerRootsRequireExplicitProfileAndManifest(test *testing.T) {
-	for name, open := range map[string]func(context.Context) (*WorkerRuntime, error){
-		"worker": func(ctx context.Context) (*WorkerRuntime, error) { return OpenWorker(ctx) }, "documents": OpenDocumentWorker,
-	} {
-		test.Run(name, func(test *testing.T) {
-			for _, profile := range []string{"", "embedded", "future-profile", outbound.BoundedDocumentsProfile, wave48ApplicationWorkerProfile} {
-				if name == "documents" && profile == wave48ApplicationWorkerProfile {
-					continue
-				}
-				test.Run("profile="+profile, func(test *testing.T) {
-					data := wave48WorkerEnvironment(test)
-					test.Setenv("CXT_EXECUTION_PROFILE", profile)
-					test.Setenv("CXT_EXECUTION_BUDGET_FILE", "")
-					test.Setenv("CXT_POSTGRES_DSN", "postgres://user:wave48-secret@localhost/db?pool_max_conns=invalid")
-					want, category := "CXT_EXECUTION_PROFILE", domain.ErrValidation
-					if profile == "future-profile" {
-						category = errors.ErrUnsupported
-					}
-					if profile == outbound.BoundedDocumentsProfile || profile == wave48ApplicationWorkerProfile {
-						want = "CXT_EXECUTION_BUDGET_FILE"
-					}
-					worker, err := open(context.Background())
-					wave48WorkerStartupError(test, worker, err, data, want, category)
-				})
+	for _, profile := range []string{"", "embedded", "future-profile", outbound.BoundedDocumentsProfile, wave48ApplicationWorkerProfile} {
+		test.Run("profile="+profile, func(test *testing.T) {
+			data := wave48WorkerEnvironment(test)
+			test.Setenv("CXT_EXECUTION_PROFILE", profile)
+			test.Setenv("CXT_EXECUTION_BUDGET_FILE", "")
+			test.Setenv("CXT_POSTGRES_DSN", "postgres://user:wave48-secret@localhost/db?pool_max_conns=invalid")
+			want, category := "CXT_EXECUTION_PROFILE", domain.ErrValidation
+			if profile == "future-profile" {
+				category = errors.ErrUnsupported
 			}
+			if profile == outbound.BoundedDocumentsProfile || profile == wave48ApplicationWorkerProfile {
+				want = "CXT_EXECUTION_BUDGET_FILE"
+			}
+			worker, err := OpenWorker(context.Background())
+			wave48WorkerStartupError(test, worker, err, data, want, category)
 		})
 	}
 }
@@ -109,18 +100,6 @@ func TestWave48WorkerRejectsProfileManifestMismatchBeforeStorage(test *testing.T
 			worker, err := OpenWorker(context.Background())
 			wave48WorkerStartupError(test, worker, err, data, "profile", domain.ErrValidation)
 		})
-	}
-}
-
-func TestWave48DocumentWorkerRejectsApplicationProfileBeforeStorage(test *testing.T) {
-	data := wave48WorkerEnvironment(test)
-	test.Setenv("CXT_EXECUTION_PROFILE", wave48ApplicationWorkerProfile)
-	test.Setenv("CXT_EXECUTION_BUDGET_FILE", runtimeExecutionBudgetFile(test, wave48WorkerBudget(test, wave48ApplicationWorkerProfile)))
-	test.Setenv("CXT_POSTGRES_DSN", "postgres://user:wave48-secret@localhost/db?pool_max_conns=invalid")
-	worker, err := OpenDocumentWorker(context.Background())
-	wave48WorkerStartupError(test, worker, err, data, "", domain.ErrValidation)
-	if !strings.Contains(err.Error(), outbound.BoundedDocumentsProfile) && !strings.Contains(err.Error(), wave48ApplicationWorkerProfile) && !strings.Contains(err.Error(), "OpenWorker") {
-		test.Fatal("document-only root reached PostgreSQL validation instead of rejecting the full profile")
 	}
 }
 

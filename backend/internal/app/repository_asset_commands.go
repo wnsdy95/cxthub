@@ -21,17 +21,6 @@ const (
 	RepositoryAssetsComplete      RepositoryAssetProfile = "complete"
 )
 
-type RepositoryAssetOperation uint8
-
-const (
-	AssetUpdateAbout RepositoryAssetOperation = iota + 1
-	AssetUpdateConfig
-	AssetPutSettings
-	AssetPutSettingsObject
-	AssetSaveSecrets
-	AssetPatchProfile
-)
-
 type RepositoryAssetStore interface {
 	GetRepo(context.Context, domain.ContentHash) (domain.Repo, error)
 	UpdateRepoAbout(context.Context, domain.ContentHash, string, string, []string) error
@@ -45,7 +34,7 @@ type RepositoryAssetRepositoryReader interface {
 }
 
 type RepositoryAssetWriteScope interface {
-	WithinAssetWrite(context.Context, domain.ContentHash, RepositoryAssetOperation, func(context.Context) error) error
+	WithinAssetSettingsWrite(context.Context, domain.ContentHash, func(context.Context) error) error
 	WithinAssetSecretsWrite(context.Context, domain.ContentHash, func(context.Context) (inbound.SaveSecretsOutput, error)) (inbound.SaveSecretsOutput, error)
 	WithinAssetProfileWrite(context.Context, domain.ContentHash, func(context.Context) (domain.Repo, error)) (domain.Repo, error)
 	AuthorizeAssetSecrets(context.Context, inbound.SaveSecretsInput) error
@@ -88,12 +77,6 @@ func NewRepositoryAssetCommands(config RepositoryAssetCommandsConfig) (*Reposito
 	}
 	return &RepositoryAssetCommands{store: config.Store, scope: config.Scope, repositories: config.Repositories,
 		secrets: config.SecretsCAS, notifications: config.Notifications}, nil
-}
-
-func (commands *RepositoryAssetCommands) UpdateAbout(ctx context.Context, repo domain.ContentHash, description, website string, topics []string) error {
-	return commands.scope.WithinAssetWrite(ctx, repo, AssetUpdateAbout, func(bound context.Context) error {
-		return commands.updateAbout(bound, repo, description, website, topics)
-	})
 }
 
 func (commands *RepositoryAssetCommands) PatchRepoProfile(ctx context.Context, repo domain.ContentHash, patch inbound.RepoProfilePatch) (domain.Repo, error) {
@@ -152,12 +135,6 @@ func (commands *RepositoryAssetCommands) updateAbout(ctx context.Context, repo d
 	return commands.store.UpdateRepoAbout(ctx, repo, strings.TrimSpace(description), normalized, topics)
 }
 
-func (commands *RepositoryAssetCommands) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
-	return commands.scope.WithinAssetWrite(ctx, repo, AssetUpdateConfig, func(bound context.Context) error {
-		return commands.updateConfig(bound, repo, branch, protected)
-	})
-}
-
 func (commands *RepositoryAssetCommands) updateConfig(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return err
@@ -171,7 +148,7 @@ func (commands *RepositoryAssetCommands) updateConfig(ctx context.Context, repo 
 }
 
 func (commands *RepositoryAssetCommands) PutSettings(ctx context.Context, repo domain.ContentHash, bundle domain.SettingsBundle) error {
-	return commands.scope.WithinAssetWrite(ctx, repo, AssetPutSettings, func(bound context.Context) error {
+	return commands.scope.WithinAssetSettingsWrite(ctx, repo, func(bound context.Context) error {
 		if err := domain.ValidateContentHash(repo); err != nil {
 			return err
 		}

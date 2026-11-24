@@ -47,8 +47,15 @@ func TestFSOrganizationMutationRollsBackWhenAuditCannotPersist(t *testing.T) {
 	if err := st.AddOrganizationMember(ctx, demotedOnlyOwner); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("FS store allowed the last Organization owner to be demoted: %v", err)
 	}
-	if err := st.RemoveOrganizationMember(ctx, organization.ID, owner.ID); !errors.Is(err, domain.ErrConflict) {
+	removedAudit := domain.OrganizationAuditEvent{
+		ID: domain.NewID("aud_"), OrganizationID: organization.ID, ActorID: owner.ID,
+		Action: "organization.member.removed", TargetType: "user", TargetID: owner.ID, CreatedAt: now,
+	}
+	if err := st.RemoveOrganizationMemberWithAudit(ctx, organization.ID, owner.ID, removedAudit); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("FS store allowed the last Organization owner to be removed: %v", err)
+	}
+	if membership, err := st.GetOrganizationMembership(ctx, organization.ID, owner.ID); err != nil || membership.Role != domain.OrganizationOwner {
+		t.Fatalf("the refused removal changed the owner's membership: %+v %v", membership, err)
 	}
 
 	// Replace the audit directory with a file so every subsequent audit append

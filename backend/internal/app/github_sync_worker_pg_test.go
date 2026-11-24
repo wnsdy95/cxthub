@@ -175,7 +175,7 @@ func TestPGGitHubWorkerReconciliationCurrentAuthorityAndLease(test *testing.T) {
 				switch scenario {
 				case "organization_revoked":
 					commands := NewIdentityService(nil, fixture.peer)
-					if err := commands.RemoveOrganizationMember(fixture.ctx, fixture.team.owner.ID, fixture.team.organization.ID, fixture.team.member.ID); err != nil {
+					if err := commands.OffboardOrganizationMember(fixture.ctx, fixture.team.owner.ID, fixture.team.organization.ID, fixture.team.member.ID, "retain"); err != nil {
 						test.Fatal(err)
 					}
 				case "team_deleted":

@@ -44,7 +44,8 @@ func TestRepositoryAssetRuntimeActualOwnerAndMCPIsolation(test *testing.T) {
 				test.Fatal(err)
 			}
 			runtime.Context = nil
-			if err := owner.UpdateAbout(ctx, repo, " independent owner ", "example.test", []string{"context"}); err != nil {
+			description, website := " independent owner ", "example.test"
+			if _, err := owner.PatchRepoProfile(ctx, repo, inbound.RepoProfilePatch{Description: &description, Website: &website, Topics: []string{"context"}}); err != nil {
 				test.Fatal("actual command depends on the parent Service", err)
 			}
 			current, err := runtime.Store.GetRepo(ctx, repo)

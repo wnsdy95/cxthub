@@ -20,8 +20,7 @@ type Service struct {
 	blobs           outbound.BlobStore
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
-	repositories       outbound.RepositoryStore
-	notificationSender outbound.NotificationSender
+	repositories outbound.RepositoryStore
 }
 
 // NewService creates a Service with an outbound port injected.

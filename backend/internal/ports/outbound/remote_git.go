@@ -83,10 +83,6 @@ type RemoteGitStore interface {
 	// ListRemotePulls lists the pull requests with their commit lists, the
 	// highest number first.
 	ListRemotePulls(ctx context.Context, repo domain.ContentHash) ([]domain.RemotePull, error)
-	// RemotePullsListing returns, for each commit among shas that a pull
-	// request lists, the numbers of the pull requests that list it, lowest
-	// first.
-	RemotePullsListing(ctx context.Context, repo domain.ContentHash, shas []string) (map[string][]int, error)
 }
 
 // RemotePushStore keeps when the server saw each branch of the remote pushed.

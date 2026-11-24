@@ -358,17 +358,6 @@ func (s *PostgresStore) AddOrganizationMemberWithAudit(ctx context.Context, memb
 	return mapPGConstraint(tx.Commit(ctx))
 }
 
-func (s *PostgresStore) RemoveOrganizationMember(ctx context.Context, organizationID, userID string) error {
-	if err := domain.ValidateOrganizationID(organizationID); err != nil {
-		return err
-	}
-	if err := domain.ValidateExternalID(userID); err != nil {
-		return err
-	}
-	_, err := s.db(ctx).Exec(ctx, `DELETE FROM organization_memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, userID)
-	return mapPGConstraint(err)
-}
-
 func (s *PostgresStore) RemoveOrganizationMemberWithAudit(ctx context.Context, organizationID, userID string, event domain.OrganizationAuditEvent) error {
 	if err := validateOrganizationMutationAudit(event, organizationID, "organization.member.removed", "user", userID); err != nil {
 		return err

@@ -30,20 +30,6 @@ func (s *Service) StoreChunks(ctx context.Context, in inbound.StoreChunksInput) 
 	}
 	return commands.StoreChunks(ctx, in)
 }
-func (service *Service) UpdateAbout(ctx context.Context, repo domain.ContentHash, description, website string, topics []string) error {
-	commands, err := service.repositoryAssets(RepositoryAssetsCompatibility)
-	if err != nil {
-		return err
-	}
-	return commands.UpdateAbout(ctx, repo, description, website, topics)
-}
-func (service *Service) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
-	commands, err := service.repositoryAssets(RepositoryAssetsCompatibility)
-	if err != nil {
-		return err
-	}
-	return commands.UpdateRepoConfig(ctx, repo, branch, protected)
-}
 func (service *Service) PutSettings(ctx context.Context, repo domain.ContentHash, bundle domain.SettingsBundle) error {
 	commands, err := service.repositoryAssets(RepositoryAssetsCompatibility)
 	if err != nil {

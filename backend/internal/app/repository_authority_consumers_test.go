@@ -100,7 +100,7 @@ func TestWave59PublicCommandFactoriesRequireCompleteAuthorityBeforeExecution(tes
 			}
 			if errors.Is(scenario.want, domain.ErrValidation) {
 				repo := domain.HashContent([]byte(test.Name()))
-				if err := service.UpdateAbout(context.Background(), repo, "invalid dependency", "", nil); !errors.Is(err, domain.ErrValidation) {
+				if err := patchAbout(context.Background(), service, repo, "invalid dependency", "", nil); !errors.Is(err, domain.ErrValidation) {
 					test.Fatal("compatibility asset entry weakened a typed-nil authority error", err)
 				}
 				if output, err := service.Commit(context.Background(), inbound.CommitInput{RepoID: repo}); !errors.Is(err, domain.ErrValidation) || output != (inbound.CommitOutput{}) {
@@ -126,7 +126,7 @@ func TestWave59CompatibilityCommandsPreserveExplicitAbsentAuthorityCapabilities(
 		test.Fatal("Complete publication factory silently selected compatibility", err)
 	}
 	ctx := inbound.WithRepositoryActor(context.Background(), repository.OwnerID)
-	if err := service.UpdateAbout(ctx, secretsInput.RepoID, " explicit compatibility ", "example.test", nil); err != nil {
+	if err := patchAbout(ctx, service, secretsInput.RepoID, " explicit compatibility ", "example.test", nil); err != nil {
 		test.Fatal("legacy asset entry rejected genuinely absent optional authority ports", err)
 	}
 	document := wave58PublicationDocument(test, test.Name())
@@ -145,10 +145,10 @@ func TestWave59CompatibilityCommandsPreserveExplicitAbsentAuthorityCapabilities(
 	if err != nil || !reflect.DeepEqual(stored, document) {
 		test.Fatal("compatibility publication entry lost its original store", stored, err)
 	}
-	if err := service.UpdateAbout(context.Background(), secretsInput.RepoID, "anonymous", "", nil); !errors.Is(err, domain.ErrUnauthorized) {
+	if err := patchAbout(context.Background(), service, secretsInput.RepoID, "anonymous", "", nil); !errors.Is(err, domain.ErrUnauthorized) {
 		test.Fatal("compatibility became an anonymous authority bypass", err)
 	}
-	if err := service.UpdateAbout(systemTestContext(), secretsInput.RepoID, "trusted system", "", nil); err != nil {
+	if err := patchAbout(systemTestContext(), service, secretsInput.RepoID, "trusted system", "", nil); err != nil {
 		test.Fatal("compatibility removed the original explicit system scope", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 			name string
 			run  func() error
 		}{
-			{name: "about", run: func() error { return assets.UpdateAbout(ctx, repo, stage, "", nil) }},
+			{name: "about", run: func() error { return patchAbout(ctx, assets, repo, stage, "", nil) }},
 			{name: "secrets", run: func() error {
 				output, err := assets.SaveSecrets(ctx, inbound.SaveSecretsInput{RepoID: repo, ActorID: fixture.member.ID,
 					Envelope: secretsTestEnvelope("aaaaaaaaaaaa"), Edit: domain.SecretsEdit{ExpectedRevision: secretsRevision}})
@@ -261,7 +261,7 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 		}
 		expected := make(map[string]int)
 		if want == nil {
-			for _, action := range []string{"repository.about.updated", "repository.secrets.updated", "context.objects.stored", "context.chunks.stored"} {
+			for _, action := range []string{"repository.profile.updated", "repository.secrets.updated", "context.objects.stored", "context.chunks.stored"} {
 				expected[action] = 1
 			}
 		}
@@ -288,4 +288,13 @@ func TestWave59PublicCommandOwnersUseCurrentAuthorityAndOriginalStores(test *tes
 		test.Fatal(err)
 	}
 	exercise("organization-demoted", domain.ErrForbidden)
+}
+
+// patchAbout changes a repository's description, website and topics the way
+// the program does: through the profile patch. Nil topics are left as they are.
+func patchAbout(ctx context.Context, commands interface {
+	PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error)
+}, repo domain.ContentHash, description, website string, topics []string) error {
+	_, err := commands.PatchRepoProfile(ctx, repo, inbound.RepoProfilePatch{Description: &description, Website: &website, Topics: topics})
+	return err
 }

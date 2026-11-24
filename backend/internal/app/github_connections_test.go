@@ -150,7 +150,7 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.identity.SetTeamRepository(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.repository.ID, domain.RolePuller); err != nil {
@@ -169,7 +169,7 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if err = g.Edit(ctx, f.owner.ID, ns, c.Generation, "map-team", domain.GitHubBinding{}, domain.GitHubTeamMapping{TeamID: f.team.ID, ExternalID: 99, SyncMembers: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err = g.reconcile(ctx, ns); err != nil {
+	if err = githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	role, ok := f.identity.RoleOf(ctx, f.repository.ID, f.member.ID)
@@ -197,10 +197,10 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if err = g.Receive(ctx, "delivery-"+ns, "membership", []byte(`{"installation":{"id":789}}`)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("altered duplicate: %v", err)
 	}
-	if err = g.reconcile(ctx, ns); err != nil {
+	if err = githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
-	if err = f.identity.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID); err != nil {
+	if err = f.identity.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain"); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationMember); err != nil {
@@ -213,7 +213,7 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if err = g.Edit(ctx, f.owner.ID, ns, c.Generation, "refresh", domain.GitHubBinding{}, domain.GitHubTeamMapping{}); err != nil {
 		t.Fatal(err)
 	}
-	if err = g.reconcile(ctx, ns); err != nil {
+	if err = githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok = f.identity.RoleOf(ctx, f.repository.ID, f.member.ID); !ok {
@@ -249,7 +249,7 @@ func TestGitHubSyncDoesNotPublishAfterDisconnect(t *testing.T) {
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	c, _ := st.GetGitHubConnection(ctx, ns)
@@ -262,7 +262,7 @@ func TestGitHubSyncDoesNotPublishAfterDisconnect(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := g.reconcile(ctx, ns); !errors.Is(err, domain.ErrConflict) {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale sync completed: %v", err)
 	}
 	c, _ = st.GetGitHubConnection(ctx, ns)
@@ -280,7 +280,7 @@ func TestGitHubBindingUsesImmutableRepositoryAcrossRename(t *testing.T) {
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh("github-binding"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
@@ -293,7 +293,7 @@ func TestGitHubBindingUsesImmutableRepositoryAcrossRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote.repos[0].FullName = "acme/renamed"
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	scoped := outbound.WithGitRepository(ctx, repo.ID)
@@ -329,7 +329,7 @@ func TestGitHubDeliveryAsksOnlyTheBoundRepositoryAndSurvivesWorkerRestart(t *tes
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh("github-queue"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
@@ -367,7 +367,7 @@ func TestGitHubDeliveryAsksOnlyTheBoundRepositoryAndSurvivesWorkerRestart(t *tes
 	}
 	// A new application instance drains durable bytes, without the original request.
 	restarted := NewGitHubConnections(f.identity, g.core, st, remote)
-	if err := restarted.deliver(ctx, githubHash("pr-delivery")); err != nil {
+	if err := githubWorkerOf(restarted).deliver(ctx, githubHash("pr-delivery")); err != nil {
 		t.Fatal(err)
 	}
 	asked, err := st.GetRemoteGitState(ctx, repo.ID)
@@ -380,7 +380,7 @@ func TestGitHubDeliveryAsksOnlyTheBoundRepositoryAndSurvivesWorkerRestart(t *tes
 	if err = restarted.Receive(ctx, "pr-delivery", "pull_request", body); err != nil {
 		t.Fatal(err)
 	}
-	if err = restarted.deliver(ctx, githubHash("pr-delivery")); err != nil {
+	if err = githubWorkerOf(restarted).deliver(ctx, githubHash("pr-delivery")); err != nil {
 		t.Fatal(err)
 	}
 	delivered, err := st.GetGitHubDelivery(ctx, githubHash("pr-delivery"))
@@ -401,7 +401,7 @@ func TestGitHubOrganizationAdminCannotBindOrInspectPrivateContexts(t *testing.T)
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh("private-github-binding"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
@@ -472,4 +472,14 @@ func TestGitHubEnterpriseVisibilityDoesNotGrantOrganizationManagement(t *testing
 	if err != nil || len(view) != 1 || !view[0].CanManage {
 		t.Fatalf("Organization owner cannot manage: %+v %v", view, err)
 	}
+}
+
+// githubWorkerOf builds the GitHub worker the way the program does on a file
+// store: from the connections' own configuration.
+func githubWorkerOf(connections *GitHubConnections) *GitHubWorker {
+	worker, err := NewGitHubWorker(connections.GitHubWorkerConfig(GitHubWorkerCompatibility))
+	if err != nil {
+		panic(err)
+	}
+	return worker
 }

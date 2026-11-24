@@ -508,39 +508,6 @@ func (s *FSStore) ListRemotePulls(ctx context.Context, repo domain.ContentHash) 
 	return pulls, nil
 }
 
-func (s *FSStore) RemotePullsListing(ctx context.Context, repo domain.ContentHash, shas []string) (map[string][]int, error) {
-	asked, err := remoteGitSHAs(shas)
-	if err != nil {
-		return nil, err
-	}
-	stored, err := s.viewRemoteGit(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	wanted := make(map[string]struct{}, len(asked))
-	for _, sha := range asked {
-		wanted[sha] = struct{}{}
-	}
-	listing := map[string][]int{}
-	for _, pull := range stored.Pulls {
-		seen := map[string]struct{}{}
-		for _, sha := range pull.Commits {
-			if _, want := wanted[sha]; !want {
-				continue
-			}
-			if _, dup := seen[sha]; dup {
-				continue
-			}
-			seen[sha] = struct{}{}
-			listing[sha] = append(listing[sha], pull.Number)
-		}
-	}
-	for _, numbers := range listing {
-		sort.Ints(numbers)
-	}
-	return listing, nil
-}
-
 var _ outbound.RemotePushStore = (*FSStore)(nil)
 
 func (s *FSStore) RecordRemotePushes(ctx context.Context, repo domain.ContentHash, pushes []domain.RemoteBranchPush) error {

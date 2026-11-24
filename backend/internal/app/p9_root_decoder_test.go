@@ -38,7 +38,7 @@ func TestP9RootWorkerStoredDecoderBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Warm semantic proof cannot authorize these later current-byte mutations.
-			if _, err := svc.verifyDocJob(ctx, job); err != nil {
+			if _, err := verifyDocJob(ctx, svc, job); err != nil {
 				t.Fatal(err)
 			}
 			manifest, err := rep.ConversationManifest()
@@ -64,7 +64,7 @@ func TestP9RootWorkerStoredDecoderBoundary(t *testing.T) {
 			if !errors.Is(loadErr, domain.ErrIntegrity) || len(loaded) != 0 {
 				t.Fatal("unbounded root load", len(loaded), loadErr)
 			}
-			err = svc.ProcessDocFinalizations(ctx, 1)
+			err = processDocFinalizations(ctx, svc, 1)
 			if err == nil {
 				t.Fatal("corruption accepted")
 			}
@@ -131,7 +131,7 @@ func TestP9RootWorkerLoaderErrorControls(t *testing.T) {
 			}
 			failing := p9FailingRootReader{st, failure}
 			svc.blobs = failing
-			if err = svc.runDocJob(ctx, failing, claim); !errors.Is(err, failure) {
+			if err = runDocJob(ctx, svc, failing, claim); !errors.Is(err, failure) {
 				t.Fatal(err)
 			}
 			got, err := st.GetDocJob(context.Background(), repo, claim.ID)

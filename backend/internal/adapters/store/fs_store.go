@@ -284,17 +284,6 @@ func (s *FSStore) DeleteDoc(_ context.Context, repoID, hash domain.ContentHash) 
 	return os.RemoveAll(filepath.Dir(s.rangeIndexPath(repoID, hash)))
 }
 
-// PutSecretsEnvelope stores a secret envelope (opaque bytes — E2E).
-func (s *FSStore) PutSecretsEnvelope(_ context.Context, repoID domain.ContentHash, raw []byte) error {
-	if err := validateHash(repoID); err != nil {
-		return err
-	}
-	lock := s.refLock(repoID, domain.RefBranch, "")
-	lock.Lock()
-	defer lock.Unlock()
-	return writeAtomic(filepath.Join(s.repoDir(repoID), "secrets.enc.json"), raw)
-}
-
 // GetSecretsEnvelope retrieves a secret envelope.
 func (s *FSStore) GetSecretsEnvelope(_ context.Context, repoID domain.ContentHash) ([]byte, error) {
 	if err := validateHash(repoID); err != nil {

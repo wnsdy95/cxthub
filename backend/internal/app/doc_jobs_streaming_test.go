@@ -98,7 +98,7 @@ func TestDocJobStreamingPreparationClosesOnEveryOutcome(t *testing.T) {
 				},
 			}
 			service := NewService(metadata, nil, nil)
-			err = service.runDocJob(ctx, storage, job)
+			err = runDocJob(ctx, service, storage, job)
 			wantComplete, wantFinish := 0, 1
 			switch outcome {
 			case "success":

@@ -219,7 +219,7 @@ func wave41SecureSender(test testing.TB, client *http.Client) outbound.Notificat
 func wave41NotificationOwner(test *testing.T, storage *wave41NotificationPGStore, metadata outbound.MetadataStore, client *http.Client) *notificationworker.Worker {
 	test.Helper()
 	worker, err := NewNotificationWorker(NotificationWorkerConfig{
-		Profile: notificationworker.Complete, Metadata: metadata, Blobs: storage.PostgresStore,
+		Metadata: metadata, Blobs: storage.PostgresStore,
 		Repositories: storage, Sender: wave41SecureSender(test, client),
 	})
 	if err != nil || worker == nil {
@@ -653,7 +653,7 @@ func TestPGWave41AuxiliaryFactoriesValidateCompleteAndKeepUnsupportedCompatibili
 	}{postgres, postgres}
 	for _, metadata := range []outbound.MetadataStore{withoutJobs, withoutGuard} {
 		worker, err := NewNotificationWorker(NotificationWorkerConfig{
-			Profile: notificationworker.Complete, Metadata: metadata, Blobs: postgres,
+			Metadata: metadata, Blobs: postgres,
 			Repositories: postgres, Sender: wave41SecureSender(test, receiver.Client()),
 		})
 		if err == nil || worker != nil {
@@ -662,7 +662,7 @@ func TestPGWave41AuxiliaryFactoriesValidateCompleteAndKeepUnsupportedCompatibili
 	}
 	for _, missing := range []string{"sender", "repositories"} {
 		config := NotificationWorkerConfig{
-			Profile: notificationworker.Complete, Metadata: postgres, Blobs: postgres,
+			Metadata: postgres, Blobs: postgres,
 			Repositories: postgres, Sender: wave41SecureSender(test, receiver.Client()),
 		}
 		if missing == "sender" {
@@ -673,16 +673,6 @@ func TestPGWave41AuxiliaryFactoriesValidateCompleteAndKeepUnsupportedCompatibili
 		if worker, err := NewNotificationWorker(config); err == nil || worker != nil {
 			test.Fatal("complete notification factory accepted missing delivery support", missing, err)
 		}
-	}
-	compatibility, err := NewNotificationWorker(NotificationWorkerConfig{
-		Profile: notificationworker.Compatibility, Metadata: withoutJobs, Blobs: postgres,
-		Repositories: postgres, Sender: wave41SecureSender(test, receiver.Client()),
-	})
-	if err != nil || compatibility == nil {
-		test.Fatal("unsupported compatibility notification assembly lost the original no-op", err)
-	}
-	if worked, err := compatibility.Process(context.Background()); err != nil || worked {
-		test.Fatal("unsupported compatibility notification processing was not a no-op", worked, err)
 	}
 	withoutMaintenance := struct{ outbound.RepositoryStore }{postgres}
 	runtimeOnly := struct {

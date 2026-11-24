@@ -112,7 +112,7 @@ func runOrganizationOwnerAccess(t *testing.T, st teamTestStore) {
 		t.Fatal(err)
 	}
 	check(domain.RoleOwner)
-	if err = s.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID); err != nil {
+	if err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain"); err != nil {
 		t.Fatal(err)
 	}
 	check("")

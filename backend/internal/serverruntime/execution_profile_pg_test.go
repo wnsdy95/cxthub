@@ -198,7 +198,7 @@ func TestExecutionProfilePostgresActualWorkerRootRunAndClose(test *testing.T) {
 	test.Setenv("CXT_AUTH", "invalid")
 	test.Setenv("CXT_PUBLIC_URL", "invalid")
 	test.Setenv("CXT_MEMORY_READ_REPOS", "invalid")
-	worker, err := OpenDocumentWorker(context.Background())
+	worker, err := OpenWorker(context.Background())
 	if err != nil {
 		test.Fatal("worker root unnecessarily required authentication or broad queries", err)
 	}
