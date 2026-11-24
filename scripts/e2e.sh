@@ -379,13 +379,56 @@ expect "a session's summary says nothing about the remote it never read" "$(curl
 # The collector a hook wakes reads the same records and sends only what changed.
 # Runs are spaced; the test moves the last run back instead of waiting.
 SEGSTATE="$(git rev-parse --absolute-git-dir)/cxt/collector-v1.json"
-segcollect() {
+segrewind() {
   [ -f "$SEGSTATE" ] && python3 - "$SEGSTATE" <<'PYWIND'
 import json, sys
 state = json.load(open(sys.argv[1]))
-state["last_run"]["at"] = "2026-01-01T00:00:00Z"
-json.dump(state, open(sys.argv[1], "w"))
+if state.get("last_run"):
+    state["last_run"]["at"] = "2026-01-01T00:00:00Z"
+    state["last_run"].pop("millis", None)
+    json.dump(state, open(sys.argv[1], "w"))
 PYWIND
+  return 0
+}
+# segquiet — wait until no collector holds the repository's collector lock. An
+# agent hook wakes a detached collector, which holds that lock while it waits
+# for its pause and while it runs. A collector started here in the meantime
+# would only leave it a request and return without reading. The lock itself is
+# asked, not the process list: a process that merely names the collector in its
+# command line is not one.
+segquiet() {
+  python3 - "$(dirname "$SEGSTATE")/collector.lock" <<'PYQUIET'
+import fcntl, os, sys, time
+path, end = sys.argv[1], time.time() + 60
+while os.path.exists(path):
+    with open(path, "r+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            break
+        except BlockingIOError:
+            pass
+    if time.time() > end:
+        sys.exit(1)
+    time.sleep(0.05)
+PYQUIET
+}
+# segwoken — wait until the collector a hook just woke has run and is gone. The
+# hook was called with the last run moved back, so that collector runs at once
+# and its run shows as a new last run.
+segwoken() {
+  local end=$((SECONDS + 60))
+  until [ "$(segran)" = ran ]; do
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep 0.05
+  done
+  segquiet
+}
+# segran — says whether the collector really ran since its last run was moved
+# back: a check of what a run left must not pass because no run happened.
+segran() { python3 -c 'import json,sys;print("ran" if json.load(open(sys.argv[1]))["last_run"]["at"]!="2026-01-01T00:00:00Z" else "did not run")' "$SEGSTATE" 2>/dev/null; }
+segcollect() {
+  segquiet; segrewind
   cxt git-hook segment-collect >/dev/null 2>&1
 }
 segappend() { printf '%s\n' '{"type":"user","uuid":"'"$1"'","sessionId":"e2e-segments","timestamp":"2031-01-02T03:01:'"$2"'.000Z","cwd":"'"$PWD"'","gitBranch":"'"$SEGBRANCH"'","promptId":"'"$1"'","message":{"content":"more"}}' >>"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"; }
@@ -407,14 +450,18 @@ expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anch
 # summary at a commit of this folder that the server never read from a remote, which another session of the same
 # member wrote.
 hooksummary() {
+  # The hook also wakes the collector; with the last run moved back it runs at once.
+  segquiet; segrewind
   printf '{"session_id":"%s","cwd":"%s","prompt":"go on"}' "$1" "$PWD" | cxt hook --provider claude --event UserPromptSubmit 2>"$TMP/hook-summary.err" | python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
 text = json.loads(raw)["hookSpecificOutput"]["additionalContext"] if raw else ""
 print("cxthub branch summary" in text, sys.argv[1][:12] in text)' "$SEGSHA"
+  segwoken
 }
 expect "a prompt hook gives another session the summary along its branch" "$(hooksummary e2e-reader)" "True True"
 expect "the same session is not given it a second time" "$(hooksummary e2e-reader)" "False False"
+expect "the collector the hooks woke has run and is gone before the checks go on" "$(segran) $(segquiet && echo quiet)" "ran quiet"
 # A session is archived by its uploader: it leaves its commit's segments and summaries, stays in the list as archived,
 # is still opened by its key, and comes back when it is restored.
 segarchive() { ccurl -sb "$1" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/archive" -H 'Content-Type: application/json' -d "{\"archived\":$2}"; }
@@ -424,7 +471,7 @@ expect "the session is at its commit with a summary before it is archived" "$(se
 expect "the uploader archives its session" "$(segarchive "$JA" true)" 200
 expect "an archived session leaves its commit's segments and summaries" "$(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "0 0"
 expect "it stays in the list as archived and is still opened" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),bool(r[0].get("archived_at")))') $(code -b "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" "1 True 200"
-expect "a report uploaded again leaves it archived" "$(segappend m9 30; segcollect; segcount "anchored-commits/$SEGSHA")" 0
+expect "a report uploaded again leaves it archived" "$(segappend m9 30; segcollect; segcount "anchored-commits/$SEGSHA") $(segran)" "0 ran"
 expect "the uploader restores it" "$(segarchive "$JA" false) $(segcount "anchored-commits/$SEGSHA")" "200 1"
 # A Codex thread is read from the databases Codex keeps, in the layout of its
 # release 0.171, and its conversation is uploaded like a Claude Code session's.
@@ -481,7 +528,7 @@ expect "the removed session is gone for its uploader and for a teammate" "$(code
 expect "its conversation document is deleted" "$(dochave "$SEGDOCLAST")" absent
 expect "the uploader lists the removal" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-removals" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["session_id"],r[0]["by_you"])')" "1 e2e-segments True"
 expect "an upload sends nothing of the removed session and does not fail" "$(cxt segments push --json >"$TMP/segments-removed.json" 2>/dev/null; echo "$? $(python3 -c 'import json,sys;r=json.load(open(sys.argv[1]));s=[x for x in r["sessions"] if x["id"]=="e2e-segments"][0];print(r["removed"],r["refused"],s["state"],"content" in s)' "$TMP/segments-removed.json") $(segheld)")" "0 1 0 removed False 0"
-expect "the collector does not bring it back" "$(segappend m10 31; segcollect; segheld)" 0
+expect "the collector does not bring it back" "$(segappend m10 31; segcollect; segheld) $(segran)" "0 ran"
 expect "the server refuses its report from anyone" "$(ccurl -sb "$JA" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" -H 'Content-Type: application/json' -d '{"rule_version":1,"sub":false,"scope":"working-folder","records":0,"commands":0,"copied_records":0,"segments":[]}')" 409
 expect "allowing it again uploads it from the tool's records" "$(cxt segments allow claude e2e-segments --json | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r["upload"]["sessions"];print(len(s),s[0]["state"],s[0]["revision"],s[0]["content"],r["upload"].get("not_found"))') $(segheld) $(segcount "anchored-commits/$SEGSHA")" "1 stored 1 stored None 1 1"
 expect "the session's log on this computer says what was done to it" "$(cxt segments log claude e2e-segments --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["sessions"][0]["log"];a=[e["action"] for e in l if e.get("action")];print(a[0],"|",a[1],"|",a[-1])')" "removed from the server | not sent | allowed again on the server"
@@ -506,6 +553,7 @@ expect "a removed session is found" "$(cxt segments remove claude e2e-segments -
 expect "allowing it again clears the finding" "$(cxt segments allow claude e2e-segments >/dev/null; segdoctor removed e2e-segments) $(segheld)" "0  1"
 # The server lost a session whose records the tool no longer holds: only the
 # copy under .cxt is left, and it is sent again from there.
+segquiet
 mv "$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl" "$TMP/e2e-segments.jsonl.away"
 ccurl -sb "$JA" -o /dev/null -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments"
 ccurl -sb "$JA" -o /dev/null -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/removal"
