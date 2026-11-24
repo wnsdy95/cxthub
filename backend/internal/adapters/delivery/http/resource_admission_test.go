@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -23,10 +22,5 @@ func TestResourceAdmissionHTTPRetryableErrors(t *testing.T) {
 		if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
 			t.Fatalf("not retryable: %v code=%d headers=%v", sentinel, response.Code, response.Header())
 		}
-	}
-	response := httptest.NewRecorder()
-	(&Server{}).respond(response, nil, fmt.Errorf("wrapped: %w", domain.ErrDocRangeIndexPending))
-	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "3" || !strings.Contains(response.Body.String(), "doc_range_index_pending") {
-		t.Fatalf("pending range retry contract: code=%d headers=%v body=%s", response.Code, response.Header(), response.Body)
 	}
 }

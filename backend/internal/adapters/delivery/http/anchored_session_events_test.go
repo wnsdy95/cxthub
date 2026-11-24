@@ -158,7 +158,7 @@ func TestAnchoredSessionEventsNeedAViewerAndASessionTheyMayRead(t *testing.T) {
 			{"member", domain.RoleMember, true, nil, nil, 200},
 			{"a session nothing is open of", domain.RoleMember, true, domain.ErrNotFound, nil, 404},
 			{"a malformed identifier", domain.RoleMember, true, domain.ErrValidation, nil, 422},
-			{"a document that is not ready", domain.RoleMember, true, nil, domain.ErrDocRangeIndexPending, 503},
+			{"a document that is not ready", domain.RoleMember, true, nil, domain.ErrDocRangeIndexUnavailable, 503},
 		} {
 			t.Run(path+"/"+test.name, func(t *testing.T) {
 				backend, handler, base := anchoredEventsHTTPFixture(t, test.role)

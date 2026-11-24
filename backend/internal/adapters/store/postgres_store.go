@@ -34,7 +34,6 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.ConnConfig.Tracer = graphQueryTracer{}
 	// Never acknowledge writes before durable WAL flush, even if a role/DSN
 	// supplies asynchronous commit. Preserve the stronger replay acknowledgement.
 	if config.ConnConfig.RuntimeParams["synchronous_commit"] != "remote_apply" {
@@ -627,31 +626,6 @@ func (s *PostgresStore) HasDocs(ctx context.Context, repoID domain.ContentHash, 
 		have = append(have, h)
 	}
 	return hashes(have), rows.Err()
-}
-
-func (s *PostgresStore) reassembleMemoryManifestTx(ctx context.Context, tx pgx.Tx, data []byte) (domain.MemoryDigest, bool, error) {
-	manifest, isManifest, err := domain.ParseMemoryChunkManifest(data)
-	if !isManifest || err != nil {
-		return domain.MemoryDigest{}, isManifest, err
-	}
-	bodies := make(map[domain.ContentHash][]byte, len(manifest.SummaryChunks)+len(manifest.FragmentChunks))
-	all := append(append([]domain.ContentHash{}, manifest.SummaryChunks...), manifest.FragmentChunks...)
-	for _, chunkHash := range all {
-		if _, loaded := bodies[chunkHash]; loaded {
-			continue
-		}
-		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(chunkHash)).Scan(&raw); err != nil {
-			return domain.MemoryDigest{}, true, err
-		}
-		body, err := docDecompress(raw)
-		if err != nil {
-			return domain.MemoryDigest{}, true, err
-		}
-		bodies[chunkHash] = body
-	}
-	digest, err := domain.AssembleMemoryChunks(manifest, bodies)
-	return digest, true, err
 }
 
 // UpdateRepoAbout updates the About field (topics are stored as JSON text).

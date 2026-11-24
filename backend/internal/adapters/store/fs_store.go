@@ -280,9 +280,6 @@ func (s *FSStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, d
 	lock := s.refLock(id, domain.RefBranch, "")
 	lock.Lock()
 	defer lock.Unlock()
-	if err := s.recoverHistoryEvent(ctx, id); err != nil {
-		return err
-	}
 	r, err := s.GetRepo(ctx, id)
 	if err != nil {
 		return err
@@ -409,24 +406,6 @@ func (s *FSStore) GetSnapshot(_ context.Context, repoID, id domain.ContentHash) 
 	return snap, nil
 }
 
-// requireSnapshots ensures that the preexistence of snapshots that graft/ref point to is verified within the repository atomic boundary. Relying solely on the pre-query in the service layer can lead to dangling edges/refs through port calls or stale reads.
-func (s *FSStore) requireSnapshots(ctx context.Context, repoID domain.ContentHash, ids ...domain.ContentHash) error {
-	seen := make(map[domain.ContentHash]bool, len(ids))
-	for _, id := range ids {
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		if _, err := s.GetSnapshot(ctx, repoID, id); err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				return fmt.Errorf("%w: snapshot %s", domain.ErrNotFound, id)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *FSStore) ListSnapshots(_ context.Context, repoID domain.ContentHash, branch string) ([]domain.Snapshot, error) {
 	if err := validateHash(repoID); err != nil {
 		return nil, err
@@ -478,196 +457,12 @@ func regularObjectExists(path string) (bool, error) {
 
 // --- Ref / manifest ---
 
-func (s *FSStore) refFile(repoID domain.ContentHash, kind domain.RefKind, name string) string {
-	switch kind {
-	case domain.RefHead:
-		return filepath.Join(s.repoDir(repoID), "HEAD")
-	case domain.RefSession:
-		return filepath.Join(s.repoDir(repoID), "refs", "sessions", filepath.FromSlash(name))
-	case domain.RefTag:
-		return filepath.Join(s.repoDir(repoID), "refs", "tags", filepath.FromSlash(name))
-	default:
-		return filepath.Join(s.repoDir(repoID), "refs", "heads", filepath.FromSlash(name))
-	}
-}
-
-func (s *FSStore) getRefRaw(_ context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
-	if err := validateHash(repoID); err != nil {
-		return domain.Ref{}, err
-	}
-	if err := domain.ValidateRefName(kind, name); err != nil {
-		return domain.Ref{}, err
-	}
-	data, err := os.ReadFile(s.refFile(repoID, kind, name))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return domain.Ref{}, domain.ErrNotFound
-		}
-		return domain.Ref{}, err
-	}
-	if kind == domain.RefBranch && strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
-		var ref domain.Ref
-		if err := json.Unmarshal(data, &ref); err != nil {
-			return ref, err
-		}
-		if ref.RepoID != repoID || ref.Kind != kind || ref.Name != name {
-			return ref, domain.ErrIntegrity
-		}
-		if err := domain.ValidateRef(ref); err != nil {
-			return ref, err
-		}
-		return ref, nil
-	}
-	content := strings.TrimSpace(string(data))
-	ref := domain.Ref{Kind: kind, Name: name, RepoID: repoID}
-	if kind == domain.RefHead {
-		if sym, ok := strings.CutPrefix(content, "ref: refs/heads/"); ok {
-			ref.Symbolic = sym
-			if err := domain.ValidateRef(ref); err != nil {
-				return domain.Ref{}, err
-			}
-			return ref, nil
-		}
-	}
-	ref.Target = domain.ContentHash(content)
-	if err := domain.ValidateRef(ref); err != nil {
-		return domain.Ref{}, err
-	}
-	return ref, nil
-}
-
-func (s *FSStore) GetRef(ctx context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
-	ref, err := s.getRefRaw(ctx, repoID, kind, name)
-	if err != nil || (kind != domain.RefBranch && kind != domain.RefHead) {
-		return ref, err
-	}
-	protocol, err := s.contextProtocol(repoID)
-	if err != nil {
-		return domain.Ref{}, err
-	}
-	if protocol == 1 {
-		return ref, nil
-	}
-	refs, err := s.listRefsRaw(ctx, repoID)
-	if err != nil {
-		return domain.Ref{}, err
-	}
-	projected, err := domain.ProjectBranchLifecycleRefs(refs)
-	if err != nil {
-		return domain.Ref{}, err
-	}
-	for _, candidate := range projected {
-		if candidate.Kind == kind && candidate.Name == name {
-			return candidate, nil
-		}
-	}
-	return domain.Ref{}, domain.ErrNotFound
-}
-
-func (s *FSStore) listRefsRaw(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
-	if err := validateHash(repoID); err != nil {
-		return nil, err
-	}
-	var out []domain.Ref
-	if head, err := s.getRefRaw(ctx, repoID, domain.RefHead, domain.HeadRefName); err == nil {
-		out = append(out, head)
-	} else if !errors.Is(err, domain.ErrNotFound) {
-		return nil, err
-	}
-	for _, kc := range []struct {
-		sub  string
-		kind domain.RefKind
-	}{{"heads", domain.RefBranch}, {"sessions", domain.RefSession}, {"tags", domain.RefTag}} {
-		root := filepath.Join(s.repoDir(repoID), "refs", kc.sub)
-		err := filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
-			if werr != nil {
-				if os.IsNotExist(werr) {
-					return nil
-				}
-				return werr
-			}
-			if info.IsDir() || strings.HasPrefix(filepath.Base(path), ".") {
-				return nil
-			}
-			rel, rerr := filepath.Rel(root, path)
-			if rerr != nil {
-				return rerr
-			}
-			ref, rerr := s.getRefRaw(ctx, repoID, kc.kind, filepath.ToSlash(rel))
-			if rerr != nil {
-				return rerr
-			}
-			out = append(out, ref)
-			return nil
-		})
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 var fsRefLocks sync.Map
 
 func (s *FSStore) refLock(repoID domain.ContentHash, _ domain.RefKind, _ string) *sync.Mutex {
 	key := s.dataDir + "\x00" + string(repoID)
 	lock, _ := fsRefLocks.LoadOrStore(key, &sync.Mutex{})
 	return lock.(*sync.Mutex)
-}
-
-func (s *FSStore) detachHeadFromBranchRaw(ctx context.Context, repoID domain.ContentHash, branch string, target domain.ContentHash) error {
-	head, err := s.getRefRaw(ctx, repoID, domain.RefHead, domain.HeadRefName)
-	if errors.Is(err, domain.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if strings.TrimPrefix(head.Symbolic, "refs/heads/") != branch {
-		return nil
-	}
-	return writeAtomic(s.refFile(repoID, domain.RefHead, domain.HeadRefName), []byte(string(target)+"\n"))
-}
-
-func (s *FSStore) reflogPath(repoID domain.ContentHash) string {
-	return filepath.Join(s.repoDir(repoID), "reflog.jsonl")
-}
-
-func (s *FSStore) appendReflogStrict(repoID domain.ContentHash, e domain.RefLogEntry) error {
-	line, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(s.reflogPath(repoID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	// reflog file is created for the first time in this append, fsync alone is not durable. Synchronize parent directory before deleting the join journal.
-	d, err := os.Open(filepath.Dir(s.reflogPath(repoID)))
-	if err != nil {
-		return err
-	}
-	if err := d.Sync(); err != nil {
-		_ = d.Close()
-		return err
-	}
-	return d.Close()
-}
-
-// appendReflog is a best-effort audit log for general ref movements. Join includes reflog in completion conditions, so use appendReflogStrict/ensureJoinReflog directly.
-func (s *FSStore) appendReflog(repoID domain.ContentHash, e domain.RefLogEntry) {
-	_ = s.appendReflogStrict(repoID, e)
 }
 
 // --- Memory Meta ---

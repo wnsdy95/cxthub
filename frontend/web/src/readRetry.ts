@@ -11,14 +11,7 @@ export function capacityRetryDelay(attempt: number, error: unknown): number {
   return Math.max(hint, backoff) + Math.floor(Math.random() * 251);
 }
 
-export function retryDocumentRead(failureCount: number, error: unknown): boolean {
-  return retryCapacityRead(failureCount, error) ||
-    (failureCount < 9 && error instanceof ApiError && error.status === 503 &&
-      ['doc_range_index_pending', 'doc_find_fields_pending', 'doc_display_pending'].includes(error.code) &&
-      (error.retryAfterMs === undefined || error.retryAfterMs <= 10_000));
-}
-
 export const documentReadRetry = {
-  retry: (failureCount: number, error: Error) => retryDocumentRead(failureCount, error),
+  retry: (failureCount: number, error: Error) => retryCapacityRead(failureCount, error),
   retryDelay: (attempt: number, error: Error) => Math.min(capacityRetryDelay(attempt, error), 10_000),
 };

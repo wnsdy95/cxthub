@@ -109,9 +109,7 @@ func (attempt *rawRepresentationAttempt) preflight(ctx context.Context, transact
 		if err != nil {
 			return domain.ErrIntegrity
 		}
-		_, document := domain.ParseDocChunkManifest(canonical)
-		_, memory, parseErr := domain.ParseMemoryChunkManifest(canonical)
-		if document || memory && parseErr == nil {
+		if _, document := domain.ParseDocChunkManifest(canonical); document {
 			attempt.exclusive[hash] = true
 		}
 	}
@@ -203,24 +201,13 @@ func (storage *PostgresStore) retainRawBlobPG(ctx context.Context, transaction p
 	if bytes.Equal(stored, body) {
 		return nil
 	}
-	_, document := domain.ParseDocChunkManifest(stored)
-	_, memory, parseErr := domain.ParseMemoryChunkManifest(stored)
-	if !document && (!memory || parseErr != nil) {
+	if _, document := domain.ParseDocChunkManifest(stored); !document {
 		return domain.ErrIntegrity
 	}
 	if !exclusive {
 		return errRawBlobNeedsExclusive
 	}
-	var canonical []byte
-	if document {
-		canonical, _, err = storage.reassembleManifestTx(ctx, transaction, stored, hash)
-	} else {
-		var digest domain.MemoryDigest
-		digest, _, err = storage.reassembleMemoryManifestTx(ctx, transaction, stored)
-		if err == nil {
-			canonical, err = json.Marshal(digest)
-		}
-	}
+	canonical, _, err := storage.reassembleManifestTx(ctx, transaction, stored, hash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, domain.ErrNotFound) {
 			return domain.ErrIntegrity

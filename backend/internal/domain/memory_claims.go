@@ -1,7 +1,5 @@
 package domain
 
-const MemoryClaimsVersion uint32 = 1
-
 // MemoryClaim is an author's explicitly scoped statement. File evidence can
 // assess its declared scope; it cannot prove the prose's semantic truth.
 type MemoryClaim struct {

@@ -156,16 +156,6 @@ type Ref struct {
 	Symbolic string      `json:"symbolic,omitempty"`
 }
 
-// RefLogEntry is an append-only log entry for a single ref movement (git reflog equivalent).
-// It provides a safety net to recover tips that were obscured by ref movements, and it does not record symbolic HEAD movements.
-type RefLogEntry struct {
-	Kind      RefKind     `json:"kind"`
-	Name      string      `json:"name"`
-	Old       ContentHash `json:"old"`
-	New       ContentHash `json:"new"`
-	CreatedAt time.Time   `json:"created_at"`
-}
-
 // MemoryDigest is the distilled memory from a snapshot (derivative, data model table, sync protocol).
 //
 // Used in memory-form load (FidelityMemory). Attached to SnapshotID, and the target snapshot must exist before the digest upload (422 if not, sync protocol).

@@ -282,7 +282,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	// code and status are included as strings — existing callers identify "non_fast_forward", "401", "403"
+	// code and status are included as strings — existing callers identify "401", "403"
 	// as error strings (for compatibility with the old do() which directly stored the original envelope).
 	// New code instead uses *HTTPError.Code for type discrimination.
 	var message string

@@ -731,11 +731,6 @@ func (s *Server) writeDecodeError(w http.ResponseWriter, err error) {
 
 func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 	if err != nil {
-		var prepared *preparedMemoryHTTPError
-		if errors.As(err, &prepared) {
-			s.writePreparedMemoryError(w, prepared.cause)
-			return
-		}
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
@@ -755,28 +750,10 @@ func mapError(err error) (code string, status int) {
 		return accessErr.code, accessErr.status
 	}
 	switch {
-	case errors.Is(err, domain.ErrGraphProjectionFailed):
-		return "graph_projection_failed", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrGraphProjectionNotReady):
-		return "graph_projection_pending", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrDocVisibleProjectionUnsupported):
-		return "doc_visible_projection_unsupported", http.StatusConflict
-	case errors.Is(err, domain.ErrDocVisibleGenerationStale):
-		return "doc_visible_generation_stale", http.StatusConflict
-	case errors.Is(err, domain.ErrDocFindFieldsUnavailable):
-		return "doc_find_fields_unavailable", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrDocFindDisplayUnavailable):
-		return "doc_find_display_unavailable", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrDocFindFieldsPending):
-		return "doc_find_fields_pending", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrDocDisplayPending):
-		return "doc_display_pending", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrResourceOverloaded):
 		return "resource_overloaded", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrDocRangeIndexUnavailable):
 		return "doc_range_index_unavailable", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrDocRangeIndexPending):
-		return "doc_range_index_pending", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrFederationUnavailable):
 		return "identity_connection_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrVerifiedDomainRequired):
@@ -799,31 +776,16 @@ func mapError(err error) (code string, status int) {
 		return "consistency_check_failed", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrSecretsMalformedEnvelope):
 		return "bad_request", http.StatusBadRequest
-
 	case errors.Is(err, domain.ErrStorageLimit):
 		return "storage_limit", http.StatusConflict
 	case errors.Is(err, domain.ErrUsageUnavailable):
 		return "usage_unavailable", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrGitAssociationStatusUnavailable):
-		return "association_status_unavailable", http.StatusServiceUnavailable
-	case errors.Is(err, domain.ErrBranchPullUnsupported):
-		return "branch_pull_unsupported", http.StatusNotImplemented
-	case errors.Is(err, domain.ErrRepositoryInitializationUnsupported):
-		return "repository_initialization_unsupported", http.StatusNotImplemented
-	case errors.Is(err, domain.ErrRepositoryInitializationConflict):
-		return "repository_initialization_conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrNotFound):
 		return "not_found", http.StatusNotFound
 	case errors.Is(err, domain.ErrIntegrity):
 		return "integrity_violation", http.StatusUnprocessableEntity
-	case errors.Is(err, domain.ErrMemoryProjectionLimit):
-		return "memory_projection_limit", http.StatusUnprocessableEntity
-	case errors.Is(err, domain.ErrNonFastForward):
-		return "non_fast_forward", http.StatusConflict
 	case errors.Is(err, domain.ErrRefConflict):
 		return "ref_conflict", http.StatusConflict
-	case errors.Is(err, domain.ErrBranchArchived):
-		return "branch_archived", http.StatusConflict
 	case errors.Is(err, domain.ErrUnauthorized):
 		return "unauthenticated", http.StatusUnauthorized
 	case errors.Is(err, domain.ErrBreakGlassAuditUnavailable):
@@ -840,12 +802,6 @@ func mapError(err error) (code string, status int) {
 		return "root_publication_disabled", http.StatusConflict
 	case errors.Is(err, domain.ErrUnsupportedDocumentIdentity):
 		return "unsupported_document_identity", http.StatusConflict
-	case errors.Is(err, domain.ErrJoinPreviewChanged):
-		return "join_preview_changed", http.StatusConflict
-	case errors.Is(err, domain.ErrEffectiveMemoryCursorStale):
-		return "memory_cursor_stale", http.StatusConflict
-	case errors.Is(err, domain.ErrPROrderingPending):
-		return "ordering_evidence_pending", http.StatusConflict
 	case errors.Is(err, domain.ErrConflict):
 		return "conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrValidation):
@@ -856,10 +812,7 @@ func mapError(err error) (code string, status int) {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string) {
-	if code == "doc_range_index_pending" {
-		w.Header().Set("Retry-After", "3")
-	}
-	if code == "resource_overloaded" || code == "doc_range_index_unavailable" || code == "graph_projection_pending" || code == "doc_find_fields_pending" || code == "doc_display_pending" {
+	if code == "resource_overloaded" || code == "doc_range_index_unavailable" {
 		// A handler that knows a quick retry repeats expensive work sets a longer delay first.
 		if w.Header().Get("Retry-After") == "" {
 			w.Header().Set("Retry-After", "1")
