@@ -215,8 +215,9 @@ create an App, issue credentials, or run `terraform apply`.
   GitHub API. This does not create or mirror a nested CXTHub team hierarchy.
 - A push or pull-request delivery only asks for a read of the remote; the
   remote Git worker reads branch heads, commits and pull requests from GitHub.
-  That worker also reads on its own schedule, which makes up for a delivery
-  that never arrived. No session is moved or merged by a delivery, and nothing
+  That worker also reads without being asked, every six hours, which makes up
+  for a delivery that never arrived; a member's cxt asks for a read after it
+  pushed. No session is moved or merged by a delivery, and nothing
   is inferred from a pull request's title or a repository URL.
 - Server operator-token fallback (`CXT_GITHUB_TOKEN`) remains for repositories
   whose owner has no connection.

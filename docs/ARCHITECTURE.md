@@ -75,8 +75,9 @@ workers:
 
 A GitHub push delivery records which branch name is alive or gone in the
 branch ledger and asks for a read of the remote. A pull-request delivery asks
-for that read. Applying a delivery reads nothing from GitHub; the remote Git
-worker does the reading.
+for that read, and so does a member's cxt after a push. Applying a delivery
+reads nothing from GitHub; the remote Git worker does the reading, when it is
+asked and otherwise every six hours.
 
 ## Ownership
 

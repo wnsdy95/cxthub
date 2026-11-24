@@ -76,7 +76,9 @@ func TestManagedHooksGiveTheUsersHookItsInputUnchanged(t *testing.T) {
 					if got := read(cxtInput); got != "" {
 						t.Fatalf("cxt was given the hook's input: %q", got)
 					}
-					if got := strings.Split(strings.TrimSuffix(read(cxtArgs), "\x00"), "\x00"); !reflect.DeepEqual(got, []string{"git-hook", "wake"}) {
+					// cxt is told which hook woke it, by the hook's own file name,
+					// and nothing of what Git passed to the hook.
+					if got := strings.Split(strings.TrimSuffix(read(cxtArgs), "\x00"), "\x00"); !reflect.DeepEqual(got, []string{"git-hook", "wake", event}) {
 						t.Fatalf("cxt was called with %q", got)
 					}
 				})

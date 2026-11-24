@@ -25,10 +25,21 @@ func anchoredPublicationFixture(t *testing.T) *remoteGitTestFixture {
 	return fixture
 }
 
-// nextPass moves the clock to the next read of the provider and runs it.
-func (fixture *remoteGitTestFixture) nextPass(t *testing.T) {
+// asked moves the clock on five minutes and asks for a read of the provider,
+// as a delivered push or a member's cxt does: without being asked the server
+// reads again only after domain.RemoteGitSyncEvery.
+func (fixture *remoteGitTestFixture) asked(t *testing.T) {
 	t.Helper()
 	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	if err := fixture.storage.RequestRemoteGitSync(context.Background(), fixture.repo, fixture.clock); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// nextPass has a read of the provider asked for and runs it.
+func (fixture *remoteGitTestFixture) nextPass(t *testing.T) {
+	t.Helper()
+	fixture.asked(t)
 	if _, err := fixture.pass(t); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +286,7 @@ func TestUncommittedPartStaysPrivateUntilItsBranchIsSeenPushed(t *testing.T) {
 	report("session-third", start.Add(7*time.Minute))
 	provider.heads["main"] = provider.commit(provider.heads["main"])
 	provider.failures["pulls:1"] = errors.New("provider unavailable")
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.asked(t)
 	if _, err := fixture.pass(t); err == nil {
 		t.Fatal("the failing read did not fail")
 	}

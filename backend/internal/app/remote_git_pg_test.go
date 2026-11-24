@@ -89,7 +89,7 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 		t.Fatalf("second pass:\n got %v\nwant %v", provider.requests, want)
 	}
 	state, err = storage.GetRemoteGitState(ctx, repo)
-	if err != nil || state.Remaining || !state.PullsComplete || !reflect.DeepEqual(state.Unreadable, []string{gone}) || !state.NextAt.Equal(clock.Add(5*time.Minute)) {
+	if err != nil || state.Remaining || !state.PullsComplete || !reflect.DeepEqual(state.Unreadable, []string{gone}) || !state.NextAt.Equal(clock.Add(domain.RemoteGitSyncEvery)) {
 		t.Fatalf("state after the second pass: %+v %v", state, err)
 	}
 	page, err := service.ReadRemoteGit(ctx, repo, domain.RemoteCommitCursor{}, 3)

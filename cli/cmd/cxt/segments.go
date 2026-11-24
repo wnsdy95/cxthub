@@ -89,6 +89,9 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 	// Branch IDs live in Git's own branch configuration.
 	// The server is told the names of this computer's worktrees, never their
 	// paths, so that a worktree no session worked in is still listed.
+	// An automatic run asks the server to read the Git host once this clone's
+	// branches of origin changed: after a push or a fetch.
+	service.WithRemoteReadRequests(gitctx.OriginBranches, remote.RequestRemoteGitRefresh)
 	return service.WithBranchIDs(gitctx.NewBranchIDs(), remote, gitctx.NewBranchID).WithWorktreeList(remote), nil
 }
 

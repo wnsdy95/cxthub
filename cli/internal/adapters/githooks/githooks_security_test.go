@@ -33,7 +33,9 @@ func TestHookScriptIsValidShellThatOnlyWakes(t *testing.T) {
 	if out, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("invalid hook shell: %v\n%s", err, out)
 	}
-	if !strings.Contains(got, version+" ") || !strings.Contains(got, `git-hook wake </dev/null`) {
+	// The hook says which hook it is by its own file name, not by anything
+	// Git passed to it.
+	if !strings.Contains(got, version+" ") || !strings.Contains(got, `git-hook wake "${0##*/}" </dev/null`) {
 		t.Fatalf("the hook does not carry this version's mark or does not wake:\n%s", got)
 	}
 	// Nothing in the script reads what Git passes to the hook, and nothing

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
@@ -37,6 +38,10 @@ type SegmentUploadService struct {
 	// uploadRecords and clock are set by WithUploadRecords.
 	uploadRecords outbound.SessionUploadRecords
 	clock         func() time.Time
+	// originBranches and requestRemoteRead are set together by
+	// WithRemoteReadRequests.
+	originBranches    func(ctx context.Context, cwd string) (string, error)
+	requestRemoteRead func(ctx context.Context, repoID string) error
 	// state, now and contentEpoch are set together by WithCollectorState.
 	state        outbound.CollectorStateStore
 	now          func() time.Time
@@ -194,6 +199,49 @@ func (s *SegmentUploadService) WithCollectorState(state outbound.CollectorStateS
 	return s
 }
 
+// WithRemoteReadRequests makes an automatic run ask the server to read the
+// repository from its Git host when origin's branches, as this clone holds
+// them, are not what they were when it last asked: this computer pushed or
+// fetched. The server opens a part of a session once it has seen its commit
+// on the host, and without being asked it reads the host only every few
+// hours. branches reads Git's own records and asks no remote.
+func (s *SegmentUploadService) WithRemoteReadRequests(branches func(ctx context.Context, cwd string) (string, error), request func(ctx context.Context, repoID string) error) *SegmentUploadService {
+	s.originBranches, s.requestRemoteRead = branches, request
+	return s
+}
+
+// askForRemoteRead asks the server to read the remote when origin's branches
+// changed in this clone since it was last asked. It never fails the run. The
+// branches are remembered once the server answered: it took the request, or
+// it said that it knows no Git host for the repository, which it would say
+// again about the same branches. A request that got no such answer is made
+// again by the next run. A clone that holds no branch of origin has nothing
+// the server could read, and asks nothing.
+func (s *SegmentUploadService) askForRemoteRead(ctx context.Context, cwd, repoID string, state *domain.CollectorState) {
+	if s.originBranches == nil || s.requestRemoteRead == nil {
+		return
+	}
+	branches, err := s.originBranches(ctx, cwd)
+	if err != nil || strings.TrimSpace(branches) == "" {
+		return
+	}
+	held := domain.Fingerprint(branches)
+	if held == state.OriginBranches {
+		return
+	}
+	if err := s.requestRemoteRead(ctx, repoID); err != nil && !noGitHostToRead(err) {
+		return
+	}
+	state.OriginBranches = held
+}
+
+// noGitHostToRead reports the server's answer that the repository has no Git
+// origin it could read.
+func noGitHostToRead(err error) bool {
+	var status statusCodeError
+	return errors.As(err, &status) && status.StatusCode() == 409
+}
+
 var _ inbound.SegmentUploader = (*SegmentUploadService)(nil)
 var _ inbound.SegmentCollector = (*SegmentUploadService)(nil)
 
@@ -265,7 +313,7 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 	}
 	// What was sent was sent to one repository on one server.
 	if target := string(repo.ID) + "\n" + repo.RemoteURL; state.Target != target {
-		state.Target, state.Sessions, state.Branches, state.Worktrees = target, nil, "", ""
+		state.Target, state.Sessions, state.Branches, state.Worktrees, state.OriginBranches = target, nil, "", "", ""
 	}
 	if state.Sessions == nil {
 		state.Sessions = map[string]domain.CollectorSessionState{}
@@ -280,6 +328,11 @@ func (s *SegmentUploadService) CollectSegments(ctx context.Context, cwd string) 
 		run.epoch = s.contentEpoch(ctx, cwd)
 	}
 	result, runErr := s.push(ctx, cwd, run, nil)
+	if runErr == nil {
+		// After the uploads: the server reads the host with the reports it
+		// was just given.
+		s.askForRemoteRead(ctx, cwd, string(repo.ID), &state)
+	}
 	state.LastRun = &domain.CollectorRun{At: now.Format(time.RFC3339Nano), Millis: s.now().UTC().Sub(now).Milliseconds(), Stored: result.Stored, Unchanged: result.Unchanged, Refused: result.Refused}
 	if runErr != nil {
 		state.LastRun.Error = runErr.Error()

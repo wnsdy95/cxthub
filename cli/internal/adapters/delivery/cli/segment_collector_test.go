@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,11 +75,11 @@ func TestSegmentCollectorRunsOnceAndOnceMoreForEachRequest(t *testing.T) {
 	// The collector runs only where cxt was set up.
 	cwd := t.TempDir()
 	requests, runs, state := 0, 0, domain.CollectorState{}
-	if err := runSegmentCollector(context.Background(), segmentCollectorTestContainer(t, &requests, &runs, &state), cwd); err != nil || runs != 0 {
+	if err := runSegmentCollector(context.Background(), segmentCollectorTestContainer(t, &requests, &runs, &state), cwd, false); err != nil || runs != 0 {
 		t.Fatalf("a folder outside Git: runs=%d err=%v", runs, err)
 	}
 	activationTestGit(t, cwd, "init", "-b", "main")
-	if err := runSegmentCollector(context.Background(), segmentCollectorTestContainer(t, &requests, &runs, &state), cwd); err != nil || runs != 0 {
+	if err := runSegmentCollector(context.Background(), segmentCollectorTestContainer(t, &requests, &runs, &state), cwd, false); err != nil || runs != 0 {
 		t.Fatalf("a repository that was not set up: runs=%d err=%v", runs, err)
 	}
 	if err := os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o700); err != nil {
@@ -89,19 +90,36 @@ func TestSegmentCollectorRunsOnceAndOnceMoreForEachRequest(t *testing.T) {
 	}
 
 	c := segmentCollectorTestContainer(t, &requests, &runs, &state)
-	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 {
+	if err := runSegmentCollector(context.Background(), c, cwd, false); err != nil || runs != 1 {
 		t.Fatalf("no request: runs=%d err=%v", runs, err)
 	}
 	// Two requests arrived while it ran: two more runs, then it ends.
 	requests, runs = 2, 0
-	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 3 || requests != 0 {
+	if err := runSegmentCollector(context.Background(), c, cwd, false); err != nil || runs != 3 || requests != 0 {
 		t.Fatalf("two requests: runs=%d left=%d err=%v", runs, requests, err)
+	}
+	// Woken by a push: once more after the pause, with no request for it.
+	requests, runs, state.LastRun = 0, 0, nil
+	if err := runSegmentCollector(context.Background(), c, cwd, true); err != nil || runs != 2 {
+		t.Fatalf("after a push: runs=%d err=%v", runs, err)
+	}
+	// The collector process is told so by the hook that started it.
+	for arguments, want := range map[string]int{"segment-collect": 1, "segment-collect after-push": 2, "segment-collect another-word": 1} {
+		runs, state.LastRun = 0, nil
+		if err := runGitHook(context.Background(), c, cwd, strings.Fields(arguments)); err != nil || runs != want {
+			t.Fatalf("cxt git-hook %s: runs=%d, want %d: %v", arguments, runs, want, err)
+		}
+	}
+	// A request that arrived meanwhile is still answered, by a third run.
+	requests, runs = 1, 0
+	if err := runSegmentCollector(context.Background(), c, cwd, true); err != nil || runs != 3 || requests != 0 {
+		t.Fatalf("after a push, with a request: runs=%d left=%d err=%v", runs, requests, err)
 	}
 	// A run that just happened is waited out before the next one starts.
 	runs = 0
 	state.LastRun = &domain.CollectorRun{At: time.Now().UTC().Format(time.RFC3339Nano)}
 	started := time.Now()
-	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 1 || time.Since(started) < 15*time.Millisecond {
+	if err := runSegmentCollector(context.Background(), c, cwd, false); err != nil || runs != 1 || time.Since(started) < 15*time.Millisecond {
 		t.Fatalf("spacing: runs=%d waited=%s err=%v", runs, time.Since(started), err)
 	}
 	// Cancelled while waiting: no run.
@@ -109,7 +127,7 @@ func TestSegmentCollectorRunsOnceAndOnceMoreForEachRequest(t *testing.T) {
 	segmentCollectorInterval = time.Hour
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := runSegmentCollector(ctx, c, cwd); err != nil || runs != 0 {
+	if err := runSegmentCollector(ctx, c, cwd, false); err != nil || runs != 0 {
 		t.Fatalf("cancelled: runs=%d err=%v", runs, err)
 	}
 }
@@ -120,7 +138,7 @@ func TestSegmentCollectorDoesNothingWithoutAServerOrItsParts(t *testing.T) {
 	c := segmentCollectorTestContainer(t, &requests, &runs, &state)
 	// No remote is configured for the repository: nothing to upload to.
 	t.Setenv("CXT_REMOTE", "")
-	if err := runSegmentCollector(context.Background(), c, cwd); err != nil || runs != 0 {
+	if err := runSegmentCollector(context.Background(), c, cwd, false); err != nil || runs != 0 {
 		t.Fatalf("without a remote: runs=%d err=%v", runs, err)
 	}
 	t.Setenv("CXT_REMOTE", "https://synthetic.invalid/api/v1")
@@ -129,7 +147,7 @@ func TestSegmentCollectorDoesNothingWithoutAServerOrItsParts(t *testing.T) {
 		"no collector": {WithSegmentCollectorLock: c.WithSegmentCollectorLock},
 		"no lock":      {SegmentCollector: c.SegmentCollector},
 	} {
-		if err := runSegmentCollector(context.Background(), broken, cwd); err != nil || runs != 0 {
+		if err := runSegmentCollector(context.Background(), broken, cwd, false); err != nil || runs != 0 {
 			t.Fatalf("%s: runs=%d err=%v", name, runs, err)
 		}
 	}
@@ -137,7 +155,7 @@ func TestSegmentCollectorDoesNothingWithoutAServerOrItsParts(t *testing.T) {
 	busy := &Container{SegmentCollector: c.SegmentCollector, WithSegmentCollectorLock: func(context.Context, string, func(func() bool) error) (bool, error) {
 		return false, nil
 	}}
-	if err := runSegmentCollector(context.Background(), busy, cwd); err != nil || runs != 0 {
+	if err := runSegmentCollector(context.Background(), busy, cwd, false); err != nil || runs != 0 {
 		t.Fatalf("while another runs: runs=%d err=%v", runs, err)
 	}
 }
@@ -150,12 +168,15 @@ func TestGitHooksWakeTheSegmentCollector(t *testing.T) {
 	repo := t.TempDir()
 	activationTestGit(t, repo, "init", "-b", "main")
 	activationTestGit(t, repo, "-c", "user.name=cxt test", "-c", "user.email=cxt@example.test", "commit", "--allow-empty", "-m", "first")
-	var woken []string
-	c := &Container{WakeSegmentCollector: func(cwd string) { woken = append(woken, cwd) }}
+	var woken, wokenAfterPush []string
+	c := &Container{WakeSegmentCollector: func(cwd string) { woken = append(woken, cwd) },
+		WakeSegmentCollectorAfterPush: func(cwd string) { wokenAfterPush = append(wokenAfterPush, cwd) }}
 
 	// cxt is not set up here: the hook leaves the repository alone.
-	if err := runGitHook(context.Background(), c, repo, []string{"post-merge", "0"}); err != nil || len(woken) != 0 {
-		t.Fatalf("an unconnected repository: %v %v", woken, err)
+	for _, event := range []string{"post-merge", "pre-push"} {
+		if err := runGitHook(context.Background(), c, repo, []string{"wake", event}); err != nil || len(woken) != 0 || len(wokenAfterPush) != 0 {
+			t.Fatalf("an unconnected repository: %s: %v %v %v", event, woken, wokenAfterPush, err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(repo, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
@@ -163,21 +184,33 @@ func TestGitHooksWakeTheSegmentCollector(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range []string{"post-merge", "post-rewrite"} {
+	for _, event := range []string{"post-commit", "post-checkout", "post-merge", "post-rewrite"} {
 		woken = nil
-		if err := runGitHook(context.Background(), c, repo, []string{event}); err != nil {
+		if err := runGitHook(context.Background(), c, repo, []string{"wake", event}); err != nil {
 			t.Fatalf("%s: %v", event, err)
 		}
-		if len(woken) != 1 || woken[0] != repo {
-			t.Fatalf("%s woke %v", event, woken)
+		if len(woken) != 1 || woken[0] != repo || len(wokenAfterPush) != 0 {
+			t.Fatalf("%s woke %v, and for a push %v", event, woken, wokenAfterPush)
 		}
+	}
+	// Git runs pre-push before the push and has no hook after it: that hook
+	// wakes a collector that runs once more after its pause, and no other.
+	woken = nil
+	if err := runGitHook(context.Background(), c, repo, []string{"wake", "pre-push"}); err != nil ||
+		len(woken) != 0 || len(wokenAfterPush) != 1 || wokenAfterPush[0] != repo {
+		t.Fatalf("pre-push woke %v, and for a push %v: %v", woken, wokenAfterPush, err)
+	}
+	// Where only the plain wake is wired, a push still wakes the collector.
+	plain := &Container{WakeSegmentCollector: func(cwd string) { woken = append(woken, cwd) }}
+	if err := runGitHook(context.Background(), plain, repo, []string{"wake", "pre-push"}); err != nil || len(woken) != 1 {
+		t.Fatalf("pre-push without the second wake: %v %v", woken, err)
 	}
 	// A name this version does not know is one a hook script of an earlier
 	// version still calls. It succeeds, so that the script cannot stop Git,
 	// and it wakes the collector like any hook.
 	for _, earlier := range [][]string{{"branch-transaction", "prepared", "1234"}, {"ref-prepare"}, {"pending-sync"}, {"wake"}, {}} {
 		woken = nil
-		if err := runGitHook(context.Background(), c, repo, earlier); err != nil || len(woken) != 1 {
+		if err := runGitHook(context.Background(), c, repo, earlier); err != nil || len(woken) != 1 || len(wokenAfterPush) != 1 {
 			t.Fatalf("%v: %v %v", earlier, woken, err)
 		}
 	}

@@ -676,10 +676,23 @@ var (
 
 const segmentCollectorShare = 6
 
+// segmentCollectAfterPush is the argument that makes a collector run once
+// more after its pause.
+const segmentCollectAfterPush = "after-push"
+
 // SpawnSegmentCollector starts a detached collector for the repository
 // holding cwd and returns at once. Hooks call it after their own work: a hook
 // is only what wakes the collector, never what it reads.
-func SpawnSegmentCollector(cwd string) {
+func SpawnSegmentCollector(cwd string) { spawnSegmentCollector(cwd, false) }
+
+// SpawnSegmentCollectorAfterPush starts a collector that runs once more after
+// its pause. The pre-push hook calls it. Git runs that hook before the push
+// and has no hook after it, so the first run sees this clone as it was before
+// the push; the second one sees what the push left, and can tell the server
+// that there is something to read on the Git host.
+func SpawnSegmentCollectorAfterPush(cwd string) { spawnSegmentCollector(cwd, true) }
+
+func spawnSegmentCollector(cwd string, afterPush bool) {
 	root := cxtRepoRoot(context.Background(), cwd)
 	if !remotecfg.SegmentsAuto(root) {
 		return
@@ -687,7 +700,8 @@ func SpawnSegmentCollector(cwd string) {
 	if _, ok := remotecfg.Origin(root); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return
 	}
-	// A collector already running takes the request; no new process is needed.
+	// A collector already running takes the request and runs once more after
+	// its pause; no new process is needed.
 	if gitctx.NewCollectorFiles().RequestRunIfBusy(context.Background(), cwd) {
 		return
 	}
@@ -695,7 +709,11 @@ func SpawnSegmentCollector(cwd string) {
 	if err != nil {
 		return
 	}
-	cmd := exec.Command(exe, "git-hook", "segment-collect")
+	args := []string{"git-hook", "segment-collect"}
+	if afterPush {
+		args = append(args, segmentCollectAfterPush)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if cmd.Start() == nil {
@@ -730,7 +748,7 @@ func segmentCollectorWait(state domain.CollectorState, now time.Time) time.Durat
 // collector woken while another runs leaves a request, and the running one
 // answers it with one more run. It never fails its caller: how a run ended is
 // kept in the collector's state.
-func runSegmentCollector(ctx context.Context, c *Container, cwd string) error {
+func runSegmentCollector(ctx context.Context, c *Container, cwd string, afterPush bool) error {
 	if c == nil || c.SegmentCollector == nil || c.WithSegmentCollectorLock == nil {
 		return nil
 	}
@@ -761,7 +779,16 @@ func runSegmentCollector(ctx context.Context, c *Container, cwd string) error {
 				}
 			}
 			_, _ = c.SegmentCollector.CollectSegments(ctx, cwd)
-			if ctx.Err() != nil || !another() {
+			if ctx.Err() != nil {
+				return nil
+			}
+			// A push is still going when its hook wakes the collector: one
+			// more run after the pause sees what the push left in this clone.
+			if afterPush {
+				afterPush = false
+				continue
+			}
+			if !another() {
 				return nil
 			}
 		}

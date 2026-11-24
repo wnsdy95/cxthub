@@ -239,10 +239,11 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 			claimedUntil  time.Time
 			ok, startOver bool
 		}{
-			{"before the next pass", origin, at(299), none, false, false},
-			{"at the next pass", origin, at(300), none, true, false},
-			{"while another worker holds the claim", origin, at(400), at(401), false, false},
-			{"after that claim ended", origin, at(401), at(401), true, false},
+			// Nobody asked: the next pass is six hours (21,600 seconds) after the last.
+			{"before the next pass", origin, at(21599), none, false, false},
+			{"at the next pass", origin, at(21600), none, true, false},
+			{"while another worker holds the claim", origin, at(21700), at(21701), false, false},
+			{"after that claim ended", origin, at(21701), at(21701), true, false},
 			{"another origin starts over at once", origin + "-moved", at(1), none, true, true},
 			{"another origin waits for a held claim", origin + "-moved", at(1), at(2), false, false},
 		} {
@@ -270,7 +271,7 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 	t.Run("end of a pass", func(t *testing.T) {
 		started := NewRemoteGitState(repo, origin, at(0)).Started(at(0))
 		done := started.Ended(at(0), false, false)
-		if !done.NextAt.Equal(at(300)) || done.Remaining || !done.SyncedAt.Equal(at(0)) {
+		if !done.NextAt.Equal(at(21600)) || done.Remaining || !done.SyncedAt.Equal(at(0)) {
 			t.Fatalf("nothing left: %+v", done)
 		}
 		more := started.Ended(at(0), false, true)
@@ -304,7 +305,7 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 		}
 		// What was asked for before the pass started was read by the pass.
 		before := NewRemoteGitState(repo, origin, at(0)).Request(at(-10)).Started(at(0))
-		if got := before.Ended(at(0), false, false); !got.NextAt.Equal(at(300)) {
+		if got := before.Ended(at(0), false, false); !got.NextAt.Equal(at(21600)) {
 			t.Fatalf("a request the pass served: next pass at %s", got.NextAt)
 		}
 	})
@@ -319,7 +320,8 @@ func TestRemoteGitSchedulingRule(t *testing.T) {
 			{"right after a pass started", 10, 30},
 			{"at the spacing", 30, 30},
 			{"well after the last pass", 100, 100},
-			{"after the next pass is due anyway", 400, 300},
+			{"hours after the last pass", 20000, 20000},
+			{"after the next pass is due anyway", 21700, 21600},
 		} {
 			got := idle.Request(at(test.now))
 			if !got.NextAt.Equal(at(test.next)) || !got.RequestedAt.Equal(at(test.now)) {

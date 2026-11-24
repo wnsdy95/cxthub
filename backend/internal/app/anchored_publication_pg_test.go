@@ -88,7 +88,13 @@ func TestPGSessionOpensInTheTransactionThatLearnsOfThePush(t *testing.T) {
 	provider.commits[local] = domain.RemoteCommit{SHA: local, Parents: []string{pushed}, AuthorName: "Member A", AuthorEmail: "member-a@example.com",
 		AuthoredAt: remoteGitTestTime(70), CommittedAt: remoteGitTestTime(70), Subject: "Pushed work"}
 	provider.heads["main"] = local
+	// The server is told of the push, as a delivery from the provider or the
+	// pusher's cxt does: without being told it reads again only after
+	// domain.RemoteGitSyncEvery.
 	clock = clock.Add(5 * time.Minute)
+	if err := storage.RequestRemoteGitSync(context.Background(), repo, clock); err != nil {
+		t.Fatal(err)
+	}
 	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil {
 		t.Fatal(err)
 	}

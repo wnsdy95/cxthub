@@ -27,8 +27,11 @@ type CollectorState struct {
 	// Branches is the fingerprint of the branch IDs last registered.
 	Branches string `json:"branches,omitempty"`
 	// Worktrees is the fingerprint of the worktree list last reported.
-	Worktrees string        `json:"worktrees,omitempty"`
-	LastRun   *CollectorRun `json:"last_run,omitempty"`
+	Worktrees string `json:"worktrees,omitempty"`
+	// OriginBranches is the fingerprint of origin's branches as this clone
+	// held them when the server was last asked to read the remote.
+	OriginBranches string        `json:"origin_branches,omitempty"`
+	LastRun        *CollectorRun `json:"last_run,omitempty"`
 }
 
 // CollectorSessionState is what was last sent for one session.

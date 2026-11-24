@@ -33,8 +33,11 @@ const (
 	RemoteGitPageLimit   = 500
 
 	// RemoteGitSyncEvery is the time from the start of a pass that left
-	// nothing to read to the next pass.
-	RemoteGitSyncEvery = 5 * time.Minute
+	// nothing to read to the next pass nobody asked for. It is the fallback:
+	// a pass is brought forward by a push the provider delivered and by a
+	// request, and a pass with nothing new still costs three provider
+	// requests for each repository.
+	RemoteGitSyncEvery = 6 * time.Hour
 	// RemoteGitSyncContinue is that time after a pass that ran out of budget.
 	RemoteGitSyncContinue = time.Minute
 	// RemoteGitSyncRetry is that time after a pass that failed.

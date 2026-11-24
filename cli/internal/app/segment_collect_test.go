@@ -366,3 +366,105 @@ func TestCollectorNeedsItsMemory(t *testing.T) {
 		t.Fatalf("sessions: %+v", g.state.state.Sessions)
 	}
 }
+
+// The server reads the Git host without being asked only every few hours. An
+// automatic run asks it to read once origin's branches, as this clone holds
+// them, are not what they were when it last asked: after a push or a fetch.
+func TestCollectorAsksForARemoteReadWhenOriginBranchesChanged(t *testing.T) {
+	f := newCollectorFixture(t)
+	f.began(time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC))
+	branches, failure := "", error(nil)
+	var asked []string
+	var read []string
+	f.service.WithRemoteReadRequests(func(_ context.Context, cwd string) (string, error) {
+		read = append(read, cwd)
+		return branches, nil
+	}, func(_ context.Context, repo string) error {
+		asked = append(asked, repo)
+		return failure
+	})
+	// A clone that holds no branch of origin has nothing the server could read.
+	for _, none := range []string{"", " \n"} {
+		branches = none
+		if f.run(t); len(asked) != 0 || f.state.state.OriginBranches != "" {
+			t.Fatalf("no branch of origin (%q): asked %v, remembered %q", none, asked, f.state.state.OriginBranches)
+		}
+	}
+	if len(read) != 2 || read[0] != "/work/app" {
+		t.Fatalf("the branches were read for %v", read)
+	}
+	// The first branches seen: asked once, for this repository, after the uploads.
+	first := "refs/remotes/origin/main " + strings.Repeat("a", 40) + "\n"
+	branches = first
+	f.run(t)
+	if len(asked) != 1 || asked[0] != string(f.repo.ID) || f.state.state.OriginBranches == "" {
+		t.Fatalf("the first branches: asked %v, remembered %q", asked, f.state.state.OriginBranches)
+	}
+	// The same branches again: nothing is asked.
+	if f.run(t); len(asked) != 1 {
+		t.Fatalf("unchanged branches: asked %d times", len(asked))
+	}
+	// A push moved a branch: asked again.
+	branches = "refs/remotes/origin/main " + strings.Repeat("b", 40) + "\n"
+	if f.run(t); len(asked) != 2 {
+		t.Fatalf("after a push: asked %d times", len(asked))
+	}
+	// A new branch on origin, by a push or a fetch: asked again.
+	branches += "refs/remotes/origin/topic " + strings.Repeat("c", 40) + "\n"
+	remembered := f.state.state.OriginBranches
+	failure = errors.New("server unreachable")
+	// A request the server did not take is not remembered, does not fail the
+	// run, and is made again by the next run.
+	if result := f.run(t); len(asked) != 3 || f.state.state.OriginBranches != remembered || len(result.Sessions) == 0 {
+		t.Fatalf("a failed request: asked %d times, remembered %q (was %q)", len(asked), f.state.state.OriginBranches, remembered)
+	}
+	failure = nil
+	if f.run(t); len(asked) != 4 || f.state.state.OriginBranches == remembered {
+		t.Fatalf("after a failed request: asked %d times, remembered %q", len(asked), f.state.state.OriginBranches)
+	}
+	if f.run(t); len(asked) != 4 {
+		t.Fatalf("after it was taken: asked %d times", len(asked))
+	}
+	// The server knows no Git host for the repository: it would say so again
+	// about the same branches, so they are remembered and not asked about
+	// again. Any other refusal is asked about again.
+	branches += "refs/remotes/origin/later " + strings.Repeat("d", 40) + "\n"
+	failure = segmentUploadStatus(409)
+	f.run(t)
+	if f.run(t); len(asked) != 5 {
+		t.Fatalf("no Git host on the server: asked %d times", len(asked))
+	}
+	branches += "refs/remotes/origin/latest " + strings.Repeat("e", 40) + "\n"
+	failure = segmentUploadStatus(403)
+	f.run(t)
+	if f.run(t); len(asked) != 7 {
+		t.Fatalf("a refusal for another reason: asked %d times", len(asked))
+	}
+	failure = nil
+	if f.run(t); len(asked) != 8 {
+		t.Fatalf("after the refusal: asked %d times", len(asked))
+	}
+	asked = asked[:4]
+	// Branches that cannot be read ask nothing.
+	f.service.WithRemoteReadRequests(func(context.Context, string) (string, error) { return first, errors.New("not a repository") },
+		func(_ context.Context, repo string) error { asked = append(asked, repo); return nil })
+	if f.run(t); len(asked) != 4 {
+		t.Fatalf("unreadable branches: asked %d times", len(asked))
+	}
+	// Sending to another server repository starts over: that server was never asked.
+	f.service.WithRemoteReadRequests(func(context.Context, string) (string, error) { return branches, nil },
+		func(_ context.Context, repo string) error { asked = append(asked, repo); return nil })
+	f.repo.ID = domain.HashContent([]byte("another repository"))
+	if f.run(t); len(asked) != 5 || asked[4] != string(f.repo.ID) {
+		t.Fatalf("another target: asked %v", asked)
+	}
+	// A run that failed asks nothing: what it could not send is not there to be opened.
+	f.repo.ID = domain.HashContent([]byte("a third repository"))
+	refused := segmentUploadStatus(401)
+	f.remote.answer = func(domain.AnchoredSessionUpload) (domain.AnchoredSessionReceipt, error) {
+		return domain.AnchoredSessionReceipt{}, refused
+	}
+	if _, err := f.service.CollectSegments(context.Background(), "/work/app"); !errors.Is(err, refused) || len(asked) != 5 {
+		t.Fatalf("a failed run: asked %d times, %v", len(asked), err)
+	}
+}

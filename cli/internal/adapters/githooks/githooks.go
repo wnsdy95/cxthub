@@ -1,8 +1,10 @@
 // Package githooks installs the Git hooks of cxt.
 //
-// Every hook runs `cxt git-hook wake`: it wakes the reading of the agent
-// tools' own session records and of Git. A hook decides nothing and carries
-// no data; what was committed, checked out or pushed is read from Git itself.
+// Every hook runs `cxt git-hook wake <its own name>`: it wakes the reading of
+// the agent tools' own session records and of Git. A hook decides nothing and
+// carries no data; what was committed, checked out or pushed is read from Git
+// itself. The name tells cxt one thing: pre-push runs before the push, and Git
+// has no hook after it, so that wake is followed by one more reading.
 //
 // Design principles:
 //   - a hook of cxt cannot stop a Git command; a pre-existing user hook's result is preserved.
@@ -25,7 +27,7 @@ const Marker = "# cxt-hook v"
 
 // version is the marker of the scripts this version installs. A script with
 // another version's marker is replaced the next time cxt runs in the repository.
-const version = Marker + "2"
+const version = Marker + "3"
 
 // HookNames lists the Git hooks installed by cxt. Each one only wakes the
 // reading of the agent tools' own session records; none of them decides
@@ -70,7 +72,7 @@ fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
 command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
-"$CXT" git-hook wake </dev/null >/dev/null 2>&1 || true
+"$CXT" git-hook wake "${0##*/}" </dev/null >/dev/null 2>&1 || true
 exit "$user_status"
 `, version, shellQuote(cxtBin))
 }

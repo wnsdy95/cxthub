@@ -11,6 +11,7 @@ package cli
 
 import (
 	"context"
+	"slices"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/githooks"
@@ -29,7 +30,7 @@ func cxtRepoRoot(ctx context.Context, cwd string) string {
 // names that no longer exist, and it must neither fail nor stop Git.
 func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) error {
 	if len(rest) > 0 && rest[0] == "segment-collect" {
-		return runSegmentCollector(ctx, c, cwd)
+		return runSegmentCollector(ctx, c, cwd, len(rest) > 1 && rest[1] == segmentCollectAfterPush)
 	}
 	state := gitctx.InspectContextRoot(ctx, cwd)
 	// A .cxt directory is kept out of Git whether or not cxt was set up in it.
@@ -41,7 +42,16 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 	}
 	// Scripts of an earlier version are replaced by the ones that only wake.
 	_ = githooks.Upgrade(state.WorktreeRoot)
-	if c != nil && c.WakeSegmentCollector != nil {
+	if c == nil {
+		return nil
+	}
+	// A hook script names itself after the word `wake`. Git runs pre-push
+	// before the push and has no hook after it.
+	if slices.Contains(rest, "pre-push") && c.WakeSegmentCollectorAfterPush != nil {
+		c.WakeSegmentCollectorAfterPush(cwd)
+		return nil
+	}
+	if c.WakeSegmentCollector != nil {
 		c.WakeSegmentCollector(cwd)
 	}
 	return nil

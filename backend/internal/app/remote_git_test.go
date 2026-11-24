@@ -287,7 +287,7 @@ func TestRemoteGitPassReadsBranchesCommitsAndPullRequests(t *testing.T) {
 	}
 	state := fixture.state(t)
 	if state.DefaultBranch != "main" || state.GitOrigin != remoteGitTestOrigin || state.SyncedAt == nil || !state.SyncedAt.Equal(start) || !state.AttemptedAt.Equal(start) ||
-		state.Remaining || !state.PullsComplete || !state.NextAt.Equal(start.Add(5*time.Minute)) || len(state.Unreadable) != 0 {
+		state.Remaining || !state.PullsComplete || !state.NextAt.Equal(start.Add(domain.RemoteGitSyncEvery)) || len(state.Unreadable) != 0 {
 		t.Fatalf("state after the pass: %+v", state)
 	}
 	ctx := context.Background()
@@ -304,18 +304,18 @@ func TestRemoteGitPassReadsBranchesCommitsAndPullRequests(t *testing.T) {
 	}
 
 	// No pass is due before the next one: the provider is not asked.
-	fixture.clock = start.Add(5*time.Minute - time.Second)
+	fixture.clock = start.Add(domain.RemoteGitSyncEvery - time.Second)
 	if requests, err := fixture.pass(t); !errors.Is(err, domain.ErrNotFound) || len(requests) != 0 {
 		t.Fatalf("a pass before it is due: %v %v", requests, err)
 	}
 	// A pass over a repository in which nothing changed asks three things and
 	// stores the same again.
-	fixture.clock = start.Add(5 * time.Minute)
+	fixture.clock = start.Add(domain.RemoteGitSyncEvery)
 	requests, err = fixture.pass(t)
 	if err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "pulls:1"}) {
 		t.Fatalf("a pass with nothing new: %v %v", requests, err)
 	}
-	if state := fixture.state(t); !state.SyncedAt.Equal(fixture.clock) || state.Remaining || !state.NextAt.Equal(fixture.clock.Add(5*time.Minute)) {
+	if state := fixture.state(t); !state.SyncedAt.Equal(fixture.clock) || state.Remaining || !state.NextAt.Equal(fixture.clock.Add(domain.RemoteGitSyncEvery)) {
 		t.Fatalf("state after the second pass: %+v", state)
 	}
 	if again := fixture.stored(t); !reflect.DeepEqual(again, commits) {
@@ -327,7 +327,7 @@ func TestRemoteGitPassReadsBranchesCommitsAndPullRequests(t *testing.T) {
 	provider.heads["main"] = second
 	delete(provider.heads, "topic")
 	provider.heads["release"] = main
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	requests, err = fixture.pass(t)
 	if err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "commits:7:1", "pulls:1"}) {
 		t.Fatalf("a pass after a push: %v %v", requests, err)
@@ -381,7 +381,7 @@ func TestRemoteGitPassStaysInsideItsBudget(t *testing.T) {
 		t.Fatalf("commits after the second pass: %d", len(commits))
 	}
 	state = fixture.state(t)
-	if state.Remaining || !state.NextAt.Equal(fixture.clock.Add(5*time.Minute)) || !state.PullsComplete {
+	if state.Remaining || !state.NextAt.Equal(fixture.clock.Add(domain.RemoteGitSyncEvery)) || !state.PullsComplete {
 		t.Fatalf("state after the pass that finished the read: %+v", state)
 	}
 	if frontier, err := fixture.storage.RemoteCommitFrontier(context.Background(), fixture.repo, 10); err != nil || len(frontier) != 0 {
@@ -430,7 +430,7 @@ func TestRemoteGitPassCutShortSaysWhatIsLeft(t *testing.T) {
 	if err != nil || len(requests) != 4 {
 		t.Fatalf("a pass with exactly its budget: %v %v", requests, err)
 	}
-	if state := exact.state(t); state.Remaining || !state.NextAt.Equal(exact.clock.Add(5*time.Minute)) {
+	if state := exact.state(t); state.Remaining || !state.NextAt.Equal(exact.clock.Add(domain.RemoteGitSyncEvery)) {
 		t.Fatalf("state: %+v", state)
 	}
 	// A budget that ends inside a walk leaves the rest of the walk.
@@ -511,7 +511,7 @@ func TestRemoteGitPassReadsPullRequestsInPages(t *testing.T) {
 
 	// After the first full read a pass stops at the first page on which
 	// nothing changed.
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	if requests, err = fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "pulls:1"}) {
 		t.Fatalf("a pass with nothing new: %v %v", requests, err)
 	}
@@ -521,7 +521,7 @@ func TestRemoteGitPassReadsPullRequestsInPages(t *testing.T) {
 	added := provider.commit(main)
 	moved.HeadSHA, moved.Commits, moved.UpdatedAt, moved.State = added, []string{added}, remoteGitTestTime(5000), domain.RemotePullClosed
 	provider.pulls[7] = moved
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	if requests, err = fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "pulls:1", "pull:7:1", "pulls:2"}) {
 		t.Fatalf("a pass after a pull request changed: %v %v", requests, err)
 	}
@@ -533,7 +533,7 @@ func TestRemoteGitPassReadsPullRequestsInPages(t *testing.T) {
 	renamed := provider.pulls[3]
 	renamed.Title, renamed.UpdatedAt = "Another title", remoteGitTestTime(6000)
 	provider.pulls[3] = renamed
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	if requests, err = fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "pulls:1", "pull:3:1", "pulls:2"}) {
 		t.Fatalf("a pass after a pull request was renamed: %v %v", requests, err)
 	}
@@ -566,7 +566,7 @@ func TestRemoteGitPassCutAmongChangedPullRequestsReadsTheRestLater(t *testing.T)
 		pull.Commits, pull.UpdatedAt = []string{pull.HeadSHA}, remoteGitTestTime(9000+number)
 		provider.pulls[number], moved[number] = pull, pull.HeadSHA
 	}
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	requests, err := fixture.pass(t)
 	if err != nil || len(requests) != remoteGitPassBudget {
 		t.Fatalf("the pass that is cut: %d requests %v", len(requests), err)
@@ -596,7 +596,7 @@ func TestRemoteGitPassCutAmongChangedPullRequestsReadsTheRestLater(t *testing.T)
 	// A pass with no budget left for pull requests at all learns nothing
 	// about them and does not start a full read.
 	fixture.sync.budget = 2
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	if _, err := fixture.pass(t); err != nil {
 		t.Fatal(err)
 	}
@@ -677,11 +677,11 @@ func TestRemoteGitPassRemembersCommitsTheProviderRefuses(t *testing.T) {
 				t.Fatalf("first pass: %v %v", requests, err)
 			}
 			state := fixture.state(t)
-			if !reflect.DeepEqual(state.Unreadable, []string{gone, refused}) || state.Remaining || state.SyncedAt == nil || !state.NextAt.Equal(fixture.clock.Add(5*time.Minute)) {
+			if !reflect.DeepEqual(state.Unreadable, []string{gone, refused}) || state.Remaining || state.SyncedAt == nil || !state.NextAt.Equal(fixture.clock.Add(domain.RemoteGitSyncEvery)) {
 				t.Fatalf("state after the provider refused two commits: %+v", state)
 			}
 			// They are not asked for again.
-			fixture.clock = fixture.clock.Add(5 * time.Minute)
+			fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 			if requests, err = fixture.pass(t); err != nil || !reflect.DeepEqual(requests, []string{"default", "heads:1", "pulls:1"}) {
 				t.Fatalf("second pass: %v %v", requests, err)
 			}
@@ -753,7 +753,7 @@ func TestRemoteGitPassThatFailsKeepsWhatItStored(t *testing.T) {
 	// A failure after a read keeps the time of that read.
 	read := fixture.clock
 	provider.failures["default"] = errors.New("https://provider.invalid/secret is unreachable")
-	fixture.clock = read.Add(5 * time.Minute)
+	fixture.clock = read.Add(domain.RemoteGitSyncEvery)
 	if requests, err = fixture.pass(t); err == nil || len(requests) != 1 {
 		t.Fatalf("a pass that failed at once: %v %v", requests, err)
 	}
@@ -862,7 +862,7 @@ func TestRemoteGitReadAskedForDuringAPassIsNotLost(t *testing.T) {
 	if _, err := fixture.pass(t); err != nil {
 		t.Fatalf("the pass that was asked for: %v", err)
 	}
-	if state := fixture.state(t); !state.NextAt.Equal(fixture.clock.Add(5 * time.Minute)) {
+	if state := fixture.state(t); !state.NextAt.Equal(fixture.clock.Add(domain.RemoteGitSyncEvery)) {
 		t.Fatalf("state after the pass that was asked for: %+v", state)
 	}
 }
@@ -938,7 +938,7 @@ func TestRemoteGitWorkerReadsRepositoriesThatAreDue(t *testing.T) {
 	}
 	// A repository that fails does not stop the ones after it.
 	provider.failures["default"] = outbound.GitProviderStatusError{Status: 503}
-	fixture.clock = fixture.clock.Add(5 * time.Minute)
+	fixture.clock = fixture.clock.Add(domain.RemoteGitSyncEvery)
 	if err := fixture.sync.Process(context.Background()); err != nil || provider.origins[recent.GitRemoteURL] != 1 || provider.origins[remoteGitTestOrigin] != 5 {
 		t.Fatalf("a round in which every read fails: %v %v", provider.origins, err)
 	}
@@ -1016,7 +1016,7 @@ func TestRemoteGitReadAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := fixture.state(t)
-	if state.RequestedAt == nil || !state.NextAt.Before(fixture.clock.Add(5*time.Minute)) {
+	if state.RequestedAt == nil || !state.NextAt.Before(fixture.clock.Add(domain.RemoteGitSyncEvery)) {
 		t.Fatalf("state after a member asked: %+v", state)
 	}
 	if err := fixture.service.RequestRemoteGitRefresh(viewer, fixture.repo); !errors.Is(err, domain.ErrForbidden) {
@@ -1056,7 +1056,7 @@ func TestRemoteGitReadIsAskedForByPushObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := fixture.state(t)
-	if state.RequestedAt == nil || !state.NextAt.Before(fixture.clock.Add(5*time.Minute)) {
+	if state.RequestedAt == nil || !state.NextAt.Before(fixture.clock.Add(domain.RemoteGitSyncEvery)) {
 		t.Fatalf("state after the push: %+v", state)
 	}
 	// A store without the cache is asked for nothing.

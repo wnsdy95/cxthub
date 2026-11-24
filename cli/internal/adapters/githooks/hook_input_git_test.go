@@ -93,7 +93,8 @@ func TestManagedPrePushWithLocalGit(t *testing.T) {
 		if got := argv("user-args"); !reflect.DeepEqual(got, []string{"origin", remote}) {
 			t.Fatalf("user args=%q", got)
 		}
-		if got := argv("cxt-args"); !reflect.DeepEqual(got, []string{"git-hook", "wake"}) {
+		// cxt is told that it is the pre-push hook, by the hook's own file name.
+		if got := argv("cxt-args"); !reflect.DeepEqual(got, []string{"git-hook", "wake", "pre-push"}) {
 			t.Fatalf("cxt args=%q", got)
 		}
 	}

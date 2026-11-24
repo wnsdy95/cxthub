@@ -598,8 +598,9 @@ cxt segments resend claude|codex <session id> [--json]
 ```
 
 - `refresh` asks the server to read the repository from GitHub again soon. A
-  part of a session opens to teammates when the server sees its commit there,
-  which it normally learns within minutes of the push.
+  part of a session opens to teammates when the server sees its commit there.
+  The collector asks the same by itself after a push, so this command is for a
+  push made where cxt does not run.
 - `archive` and `unarchive` do what the Sessions tab does: an archived session
   is left out of commits, the search and the summaries for every reader, and
   nothing of it is removed.
@@ -663,7 +664,7 @@ computer, so the tab shows the commands and runs nothing.
 In a repository cxt is set up in and connected to a server, the same upload
 also runs without being asked. Hooks only wake it: the Git hooks `post-commit`,
 `post-checkout`, `post-merge`, `post-rewrite` and `pre-push`, and the agent
-hooks at session start, prompt, stop and session end. A hook is never what is
+hooks at the end of a turn and of a session. A hook is never what is
 read. The collector reads the records the tools and Git left, by the same
 rules, whichever hook ran, so a hook that did not run is made up for by the
 next one that does, and work in a worktree where no hook runs is read when a
@@ -680,6 +681,18 @@ It differs from `cxt segments push` in two ways only:
   is read back and built again when the session's records or their cut changed,
   or when the masking policy or the document identity did, and branch IDs are
   registered again when the branches on origin or their IDs changed.
+
+**After a push.** The server opens a part of a session to others once it has
+seen the part's commit on the Git host. It learns of a push from the host's
+own notification where a GitHub App or webhook is connected, and otherwise
+reads the host without being asked only every six hours. So a run also asks
+the server to read the host when origin's branches, as this clone holds them,
+are not what they were when it last asked: after this computer pushed or
+fetched. Git runs `pre-push` before the push and has no hook after it, so the
+collector that hook wakes runs once more after its pause, and that run finds
+the branches changed. Nothing is asked when the branches are the same, or when
+the clone holds no branch of origin. A server that knows no Git host for the
+repository says so, and is not asked again about the same branches.
 
 Like every upload it sends nothing of a session that was removed from the
 server, and it then forgets what it had sent of that session, so that the
@@ -777,8 +790,9 @@ pre-push
 ```
 
 Each one runs a hook you already had first, with the hook's own input, and
-ends with that hook's result. Then it wakes the collector. It reads nothing
-Git passes to it, decides nothing, and cannot stop the Git command: a missing
+ends with that hook's result. Then it wakes the collector and tells it which
+hook it is, by its own file name. It reads nothing Git passes to it, decides
+nothing, and cannot stop the Git command: a missing
 or failing cxt changes nothing about the result. Existing user hooks are
 restored on uninstall.
 

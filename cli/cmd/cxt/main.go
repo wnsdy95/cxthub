@@ -303,6 +303,7 @@ func buildContainer(cfg config) container {
 		clictr.WithSegmentCollectorLock = files.WithCollectorLock
 		clictr.SegmentCollectorState = files.LoadCollectorState
 		clictr.WakeSegmentCollector = delivcli.SpawnSegmentCollector
+		clictr.WakeSegmentCollectorAfterPush = delivcli.SpawnSegmentCollectorAfterPush
 	}
 
 	return container{

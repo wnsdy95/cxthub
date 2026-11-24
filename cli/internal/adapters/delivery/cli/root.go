@@ -68,6 +68,9 @@ type Container struct {
 	// WakeSegmentCollector starts a detached collector; process lifecycle
 	// wiring, absent in embedded and test drivers.
 	WakeSegmentCollector func(string)
+	// WakeSegmentCollectorAfterPush starts one that runs once more after its
+	// pause; the pre-push hook uses it. Absent like WakeSegmentCollector.
+	WakeSegmentCollectorAfterPush func(string)
 	// WithSegmentCollectorLock lets one collector run per repository and
 	// keeps one request for another run.
 	WithSegmentCollectorLock func(ctx context.Context, cwd string, use func(another func() bool) error) (bool, error)
