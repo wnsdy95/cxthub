@@ -34,9 +34,9 @@ const (
 
 	// RemoteGitSyncEvery is the time from the start of a pass that left
 	// nothing to read to the next pass nobody asked for. It is the fallback:
-	// a pass is brought forward by a push the provider delivered and by a
-	// request, and a pass with nothing new still costs three provider
-	// requests for each repository.
+	// a pass is brought forward by a push the provider delivered, by a
+	// request and by a look at what was read, and a pass with nothing new
+	// still costs three provider requests for each repository.
 	RemoteGitSyncEvery = 6 * time.Hour
 	// RemoteGitSyncContinue is that time after a pass that ran out of budget.
 	RemoteGitSyncContinue = time.Minute
@@ -45,6 +45,11 @@ const (
 	// RemoteGitRequestSpacing is the least time from the start of a pass to a
 	// pass somebody asked for.
 	RemoteGitRequestSpacing = 30 * time.Second
+	// RemoteGitLookSpacing is the time from the start of a pass after which
+	// a look at what was read asks for another one. A push from a computer
+	// that tells the server nothing is read then, when somebody looks, and
+	// not only at the fallback.
+	RemoteGitLookSpacing = 5 * time.Minute
 
 	remoteGitTextLimit   = 1024
 	remoteGitOriginLimit = 2048
@@ -411,6 +416,14 @@ func (s RemoteGitState) Request(now time.Time) RemoteGitState {
 	s.RequestedAt = &now
 	s.NextAt = remoteGitRequested(s.NextAt, s.AttemptedAt, now)
 	return s
+}
+
+// LookAsks reports whether a look at what was read, at now, asks for a pass:
+// none is due yet, and the last one started RemoteGitLookSpacing ago or more.
+// It goes by the start of the last pass, not of the last one that succeeded,
+// so that looking does not hurry the retry of a pass that failed.
+func (s RemoteGitState) LookAsks(now time.Time) bool {
+	return now.Before(s.NextAt) && s.AttemptedAt != nil && !now.Before(s.AttemptedAt.Add(RemoteGitLookSpacing))
 }
 
 func remoteGitRequested(next time.Time, attempted *time.Time, now time.Time) time.Time {

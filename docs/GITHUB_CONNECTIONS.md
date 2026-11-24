@@ -217,8 +217,11 @@ create an App, issue credentials, or run `terraform apply`.
   remote Git worker reads branch heads, commits and pull requests from GitHub.
   That worker also reads without being asked, every six hours, which makes up
   for a delivery that never arrived; a member's cxt asks for a read after it
-  pushed. No session is moved or merged by a delivery, and nothing
-  is inferred from a pull request's title or a repository URL.
+  pushed or fetched, and so does a look at the Sessions tab once the last read
+  started five minutes ago or more. That look is what reads a push made where
+  no delivery arrives and no cxt runs. No session is moved or merged by a
+  delivery, and nothing is inferred from a pull request's title or a
+  repository URL.
 - Server operator-token fallback (`CXT_GITHUB_TOKEN`) remains for repositories
   whose owner has no connection.
 - GitHub.com only. GHES, direct Enterprise installations/API operations, SCIM/SSO,

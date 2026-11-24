@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -676,28 +678,11 @@ var (
 
 const segmentCollectorShare = 6
 
-// segmentCollectAfterPush is the argument that makes a collector run once
-// more after its pause.
-const segmentCollectAfterPush = "after-push"
-
 // SpawnSegmentCollector starts a detached collector for the repository
 // holding cwd and returns at once. Hooks call it after their own work: a hook
 // is only what wakes the collector, never what it reads.
-func SpawnSegmentCollector(cwd string) { spawnSegmentCollector(cwd, false) }
-
-// SpawnSegmentCollectorAfterPush starts a collector that runs once more after
-// its pause. The pre-push hook calls it. Git runs that hook before the push
-// and has no hook after it, so the first run sees this clone as it was before
-// the push; the second one sees what the push left, and can tell the server
-// that there is something to read on the Git host.
-func SpawnSegmentCollectorAfterPush(cwd string) { spawnSegmentCollector(cwd, true) }
-
-func spawnSegmentCollector(cwd string, afterPush bool) {
-	root := cxtRepoRoot(context.Background(), cwd)
-	if !remotecfg.SegmentsAuto(root) {
-		return
-	}
-	if _, ok := remotecfg.Origin(root); !ok && os.Getenv("CXT_REMOTE") == "" {
+func SpawnSegmentCollector(cwd string) {
+	if !segmentCollectorWanted(cwd) {
 		return
 	}
 	// A collector already running takes the request and runs once more after
@@ -705,13 +690,26 @@ func spawnSegmentCollector(cwd string, afterPush bool) {
 	if gitctx.NewCollectorFiles().RequestRunIfBusy(context.Background(), cwd) {
 		return
 	}
+	spawnDetached(cwd, "git-hook", "segment-collect")
+}
+
+// segmentCollectorWanted reports whether automatic reading is on in the
+// repository holding cwd and there is a server to upload to.
+func segmentCollectorWanted(cwd string) bool {
+	root := cxtRepoRoot(context.Background(), cwd)
+	if !remotecfg.SegmentsAuto(root) {
+		return false
+	}
+	_, ok := remotecfg.Origin(root)
+	return ok || os.Getenv("CXT_REMOTE") != ""
+}
+
+// spawnDetached starts this program again with args, in a session of its
+// own, and does not wait for it: what a hook starts must outlive the hook.
+func spawnDetached(cwd string, args ...string) {
 	exe, err := os.Executable()
 	if err != nil {
 		return
-	}
-	args := []string{"git-hook", "segment-collect"}
-	if afterPush {
-		args = append(args, segmentCollectAfterPush)
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = cwd
@@ -719,6 +717,57 @@ func spawnSegmentCollector(cwd string, afterPush bool) {
 	if cmd.Start() == nil {
 		_ = cmd.Process.Release()
 	}
+}
+
+// wakeAfterPush is the command of the wait for a push to end.
+const wakeAfterPush = "after-push"
+
+// A push is watched until it ends, and not for ever: one that is still going
+// after wakeAfterPushLimit is left to the next wake.
+var (
+	wakeAfterPushPoll  = 200 * time.Millisecond
+	wakeAfterPushLimit = 30 * time.Minute
+)
+
+// SpawnWakeAfterPush starts the detached wait for the process pushing to
+// end. The pre-push hook calls it with the Git process that runs the hook:
+// Git runs that hook before the push and has no hook after it, and what a
+// push changes in this clone, origin's branches, is there to read only when
+// that process has ended.
+func SpawnWakeAfterPush(cwd string, pushing int) {
+	if !segmentCollectorWanted(cwd) {
+		return
+	}
+	spawnDetached(cwd, "git-hook", wakeAfterPush, strconv.Itoa(pushing))
+}
+
+// processRuns reports whether a process with this number exists. A process
+// of another user exists too: asking about it is refused, not unanswered.
+func processRuns(process int) bool {
+	err := syscall.Kill(process, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// runWakeAfterPush is the detached wait. It waits until the process that
+// pushes has ended and then wakes the collector like any hook: it reads
+// nothing and decides nothing, and whether the push changed anything is for
+// the collector to find. It holds no lock, so collectors other hooks wake run
+// while it waits.
+func runWakeAfterPush(ctx context.Context, c *Container, cwd, pushing string) error {
+	process, err := strconv.Atoi(pushing)
+	if err != nil || process <= 1 || c == nil || c.WakeSegmentCollector == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, wakeAfterPushLimit)
+	defer cancel()
+	for processRuns(process) && ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+		case <-time.After(wakeAfterPushPoll):
+		}
+	}
+	c.WakeSegmentCollector(cwd)
+	return nil
 }
 
 // segmentCollectorWait is how long a collector waits before it may start a
@@ -748,7 +797,7 @@ func segmentCollectorWait(state domain.CollectorState, now time.Time) time.Durat
 // collector woken while another runs leaves a request, and the running one
 // answers it with one more run. It never fails its caller: how a run ended is
 // kept in the collector's state.
-func runSegmentCollector(ctx context.Context, c *Container, cwd string, afterPush bool) error {
+func runSegmentCollector(ctx context.Context, c *Container, cwd string) error {
 	if c == nil || c.SegmentCollector == nil || c.WithSegmentCollectorLock == nil {
 		return nil
 	}
@@ -781,12 +830,6 @@ func runSegmentCollector(ctx context.Context, c *Container, cwd string, afterPus
 			_, _ = c.SegmentCollector.CollectSegments(ctx, cwd)
 			if ctx.Err() != nil {
 				return nil
-			}
-			// A push is still going when its hook wakes the collector: one
-			// more run after the pause sees what the push left in this clone.
-			if afterPush {
-				afterPush = false
-				continue
 			}
 			if !another() {
 				return nil

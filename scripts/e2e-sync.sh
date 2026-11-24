@@ -219,7 +219,7 @@ cxt setup "$REMOTE" --no-login >"$TMP/setup.out" 2>&1
 expect "setup succeeds" "$?" 0
 expect "setup writes the mark" "$([ -f .cxt/HEAD ] && echo yes)" yes
 expect "setup registers the remote" "$(grep -c 'origin' .cxt/config)" 1
-expect "setup installs five Git hooks, each of which only wakes" "$(cat .git/hooks/post-commit .git/hooks/post-checkout .git/hooks/post-merge .git/hooks/post-rewrite .git/hooks/pre-push 2>/dev/null | grep -cF 'git-hook wake "${0##*/}" </dev/null')" 5
+expect "setup installs five Git hooks, each of which only wakes" "$(cat .git/hooks/post-commit .git/hooks/post-checkout .git/hooks/post-merge .git/hooks/post-rewrite .git/hooks/pre-push 2>/dev/null | grep -cF 'git-hook wake "${0##*/}" "$PPID" </dev/null')" 5
 expect "setup installs no reference-transaction hook" "$([ ! -e .git/hooks/reference-transaction ] && echo yes)" yes
 expect "setup keeps the user's own hook for chaining" "$(grep -c user-hook-ran .git/hooks/post-commit.pre-cxt)" 1
 expect "setup merges the Claude hooks" "$(grep -c 'cxt hook --provider claude --event UserPromptSubmit' .claude/settings.json 2>/dev/null)" 1
@@ -259,21 +259,27 @@ printf '%s' "{\"session_id\":\"sync-one\",\"cwd\":\"$PWD\"}" | cxt hook --provid
 expect "the agent hook succeeds" "$?" 0
 expect "the session that went on is uploaded again" "$(until_true 30 revision_is sync-one 2 && revision sync-one)" 2
 
-echo "── C2. after a push the collector runs once more and asks the server about the Git host"
-# Git runs pre-push before the push and has no hook after it. The collector that hook wakes runs once more after its
-# pause, finds origin's branches changed in this clone, and asks the server to read the Git host: without being asked
-# the server reads it only every few hours. The origin here takes three seconds to receive a push, so the first run
-# is over before the push is. This server knows no Git host for the repository and says so; the collector remembers
-# the branches it asked about either way. The commit pushed is no session's, so nothing else changes.
+echo "── C2. a push wakes the collector when it has ended, and that run asks the server about the Git host"
+# Git runs pre-push before the push and has no hook after it. The hook names the Git process that runs it, the one
+# that pushes, and the collector is woken when that process has ended: its run then finds origin's branches changed
+# in this clone, and asks the server to read the Git host. Without being asked the server reads it only every few
+# hours. The origin here takes three seconds to receive a push, and no collector runs in that time. This server
+# knows no Git host for the repository and says so; the collector remembers the branches it asked about either way.
+# The commit pushed is no session's, so nothing else changes.
 asked_remote_read() { python3 -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1])).get("origin_branches") else 1)' "$STATE" 2>/dev/null; }
+last_run_at() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["last_run"]["at"])' "$STATE" 2>/dev/null; }
 printf '#!/bin/sh\nsleep 3\n' > "$TMP/bare.git/hooks/pre-receive"; chmod +x "$TMP/bare.git/hooks/pre-receive"
 PROBE="$(git commit-tree "$(git rev-parse 'HEAD^{tree}')" -m "no session made this" </dev/null)"
 quiet
+REWOUND="$(last_run_at)"
 expect "before any push the server was not asked" "$(asked_remote_read && echo asked || echo not asked)" "not asked"
-git push -q origin "$PROBE:refs/heads/probe" 2>"$TMP/push.err"
+git push -q origin "$PROBE:refs/heads/probe" 2>"$TMP/push.err" &
+PUSHPID=$!
+sleep 1.5
+expect "while the push goes on no collector runs" "$([ -n "$REWOUND" ] && [ "$(last_run_at)" = "$REWOUND" ] && echo did not run) $(asked_remote_read && echo asked || echo not asked)" "did not run not asked"
+wait "$PUSHPID"
 expect "the push goes through the hook" "$?" 0
-expect "the run during the push saw nothing new on origin" "$(asked_remote_read && echo asked || echo not asked)" "not asked"
-expect "the run after the pause asks the server about the Git host" "$(until_true 40 asked_remote_read && echo asked)" asked
+expect "when the push has ended the collector runs and asks the server about the Git host" "$(until_true 40 asked_remote_read && echo asked) $([ "$(last_run_at)" != "$REWOUND" ] && echo ran)" "asked ran"
 rm -f "$TMP/bare.git/hooks/pre-receive"
 
 echo "── D. a linked worktree shares the hooks"
@@ -304,7 +310,7 @@ quiet
 git branch from-earlier-hooks >"$TMP/earlier-branch.out" 2>&1
 expect "a branch is created through the earlier hook" "$? $(git show-ref --verify --quiet refs/heads/from-earlier-hooks && echo exists)" "0 exists"
 expect "the earlier reference-transaction hook is gone after its first run" "$([ ! -e .git/hooks/reference-transaction ] && echo yes)" yes
-expect "the earlier post-checkout hook became this version's" "$(grep -cF 'git-hook wake "${0##*/}" </dev/null' .git/hooks/post-checkout)" 1
+expect "the earlier post-checkout hook became this version's" "$(grep -cF 'git-hook wake "${0##*/}" "$PPID" </dev/null' .git/hooks/post-checkout)" 1
 # The earlier hook woke cxt more than once for one branch, so one more run follows after the pause between runs.
 quiet
 git checkout -q from-earlier-hooks

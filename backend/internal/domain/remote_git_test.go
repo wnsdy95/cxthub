@@ -379,3 +379,50 @@ func TestRemoteGitUnreadableIsBounded(t *testing.T) {
 		t.Fatal("remembering changed the state it was computed from")
 	}
 }
+
+// A look at what was read asks for a pass when none is due yet and the last
+// one started five minutes (300 seconds) ago or more.
+func TestRemoteGitLookAsksWhenTheLastPassIsOld(t *testing.T) {
+	repo := HashContent([]byte("repo"))
+	const origin = "https://github.com/example/project"
+	at := func(seconds int) time.Time { return remoteGitTestTime(10, 0).Add(time.Duration(seconds) * time.Second) }
+	// A pass that started at 0 and read everything: the next one nobody
+	// asked for is due six hours (21,600 seconds) later.
+	read := NewRemoteGitState(repo, origin, at(0)).Started(at(0)).Ended(at(0), false, false)
+	// A pass that started at 1,000 and failed: it is tried again two minutes
+	// later, and the last read is still the one at 0.
+	failed := read.Started(at(1000)).Ended(at(1000), true, false)
+	// A pass that started at 1,000 and ran out of budget goes on a minute later.
+	cut := read.Started(at(1000)).Ended(at(1000), false, true)
+	for _, test := range []struct {
+		name  string
+		state RemoteGitState
+		now   time.Time
+		want  bool
+	}{
+		{"at the start of the pass", read, at(0), false},
+		{"a second before five minutes", read, at(299), false},
+		{"at five minutes", read, at(300), true},
+		{"a second before the pass nobody asked for", read, at(21599), true},
+		{"when that pass is due", read, at(21600), false},
+		{"after it is due", read, at(30000), false},
+		// Looking goes by the start of the last pass, not by the last read
+		// that succeeded: a pass that failed is tried again by its own rule.
+		{"a minute after a pass that failed", failed, at(1060), false},
+		{"when the retry of that pass is due", failed, at(1120), false},
+		{"half a minute after a pass that was cut short", cut, at(1030), false},
+		// Once a look asked, a pass is due, and the next look asks nothing.
+		{"right after a look asked", read.Request(at(300)), at(300), false},
+		{"a minute after a look asked", read.Request(at(300)), at(360), false},
+		// A request that came too soon after the start of the pass is due
+		// thirty seconds after that start, and until then nothing is due.
+		{"before a request that came too soon is due", read.Request(at(10)), at(20), false},
+		// A state nothing was ever read into has no pass to go by.
+		{"never read, due at once", NewRemoteGitState(repo, origin, at(0)), at(0), false},
+		{"never read, with its first pass still ahead", NewRemoteGitState(repo, origin, at(600)), at(400), false},
+	} {
+		if got := test.state.LookAsks(test.now); got != test.want {
+			t.Errorf("%s: asks=%v", test.name, got)
+		}
+	}
+}

@@ -43,6 +43,12 @@ func (s *Service) remoteGitStore() (outbound.RemoteGitStore, error) {
 //
 // What was read from an origin the repository no longer has is not shown: the
 // repository then reads as one that was never read.
+//
+// The page from the top is a look at what was read. When the last pass
+// started some time ago, the look asks for another one: the reader is given
+// what the server holds now, and the next read of the page shows what that
+// pass found. Whoever may read the page asks this way, a viewer too, and
+// nothing is recorded of it but the time of the request.
 func (s *Service) ReadRemoteGit(ctx context.Context, repo domain.ContentHash, before domain.RemoteCommitCursor, limit int) (domain.RemoteGitPage, error) {
 	if err := validateHashes(repo); err != nil {
 		return domain.RemoteGitPage{}, err
@@ -50,7 +56,9 @@ func (s *Service) ReadRemoteGit(ctx context.Context, repo domain.ContentHash, be
 	if limit < 1 || limit > domain.RemoteGitPageLimit {
 		return domain.RemoteGitPage{}, fmt.Errorf("%w: a page holds 1 to %d commits", domain.ErrValidation, domain.RemoteGitPageLimit)
 	}
-	return repositoryRead(ctx, s, func(bound context.Context) (domain.RemoteGitPage, error) {
+	var looked *domain.RemoteGitState
+	page, err := repositoryRead(ctx, s, func(bound context.Context) (domain.RemoteGitPage, error) {
+		looked = nil
 		page := domain.RemoteGitPage{Branches: []domain.RemoteBranch{}, Pulls: []domain.RemotePull{}, Commits: []domain.RemoteCommit{}}
 		store, err := s.remoteGitStore()
 		if err != nil {
@@ -68,6 +76,7 @@ func (s *Service) ReadRemoteGit(ctx context.Context, repo domain.ContentHash, be
 			return domain.RemoteGitPage{}, err
 		}
 		if before.IsZero() {
+			looked = &state
 			page.DefaultBranch, page.SyncedAt = state.DefaultBranch, state.SyncedAt
 			if page.Branches, err = store.ListRemoteBranches(bound, repo); err != nil {
 				return domain.RemoteGitPage{}, err
@@ -89,6 +98,17 @@ func (s *Service) ReadRemoteGit(ctx context.Context, repo domain.ContentHash, be
 		page.Commits = commits
 		return page, nil
 	})
+	if err != nil {
+		return domain.RemoteGitPage{}, err
+	}
+	if now := time.Now().UTC(); looked != nil && looked.LookAsks(now) {
+		// A request that fails takes nothing from this reader: the page was
+		// read, and the pass nobody asked for still comes.
+		if store, unavailable := s.remoteGitStore(); unavailable == nil {
+			_ = store.RequestRemoteGitSync(ctx, repo, now)
+		}
+	}
+	return page, nil
 }
 
 // RequestRemoteGitRefresh asks for the provider to be read again soon. It

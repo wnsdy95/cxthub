@@ -2,11 +2,14 @@ package githooks
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -37,6 +40,7 @@ func TestManagedPrePushWithLocalGit(t *testing.T) {
 		"REVIEW_USER_ARGS="+filepath.Join(root, "user-args"),
 		"REVIEW_CXT_INPUT="+filepath.Join(root, "cxt-input"),
 		"REVIEW_CXT_ARGS="+filepath.Join(root, "cxt-args"),
+		"REVIEW_CXT_PUSHING="+filepath.Join(root, "cxt-pushing"),
 		"REVIEW_CXT_CALLS="+filepath.Join(root, "cxt-calls"))
 	run := func(dir string, args ...string) ([]byte, error) {
 		cmd := exec.Command(git, args...)
@@ -80,7 +84,9 @@ func TestManagedPrePushWithLocalGit(t *testing.T) {
 	must(repo, "remote", "add", "origin", remote)
 
 	mockCxt := filepath.Join(root, "mock cxt ' executable")
-	write(mockCxt, "#!/bin/sh\ncat > \"$REVIEW_CXT_INPUT\"\nprintf '%s\\0' \"$@\" > \"$REVIEW_CXT_ARGS\"\nprintf 'called\\n' >> \"$REVIEW_CXT_CALLS\"\nexit 23\n", 0700)
+	// The stand-in for cxt also notes whether the process the hook named runs.
+	write(mockCxt, "#!/bin/sh\ncat > \"$REVIEW_CXT_INPUT\"\nprintf '%s\\0' \"$@\" > \"$REVIEW_CXT_ARGS\"\nprintf 'called\\n' >> \"$REVIEW_CXT_CALLS\"\n"+
+		"if kill -0 \"$4\" 2>/dev/null; then echo runs; else echo ended; fi > \"$REVIEW_CXT_PUSHING\"\nexit 23\n", 0700)
 	hook := filepath.Join(repo, ".git", "hooks", "pre-push")
 	write(hook, script(mockCxt), 0700)
 	write(hook+".pre-cxt", "#!/bin/sh\ncat > \"$REVIEW_USER_INPUT\"\nprintf '%s\\0' \"$@\" > \"$REVIEW_USER_ARGS\"\nexit \"$(cat \"$REVIEW_STATUS_FILE\")\"\n", 0700)
@@ -93,9 +99,22 @@ func TestManagedPrePushWithLocalGit(t *testing.T) {
 		if got := argv("user-args"); !reflect.DeepEqual(got, []string{"origin", remote}) {
 			t.Fatalf("user args=%q", got)
 		}
-		// cxt is told that it is the pre-push hook, by the hook's own file name.
-		if got := argv("cxt-args"); !reflect.DeepEqual(got, []string{"git-hook", "wake", "pre-push"}) {
+		// cxt is told that it is the pre-push hook, by the hook's own file
+		// name, and which process runs the hook. That process is the push:
+		// it ran while the hook did, and it has ended now that the push has.
+		got := argv("cxt-args")
+		if len(got) != 4 || !reflect.DeepEqual(got[:3], []string{"git-hook", "wake", "pre-push"}) {
 			t.Fatalf("cxt args=%q", got)
+		}
+		pushing, err := strconv.Atoi(got[3])
+		if err != nil || pushing <= 1 || pushing == os.Getpid() {
+			t.Fatalf("the hook named the process %q", got[3])
+		}
+		if during := string(read("cxt-pushing")); during != "runs\n" {
+			t.Fatalf("during the hook the process it named %s", during)
+		}
+		if err := syscall.Kill(pushing, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("after the push the process the hook named is still there: %v", err)
 		}
 	}
 	checkRows := func(want map[string][]string, expectCxt bool) {

@@ -172,3 +172,36 @@ func cleanHookTestEnv() []string {
 	}
 	return append(env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false")
 }
+
+// The scripts of the version before this one did not say which process runs
+// them. A repository that holds only those is upgraded like any other.
+func TestUpgradeReplacesTheScriptsOfTheVersionBefore(t *testing.T) {
+	standIn(t)
+	repo := t.TempDir()
+	cmd := exec.Command("git", "-C", repo, "init", "-q", "-b", "main")
+	cmd.Env = cleanHookTestEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	dir, err := hooksDir(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := "#!/bin/sh\n" + Marker + "3 (managed by cxt — 'cxt hooks uninstall' to remove)\n" +
+		"cxt git-hook wake \"${0##*/}\" </dev/null >/dev/null 2>&1 || true\n"
+	for _, name := range HookNames {
+		writeHookTestFile(t, filepath.Join(dir, name), before)
+	}
+	if err := Upgrade(repo); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range HookNames {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !strings.Contains(string(got), version+" ") || !strings.Contains(string(got), `git-hook wake "${0##*/}" "$PPID" </dev/null`) {
+			t.Fatalf("%s is still the script of the version before: %v\n%s", name, err, got)
+		}
+	}
+}

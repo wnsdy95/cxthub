@@ -684,15 +684,20 @@ It differs from `cxt segments push` in two ways only:
 
 **After a push.** The server opens a part of a session to others once it has
 seen the part's commit on the Git host. It learns of a push from the host's
-own notification where a GitHub App or webhook is connected, and otherwise
-reads the host without being asked only every six hours. So a run also asks
+own notification where a GitHub App or webhook is connected. Without one it
+reads the host when somebody opens the Sessions tab and its last read started
+five minutes ago or more, and without being asked only every six hours. So a
+run also asks
 the server to read the host when origin's branches, as this clone holds them,
 are not what they were when it last asked: after this computer pushed or
-fetched. Git runs `pre-push` before the push and has no hook after it, so the
-collector that hook wakes runs once more after its pause, and that run finds
-the branches changed. Nothing is asked when the branches are the same, or when
-the clone holds no branch of origin. A server that knows no Git host for the
-repository says so, and is not asked again about the same branches.
+fetched. Git runs `pre-push` before the push and has no hook after it. So that
+hook does not wake the collector at once: its script names the Git process
+that runs it, the one that pushes, and the collector is woken when that
+process has ended, however long the push took. That run finds the branches
+changed. A push still going after thirty minutes is no longer waited for, and
+is read at the next wake. Nothing is asked when the branches are the same, or
+when the clone holds no branch of origin. A server that knows no Git host for
+the repository says so, and is not asked again about the same branches.
 
 Like every upload it sends nothing of a session that was removed from the
 server, and it then forgets what it had sent of that session, so that the

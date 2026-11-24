@@ -1,10 +1,11 @@
 // Package githooks installs the Git hooks of cxt.
 //
-// Every hook runs `cxt git-hook wake <its own name>`: it wakes the reading of
-// the agent tools' own session records and of Git. A hook decides nothing and
-// carries no data; what was committed, checked out or pushed is read from Git
-// itself. The name tells cxt one thing: pre-push runs before the push, and Git
-// has no hook after it, so that wake is followed by one more reading.
+// Every hook runs `cxt git-hook wake <its own name> <the process that runs
+// it>`: it wakes the reading of the agent tools' own session records and of
+// Git. A hook decides nothing and carries no data; what was committed, checked
+// out or pushed is read from Git itself. The two words tell cxt one thing:
+// pre-push runs before the push, and Git has no hook after it, so that wake
+// is held until the Git process that pushes has ended.
 //
 // Design principles:
 //   - a hook of cxt cannot stop a Git command; a pre-existing user hook's result is preserved.
@@ -27,7 +28,7 @@ const Marker = "# cxt-hook v"
 
 // version is the marker of the scripts this version installs. A script with
 // another version's marker is replaced the next time cxt runs in the repository.
-const version = Marker + "3"
+const version = Marker + "4"
 
 // HookNames lists the Git hooks installed by cxt. Each one only wakes the
 // reading of the agent tools' own session records; none of them decides
@@ -61,7 +62,9 @@ func shellQuote(value string) string {
 // script generates the hook shell script. It embeds the absolute path to the cxt binary but
 // falls back to PATH's cxt if not available (hooks run in restricted environments).
 // A hook the user already had runs first, with the hook's own input, and its
-// result is the result: cxt never changes whether Git goes on.
+// result is the result: cxt never changes whether Git goes on. Git runs the
+// script itself, so the shell's parent, $PPID, is the Git process the hook
+// belongs to: for pre-push, the one that pushes.
 func script(cxtBin string) string {
 	return fmt.Sprintf(`#!/bin/sh
 %s (managed by cxt — 'cxt hooks uninstall' to remove)
@@ -72,7 +75,7 @@ fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
 command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
-"$CXT" git-hook wake "${0##*/}" </dev/null >/dev/null 2>&1 || true
+"$CXT" git-hook wake "${0##*/}" "$PPID" </dev/null >/dev/null 2>&1 || true
 exit "$user_status"
 `, version, shellQuote(cxtBin))
 }

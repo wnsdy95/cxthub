@@ -176,6 +176,15 @@ func (provider *remoteGitTestProvider) ListRemotePullCommits(_ context.Context, 
 type remoteGitTestStore struct {
 	*store.FSStore
 	origins map[domain.ContentHash]string
+	// refusal is what a request for a read fails with, when set.
+	refusal error
+}
+
+func (storage *remoteGitTestStore) RequestRemoteGitSync(ctx context.Context, repo domain.ContentHash, now time.Time) error {
+	if storage.refusal != nil {
+		return storage.refusal
+	}
+	return storage.FSStore.RequestRemoteGitSync(ctx, repo, now)
 }
 
 func (storage *remoteGitTestStore) GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error) {
@@ -1091,4 +1100,153 @@ func TestRemoteGitReadIsAskedForByQualifiedPushDeliveries(t *testing.T) {
 	if err != nil || after.RequestedAt == nil || !after.NextAt.Before(time.Now().Add(time.Minute)) {
 		t.Fatalf("state after the push: %+v %v", after, err)
 	}
+}
+
+// A push from a computer that tells the server nothing is read when somebody
+// looks: a look at the page from the top asks for a read once the last pass
+// started five minutes ago or more. The service goes by the time it is, so
+// the passes of this test start minutes before now.
+func TestRemoteGitLookAsksForARead(t *testing.T) {
+	member, viewer := anchoredActor("member-a"), anchoredActor("viewer")
+	ago := func(d time.Duration) time.Time { return time.Now().UTC().Add(-d).Truncate(time.Second) }
+	top := domain.RemoteCommitCursor{}
+	look := func(t *testing.T, fixture *remoteGitTestFixture, actor context.Context, before domain.RemoteCommitCursor) domain.RemoteGitPage {
+		t.Helper()
+		page, err := fixture.service.ReadRemoteGit(actor, fixture.repo, before, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	readAt := func(t *testing.T, started time.Time) *remoteGitTestFixture {
+		t.Helper()
+		fixture := newRemoteGitTestFixture(t, 100)
+		fixture.provider.heads["main"] = fixture.provider.chain(3, "")
+		fixture.clock = started
+		if _, err := fixture.pass(t); err != nil {
+			t.Fatal(err)
+		}
+		return fixture
+	}
+
+	t.Run("an old read", func(t *testing.T) {
+		fixture := readAt(t, ago(10*time.Minute))
+		read := fixture.state(t)
+		// A page further down is no look at what was read.
+		first := look(t, fixture, member, top)
+		if state := fixture.state(t); first.Next == nil || state.RequestedAt == nil {
+			t.Fatalf("the first look: %+v %+v", first, state)
+		}
+		// That first look asked. What it asked is undone here, to see the
+		// page further down ask nothing by itself.
+		if err := fixture.storage.FinishRemoteGitSync(context.Background(), read); err != nil {
+			t.Fatal(err)
+		}
+		look(t, fixture, member, *first.Next)
+		if state := fixture.state(t); !reflect.DeepEqual(state, read) {
+			t.Fatalf("a page further down changed the state:\n got %+v\nwant %+v", state, read)
+		}
+
+		// A viewer may read the page, and so asks like anyone.
+		before := time.Now().UTC()
+		page := look(t, fixture, viewer, top)
+		after := time.Now().UTC()
+		state := fixture.state(t)
+		if state.RequestedAt == nil || state.RequestedAt.Before(before) || state.RequestedAt.After(after) || !state.NextAt.Equal(*state.RequestedAt) {
+			t.Fatalf("state after a viewer looked: %+v, between %s and %s", state, before, after)
+		}
+		// The reader is given what the server holds now.
+		if !page.SyncedAt.Equal(fixture.clock) || len(page.Commits) != 2 || page.Commits[0].SHA != remoteGitTestSHA(3) || len(page.Branches) != 1 {
+			t.Fatalf("the page of the look that asked: %+v", page)
+		}
+		// A pass is due now: another look asks nothing more.
+		look(t, fixture, member, top)
+		if again := fixture.state(t); !reflect.DeepEqual(again, state) {
+			t.Fatalf("a second look changed the state:\n got %+v\nwant %+v", again, state)
+		}
+		// The pass that was asked for reads what was pushed meanwhile, and
+		// the look after it shows that and asks nothing.
+		fixture.provider.heads["main"] = fixture.provider.chain(2, fixture.provider.heads["main"])
+		fixture.clock = time.Now().UTC().Truncate(time.Second).Add(time.Second)
+		if requests, err := fixture.pass(t); err != nil || len(requests) == 0 {
+			t.Fatalf("the pass a look asked for: %v %v", requests, err)
+		}
+		finished := fixture.state(t)
+		page = look(t, fixture, viewer, top)
+		if !page.SyncedAt.Equal(fixture.clock) || page.Commits[0].SHA != remoteGitTestSHA(5) {
+			t.Fatalf("the page after that pass: %+v", page)
+		}
+		if state := fixture.state(t); !reflect.DeepEqual(state, finished) {
+			t.Fatalf("a look right after a pass changed the state:\n got %+v\nwant %+v", state, finished)
+		}
+	})
+
+	t.Run("a recent read", func(t *testing.T) {
+		fixture := readAt(t, ago(time.Minute))
+		read := fixture.state(t)
+		if page := look(t, fixture, member, top); !page.SyncedAt.Equal(fixture.clock) {
+			t.Fatalf("the page: %+v", page)
+		}
+		if state := fixture.state(t); !reflect.DeepEqual(state, read) || state.RequestedAt != nil {
+			t.Fatalf("a look a minute after a pass changed the state:\n got %+v\nwant %+v", state, read)
+		}
+	})
+
+	t.Run("a pass that just failed", func(t *testing.T) {
+		// The last read is twenty minutes old, and a pass that started a
+		// minute ago failed: it is tried again by its own rule, and a look
+		// does not hurry it.
+		fixture := readAt(t, ago(20*time.Minute))
+		// A request two minutes ago made the pass of a minute ago due.
+		if err := fixture.storage.RequestRemoteGitSync(context.Background(), fixture.repo, ago(2*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		unreachable := errors.New("the provider is unreachable")
+		fixture.provider.failures["default"] = unreachable
+		fixture.clock = ago(time.Minute)
+		if _, err := fixture.pass(t); !errors.Is(err, unreachable) {
+			t.Fatalf("the pass did not fail with the provider's failure: %v", err)
+		}
+		failed := fixture.state(t)
+		if !failed.AttemptedAt.Equal(fixture.clock) || !failed.SyncedAt.Before(fixture.clock) || !failed.NextAt.Equal(fixture.clock.Add(domain.RemoteGitSyncRetry)) {
+			t.Fatalf("state after the failure: %+v", failed)
+		}
+		look(t, fixture, member, top)
+		if state := fixture.state(t); !reflect.DeepEqual(state, failed) {
+			t.Fatalf("a look after a failed pass changed the state:\n got %+v\nwant %+v", state, failed)
+		}
+	})
+
+	t.Run("nothing to ask about", func(t *testing.T) {
+		// A repository never read has no state, and a look makes none.
+		never := newRemoteGitTestFixture(t, 100)
+		look(t, never, member, top)
+		if _, err := never.storage.GetRemoteGitState(context.Background(), never.repo); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("a look at a repository never read made a state: %v", err)
+		}
+		// What was read from an origin the repository no longer has is not
+		// shown, and a look at it asks nothing.
+		moved := readAt(t, ago(10*time.Minute))
+		read := moved.state(t)
+		moved.setOrigin("https://github.com/example/elsewhere")
+		if page := look(t, moved, member, top); page.SyncedAt != nil || len(page.Commits) != 0 {
+			t.Fatalf("the page of another origin: %+v", page)
+		}
+		if state := moved.state(t); !reflect.DeepEqual(state, read) {
+			t.Fatalf("a look at another origin changed the state:\n got %+v\nwant %+v", state, read)
+		}
+	})
+
+	t.Run("a request that fails", func(t *testing.T) {
+		// The reader still gets the page.
+		fixture := readAt(t, ago(10*time.Minute))
+		read := fixture.state(t)
+		fixture.storage.refusal = errors.New("the store is unavailable")
+		if page := look(t, fixture, member, top); !page.SyncedAt.Equal(fixture.clock) || len(page.Commits) != 2 {
+			t.Fatalf("the page when the request failed: %+v", page)
+		}
+		if state := fixture.state(t); !reflect.DeepEqual(state, read) {
+			t.Fatalf("a request that failed changed the state:\n got %+v\nwant %+v", state, read)
+		}
+	})
 }

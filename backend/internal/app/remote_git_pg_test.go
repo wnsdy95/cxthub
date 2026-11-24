@@ -136,3 +136,70 @@ func TestPGRemoteGitPassStoresWhatItReads(t *testing.T) {
 		t.Fatalf("the pass that was asked for: %v %v", provider.requests, err)
 	}
 }
+
+// A look at the page from the top asks for a read once the last pass started
+// five minutes ago or more, through the store alone: no repository
+// transaction is open around the request, and a look is no write of the
+// repository, so its revision stays.
+func TestPGRemoteGitLookAsksForARead(t *testing.T) {
+	service, storage, repo := remoteGitPG(t)
+	ctx := systemTestContext()
+	provider := newRemoteGitTestProvider(100)
+	provider.heads["main"] = provider.chain(3, "")
+	worker, err := NewRemoteGitSync(RemoteGitSyncConfig{Metadata: storage, Blobs: storage, Repositories: storage, Reader: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	worker.now = func() time.Time { return clock }
+	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	read, err := storage.GetRemoteGitState(ctx, repo)
+	if err != nil || read.RequestedAt != nil || !read.NextAt.Equal(clock.Add(domain.RemoteGitSyncEvery)) {
+		t.Fatalf("state after the pass: %+v %v", read, err)
+	}
+	revision, err := storage.RepositoryRevision(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now().UTC().Add(-time.Millisecond)
+	page, err := service.ReadRemoteGit(ctx, repo, domain.RemoteCommitCursor{}, 2)
+	after := time.Now().UTC().Add(time.Millisecond)
+	if err != nil || !page.SyncedAt.Equal(clock) || len(page.Commits) != 2 {
+		t.Fatalf("the page of the look: %+v %v", page, err)
+	}
+	asked, err := storage.GetRemoteGitState(ctx, repo)
+	if err != nil || asked.RequestedAt == nil || asked.RequestedAt.Before(before) || asked.RequestedAt.After(after) || !asked.NextAt.Equal(*asked.RequestedAt) {
+		t.Fatalf("state after the look: %+v %v, between %s and %s", asked, err, before, after)
+	}
+	// A pass is due now: another look, and a page further down, ask nothing.
+	for _, cursor := range []domain.RemoteCommitCursor{{}, *page.Next} {
+		if _, err := service.ReadRemoteGit(ctx, repo, cursor, 2); err != nil {
+			t.Fatal(err)
+		}
+		if again, err := storage.GetRemoteGitState(ctx, repo); err != nil || !reflect.DeepEqual(again, asked) {
+			t.Fatalf("a look after the one that asked changed the state:\n got %+v\nwant %+v (%v)", again, asked, err)
+		}
+	}
+	if now, err := storage.RepositoryRevision(ctx, repo); err != nil || !reflect.DeepEqual(now, revision) {
+		t.Fatalf("a look moved the revision from %+v to %+v (%v)", revision, now, err)
+	}
+	// The worker finds the pass due and reads.
+	provider.requests, clock = nil, time.Now().UTC().Truncate(time.Second).Add(time.Second)
+	if err := worker.SyncRemoteGit(context.Background(), repo); err != nil || len(provider.requests) == 0 {
+		t.Fatalf("the pass the look asked for: %v %v", provider.requests, err)
+	}
+	// A look right after it asks nothing.
+	finished, err := storage.GetRemoteGitState(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ReadRemoteGit(ctx, repo, domain.RemoteCommitCursor{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := storage.GetRemoteGitState(ctx, repo); err != nil || !reflect.DeepEqual(state, finished) {
+		t.Fatalf("a look right after a pass changed the state:\n got %+v\nwant %+v (%v)", state, finished, err)
+	}
+}
