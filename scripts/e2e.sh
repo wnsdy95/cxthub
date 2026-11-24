@@ -450,18 +450,22 @@ expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anch
 # summary at a commit of this folder that the server never read from a remote, which another session of the same
 # member wrote.
 hooksummary() {
-  # The hook also wakes the collector; with the last run moved back it runs at once.
+  # A prompt hook wakes no collector: the last run is moved back so that a run would show.
   segquiet; segrewind
   printf '{"session_id":"%s","cwd":"%s","prompt":"go on"}' "$1" "$PWD" | cxt hook --provider claude --event UserPromptSubmit 2>"$TMP/hook-summary.err" | python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
 text = json.loads(raw)["hookSpecificOutput"]["additionalContext"] if raw else ""
 print("cxthub branch summary" in text, sys.argv[1][:12] in text)' "$SEGSHA"
-  segwoken
 }
 expect "a prompt hook gives another session the summary along its branch" "$(hooksummary e2e-reader)" "True True"
 expect "the same session is not given it a second time" "$(hooksummary e2e-reader)" "False False"
-expect "the collector the hooks woke has run and is gone before the checks go on" "$(segran) $(segquiet && echo quiet)" "ran quiet"
+sleep 1
+expect "a prompt hook woke no collector" "$(segran) $(segquiet && echo quiet)" "did not run quiet"
+# The end of a turn wakes it: a commit and a push happen in the middle of a turn, and the rest is recorded afterwards.
+segquiet; segrewind
+printf '{"session_id":"e2e-reader","cwd":"%s"}' "$PWD" | cxt hook --provider claude --event Stop 2>"$TMP/hook-stop.err"
+expect "the hook at the end of a turn wakes the collector, which runs and is gone" "$(segwoken && echo "$(segran) quiet")" "ran quiet"
 # A session is archived by its uploader: it leaves its commit's segments and summaries, stays in the list as archived,
 # is still opened by its key, and comes back when it is restored.
 segarchive() { ccurl -sb "$1" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/archive" -H 'Content-Type: application/json' -d "{\"archived\":$2}"; }

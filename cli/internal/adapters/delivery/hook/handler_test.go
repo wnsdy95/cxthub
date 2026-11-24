@@ -151,10 +151,13 @@ func TestHandlerReportsABranchSummaryThatWasNotGiven(t *testing.T) {
 	}
 }
 
-// Every event a tool reports wakes the collector, after the hook's own work
-// and whether or not that work succeeded. A hook is only what wakes it: the
-// collector reads the tool's own records.
-func TestAgentHooksWakeTheCollector(t *testing.T) {
+// The end of a turn and the end of a session wake the collector: a commit and
+// a push usually happen in the middle of a turn, and the rest of the turn is
+// recorded after the Git hooks ran. The start of a session and a prompt give
+// the summary and wake nothing: nothing was recorded since the last turn
+// ended. A hook is only what wakes the collector, which reads the tool's own
+// records.
+func TestTheEndOfATurnWakesTheCollector(t *testing.T) {
 	cwd := gitRepository(t, true)
 	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
 		for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
@@ -162,11 +165,16 @@ func TestAgentHooksWakeTheCollector(t *testing.T) {
 			summaries := &hookSummaries{err: errors.New("server unreachable")}
 			h := NewHandler().WithBranchSummaries(summaries).WithSegmentCollector(func(dir string) { woken = append(woken, dir) })
 			err := run(t, h, provider, event, hookPayload{Cwd: cwd, SessionID: "33333333-3333-4333-8333-333333333333"}, &bytes.Buffer{})
-			if !reflect.DeepEqual(woken, []string{cwd}) {
-				t.Fatalf("%s %s woke %v", provider, event, woken)
-			}
-			// Only the start of a session and a prompt ask for the summary.
+			// Only the start of a session and a prompt ask for the summary;
+			// only the two ends wake the collector, once, for the session's folder.
 			asks := event == "SessionStart" || event == "UserPromptSubmit"
+			want := []string{cwd}
+			if asks {
+				want = nil
+			}
+			if !reflect.DeepEqual(woken, want) {
+				t.Fatalf("%s %s woke %v, want %v", provider, event, woken, want)
+			}
 			if (len(summaries.inputs) == 1) != asks || (err != nil) != asks {
 				t.Fatalf("%s %s asked %d times and returned %v", provider, event, len(summaries.inputs), err)
 			}

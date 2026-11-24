@@ -185,7 +185,7 @@ that reading:
 
 - the five managed Git hooks (`post-commit`, `post-checkout`, `post-merge`,
   `post-rewrite`, `pre-push`); and
-- the agent hooks at session start, prompt, stop and session end.
+- the agent hooks at the end of a turn and of a session.
 
 A hook is never what is read, so a hook that did not run is made up for by the
 next one that does. The automatic upload covers sessions recorded since it

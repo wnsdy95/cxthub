@@ -7,8 +7,15 @@
 //
 //	SessionStart, UserPromptSubmit: give the session the most recent summary
 //	    along the branch its folder is on, once for each branch it comes to
-//	every handled event: wake the collector that reads the tools' own session
+//	Stop, SessionEnd: wake the collector that reads the tools' own session
 //	    records and Git
+//
+// The end of a turn is the one moment an agent hook wakes the collector. A
+// commit and a push usually happen in the middle of a turn, and Git has no
+// hook after a push: the Git hooks wake the collector while the turn is still
+// being written, and the end of the turn lets it read the rest. Nothing is
+// recorded between the end of a turn and the next prompt, so the start of a
+// session and a prompt wake nothing.
 //
 // A hook carries no data to the server and decides nothing: what a session
 // said and did is read from the tool's records, whether or not a hook ran.
@@ -37,8 +44,9 @@ import (
 type Handler struct {
 	// summaries gives a session the most recent summary along its branch.
 	summaries inbound.BranchSummaries
-	// wakeCollector starts the detached session report collector. An agent
-	// hook only wakes it; the collector reads what the tools recorded.
+	// wakeCollector starts the detached session report collector at the end
+	// of a turn and of a session. A hook only wakes it; the collector reads
+	// what the tools recorded.
 	wakeCollector func(string)
 	stdin         io.Reader // for testing. nil means os.Stdin (no read from terminal)
 	stdout        io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
@@ -49,8 +57,8 @@ func NewHandler() *Handler {
 	return &Handler{}
 }
 
-// WithSegmentCollector makes every handled agent hook wake the session report
-// collector after its own work.
+// WithSegmentCollector makes the end of a turn and the end of a session wake
+// the session report collector.
 func (h *Handler) WithSegmentCollector(wake func(string)) *Handler {
 	h.wakeCollector = wake
 	return h
@@ -116,10 +124,10 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 	if !state.GitRepository || !state.Initialized {
 		return nil
 	}
-	if h.wakeCollector != nil {
-		defer h.wakeCollector(cwd)
-	}
-	if event != "SessionStart" && event != "UserPromptSubmit" {
+	if event == "Stop" || event == "SessionEnd" {
+		if h.wakeCollector != nil {
+			h.wakeCollector(cwd)
+		}
 		return nil
 	}
 	return h.giveSummary(ctx, provider, event, cwd, p.SessionID)

@@ -732,9 +732,12 @@ hook settings; users normally do not call it directly. A failure is reported
 without blocking the tool.
 
 The events are `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd`.
-Each one wakes the collector described under
-[Automatic upload](#automatic-upload). A start or prompt hook also gives the
-session the most recent summary along the branch its folder is on, once for
+`Stop` and `SessionEnd`, the end of a turn and of a session, wake the collector
+described under [Automatic upload](#automatic-upload): a commit and a push
+usually happen in the middle of a turn and Git has no hook after a push, so
+the Git hooks wake the collector while the turn is still being written, and
+its end lets the collector read the rest. A start or prompt hook wakes nothing
+and gives the session the most recent summary along the branch its folder is on, once for
 each branch the session comes to: at its first hook, and again after the folder
 moved to another branch. cxt reads the branch from Git when the hook runs and
 remembers beside Git's files which branch each session was last given a summary

@@ -158,10 +158,11 @@ Codex. The same hooks cover Codex app and IDE sessions and Claude Desktop's
 the way you normally do. Linked worktrees share the primary repository's
 `.cxt` folder.
 
-An agent hook does two things. It wakes the collector, and at session start
-and at a prompt it gives the session the most recent summary another session
-wrote along the branch its folder is on, once for each branch the session
-comes to. That text is at most 16 KiB. A hook carries no conversation to the
+An agent hook does one of two things. At the end of a turn and of a session it
+wakes the collector, which then reads the rest of a turn that committed or
+pushed in its middle. At session start and at a prompt it gives the session
+the most recent summary another session wrote along the branch its folder is
+on, once for each branch the session comes to. That text is at most 16 KiB. A hook carries no conversation to the
 server, and it never writes to the tool's own files.
 
 Claude Desktop's general **Chat** tab is not a Claude Code session and does not

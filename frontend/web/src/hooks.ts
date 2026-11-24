@@ -297,9 +297,9 @@ export function useCreateInvite() {
 }
 // The Sessions tab reads its lists again this often while it is in view. A
 // report does not move the repository revision, so nothing else tells the tab
-// that there is something new. Each list is one small request (the list of
-// sessions answered in 20 ms for an 80 MB session when it was measured).
-const SESSIONS_REFRESH_MS = 10_000;
+// that there is something new. A session is uploaded at a Git hook and at the
+// end of a turn, not as it is typed, so a minute is soon enough.
+const SESSIONS_REFRESH_MS = 60_000;
 
 // Anchored sessions — the caller's own reports. A report does not move the
 // repository revision, so the lists are read again on a timer and on request.

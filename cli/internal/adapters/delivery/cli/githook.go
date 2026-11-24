@@ -1,15 +1,12 @@
-// githook.go — event handlers called by git hooks (scripts targeted by githooks adapters).
+// githook.go — what the Git hooks cxt installs run.
 //
-// "Using git automatically follows cxt":
+// The five hooks (post-commit, post-checkout, post-merge, post-rewrite,
+// pre-push) do one thing: they wake the collector that reads the agent tools'
+// session records and Git. A hook reads nothing itself and decides nothing,
+// so a hook that did not run is made up for by the next wake.
 //
-//	git commit          → post-commit   → active session snapshot (commit message + SHA link)
-//	git checkout -b X   → post-checkout → fork current context to X
-//	git checkout X      → post-checkout → restore context X (auto) or prompt (prepare)
-//	git push            → pre-push      → cxt push (when origin is registered)
-//	git pull/merge      → post-merge    → cxt pull (when origin is registered)
-//
-// All handlers are fail-open: failures are logged as stderr warnings and return nil,
-// never blocking git operations.
+// All handlers are fail-open: a failure is a warning on stderr and nil is
+// returned, so a Git command is never blocked.
 package cli
 
 import (
@@ -49,7 +46,3 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 	}
 	return nil
 }
-
-// --- History Rewrite Mapping (.cxt/rewrites.json) ---
-// Snapshot message [git <sha>] links are immutable (content-addressed), so they cannot be modified.
-// Similar to git's refs/replace, we accumulate old→new commit mappings in a side table and follow the chain when interpreting links (aaa→bbb→ccc).
