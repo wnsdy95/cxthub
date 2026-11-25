@@ -196,6 +196,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/worktrees", s.guard(domain.RoleMember, s.putWorktrees))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/collector", s.guard(domain.RoleMember, s.putCollector))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/push-origins", s.guard(domain.RoleViewer, s.getPushOrigins))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/github-connection", s.guard(domain.RoleViewer, s.getGitHubConnection))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/revision", s.guard(domain.RoleViewer, s.getViewRevision))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/remote-git", s.guard(domain.RoleViewer, s.getRemoteGit))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/remote-git/refresh", s.guard(domain.RoleMember, s.refreshRemoteGit))

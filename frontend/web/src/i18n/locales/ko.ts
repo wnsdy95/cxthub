@@ -871,6 +871,8 @@ export const ko = {
     originTimes: 'push한 시각, cxt가 알린 시각:',
     originSomeComputer: '팀원의 컴퓨터',
     originThisComputer: '이 계정의 컴퓨터',
+    githubNotConnected: 'CXTHub가 GitHub의 이 저장소에 연결되어 있지 않습니다. 세션은 CXTHub가 GitHub에서 읽은 push에 대해서만 커밋과 함께 보입니다. 저장소 소유자가 연결할 수 있습니다:',
+    githubConnect: 'GitHub 연결',
     ownCollectorFailing: '내 컴퓨터 {machine}의 cxt가 마지막 실행이 실패했다고 알렸습니다.',
     ownCollectorHint: '그 컴퓨터의 저장소에서 `cxt segments doctor`를 실행해 보세요.',
     segmentOf: '조각 {no}/{total}',

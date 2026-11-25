@@ -47,6 +47,11 @@ type Container struct {
 	Settings interface {
 		PullSettings(ctx context.Context, repoID, kind string) (domain.SettingsBundle, error)
 	}
+	// GitHub asks the server whether it reads the repository on GitHub
+	// through the GitHub App (outbound direct, like Settings).
+	GitHub interface {
+		ReadGitHubConnection(ctx context.Context, repoID string) (domain.GitHubRepositoryConnection, error)
+	}
 	// SettingsObjects is a local settings object store access (for replacement/backup/restore).
 	SettingsObjects interface {
 		PutSettingsObject(ctx context.Context, bundle domain.SettingsBundle) (domain.ContentHash, error)

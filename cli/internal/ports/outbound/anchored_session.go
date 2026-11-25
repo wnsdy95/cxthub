@@ -39,6 +39,10 @@ type SegmentCareRemote interface {
 	// ReadRemoteGitSyncedAt says when the server last finished reading the
 	// repository from GitHub; empty when it never did.
 	ReadRemoteGitSyncedAt(ctx context.Context, repoID string) (string, error)
+	// ReadGitHubConnection says whether the server reads the repository on
+	// GitHub through the GitHub App; a server that does not say answers with
+	// an empty state.
+	ReadGitHubConnection(ctx context.Context, repoID string) (domain.GitHubRepositoryConnection, error)
 	// RequestRemoteGitRefresh asks the server to read GitHub again soon.
 	RequestRemoteGitRefresh(ctx context.Context, repoID string) error
 	// SetAnchoredSessionArchived archives a session or restores it.

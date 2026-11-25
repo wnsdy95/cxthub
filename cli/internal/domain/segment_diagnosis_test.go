@@ -99,6 +99,9 @@ func TestDiagnosisNamesEachThingThatDoesNotFitWithItsFix(t *testing.T) {
 			in.Server.Sessions = append(in.Server.Sessions, listed)
 		}, "records-gone", false, "", "no longer hold the records of 1 sessions"},
 		"the server cannot be read": {func(in *SegmentDiagnosisInput) { in.Server, in.ServerError = nil, "server answered 401: token expired" }, "server-not-read", true, "cxt login", "could not be read"},
+		"the repository is not connected to GitHub": {func(in *SegmentDiagnosisInput) {
+			in.Server.GitHub = GitHubRepositoryConnection{State: GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github?namespace=ns_owner"}
+		}, "github-not-connected", true, "an owner of the repository connects it at https://example.test/connect/github?namespace=ns_owner", "not connected to GitHub"},
 		"a removed session": {func(in *SegmentDiagnosisInput) {
 			in.Server.Sessions = nil
 			in.Server.Removed = []AnchoredSessionRemoval{{Provider: ProviderClaude, SessionID: "session-1", RemovedAt: "2031-01-02T03:00:00Z", ByYou: true}}
@@ -126,6 +129,35 @@ func TestDiagnosisNamesEachThingThatDoesNotFitWithItsFix(t *testing.T) {
 		}
 		if finding.Why == "" {
 			t.Errorf("%s: the finding does not say why it matters", name)
+		}
+	}
+}
+
+// The connection with GitHub is looked at where the server says of it: a
+// server without a GitHub App, or one from before the question, is neither a
+// finding nor among what was checked.
+func TestDiagnosisLooksAtTheGitHubConnectionWhereTheServerSaysOfIt(t *testing.T) {
+	for state, looked := range map[string]bool{GitHubRepositoryConnected: true, GitHubRepositoryNotConnected: true, "not_configured": false, "": false} {
+		in := diagnosisHealthy()
+		in.Server.GitHub = GitHubRepositoryConnection{State: state, ConnectURL: "https://example.test/connect/github"}
+		diagnosis := DiagnoseSegments(in)
+		checked := false
+		for _, name := range diagnosis.Checked {
+			checked = checked || name == "github-connection"
+		}
+		if checked != looked {
+			t.Errorf("state %q: among what was checked %v", state, checked)
+		}
+		if found := len(diagnosis.Findings) == 1 && diagnosis.Findings[0].Code == "github-not-connected" && diagnosis.Problems == 1; found != (state == GitHubRepositoryNotConnected) || (!found && len(diagnosis.Findings) != 0) {
+			t.Errorf("state %q: findings %+v", state, diagnosis.Findings)
+		}
+	}
+	// A server that was not read says nothing of GitHub either.
+	in := diagnosisHealthy()
+	in.Server, in.ServerError = nil, "synthetic status 500"
+	for _, name := range DiagnoseSegments(in).Checked {
+		if name == "github-connection" {
+			t.Fatal("the connection with GitHub was checked without the server")
 		}
 	}
 }

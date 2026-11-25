@@ -13,6 +13,7 @@
 #   F. segments.auto off    → nothing is sent, and cxt doctor says why
 #   G. a folder not set up  → hooks leave it alone
 #   H. removed commands     → unknown commands, not silent successes
+#   I. a server with a GitHub App → setup and cxt doctor say that the repository is not connected
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
 # CXT_E2E_DSN=<disposable PostgreSQL DSN> exercises production storage instead of FS.
@@ -28,6 +29,7 @@ B="http://127.0.0.1:$PORT/api/v1"
 ORIGIN="http://127.0.0.1:$PORT"
 FAIL=0
 SRV_PID=""
+SRV2_PID=""
 LPID=""
 
 # BEGIN fixture job cleanup (also exercised without launching cxt).
@@ -71,6 +73,7 @@ cleanup() {
     python3 "$ROOT/scripts/e2e-collect-diagnostics.py" "$TMP" "$CXT_E2E_DIAGNOSTICS_DIR" || echo "Could not collect E2E failure diagnostics" >&2
   fi
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null && wait "$SRV_PID" 2>/dev/null
+  [ -n "${SRV2_PID:-}" ] && kill "$SRV2_PID" 2>/dev/null && wait "$SRV2_PID" 2>/dev/null
   if [ "${CXT_E2E_KEEP_TMP:-0}" = 1 ]; then
     echo "SYNC E2E fixture preserved: $TMP"
   else
@@ -415,6 +418,54 @@ expect "this computer keeps the mark, the connection, its lock and the copies of
 if [ -z "${CXT_E2E_DSN:-}" ]; then
   expect "the server has no routes that take or list captures" "$(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$RID/snapshots") $(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$RID/refs")" "404 404"
 fi
+
+echo "── I. a server with a GitHub App: setup and the diagnosis say that the repository is not connected"
+# The suite's server has no GitHub App, and says nothing of GitHub. This is a second server that has one, with a key
+# made here and thrown away. Nothing of it talks to GitHub: no owner installed the App, so every repository is not
+# connected. Nothing is committed in the folder set up here, and no collector is woken in it.
+expect "a server without a GitHub App says nothing of GitHub in setup" "$(grep -c 'GitHub' "$TMP/setup.out")" 0
+PORT2=$((PORT + 900))
+ORIGIN2="http://127.0.0.1:$PORT2"
+B2="$ORIGIN2/api/v1"
+openssl genrsa -out "$TMP/app.pem" 2048 2>/dev/null
+env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
+  CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN2" \
+  CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN2" \
+  RESEND_API_KEY= CXT_GITHUB_TOKEN= \
+  CXT_GITHUB_APP_ID=1 CXT_GITHUB_APP_CLIENT_ID=fixture CXT_GITHUB_APP_CLIENT_SECRET=fixture \
+  CXT_GITHUB_APP_SLUG=fixture CXT_GITHUB_APP_WEBHOOK_SECRET=fixture CXT_GITHUB_APP_PRIVATE_KEY="$(cat "$TMP/app.pem")" \
+  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT2 --data "$TMP/data2" >"$TMP/srv2.log" 2>&1 &
+SRV2_PID=$!
+until_true 15 curl -sf -o /dev/null "$B2/repos"
+curl2() { command curl -H "Origin: $ORIGIN2" -H 'X-Cxt-CSRF: 1' "$@"; }
+J2="$TMP/b.jar"
+curl2 -s -c "$J2" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:hub$SUFFIX@t.io:Hub" >/dev/null
+SLUG2=$(curl2 -sb "$J2" -X POST "$B2/repositories" -H 'Content-Type: application/json' -d "{\"name\":\"Hub$SUFFIX\"}" | jget "['slug']")
+OWN2=$(curl -sb "$J2" "$B2/me" | jget "['username']")
+expect "the second server answers and holds a repository" "$([ -n "$SLUG2" ] && [ -n "$OWN2" ] && echo yes)" yes
+git init -q --bare "$TMP/hub.git"
+mkdir -p "$TMP/hub"; cd "$TMP/hub" || exit 1
+git init -q; git remote add origin "$TMP/hub.git"
+CXT_NO_BROWSER=1 cxt login --server "$ORIGIN2" >"$TMP/login2.out" 2>&1 &
+LPID=$!
+DCODE2=""
+for i in $(seq 1 40); do
+  DCODE2=$(grep -o '[B-Z2-9]\{3\}-[B-Z2-9]\{3\}' "$TMP/login2.out" 2>/dev/null | head -1)
+  [ -n "$DCODE2" ] && break; sleep 0.25
+done
+curl2 -sb "$J2" -X POST "$B2/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE2\"}" >/dev/null
+wait "$LPID"; LPID=""
+cxt setup "$ORIGIN2/$OWN2/$SLUG2" --no-login >"$TMP/hub-setup.out" 2>&1; HUB=$?
+expect "setup ends as not complete and says where an owner connects the repository" \
+  "$([ "$HUB" -ne 0 ] && echo stopped) $(grep -c "✗ GitHub is not connected — an owner of the repository connects it at $ORIGIN2/connect/github?namespace=ns_" "$TMP/hub-setup.out") $(grep -c '^Complete' "$TMP/hub-setup.out") $(grep -c "not complete: this repository is not connected to GitHub — an owner of the repository connects it at $ORIGIN2/connect/github?namespace=ns_" "$TMP/hub-setup.out")" "stopped 1 0 1"
+expect "everything on this computer is set up all the same" "$([ -f .cxt/HEAD ] && echo mark) $(grep -cF 'git-hook wake' .git/hooks/pre-push 2>/dev/null)" "mark 1"
+RID2="$(curl -fsSb "$J2" "$B2/repos?repository=$(curl -fsSb "$J2" "$B2/repositories" | jget "[0]['id']")" | jget "[0]['id']")"
+expect "the server says the same to whoever may view the repository" "$(curl -sb "$J2" "$B2/repos/$RID2/github-connection" | python3 -c 'import json,sys;v=json.load(sys.stdin);print(v["state"], v["connect_url"].startswith(sys.argv[1]))' "$ORIGIN2/connect/github?namespace=ns_")" "not_connected True"
+expect "the diagnosis names the connection that is missing, with where to connect" "$(cxt doctor --json | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+found = [f for f in d["findings"] if f["code"] == "github-not-connected"]
+print("github-connection" in d["checked"], len(found), found and found[0]["problem"], found and found[0]["fix"].startswith("an owner of the repository connects it at " + sys.argv[1]))' "$ORIGIN2/connect/github?namespace=ns_")" "True 1 True True"
+cd "$TMP/repo" || exit 1
 
 echo
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: all passed ✓"; else echo "SYNC E2E: FAILED ✗"; fi

@@ -23,6 +23,7 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/githooks"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
@@ -253,8 +254,19 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	}
 
 	// 6) Team default settings pull(.claude/.agents/.codex) — only when login and origin exist.
+	connectGitHubAt, githubMissing := "", false
 	if hasOrigin && authTokenPresent(cwd) {
 		if conn, cerr := c.Connection.Connect(ctx, cwd); cerr == nil {
+			// The connection with GitHub: the server reads through it what
+			// was pushed.
+			if c.GitHub != nil {
+				connection, gerr := c.GitHub.ReadGitHubConnection(ctx, string(conn.Repo.ID))
+				mark, line := setupGitHubLine(connection, gerr)
+				if mark != "" {
+					fmt.Printf("  %s %s\n", mark, line)
+				}
+				connectGitHubAt, githubMissing = connection.ConnectURL, mark == setupMissing
+			}
 			// The server derives RepositoryID from the URL's namespace/repository
 			// prefix. A missing binding is a legacy/local state worth surfacing.
 			if conn.Repo.RepositoryID == "" {
@@ -278,8 +290,34 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
+	if githubMissing {
+		return fmt.Errorf("not complete: this repository is not connected to GitHub — an owner of the repository connects it at %s; everything on this computer is set up", connectGitHubAt)
+	}
 	fmt.Println("Complete — use Claude Code/Codex as usual; your sessions are read from their own records and shown with your commits once you push them. Check with: cxt doctor")
 	return nil
+}
+
+// The marks of a checklist line that setupGitHubLine answers.
+const (
+	setupDone    = "✓"
+	setupMissing = "✗"
+	setupToKnow  = "⚠"
+)
+
+// setupGitHubLine is what cxt setup says of the repository's connection with
+// GitHub: the mark of the line and the line. A repository that is not
+// connected is missing something, and setup does not end as complete. A server
+// without a GitHub App, or one that does not say, gets no line.
+func setupGitHubLine(connection domain.GitHubRepositoryConnection, err error) (string, string) {
+	switch {
+	case err != nil:
+		return setupToKnow, fmt.Sprintf("the server did not say whether this repository is connected to GitHub: %v", err)
+	case connection.State == domain.GitHubRepositoryConnected:
+		return setupDone, "GitHub connected (the server reads what is pushed through the GitHub App)"
+	case connection.State == domain.GitHubRepositoryNotConnected:
+		return setupMissing, "GitHub is not connected — an owner of the repository connects it at " + connection.ConnectURL
+	}
+	return "", ""
 }
 
 func setupRemoteMatches(ctx context.Context, c *Container, existing, requested string) (bool, error) {

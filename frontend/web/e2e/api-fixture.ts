@@ -30,6 +30,8 @@ function emptyAnswers(request: ApiRequest): ApiResponse | undefined {
   if (resource === 'revision') return { body: { revision: '0.0.0' } };
   // Where pushes came from: nothing is known unless a test says so.
   if (resource === 'push-origins') return { body: { collectors: [], pushes: [] } };
+  // The connection with GitHub: a server without a GitHub App unless a test says otherwise.
+  if (resource === 'github-connection') return { body: { state: 'not_configured' } };
   if (resource && ['anchored-sessions', 'anchored-notes', 'branch-lifetimes', 'worktrees'].includes(resource)) return { body: [] };
   return undefined;
 }

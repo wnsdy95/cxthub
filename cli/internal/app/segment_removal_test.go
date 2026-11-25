@@ -27,6 +27,8 @@ type removalRemoteFake struct {
 	summaries      map[string][]domain.AnchoredSummary
 	summariesAsked []string
 	syncedAt       string
+	github         domain.GitHubRepositoryConnection
+	githubErr      error
 	refreshes      int
 	archives       []string
 }
@@ -54,6 +56,10 @@ func (f *removalRemoteFake) ListAnchoredCommitSummaries(_ context.Context, _ str
 
 func (f *removalRemoteFake) ReadRemoteGitSyncedAt(context.Context, string) (string, error) {
 	return f.syncedAt, nil
+}
+
+func (f *removalRemoteFake) ReadGitHubConnection(context.Context, string) (domain.GitHubRepositoryConnection, error) {
+	return f.github, f.githubErr
 }
 
 func (f *removalRemoteFake) RequestRemoteGitRefresh(context.Context, string) error {
@@ -317,6 +323,22 @@ func TestDiagnoseReadsThisComputerAndTheServer(t *testing.T) {
 	if !reflect.DeepEqual(originAsked, []string{sha}) || !reflect.DeepEqual(removals.summariesAsked, []string{sha}) {
 		t.Fatalf("asked of Git: %v of the server: %v", originAsked, removals.summariesAsked)
 	}
+
+	// What the server says of the connection with GitHub reaches the
+	// diagnosis; a server that fails to say is a server that was not read.
+	if diagnosisCode(diagnosis, "github-not-connected") != nil {
+		t.Fatalf("a server that says nothing of GitHub: %+v", diagnosis.Findings)
+	}
+	removals.github = domain.GitHubRepositoryConnection{State: domain.GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github"}
+	if diagnosis, err = care.Diagnose(context.Background(), "/work/app"); err != nil || diagnosisCode(diagnosis, "github-not-connected") == nil ||
+		diagnosisCode(diagnosis, "github-not-connected").Fix != "an owner of the repository connects it at https://example.test/connect/github" {
+		t.Fatalf("a repository that is not connected to GitHub: %+v %v", diagnosis.Findings, err)
+	}
+	removals.githubErr = errors.New("synthetic status 500")
+	if diagnosis, err = care.Diagnose(context.Background(), "/work/app"); err != nil || diagnosisCode(diagnosis, "server-not-read") == nil || diagnosisCode(diagnosis, "github-not-connected") != nil {
+		t.Fatalf("a server that fails to say whether GitHub is connected: %+v %v", diagnosis.Findings, err)
+	}
+	removals.github, removals.githubErr = domain.GitHubRepositoryConnection{}, nil
 
 	// The copy's log says the server took another report than it holds now.
 	removals.sessions[0].BodyHash = "sha256:other"

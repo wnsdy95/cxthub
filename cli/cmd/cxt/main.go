@@ -293,6 +293,7 @@ func buildContainer(cfg config) container {
 		Init:            initSvc,
 		Connection:      connectSvc,
 		Settings:        remote,
+		GitHub:          remote,
 		SettingsObjects: store,
 	}
 	// The session report collector a hook wakes. A hook is never what it

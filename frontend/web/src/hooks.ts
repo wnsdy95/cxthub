@@ -467,6 +467,17 @@ export function usePushOrigins(repoId: string | null) {
     refetchInterval: SESSIONS_FALLBACK_MS,
   });
 }
+// Whether the server reads the repository on GitHub through the GitHub App. Asked for a member only: with null
+// nothing is asked. A server without the route leaves the tab as it was.
+export function useGitHubConnection(repoId: string | null) {
+  return useQuery({
+    queryKey: ['github-connection', repoId],
+    queryFn: ({ signal }) => api.githubConnection(repoId as string, signal),
+    enabled: Boolean(repoId),
+    retry: false,
+    refetchInterval: SESSIONS_FALLBACK_MS,
+  });
+}
 export function useRemoteGit(repoId: string | null) {
   return useInfiniteQuery({
     queryKey: ['remote-git', repoId],

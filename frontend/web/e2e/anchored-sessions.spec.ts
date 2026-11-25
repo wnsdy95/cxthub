@@ -591,3 +591,45 @@ test('a commit without a session says where it was pushed from, and the owner of
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+test('a member is told that the repository is not connected to GitHub and where an owner connects it', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const connectAt = 'https://example.test/connect/github?namespace=ns_owner';
+  const state = { role: 'member', revision: '1.0.0', connection: { state: 'not_connected', connect_url: connectAt } as { state: string; connect_url?: string }, asked: 0 };
+  const unexpected = await installApiFixture(page, request => {
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/revision') return { body: { revision: state.revision } };
+    if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/github-connection') {
+      state.asked++;
+      return { body: state.connection };
+    }
+    return fixture(state.role, [], true)(request);
+  });
+  await page.goto('/alice/app?tab=sessions&show=all');
+  const notice = page.locator('[data-github-connection]');
+  await expect(notice).toContainText('CXTHub is not connected to this repository on GitHub.');
+  await expect(notice).toHaveAttribute('data-github-connection', 'not_connected');
+  await expect(notice.getByRole('link', { name: 'Connect GitHub' })).toHaveAttribute('href', connectAt);
+
+  // The answer is read again with everything else the tab shows: once the
+  // repository is connected, the notice goes. A server without a GitHub App
+  // has nothing to connect, and says nothing either.
+  for (const [step, connection] of [{ state: 'connected', connect_url: connectAt }, { state: 'not_connected', connect_url: connectAt }, { state: 'not_configured' }].entries()) {
+    state.connection = connection;
+    state.revision = `${step + 2}.0.0`;
+    await expect(notice).toHaveCount(connection.state === 'not_connected' ? 1 : 0, { timeout: 20_000 });
+  }
+
+  // One who only views the repository is not told, and the server is not asked for them.
+  state.role = 'viewer';
+  state.connection = { state: 'not_connected', connect_url: connectAt };
+  const asked = state.asked;
+  await page.reload();
+  await expect(page.getByText('Sessions are shown as far as they are pushed.')).toBeVisible();
+  await expect(page.locator('.anchor-commit')).toHaveCount(5);
+  await page.waitForLoadState('networkidle');
+  expect(state.asked).toBe(asked);
+  await expect(notice).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

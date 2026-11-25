@@ -46,7 +46,7 @@ test('an open tab asks every few seconds and falls back to minutes', () => {
   assert.equal(VIEW_REVISION_MS, 3_000);
   assert.equal(SESSIONS_FALLBACK_MS, 300_000);
   // Everything the tab reads for a repository is read again together.
-  for (const key of ['anchored-sessions', 'anchored-commit', 'anchored-commit-summaries', 'anchored-notes', 'branch-lifetimes', 'reported-worktrees', 'remote-git', 'push-origins']) {
+  for (const key of ['anchored-sessions', 'anchored-commit', 'anchored-commit-summaries', 'anchored-notes', 'branch-lifetimes', 'reported-worktrees', 'remote-git', 'push-origins', 'github-connection']) {
     assert.equal((SESSIONS_TAB_QUERIES as readonly string[]).includes(key), true, key);
   }
   assert.equal(new Set(SESSIONS_TAB_QUERIES).size, SESSIONS_TAB_QUERIES.length);

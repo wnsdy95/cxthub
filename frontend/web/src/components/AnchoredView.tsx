@@ -12,7 +12,7 @@ import { navigate, type AnchoredSelection } from '../route';
 import type { AnchoredNote, AnchoredNoteTarget, AnchoredSearchHit, AnchoredSessionSummary, AnchoredSummary, PushCollector, RemotePull, Repo } from '../types';
 import {
   useAnchoredCommit, useAnchoredCommitSummaries, useAnchoredSearch, useAnchoredNotes, useAnchoredSessions, useBranchLifetimes, useDeleteAnchoredNote, useFollowViewRevision,
-  useMe, usePushOrigins, useRemoteGit, useReportedWorktrees, useSaveAnchoredNote,
+  useGitHubConnection, useMe, usePushOrigins, useRemoteGit, useReportedWorktrees, useSaveAnchoredNote,
 } from '../hooks';
 import {
   ANCHORED_PROVIDERS, anchoredBranchCommits, anchoredCompare, anchoredKey, anchoredNotesFor, anchoredSegmentCommits, anchoredShortId, anchoredShortSha, buildAnchoredIndex,
@@ -51,6 +51,8 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
   // Where the pushes came from. Without an answer the commits carry no label.
   const originsQ = usePushOrigins(repo.id);
   const origins = useMemo(() => pushOriginsByHead(originsQ.data), [originsQ.data]);
+  // Whether the server reads the repository on GitHub through the GitHub App. A member is told when it does not.
+  const githubQ = useGitHubConnection(member ? repo.id : null);
   const remote = useMemo<AnchoredRemote | undefined>(() => {
     const pages = remoteQ.data?.pages;
     if (!pages?.length) return undefined;
@@ -153,6 +155,12 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
         )}
       </nav>
       <div className="anchor-body">
+        {githubQ.data?.state === 'not_connected' && (
+          <p role="alert" className="err" data-github-connection="not_connected">
+            {t('anchored.githubNotConnected')}{' '}
+            {githubQ.data.connect_url && <a href={githubQ.data.connect_url}>{t('anchored.githubConnect')}</a>}
+          </p>
+        )}
         {ownFailingCollectors(originsQ.data).map(collector => (
           <p key={collector.machine ?? ''} role="alert" className="err" data-own-collector={collector.machine ?? ''}>
             {t('anchored.ownCollectorFailing', { machine: collector.machine || t('anchored.originThisComputer') })}{collector.run_error ? ` ${collector.run_error}` : ''}{' '}

@@ -54,8 +54,9 @@ Runs the complete, idempotent onboarding sequence:
 2. log in and verify the repository remote when one is supplied (`--no-login` uses existing credentials);
 3. register the connection with the server;
 4. install the managed Git hooks;
-5. merge the Claude Code and Codex hooks into their settings; and
-6. pull team settings when logged in.
+5. merge the Claude Code and Codex hooks into their settings;
+6. ask the server whether the repository is connected to GitHub; and
+7. pull team settings when logged in.
 
 Example:
 
@@ -66,6 +67,13 @@ cxt setup https://cxthub.example/alice/platform
 Rerunning the command reports and repairs missing setup steps without replacing
 an existing remote that points somewhere else. An explicitly requested
 different repository is rejected while the existing connection is preserved.
+
+Where the server has a GitHub App and says the repository is not connected to
+it, setup prints the page where an owner of the repository connects it and ends
+as not complete, with exit status 1, after everything on the computer was set
+up: the server sees what is pushed through that connection. Run setup again once
+it is connected. A server without a GitHub App is not asked for more; see
+[GitHub connections](GITHUB_CONNECTIONS.md#what-readers-of-a-repository-are-told).
 
 Nothing is uploaded by setup itself. From then on the hooks wake the collector
 described under [Automatic upload](#automatic-upload); `cxt doctor` says whether
@@ -572,6 +580,7 @@ said. `checked` lists what was looked at, so that no finding means something.
 | `server-behind` | the server holds fewer records of a session than this computer | `cxt segments push <tool> <session>` |
 | `server-differs` | the report on the server is not the one this computer last sent | `cxt segments push <tool> <session>` |
 | `push-not-seen` | a commit is on origin here, but the server has not seen it on GitHub | `cxt segments refresh` |
+| `github-not-connected` | the server has a GitHub App and this repository is not connected to it | none: an owner of the repository opens the page the finding names |
 | `summary-missing` | a session has no summary at one of its commits | `cxt segments push <tool> <session>` |
 | `removed` | a session was removed from the server | `cxt segments allow <tool> <session>` |
 | `archived` | a session is archived on the server | `cxt segments unarchive <tool> <session>` |

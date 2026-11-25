@@ -193,6 +193,41 @@ create an App, issue credentials, or run `terraform apply`.
    only where the actor has local organization management authority. Enterprise
    membership does not grant repository access.
 
+## What readers of a repository are told
+
+`GET /api/v1/repos/{repoID}/github-connection` answers, to whoever may view the
+repository, one of three states.
+
+| State | Meaning |
+| --- | --- |
+| `connected` | the installation of the repository's owner is in use and was told to read this repository: the server reads it on GitHub with that installation |
+| `not_connected` | the owner has no installation in use, or the installation was not told to read this repository |
+| `not_configured` | this server has no GitHub App |
+
+An installation is in use while it is enabled, not suspended, and GitHub
+answered for it within the last ten minutes. The answer is made by the rule
+that gives the reader of GitHub its credential, so a repository is told as
+connected exactly while the server reads it with the installation.
+
+Except on a server without a GitHub App the answer carries `connect_url`, the
+GitHub connections page of the repository's owner. A repository that is not
+connected is said in three places:
+
+- the Sessions tab shows a member a notice with a link to that page; one who
+  only views the repository is not told, and is not asked for;
+- `cxt setup` prints the line with the address and ends as not complete, with
+  exit status 1, after it set up everything on the computer;
+- `cxt doctor` reports the problem `github-not-connected` with the address.
+
+A server without a GitHub App says nothing in those places: it reads GitHub as
+the next section describes. A server from before this route answers 404, which
+cxt and the web read as a server that does not say.
+
+To know before an owner installs the App: from then on the server reads that
+owner's repositories only through the installation. A repository of the owner
+that was not chosen on the connections page is no longer read with
+`CXT_GITHUB_TOKEN`, and is told as `not_connected`.
+
 ## Two ways GitHub tells the server
 
 There are two, and they are not the same thing.

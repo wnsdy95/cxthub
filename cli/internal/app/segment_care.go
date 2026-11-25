@@ -113,8 +113,9 @@ func (s *SegmentCareService) Diagnose(ctx context.Context, cwd string) (domain.S
 }
 
 // readServer reads what the diagnosis compares with: the caller's sessions,
-// their removals, when the server last read GitHub, and the summaries at the
-// newest commits of this computer's sessions.
+// their removals, when the server last read GitHub, whether it reads GitHub
+// through the GitHub App, and the summaries at the newest commits of this
+// computer's sessions.
 func (s *SegmentCareService) readServer(ctx context.Context, cwd string, report domain.SegmentReport) (*domain.SegmentDiagnosisServer, error) {
 	repo, err := s.repo(ctx, cwd)
 	if err != nil {
@@ -129,6 +130,9 @@ func (s *SegmentCareService) readServer(ctx context.Context, cwd string, report 
 		return nil, err
 	}
 	if server.RemoteSyncedAt, err = s.removals.ReadRemoteGitSyncedAt(ctx, id); err != nil {
+		return nil, err
+	}
+	if server.GitHub, err = s.removals.ReadGitHubConnection(ctx, id); err != nil {
 		return nil, err
 	}
 	// The newest commits first: the report lists sessions oldest first.

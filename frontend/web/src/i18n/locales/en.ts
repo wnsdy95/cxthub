@@ -868,6 +868,8 @@ export const en: Messages = {
     originTimes: 'Pushed, then reported by cxt:',
     originSomeComputer: 'a member\'s computer',
     originThisComputer: 'this account\'s computer',
+    githubNotConnected: 'CXTHub is not connected to this repository on GitHub. A session is shown with its commits only for pushes CXTHub reads there. An owner of the repository connects it:',
+    githubConnect: 'Connect GitHub',
     ownCollectorFailing: 'cxt on your computer {machine} reported that its last run failed.',
     ownCollectorHint: 'Run `cxt segments doctor` in the repository on that computer.',
     segmentOf: 'Segment {no} of {total}',

@@ -58,6 +58,9 @@ type SegmentDiagnosisServer struct {
 	// RemoteSyncedAt is when the server last finished reading the repository
 	// from GitHub; empty when it never did.
 	RemoteSyncedAt string
+	// GitHub says whether the server reads the repository on GitHub through
+	// the GitHub App.
+	GitHub GitHubRepositoryConnection
 	// Summarized names, for the commits that were asked about, the sessions
 	// that have a summary there: commit -> "tool/session" -> true.
 	Summarized map[string]map[string]bool
@@ -228,6 +231,17 @@ func DiagnoseSegments(in SegmentDiagnosisInput) SegmentDiagnosis {
 				Why: "nothing on this computer was compared with the server", Fix: fix})
 		}
 		return out
+	}
+
+	// The connection with GitHub, where the server says of it. A server
+	// without a GitHub App, or one that does not say, is not looked at.
+	if state := in.Server.GitHub.State; state == GitHubRepositoryConnected || state == GitHubRepositoryNotConnected {
+		out.Checked = append(out.Checked, "github-connection")
+		if state == GitHubRepositoryNotConnected {
+			add(SegmentFinding{Code: "github-not-connected", Problem: true, What: "this repository is not connected to GitHub on the server",
+				Why: "without the connection the server reads GitHub only with a credential its operator set, if any; a session is shown with its commits only for pushes the server reads",
+				Fix: "an owner of the repository connects it at " + in.Server.GitHub.ConnectURL})
+		}
 	}
 
 	// 6. Each session of this computer against the server.
