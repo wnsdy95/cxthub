@@ -22,12 +22,16 @@ type anchoredRemovalStores interface {
 }
 
 // anchoredStoreSessionWithContent is a session whose one segment is the
-// whole of the named conversation document.
-func anchoredStoreSessionWithContent(t *testing.T, repo domain.ContentHash, provider domain.ProviderKind, id, uploader, commit string, doc domain.ContentHash) domain.AnchoredSession {
+// whole of a conversation of two events: both in the one document named, or
+// one in each of two.
+func anchoredStoreSessionWithContent(t *testing.T, repo domain.ContentHash, provider domain.ProviderKind, id, uploader, commit string, docs ...domain.ContentHash) domain.AnchoredSession {
 	t.Helper()
 	session := anchoredStoreSession(t, repo, provider, id, uploader, commit)
 	session.Body.Segments[0].Events = 2
-	session.Body.Content = &domain.AnchoredContent{Doc: doc, Events: 2}
+	session.Body.Content = &domain.AnchoredContent{Events: 2}
+	for _, doc := range docs {
+		session.Body.Content.Parts = append(session.Body.Content.Parts, domain.AnchoredContentPart{Doc: doc, Events: 2 / len(docs)})
+	}
 	session.Body = session.Body.Canonical()
 	if err := session.Body.Validate(); err != nil {
 		t.Fatal(err)
@@ -46,8 +50,10 @@ func checkAnchoredRemovalPersistence(t *testing.T, ctx context.Context, storage 
 	t.Helper()
 	a := anchoredStoreSHA("a")
 	docOne, docTwo, docNone := domain.HashContent([]byte("document one")), domain.HashContent([]byte("document two")), domain.HashContent([]byte("no document"))
+	// The conversation of the first session is kept in two documents.
+	docLater := domain.HashContent([]byte("document one goes on"))
 	for _, session := range []domain.AnchoredSession{
-		anchoredStoreSessionWithContent(t, repo, domain.ProviderClaude, "session-1", "uploader-1", a, docOne),
+		anchoredStoreSessionWithContent(t, repo, domain.ProviderClaude, "session-1", "uploader-1", a, docOne, docLater),
 		anchoredStoreSessionWithContent(t, repo, domain.ProviderCodex, "session-2", "uploader-1", a, docTwo),
 		anchoredStoreSessionWithContent(t, repo, domain.ProviderClaude, "session-3", "uploader-2", a, docTwo),
 	} {
@@ -74,8 +80,9 @@ func checkAnchoredRemovalPersistence(t *testing.T, ctx context.Context, storage 
 		}
 	}
 
-	// A document is in use while a stored report names it.
-	for doc, want := range map[domain.ContentHash]bool{docOne: true, docTwo: true, docNone: false} {
+	// A document is in use while a stored report names it, as any part of
+	// its conversation.
+	for doc, want := range map[domain.ContentHash]bool{docOne: true, docLater: true, docTwo: true, docNone: false} {
 		if used, err := storage.AnchoredContentInUse(ctx, repo, doc); err != nil || used != want {
 			t.Fatalf("document %s in use = %v %v, want %v", doc, used, err, want)
 		}
@@ -103,9 +110,11 @@ func checkAnchoredRemovalPersistence(t *testing.T, ctx context.Context, storage 
 	if ranges, err := storage.GetAnchoredPublication(ctx, repo, domain.ProviderCodex, "session-2"); err != nil || len(ranges) != 1 {
 		t.Fatalf("open ranges of another session: %+v %v", ranges, err)
 	}
-	// Its document is no longer in use; one another report still names is.
-	if used, err := storage.AnchoredContentInUse(ctx, repo, docOne); err != nil || used {
-		t.Fatalf("the removed session's document in use = %v %v", used, err)
+	// Its documents are no longer in use; one another report still names is.
+	for _, doc := range []domain.ContentHash{docOne, docLater} {
+		if used, err := storage.AnchoredContentInUse(ctx, repo, doc); err != nil || used {
+			t.Fatalf("a document of the removed session in use = %v %v", used, err)
+		}
 	}
 	if err := storage.DeleteAnchoredSession(ctx, repo, domain.ProviderCodex, "session-2"); err != nil {
 		t.Fatal(err)

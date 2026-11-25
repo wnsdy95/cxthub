@@ -73,7 +73,7 @@ func (s *FSStore) DeleteAnchoredSession(ctx context.Context, repo domain.Content
 }
 
 // AnchoredContentInUse reports whether a stored report names the document as
-// its content.
+// a part of its content.
 func (s *FSStore) AnchoredContentInUse(ctx context.Context, repo, doc domain.ContentHash) (bool, error) {
 	if err := validateHashes(repo, doc); err != nil {
 		return false, err
@@ -83,8 +83,10 @@ func (s *FSStore) AnchoredContentInUse(ctx context.Context, repo, doc domain.Con
 		return false, err
 	}
 	for _, session := range sessions {
-		if content := session.Body.Content; content != nil && content.Doc == doc {
-			return true, nil
+		for _, named := range session.Body.Content.Docs() {
+			if named == doc {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

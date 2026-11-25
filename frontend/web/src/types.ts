@@ -363,7 +363,7 @@ interface AnchoredUncommitted extends AnchoredRange { places: AnchoredPlace[]; u
 interface AnchoredSpawn { at_record: string; at_ordinal: number; rule: AnchoredSpawnRule }
 export interface AnchoredAgentCall { tool: string; from: string; to: string[]; status?: string; at?: string; record?: string }
 /** The conversation of a session. `doc` is given to the uploader only; everyone reads the conversation through the session. */
-interface AnchoredContent { doc?: string; identity?: string; events: number }
+interface AnchoredContent { events: number; parts?: { doc: string; identity?: string; events: number }[] }
 export interface AnchoredSessionBody {
   rule_version: number; sub: boolean; parent?: string; spawn?: AnchoredSpawn; scope: 'working-folder' | 'origin-url'; machine?: string;
   started_at?: string; ended_at?: string; records: number; commands: number; copied_records: number; copied_from?: string[]; file_copies?: number;

@@ -212,13 +212,14 @@ func (s *PostgresStore) DeleteAnchoredSession(ctx context.Context, repo domain.C
 }
 
 // AnchoredContentInUse reports whether a stored report names the document as
-// its content.
+// a part of its content: the report is kept as it was sent, and a part is an
+// element of the list under content.parts.
 func (s *PostgresStore) AnchoredContentInUse(ctx context.Context, repo, doc domain.ContentHash) (bool, error) {
 	if err := validateHashes(repo, doc); err != nil {
 		return false, err
 	}
 	var used bool
-	err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM anchored_sessions WHERE repo_id=$1 AND body->'content'->>'doc'=$2)`, repo, doc).Scan(&used)
+	err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM anchored_sessions WHERE repo_id=$1 AND body->'content'->'parts' @> jsonb_build_array(jsonb_build_object('doc',$2::text)))`, repo, doc).Scan(&used)
 	return used, err
 }
 

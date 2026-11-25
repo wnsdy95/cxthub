@@ -265,12 +265,25 @@ func (p AnchoredPublication) Validate() error {
 }
 
 // AnchoredContentAccess is what one reader may read of a session's
-// conversation: the document that holds it and the events open to that
-// reader, as disjoint spans [first, end) in order.
+// conversation: the documents that hold it, in order, and the events open to
+// that reader, as disjoint spans [first, end) in order.
 type AnchoredContentAccess struct {
-	Doc    ContentHash
+	Parts  []AnchoredContentPart
 	Events int
 	Open   [][2]int
+}
+
+// Part returns the document that holds the event at index, and the events
+// [first, end) of the conversation that document holds: the event is at
+// index-first in it.
+func (a AnchoredContentAccess) Part(index int) (doc ContentHash, first, end int, found bool) {
+	for _, part := range a.Parts {
+		if end = first + part.Events; index >= first && index < end {
+			return part.Doc, first, end, true
+		}
+		first = end
+	}
+	return "", 0, 0, false
 }
 
 // Span returns the open span that holds the event at index.

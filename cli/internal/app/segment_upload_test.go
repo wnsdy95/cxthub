@@ -192,8 +192,8 @@ func TestSegmentUploadNamesTheConversationInTheReport(t *testing.T) {
 		t.Fatalf("documents=%d reports=%d reads=%d roots=%v", len(content.docs), len(remote.uploads), len(source.read), source.roots)
 	}
 	first := remote.uploads[0].Body
-	want := &domain.AnchoredContent{Doc: domain.HashContent([]byte("with-commit")), Events: 6}
-	if first.Content == nil || *first.Content != *want || len(content.docs[0].Events) != 6 {
+	want := &domain.AnchoredContent{Events: 6, Parts: []domain.AnchoredContentPart{{Doc: domain.HashContent([]byte("with-commit")), Events: 6}}}
+	if !reflect.DeepEqual(first.Content, want) || len(content.docs[0].Events) != 6 {
 		t.Fatalf("content = %+v, document events = %d", first.Content, len(content.docs[0].Events))
 	}
 	// with-commit: one segment of three records that keeps its whole turn.

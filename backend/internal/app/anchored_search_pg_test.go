@@ -77,7 +77,7 @@ func TestPGSearchReadsWhatTheReaderMayRead(t *testing.T) {
 	alice, bob := anchoredActor(users["member-a"]), anchoredActor(users["member-b"])
 	body := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 4,
-		Content: &domain.AnchoredContent{Doc: doc.Hash, Events: 4},
+		Content: &domain.AnchoredContent{Events: 4, Parts: []domain.AnchoredContentPart{{Doc: doc.Hash, Events: 4}}},
 		Segments: []domain.AnchoredSegment{
 			{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber, Subject: "Add the Parser"}}},
@@ -123,5 +123,45 @@ func TestPGSearchReadsWhatTheReaderMayRead(t *testing.T) {
 		if found, err := service.SearchAnchored(bob, repo, query); err != nil || len(found.Hits) != 0 {
 			t.Fatalf("another member found %q, which is not pushed: %+v %v", query, found.Hits, err)
 		}
+	}
+
+	// A conversation kept in two documents, of which only the second holds
+	// the query: the store names that document alone, and the hit is placed
+	// by where it is in the conversation.
+	part := func(first int, texts ...string) domain.AnchoredContentPart {
+		later := domain.SessionDoc{CIR: domain.CIRDocument{}}
+		later.CIR.Envelope.CIRVersion, later.CIR.Envelope.SourceProvider = "1", "claude"
+		for index, text := range texts {
+			later.CIR.Events = append(later.CIR.Events, domain.CIREvent{Kind: domain.EventMessage, Seq: first + index, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: text}}})
+		}
+		raw, err := domain.CanonicalBytes(later.CIR)
+		if err != nil {
+			t.Fatal(err)
+		}
+		later.Hash = domain.HashContent(raw)
+		if _, err := storage.PutDoc(ctx, repo, later); err != nil {
+			t.Fatal(err)
+		}
+		return domain.AnchoredContentPart{Doc: later.Hash, Events: len(texts)}
+	}
+	second := domain.AnchoredSessionBody{
+		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 3,
+		Content:     &domain.AnchoredContent{Events: 3, Parts: []domain.AnchoredContentPart{part(0, "Only setup talk.", "More setup."), part(2, "Tokenizer notes.")}},
+		Uncommitted: &domain.AnchoredUncommitted{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m3", FirstOrdinal: 0, LastOrdinal: 2, FirstEvent: 0, Events: 3}, Places: []domain.AnchoredPlace{}, Unplaced: true},
+	}
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-2", second); err != nil {
+		t.Fatal(err)
+	}
+	var later domain.AnchoredSearchResult
+	for round := 0; round < 5; round++ {
+		if later, err = service.SearchAnchored(alice, repo, "tokenizer"); err != nil {
+			t.Fatal(err)
+		}
+		if !later.Truncated {
+			break
+		}
+	}
+	if len(later.Hits) != 1 || later.Hits[0].SessionID != "session-2" || later.Hits[0].Snippet != "Tokenizer notes." || later.Hits[0].Event == nil || *later.Hits[0].Event != 2 {
+		t.Fatalf("a hit in the second document of a conversation: %+v", later.Hits)
 	}
 }

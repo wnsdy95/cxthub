@@ -515,7 +515,7 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 				switch {
 				case remembered.Content == nil:
 					state, reused = domain.SegmentContentNone, true
-				case upload.Body.AttachContent(domain.DocumentRef{Hash: remembered.Content.Doc, Identity: remembered.Content.Identity}, remembered.Content.Events, remembered.FirstEvent, remembered.Events):
+				case upload.Body.AttachContent(remembered.Content.Parts, remembered.FirstEvent, remembered.Events):
 					state, reused = domain.SegmentContentStored, true
 				}
 			}
@@ -620,7 +620,7 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 				Content: session.Content, ContentReason: session.ContentReason, Summaries: session.Summaries, SummaryReason: session.SummaryReason,
 			}
 			if content := upload.Body.Content; content != nil {
-				entry.Doc, entry.Events = content.Doc, content.Events
+				entry.Doc, entry.Parts, entry.Events = content.Last(), len(content.Parts), content.Events
 			}
 			if result.LocalRecords == nil {
 				result.LocalRecords = &domain.SegmentPushLocalRecords{}
@@ -676,7 +676,7 @@ func (s *SegmentUploadService) attachContent(ctx context.Context, repoID, repoRo
 	default:
 		return "", "", nil, nil, nil, err
 	}
-	if !body.AttachContent(ref, len(doc.Events), first, count) {
+	if !body.AttachContent([]domain.AnchoredContentPart{{Doc: ref.Hash, Identity: ref.Identity, Events: len(doc.Events)}}, first, count) {
 		return domain.SegmentContentNotUploaded, "the conversation was read in other ranges than the report has", nil, nil, nil, nil
 	}
 	return domain.SegmentContentStored, "", first, count, &doc, nil
@@ -795,7 +795,7 @@ func (s *SegmentUploadService) ResendSession(ctx context.Context, cwd string, ke
 		if err != nil {
 			return result, fmt.Errorf("the copy of the conversation of %s was not taken: %w", name, err)
 		}
-		if ref.Hash != content.Doc {
+		if len(content.Parts) != 1 || ref.Hash != content.Parts[0].Doc {
 			return result, fmt.Errorf("the copy of the conversation of %s is not the document its report names; nothing was sent of the report", name)
 		}
 		session.Content = domain.SegmentContentStored
@@ -823,7 +823,7 @@ func (s *SegmentUploadService) ResendSession(ctx context.Context, cwd string, ke
 		ReportHash: domain.Fingerprint(upload.Body), ServerHash: receipt.BodyHash, Reason: session.Reason, Content: session.Content,
 		Summaries: session.Summaries, SummaryReason: session.SummaryReason, Action: "sent again from the copy"}
 	if content := upload.Body.Content; content != nil {
-		entry.Doc, entry.Events = content.Doc, content.Events
+		entry.Doc, entry.Parts, entry.Events = content.Last(), len(content.Parts), content.Events
 	}
 	_ = s.uploadRecords.LogSessionAction(context.WithoutCancel(ctx), cwd, key, entry)
 	result.Sessions = append(result.Sessions, session)

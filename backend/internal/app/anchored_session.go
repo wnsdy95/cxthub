@@ -82,15 +82,21 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 		if err != nil {
 			return domain.AnchoredSessionReceipt{}, err
 		}
-		// A report may only name content this repository holds. The document
+		// A report may only name content this repository holds. Each document
 		// is uploaded first, through the path that verifies and counts it.
-		if content := body.Content; content != nil {
-			have, err := s.blobs.HasDocs(bound, repo, []domain.ContentHash{content.Doc})
+		if docs := body.Content.Docs(); len(docs) > 0 {
+			have, err := s.blobs.HasDocs(bound, repo, docs)
 			if err != nil {
 				return domain.AnchoredSessionReceipt{}, err
 			}
-			if len(have) != 1 || have[0] != content.Doc {
-				return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: anchored session: the content document is not in this repository", domain.ErrValidation)
+			held := map[domain.ContentHash]struct{}{}
+			for _, doc := range have {
+				held[doc] = struct{}{}
+			}
+			for _, doc := range docs {
+				if _, ok := held[doc]; !ok {
+					return domain.AnchoredSessionReceipt{}, fmt.Errorf("%w: anchored session: a content document is not in this repository", domain.ErrValidation)
+				}
 			}
 		}
 		// A session that was removed from the server is not taken again
@@ -120,13 +126,20 @@ func (s *Service) PutAnchoredSession(ctx context.Context, repo domain.ContentHas
 		if err := store.PutAnchoredSession(bound, next); err != nil {
 			return domain.AnchoredSessionReceipt{}, err
 		}
-		// The document the earlier report named is no longer the session's
-		// conversation: a session that grew, or was masked another way, has a
-		// new one. It is deleted when nothing else uses it. A deletion that
-		// fails does not fail the report; the document then stays until the
-		// session is removed.
-		if earlier := existing.Body.Content; earlier != nil && (body.Content == nil || body.Content.Doc != earlier.Doc) {
-			_ = s.dropAnchoredContent(bound, store, repo, earlier.Doc)
+		// A document the earlier report named and this one does not is no
+		// longer part of the session's conversation: a session that grew has
+		// another last part, and one that was masked another way has other
+		// parts altogether. It is deleted when nothing else uses it. A
+		// deletion that fails does not fail the report; the document then
+		// stays until the session is removed.
+		kept := map[domain.ContentHash]struct{}{}
+		for _, doc := range body.Content.Docs() {
+			kept[doc] = struct{}{}
+		}
+		for _, doc := range existing.Body.Content.Docs() {
+			if _, named := kept[doc]; !named {
+				_ = s.dropAnchoredContent(bound, store, repo, doc)
+			}
 		}
 		// What the report explains may already be on the remote.
 		if err := openAnchoredSessions(bound, s.meta, repo, &anchoredKey{provider, sessionID}, now); err != nil {
@@ -536,8 +549,8 @@ func (s *Service) RemoveAnchoredSession(ctx context.Context, repo domain.Content
 		// the caller asked to be removed is never reported as removed while
 		// its conversation is still stored.
 		for _, each := range doomed {
-			if content := each.Body.Content; content != nil {
-				if err := s.dropAnchoredContent(bound, store, repo, content.Doc); err != nil {
+			for _, doc := range each.Body.Content.Docs() {
+				if err := s.dropAnchoredContent(bound, store, repo, doc); err != nil {
 					return none, err
 				}
 			}
@@ -634,7 +647,7 @@ func (s *Service) AnchoredSessionContentAccess(ctx context.Context, repo domain.
 		content := session.Body.Content
 		access := domain.AnchoredContentAccess{}
 		if content != nil {
-			access.Doc, access.Events = content.Doc, content.Events
+			access.Parts, access.Events = content.Parts, content.Events
 		}
 		if anchoredOwn(reader.actor, session.Uploader) {
 			if content == nil {

@@ -653,12 +653,23 @@ components:
         next: { type: string, description: Send it back as before to read the following page of commits. Absent on the last page. }
     AnchoredContent:
       type: object
-      required: [doc, events]
-      description: The repository document that holds the conversation of the session's own records, each stored once, in the order of the ranges. It is uploaded first through the document path; a report naming a document the repository does not hold is refused.
+      required: [events]
+      description: The conversation of the session's own records, each stored once, in the order of the ranges. It is kept in one or more repository documents, `parts`, and is their events one after another; `events` is how many that is. A session that goes on gets a further part or another last part, and the parts before it stay the documents they were. Each document is uploaded first through the document path; a report naming a document the repository does not hold is refused. A report names its parts; what another account reads of a session carries `events` alone.
       properties:
-        doc: { $ref: '#/components/schemas/ContentHash' }
-        identity: { $ref: '#/components/schemas/DocumentIdentity' }
         events: { type: integer, minimum: 1 }
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 4096
+          description: The documents in order. No document is named twice, and the event counts add up to `events`.
+          items:
+            type: object
+            additionalProperties: false
+            required: [doc, events]
+            properties:
+              doc: { $ref: '#/components/schemas/ContentHash' }
+              identity: { $ref: '#/components/schemas/DocumentIdentity' }
+              events: { type: integer, minimum: 1 }
     AnchoredSession:
       type: object
       required: [repo_id, provider, session_id, uploader, revision, body_hash, created_at, updated_at, body]

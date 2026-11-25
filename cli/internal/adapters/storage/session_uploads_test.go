@@ -21,7 +21,7 @@ func sessionUploadFixture(t *testing.T) (*SessionUploadFiles, string, domain.Anc
 	root := t.TempDir()
 	files := NewSessionUploadFiles(func(context.Context, string) (string, bool) { return root, true })
 	upload := domain.AnchoredSessionUpload{Provider: domain.ProviderClaude, SessionID: "session-1", Body: domain.AnchoredSessionBody{
-		RuleVersion: 1, Records: 2, Segments: []domain.AnchoredSegment{}, Content: &domain.AnchoredContent{Doc: "sha256:" + domain.ContentHash(strings.Repeat("a", 64)), Events: 2},
+		RuleVersion: 1, Records: 2, Segments: []domain.AnchoredSegment{}, Content: &domain.AnchoredContent{Events: 2, Parts: []domain.AnchoredContentPart{{Doc: "sha256:" + domain.ContentHash(strings.Repeat("a", 64)), Events: 2}}},
 	}}
 	doc := &domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, SessionOriginID: "session-1"},
 		Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "synthetic question"}}}, {Seq: 1, Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "synthetic answer"}}}}}
@@ -31,7 +31,7 @@ func sessionUploadFixture(t *testing.T) (*SessionUploadFiles, string, domain.Anc
 func sessionUploadEntry(at string, upload domain.AnchoredSessionUpload, state domain.SegmentPushState, revision int64) domain.SessionUploadLogEntry {
 	entry := domain.SessionUploadLogEntry{At: at, Report: state, Revision: revision, ReportHash: domain.Fingerprint(upload.Body), Content: domain.SegmentContentStored}
 	if upload.Body.Content != nil {
-		entry.Doc, entry.Events = upload.Body.Content.Doc, upload.Body.Content.Events
+		entry.Doc, entry.Parts, entry.Events = upload.Body.Content.Last(), len(upload.Body.Content.Parts), upload.Body.Content.Events
 	}
 	return entry
 }
@@ -86,14 +86,14 @@ func TestSessionUploadFilesKeepWhatWasSent(t *testing.T) {
 
 	// The session went on: a new report, a new document, one new line.
 	grown := upload
-	grown.Body.Records, grown.Body.Content = 3, &domain.AnchoredContent{Doc: "sha256:" + domain.ContentHash(strings.Repeat("b", 64)), Events: 3}
+	grown.Body.Records, grown.Body.Content = 3, &domain.AnchoredContent{Events: 3, Parts: []domain.AnchoredContentPart{{Doc: "sha256:" + domain.ContentHash(strings.Repeat("b", 64)), Events: 3}}}
 	longer := *doc
 	longer.Events = append(append([]domain.Event(nil), doc.Events...), domain.Event{Seq: 2, Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "one more"}}})
 	if err := files.KeepSessionUpload(ctx, root, grown, &longer, sessionUploadEntry("2031-01-02T03:03:00Z", grown, domain.SegmentPushStored, 2)); err != nil {
 		t.Fatal(err)
 	}
 	record, _ = files.ReadSessionUpload(ctx, root, key, true)
-	if len(record.Log) != 2 || record.Report.Records != 3 || len(record.Conversation.Events) != 3 || record.Log[1].Doc != grown.Body.Content.Doc {
+	if len(record.Log) != 2 || record.Report.Records != 3 || len(record.Conversation.Events) != 3 || record.Log[1].Doc != grown.Body.Content.Last() {
 		t.Fatalf("grown session: %+v", record)
 	}
 

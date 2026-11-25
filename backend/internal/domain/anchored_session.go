@@ -49,7 +49,9 @@ const (
 	anchoredCopiedLimit    = 256
 	anchoredNameLimit      = 256
 	anchoredEventLimit     = 100_000_000
-	anchoredTurnLimit      = 20000
+	// anchoredContentPartLimit bounds the documents of one conversation.
+	anchoredContentPartLimit = 4096
+	anchoredTurnLimit        = 20000
 )
 
 var (
@@ -73,14 +75,35 @@ type AnchoredRange struct {
 	Events     int `json:"events,omitempty"`
 }
 
-// AnchoredContent names the document that holds the conversation of the
+// AnchoredContent names the documents that hold the conversation of the
 // session's own records, each stored once, in the order of the ranges. The
-// document is an ordinary repository document, so its bytes are verified,
-// counted and read the way every document is.
+// conversation is the events of the parts one after another, and Events is
+// how many that is. A session that goes on gets a further part, or another
+// last part; the parts before it stay the documents they were.
 type AnchoredContent struct {
+	Events int                   `json:"events"`
+	Parts  []AnchoredContentPart `json:"parts,omitempty"`
+}
+
+// AnchoredContentPart is one document of a session's conversation and how
+// many events it holds. It is an ordinary repository document, so its bytes
+// are verified, counted and read the way every document is.
+type AnchoredContentPart struct {
 	Doc      ContentHash      `json:"doc"`
 	Identity DocumentIdentity `json:"identity,omitempty"`
 	Events   int              `json:"events"`
+}
+
+// Docs lists the documents of the parts, in order.
+func (c *AnchoredContent) Docs() []ContentHash {
+	if c == nil {
+		return nil
+	}
+	docs := make([]ContentHash, len(c.Parts))
+	for index, part := range c.Parts {
+		docs[index] = part.Doc
+	}
+	return docs
 }
 
 // AnchoredCommit is a commit a segment ends at. The author time, author and
@@ -391,9 +414,23 @@ func (b AnchoredSessionBody) Validate() error {
 		return anchoredInvalid("too many segments")
 	}
 	if content := b.Content; content != nil {
-		if ValidateContentHash(content.Doc) != nil || (content.Identity != DocumentIdentityLegacy && content.Identity != DocumentIdentityRootV1) ||
-			content.Events < 1 || content.Events > anchoredEventLimit {
-			return anchoredInvalid("content needs a document, a known identity and its event count")
+		if len(content.Parts) < 1 || len(content.Parts) > anchoredContentPartLimit || content.Events > anchoredEventLimit {
+			return anchoredInvalid("content needs between 1 and %d parts and at most %d events", anchoredContentPartLimit, anchoredEventLimit)
+		}
+		events, named := 0, map[ContentHash]struct{}{}
+		for _, part := range content.Parts {
+			if ValidateContentHash(part.Doc) != nil || (part.Identity != DocumentIdentityLegacy && part.Identity != DocumentIdentityRootV1) ||
+				part.Events < 1 || part.Events > content.Events-events {
+				return anchoredInvalid("a part of the content needs a document, a known identity and its event count")
+			}
+			if _, twice := named[part.Doc]; twice {
+				return anchoredInvalid("a document is named as two parts of the content")
+			}
+			named[part.Doc] = struct{}{}
+			events += part.Events
+		}
+		if events != content.Events {
+			return anchoredInvalid("the parts of the content hold %d events, the content says %d", events, content.Events)
 		}
 	}
 	next, nextEvent := 0, 0
@@ -520,6 +557,7 @@ func (b AnchoredSessionBody) Canonical() AnchoredSessionBody {
 	}
 	if b.Content != nil {
 		content := *b.Content
+		content.Parts = append([]AnchoredContentPart(nil), b.Content.Parts...)
 		out.Content = &content
 	}
 	if b.Uncommitted != nil {

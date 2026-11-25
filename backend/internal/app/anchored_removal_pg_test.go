@@ -73,7 +73,7 @@ func TestPGRemovedSessionIsGoneWithItsDocument(t *testing.T) {
 	report := func(doc domain.ContentHash, events int) domain.AnchoredSessionBody {
 		return domain.AnchoredSessionBody{
 			RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: events,
-			Content: &domain.AnchoredContent{Doc: doc, Events: events},
+			Content: &domain.AnchoredContent{Events: events, Parts: []domain.AnchoredContentPart{{Doc: doc, Events: events}}},
 			Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m9", FirstOrdinal: 0, LastOrdinal: events - 1, FirstEvent: 0, Events: events},
 				Commits: []domain.AnchoredCommit{{SHA: commit, Rule: domain.AnchoredLinkPrintedNumber}}}},
 		}

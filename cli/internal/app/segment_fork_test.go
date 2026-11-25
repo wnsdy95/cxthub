@@ -143,7 +143,7 @@ func newForkFixture() *forkFixture {
 	f.remote = &forkRemoteFake{
 		events: []domain.Event{forkMessage(0, "user", "Plan the parser."), forkMessage(1, "assistant", "Planned."), forkMessage(2, "user", "Write it."),
 			forkMessage(3, "assistant", "Written and committed."), forkMessage(4, "user", "Now the lexer."), forkMessage(5, "assistant", "Started.")},
-		body: domain.AnchoredSessionBody{Records: 6, Content: &domain.AnchoredContent{Doc: "sha256:doc", Events: 6},
+		body: domain.AnchoredSessionBody{Records: 6, Content: &domain.AnchoredContent{Events: 6, Parts: []domain.AnchoredContentPart{{Doc: "sha256:doc", Events: 6}}},
 			Segments: []domain.AnchoredSegment{
 				{AnchoredRange: domain.AnchoredRange{FirstEvent: 0, Events: 4}, Commits: []domain.AnchoredCommit{{SHA: commit}}},
 				{AnchoredRange: domain.AnchoredRange{FirstEvent: 4, Events: 2}, Commits: []domain.AnchoredCommit{{SHA: later}}}}},

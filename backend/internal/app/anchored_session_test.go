@@ -225,7 +225,7 @@ func TestAnchoredSessionContentMustBeInTheRepository(t *testing.T) {
 	}
 	doc.Hash = domain.HashContent(raw)
 	body := anchoredTestBody("m3")
-	body.Content = &domain.AnchoredContent{Doc: doc.Hash, Events: 3}
+	body.Content = &domain.AnchoredContent{Events: 3, Parts: []domain.AnchoredContentPart{{Doc: doc.Hash, Events: 3}}}
 	body.Segments[0].Events = 2
 	body.Uncommitted.FirstEvent, body.Uncommitted.Events = 2, 1
 
@@ -254,7 +254,7 @@ func TestAnchoredSessionContentMustBeInTheRepository(t *testing.T) {
 		t.Fatalf("content the repository holds: %+v %v", receipt, err)
 	}
 	stored, err := service.GetAnchoredSession(alice, repo, domain.ProviderClaude, "session-1")
-	if err != nil || stored.Body.Content == nil || stored.Body.Content.Doc != doc.Hash || stored.Body.Uncommitted.FirstEvent != 2 {
+	if err != nil || stored.Body.Content == nil || len(stored.Body.Content.Parts) != 1 || stored.Body.Content.Parts[0].Doc != doc.Hash || stored.Body.Uncommitted.FirstEvent != 2 {
 		t.Fatalf("stored content: %+v %v", stored.Body.Content, err)
 	}
 	// A segment read through its commit carries where it sits in the content.

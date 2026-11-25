@@ -65,12 +65,18 @@ func (s *Server) getAnchoredSessionEvents(w http.ResponseWriter, r *http.Request
 		return
 	}
 	span, open := access.Span(offset)
-	if !open {
+	doc, first, end, held := access.Part(offset)
+	if !open || !held {
 		s.respond(w, nil, domain.ErrNotFound)
 		return
 	}
-	if limit > span[1]-offset {
-		limit = span[1] - offset
+	// A page ends where the open span ends, and where the document that
+	// holds its events ends: the next page goes on in the next document.
+	if end > span[1] {
+		end = span[1]
+	}
+	if limit > end-offset {
+		limit = end - offset
 	}
 	request, release, ok := s.documentResponseRequest(w, r)
 	if !ok {
@@ -79,16 +85,19 @@ func (s *Server) getAnchoredSessionEvents(w http.ResponseWriter, r *http.Request
 	defer release()
 	repo := s.repoID(r)
 	ctx := inbound.WithDocumentReadAuthorizer(request.Context(), s.documentReadAuthorizer(r, repo))
-	page, err := viewer.ReadDocViewEvents(ctx, repo, access.Doc, offset, limit, view)
+	page, err := viewer.ReadDocViewEvents(ctx, repo, doc, offset-first, limit, view)
 	if err != nil {
 		s.respond(w, nil, err)
 		return
 	}
 	out := domain.AnchoredEventPage{Events: []domain.DocViewEvent{}, Offset: offset, Next: -1}
 	// What the reader returned is held to what was asked: in order from the
-	// offset, at most the page, and never past the end of the open span.
+	// offset, at most the page, and never past the end of the open span or
+	// of the document. The reader counts events within its document; the
+	// page counts them within the conversation.
 	for _, event := range page.Events {
-		if len(out.Events) < limit && event.Index == offset+len(out.Events) && event.Index < span[1] {
+		event.Index += first
+		if len(out.Events) < limit && event.Index == offset+len(out.Events) && event.Index < end {
 			out.Events = append(out.Events, event)
 		}
 	}
@@ -126,7 +135,9 @@ func (s *Server) getAnchoredSessionEventFragment(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	if _, open := access.Span(values["index"]); !open {
+	_, open := access.Span(values["index"])
+	doc, first, _, held := access.Part(values["index"])
+	if !open || !held {
 		s.respond(w, nil, domain.ErrNotFound)
 		return
 	}
@@ -137,6 +148,9 @@ func (s *Server) getAnchoredSessionEventFragment(w http.ResponseWriter, r *http.
 	defer release()
 	repo := s.repoID(r)
 	ctx := inbound.WithDocumentReadAuthorizer(request.Context(), s.documentReadAuthorizer(r, repo))
-	out, err := viewer.ReadDocViewFragment(ctx, repo, access.Doc, values["index"], values["offset"], values["budget"])
+	out, err := viewer.ReadDocViewFragment(ctx, repo, doc, values["index"]-first, values["offset"], values["budget"])
+	// The reader counts events within its document; the answer counts them
+	// within the conversation.
+	out.Index += first
 	s.respond(w, out, err)
 }

@@ -42,7 +42,7 @@ func TestRemovedSessionIsGoneAndNotTakenAgainUntilAllowed(t *testing.T) {
 	body := func(doc domain.ContentHash) domain.AnchoredSessionBody {
 		return domain.AnchoredSessionBody{
 			RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 2,
-			Content: &domain.AnchoredContent{Doc: doc, Events: 2},
+			Content: &domain.AnchoredContent{Events: 2, Parts: []domain.AnchoredContentPart{{Doc: doc, Events: 2}}},
 			Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber}}}},
 		}
@@ -249,7 +249,7 @@ func TestReportThatGrewLeavesNoEarlierConversationDocument(t *testing.T) {
 	report := func(doc domain.ContentHash, events int) domain.AnchoredSessionBody {
 		return domain.AnchoredSessionBody{
 			RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: events,
-			Content: &domain.AnchoredContent{Doc: doc, Events: events},
+			Content: &domain.AnchoredContent{Events: events, Parts: []domain.AnchoredContentPart{{Doc: doc, Events: events}}},
 			Uncommitted: &domain.AnchoredUncommitted{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m9", FirstOrdinal: 0, LastOrdinal: events - 1, FirstEvent: 0, Events: events},
 				Places: []domain.AnchoredPlace{{Worktree: "app", Branch: "main", Rule: domain.AnchoredPlaceRecorded}}},
 		}
@@ -282,5 +282,102 @@ func TestReportThatGrewLeavesNoEarlierConversationDocument(t *testing.T) {
 	// The same report again deletes nothing.
 	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", report(second, 3)); err != nil || !anchoredRemovalHas(t, fixture, second) {
 		t.Fatalf("the same report again: %v", err)
+	}
+}
+
+// A conversation is kept in several documents, one after another. A session
+// that goes on gets another last document: the documents before it stay, and
+// only what the new report no longer names is deleted. A report may name
+// only documents the repository holds.
+func TestSessionThatGoesOnKeepsItsEarlierDocumentsAndDropsTheOnesItNoLongerNames(t *testing.T) {
+	fixture := anchoredPublicationFixture(t)
+	service, repo := fixture.service, fixture.repo
+	alice := anchoredActor("member-a")
+	report := func(parts ...domain.AnchoredContentPart) domain.AnchoredSessionBody {
+		events := 0
+		for _, part := range parts {
+			events += part.Events
+		}
+		return domain.AnchoredSessionBody{
+			RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: events,
+			Content: &domain.AnchoredContent{Events: events, Parts: parts},
+			Uncommitted: &domain.AnchoredUncommitted{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m9", FirstOrdinal: 0, LastOrdinal: events - 1, FirstEvent: 0, Events: events},
+				Places: []domain.AnchoredPlace{{Worktree: "app", Branch: "main", Rule: domain.AnchoredPlaceRecorded}}},
+		}
+	}
+	part := func(first int, texts ...string) domain.AnchoredContentPart {
+		return domain.AnchoredContentPart{Doc: anchoredConversationDoc(t, fixture, first, texts...), Events: len(texts)}
+	}
+	put := func(session string, parts ...domain.AnchoredContentPart) error {
+		_, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, session, report(parts...))
+		return err
+	}
+	stored := func(parts ...domain.AnchoredContentPart) string {
+		out := ""
+		for _, each := range parts {
+			if anchoredRemovalHas(t, fixture, each.Doc) {
+				out += "kept "
+			} else {
+				out += "gone "
+			}
+		}
+		return out
+	}
+	sealed := part(0, "Plan the parser.", "The parser is planned.")
+	open := part(2, "Now write it.")
+	if err := put("session-1", sealed, open); err != nil {
+		t.Fatal(err)
+	}
+	// One more exchange: the last document is another one, the first stays.
+	grown := part(2, "Now write it.", "It is written.")
+	if err := put("session-1", sealed, grown); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(sealed, open, grown); got != "kept gone kept " {
+		t.Fatalf("after the session went on (first, earlier last, new last): %s", got)
+	}
+	// The last document was filled, and a further one begins.
+	further := part(4, "Test it.")
+	if err := put("session-1", sealed, grown, further); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(sealed, grown, further); got != "kept kept kept " {
+		t.Fatalf("after a further document began: %s", got)
+	}
+	// A report may only name documents the repository holds, each of them.
+	absent := domain.AnchoredContentPart{Doc: domain.HashContent([]byte("never uploaded")), Events: 1}
+	for name, parts := range map[string][]domain.AnchoredContentPart{
+		"the last document is not held":  {sealed, grown, absent},
+		"the first document is not held": {absent, grown, further},
+	} {
+		if err := put("session-1", parts...); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if got := stored(sealed, grown, further); got != "kept kept kept " {
+		t.Fatalf("after refused reports: %s", got)
+	}
+	// Masked another way, the conversation is other documents altogether;
+	// one that another session names stays.
+	if err := put("session-2", grown); err != nil {
+		t.Fatal(err)
+	}
+	whole := part(0, "Plan the [masked].", "The [masked] is planned.", "Now write it.", "It is written.", "Test it.")
+	if err := put("session-1", whole); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(sealed, grown, further, whole); got != "gone kept gone kept " {
+		t.Fatalf("after every document was replaced (first, the one another session names, last, new): %s", got)
+	}
+	// Removing a session deletes every document of it that nothing else names.
+	last := part(5, "And ship it.")
+	if err := put("session-1", whole, last); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RemoveAnchoredSession(alice, repo, domain.ProviderClaude, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(whole, last, grown); got != "gone gone kept " {
+		t.Fatalf("after the session was removed (its two documents, another session's): %s", got)
 	}
 }

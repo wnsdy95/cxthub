@@ -13,8 +13,16 @@ import (
 
 // The read side reads a session's conversation in pieces, and only what the
 // caller may read: the uploader all of it, anyone else the open parts, with
-// reading going on at the next open part.
+// reading going on at the next open part. A conversation kept in several
+// documents reads as the same conversation kept in one: where one document
+// ends and the next begins shows nowhere.
 func TestConversationIsReadInPiecesWithinWhatIsOpen(t *testing.T) {
+	for name, sizes := range map[string][]int{"in one document": {5}, "in three documents": {2, 1, 2}, "a document for each event": {1, 1, 1, 1, 1}, "cut inside an open part and inside a closed one": {1, 2, 2}} {
+		t.Run(name, func(t *testing.T) { conversationIsReadInPieces(t, sizes) })
+	}
+}
+
+func conversationIsReadInPieces(t *testing.T, sizes []int) {
 	fixture := anchoredPublicationFixture(t)
 	service, provider, repo := fixture.service, fixture.provider, fixture.repo
 	alice, bob, visitor := anchoredActor("member-a"), anchoredActor("member-b"), context.Background()
@@ -32,7 +40,7 @@ func TestConversationIsReadInPiecesWithinWhatIsOpen(t *testing.T) {
 	texts := []string{"Plan the parser.", "The parser is committed.", "A hidden idea.", "Still hidden.", "Leftovers."}
 	body := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 5,
-		Content: &domain.AnchoredContent{Doc: anchoredSearchDoc(t, fixture, texts...), Events: 5},
+		Content: anchoredConversationParts(t, fixture, texts, sizes...),
 		Segments: []domain.AnchoredSegment{
 			{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber}}},
@@ -71,6 +79,11 @@ func TestConversationIsReadInPiecesWithinWhatIsOpen(t *testing.T) {
 					var event domain.CIREvent
 					if err := json.Unmarshal([]byte(pending), &event); err != nil || len(event.Blocks) != 1 {
 						t.Fatalf("event %d does not read back: %q %v", fragment.Index, pending, err)
+					}
+					// An event is numbered by its place in the conversation,
+					// whichever document holds it.
+					if fragment.Index != event.Seq || texts[fragment.Index] != event.Blocks[0].Text {
+						t.Fatalf("event %d was answered as event %d: %q", event.Seq, fragment.Index, pending)
 					}
 					found, pending = append(found, event.Blocks[0].Text), ""
 				}
@@ -114,15 +127,30 @@ func TestConversationIsReadInPiecesWithinWhatIsOpen(t *testing.T) {
 	if got, _ := whole(visitor, 2, 1, 40); !reflect.DeepEqual(got, texts[4:]) {
 		t.Fatalf("from an event that is not open, reading goes on at the next open part: %v", got)
 	}
-	if page, err := reads.ReadAnchoredSessionFragments(bob, repo, domain.ProviderClaude, "session-1", 0, 0, 50, 12<<10); err != nil || page.NextIndex != 4 || page.NextOffset != 0 || len(page.Fragments) != 2 {
-		t.Fatalf("a page stops where the open part ends: %+v %v", page, err)
+	// A page stops where the open part ends, or sooner where the document
+	// that holds its first event ends; the next page goes on from there, and
+	// past the part that stays closed.
+	stop, next := min(2, sizes[0]), 4
+	if stop < 2 {
+		next = stop
+	}
+	if page, err := reads.ReadAnchoredSessionFragments(bob, repo, domain.ProviderClaude, "session-1", 0, 0, 50, 12<<10); err != nil || page.NextIndex != next || page.NextOffset != 0 || len(page.Fragments) != stop {
+		t.Fatalf("a page stops where the open part or its document ends: %+v %v", page, err)
+	}
+	if page, err := reads.ReadAnchoredSessionFragments(bob, repo, domain.ProviderClaude, "session-1", 1, 0, 50, 12<<10); err != nil || page.NextIndex != 4 || page.NextOffset != 0 || len(page.Fragments) != 1 || page.Fragments[0].Index != 1 {
+		t.Fatalf("the last event of an open part: %+v %v", page, err)
 	}
 	for _, fragment := range []string{"hidden"} {
 		for _, reader := range []context.Context{bob, visitor} {
 			page, err := reads.ReadAnchoredSessionFragments(reader, repo, domain.ProviderClaude, "session-1", 2, 0, 50, 12<<10)
 			raw, _ := json.Marshal(page)
-			if err != nil || strings.Contains(string(raw), fragment) || strings.Contains(string(raw), string(body.Content.Doc)) {
-				t.Fatalf("what is not open, or the document's hash, was answered: %s %v", raw, err)
+			if err != nil || strings.Contains(string(raw), fragment) {
+				t.Fatalf("what is not open was answered: %s %v", raw, err)
+			}
+			for _, doc := range body.Content.Docs() {
+				if strings.Contains(string(raw), string(doc)) {
+					t.Fatalf("a document's hash was answered: %s", raw)
+				}
 			}
 		}
 	}
@@ -238,5 +266,54 @@ func TestStoredConversationIsPagedThroughTheService(t *testing.T) {
 	// A document the repository does not hold.
 	if _, err := fixture.service.ReadDocViewEvents(ctx, fixture.repo, domain.HashContent([]byte("no such document")), 0, 20, "all"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a document that is not there: %v", err)
+	}
+}
+
+// A document of a conversation holds what the report says of it and no more:
+// where a report gives a document fewer events than it holds, the events
+// after those are not part of the conversation, and reading goes on in the
+// next document.
+func TestConversationDocumentHoldsNoMoreThanItsReportSays(t *testing.T) {
+	fixture := anchoredPublicationFixture(t)
+	service, repo := fixture.service, fixture.repo
+	alice := anchoredActor("member-a")
+	reads, err := NewAnchoredReadService(fixture.storage, fixture.storage, fixture.storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := domain.AnchoredSessionBody{
+		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 4,
+		Content: &domain.AnchoredContent{Events: 4, Parts: []domain.AnchoredContentPart{
+			{Doc: anchoredConversationDoc(t, fixture, 0, "First.", "Second.", "Not of this conversation."), Events: 2},
+			{Doc: anchoredConversationDoc(t, fixture, 2, "Third.", "Fourth."), Events: 2},
+		}},
+		Uncommitted: &domain.AnchoredUncommitted{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m4", FirstOrdinal: 0, LastOrdinal: 3, FirstEvent: 0, Events: 4},
+			Places: []domain.AnchoredPlace{{Worktree: "app", Branch: "main", Rule: domain.AnchoredPlaceRecorded}}},
+	}
+	if _, err := service.PutAnchoredSession(alice, repo, domain.ProviderClaude, "session-1", body); err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int{50, 3, 1} {
+		var found []string
+		for index, step := 0, 0; index >= 0; step++ {
+			if step > 20 {
+				t.Fatal("the read does not end")
+			}
+			page, err := reads.ReadAnchoredSessionFragments(alice, repo, domain.ProviderClaude, "session-1", index, 0, limit, 12<<10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, fragment := range page.Fragments {
+				var event domain.CIREvent
+				if err := json.Unmarshal([]byte(fragment.JSON), &event); err != nil || !fragment.Complete || len(event.Blocks) != 1 {
+					t.Fatalf("event %d does not read back: %q %v", fragment.Index, fragment.JSON, err)
+				}
+				found = append(found, event.Blocks[0].Text)
+			}
+			index = page.NextIndex
+		}
+		if !reflect.DeepEqual(found, []string{"First.", "Second.", "Third.", "Fourth."}) {
+			t.Fatalf("read %d events at a time: %v", limit, found)
+		}
 	}
 }

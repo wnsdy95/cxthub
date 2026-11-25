@@ -27,9 +27,18 @@ type AnchoredRange struct {
 	Events     int `json:"events,omitempty"`
 }
 
-// AnchoredContent names the document that holds the conversation of the
-// session's own records, each stored once, in the order of the ranges.
+// AnchoredContent names the documents that hold the conversation of the
+// session's own records, each stored once, in the order of the ranges. The
+// conversation is the events of the parts one after another, and Events is
+// how many that is.
 type AnchoredContent struct {
+	Events int                   `json:"events"`
+	Parts  []AnchoredContentPart `json:"parts,omitempty"`
+}
+
+// AnchoredContentPart is one document of a session's conversation and how
+// many events it holds.
+type AnchoredContentPart struct {
 	Doc      ContentHash      `json:"doc"`
 	Identity DocumentIdentity `json:"identity,omitempty"`
 	Events   int              `json:"events"`
@@ -119,11 +128,23 @@ type AnchoredSessionBody struct {
 	Content       *AnchoredContent     `json:"content,omitempty"`
 }
 
-// AttachContent names the content document in the report and places every
-// range in it. first and count give, for each range in order (the segments,
-// then the uncommitted part turn by turn), where it starts and how many
-// events it holds.
-func (b *AnchoredSessionBody) AttachContent(ref DocumentRef, events int, first, count []int) bool {
+// Last names the last document of the conversation, the one that is another
+// when the session goes on.
+func (c AnchoredContent) Last() ContentHash {
+	if len(c.Parts) == 0 {
+		return ""
+	}
+	return c.Parts[len(c.Parts)-1].Doc
+}
+
+// AttachContent names the documents of the conversation in the report, in
+// order, and places every range in it. first and count give, for each range
+// in order (the segments, then the uncommitted part turn by turn), where it
+// starts in the conversation and how many events it holds.
+func (b *AnchoredSessionBody) AttachContent(parts []AnchoredContentPart, first, count []int) bool {
+	if len(parts) == 0 {
+		return false
+	}
 	segments, turns := len(b.Segments), 0
 	if b.Uncommitted != nil {
 		turns = len(b.Uncommitted.Turns)
@@ -144,7 +165,11 @@ func (b *AnchoredSessionBody) AttachContent(ref DocumentRef, events int, first, 
 			b.Uncommitted.Events += count[segments+turn]
 		}
 	}
-	b.Content = &AnchoredContent{Doc: ref.Hash, Identity: ref.Identity, Events: events}
+	content := &AnchoredContent{Parts: append([]AnchoredContentPart(nil), parts...)}
+	for _, part := range parts {
+		content.Events += part.Events
+	}
+	b.Content = content
 	return true
 }
 

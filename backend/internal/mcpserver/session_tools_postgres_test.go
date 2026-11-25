@@ -107,7 +107,7 @@ func TestPGSessionToolsReadThroughTheIndependentServer(t *testing.T) {
 	own := inbound.WithRepositoryActor(ctx, uploader.ID)
 	body := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 3,
-		Content: &domain.AnchoredContent{Doc: document.Hash, Events: 3},
+		Content: &domain.AnchoredContent{Events: 3, Parts: []domain.AnchoredContentPart{{Doc: document.Hash, Events: 3}}},
 		Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 			Commits: []domain.AnchoredCommit{{SHA: sha, Rule: domain.AnchoredLinkPrintedNumber, Subject: "Add the parser"}}}},
 		Uncommitted: &domain.AnchoredUncommitted{AnchoredRange: domain.AnchoredRange{First: "m3", Last: "m3", FirstOrdinal: 2, LastOrdinal: 2, FirstEvent: 2, Events: 1},

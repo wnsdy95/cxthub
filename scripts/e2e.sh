@@ -292,8 +292,8 @@ expect "commit leads to the session's segment" "$(curl -sb "$JA" "$B/repos/$CLIR
 expect "stored report names the worktree and never its path" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c "import json,sys;r=json.load(sys.stdin);u=r['body']['uncommitted'];print(u['first'],u['places'][0]['worktree'],u['places'][0]['rule'],'$TMP' in json.dumps(r))")" "m5 repo recorded-by-tool False"
 # The conversation of the session's own records is one repository document, sent
 # through the path that verifies documents; every range says where it sits in it.
-SEGDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['doc']")"
-expect "report places its ranges in the content document" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];s=b["segments"][0];u=b["uncommitted"];print(b["content"]["events"],s.get("first_event",0),s["events"],u["first_event"],u["events"])')" "5 0 4 4 1"
+SEGDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['parts'][-1]['doc']")"
+expect "report places its ranges in the content document" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];s=b["segments"][0];u=b["uncommitted"];print(b["content"]["events"],len(b["content"]["parts"]),b["content"]["parts"][0]["events"],s.get("first_event",0),s["events"],u["first_event"],u["events"])')" "5 1 5 0 4 4 1"
 expect "content document holds the conversation in order" "$(segevents claude e2e-segments | python3 -c 'import json,sys;e=json.load(sys.stdin);print(len(e),e[0]["kind"],e[1]["kind"],e[2]["kind"],e[4]["blocks"][0]["text"])')" "5 message tool_call tool_result one more thing"
 expect "the repository holds the content document" "$(dochave "$SEGDOC")" held
 expect "an account outside the repository cannot read the conversation" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/content")" 403
@@ -307,7 +307,7 @@ expect "the log has a line for the stored report and one for the run that only w
 # Appended records extend the same document: the earlier events keep their place.
 printf '%s\n' '{"type":"assistant","uuid":"m6","sessionId":"e2e-segments","timestamp":"2031-01-02T03:00:41.000Z","cwd":"'"$PWD"'","gitBranch":"'"$SEGBRANCH"'","message":{"content":[{"type":"text","text":"done"}]}}' >>"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"
 expect "an appended record replaces the report" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"],r["unchanged"],r["sessions"][0]["revision"])')" "1 0 2"
-SEGDOC2="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['doc']")"
+SEGDOC2="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['parts'][-1]['doc']")"
 expect "the grown document keeps the earlier events and adds the new one" "$(segevents claude e2e-segments | python3 -c 'import json,sys;e=json.load(sys.stdin);print(len(e),e[4]["blocks"][0]["text"],e[5]["blocks"][0]["text"])') $(dochave "$SEGDOC2")" "6 one more thing done held"
 expect "revision after the appended record" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']")" 2
 expect "the uncommitted part says where each of its turns begins" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c 'import json,sys;u=json.load(sys.stdin)["body"]["uncommitted"];t=u["turns"];print(len(t),t[0]["first_ordinal"]==u["first_ordinal"],t[0].get("first_event",0)==u.get("first_event",0),[m["first_ordinal"] for m in t]==sorted(m["first_ordinal"] for m in t))')" "1 True True True"
@@ -515,7 +515,7 @@ PYCDX
   cxt segments push --json >"$TMP/segments-codex.json" 2>"$TMP/segments-codex.err"
   expect "a Codex thread is uploaded with its conversation and a summary" "$(python3 -c "import json;r=json.load(open('$TMP/segments-codex.json'));s=[x for x in r['sessions'] if x['provider']=='codex'];print(len(s),s[0]['id'],s[0]['content'],s[0].get('summaries'),s[0].get('content_reason'))")" "1 e2e-codex stored 1 None"
   expect "its commit leads to its segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$CDXSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r[0]["segment"];print(len(r),r[0]["provider"],r[0]["session_id"],r[0]["rule"],s["first"],s["last"])')" "1 codex e2e-codex printed-number t1/u1 t1/a1"
-  CDXDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | jget "['body']['content']['doc']")"
+  CDXDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | jget "['body']['content']['parts'][-1]['doc']")"
   expect "its report places its ranges in the content document" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];s=b["segments"][0];u=b["uncommitted"];print(b["content"]["events"],s.get("first_event",0),s["events"],u["first_event"],u["events"])')" "6 0 4 4 2"
   # An item kind cxt has no rule for is carried whole under its own name, and the folder a command ran in stays on this computer.
   expect "its content document holds the items as events" "$(segevents codex e2e-codex | python3 -c 'import json,sys;e=json.load(sys.stdin);print(len(e),e[0]["blocks"][0]["text"],e[1]["tool_name"],e[2]["kind"],e[3]["blocks"][0]["text"],e[5]["tool_name"],e[5]["input"]["scene"],"cwd" in e[1]["input"])') $(dochave "$CDXDOC")" "6 commit the codex change shell tool_result committed the codex change unknown:holoDeck bridge False held"
@@ -526,7 +526,7 @@ fi
 # A session is removed from the server for every reader, is not sent again by
 # an upload or by the collector, and comes back when it is allowed again.
 segheld() { curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(sum(1 for s in json.load(sys.stdin) if s["session_id"]=="e2e-segments"))'; }
-SEGDOCLAST="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['doc']")"
+SEGDOCLAST="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['parts'][-1]['doc']")"
 expect "removing without confirmation removes nothing and fails" "$(cxt segments remove claude e2e-segments >/dev/null 2>&1; echo "$? $(segheld)")" "1 1"
 expect "a teammate who does not manage the repository cannot remove another member's session" "$(ccurl -sb "$JS" -o /dev/null -w '%{http_code}' -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(segheld)" "403 1"
 expect "the uploader removes its session" "$(cxt segments remove claude e2e-segments --yes --json | python3 -c 'import json,sys;r=json.load(sys.stdin)["removed"];print(len(r),r[0]["session_id"],r[0]["by_you"])')" "1 e2e-segments True"

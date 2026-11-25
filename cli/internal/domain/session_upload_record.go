@@ -20,10 +20,12 @@ type SessionUploadLogEntry struct {
 	// that sent no report.
 	ServerHash ContentHash `json:"server_hash,omitempty"`
 	Reason     string      `json:"reason,omitempty"`
-	// Content is what happened to the conversation, Doc the document the
-	// report names for it and Events how many events it holds.
+	// Content is what happened to the conversation. The report names Parts
+	// documents for it, of which Doc is the last, the one that is another
+	// when the session goes on; Events is how many events they hold.
 	Content       SegmentContentState `json:"content,omitempty"`
 	Doc           ContentHash         `json:"doc,omitempty"`
+	Parts         int                 `json:"parts,omitempty"`
 	Events        int                 `json:"events,omitempty"`
 	ContentReason string              `json:"content_reason,omitempty"`
 	Summaries     int                 `json:"summaries,omitempty"`
@@ -69,10 +71,12 @@ type SessionUploadListing struct {
 	// ReportKept and ConversationKept say which copies are there.
 	ReportKept       bool `json:"report_kept"`
 	ConversationKept bool `json:"conversation_kept"`
-	// Segments, Records, Doc and Events are read from the report copy.
+	// Segments, Records, Doc, Parts and Events are read from the report
+	// copy. The conversation is kept in Parts documents; Doc is the last.
 	Segments int         `json:"segments"`
 	Records  int         `json:"records"`
 	Doc      ContentHash `json:"doc,omitempty"`
+	Parts    int         `json:"parts,omitempty"`
 	Events   int         `json:"events,omitempty"`
 	// ReportHash is the fingerprint of the report copy, to compare with the
 	// log and with the server.
@@ -97,7 +101,7 @@ func SessionUploadListingOf(record SessionUploadRecord, lastOnly bool) SessionUp
 	if report := record.Report; report != nil {
 		out.Segments, out.Records, out.ReportHash = len(report.Segments), report.Records, Fingerprint(*report)
 		if report.Content != nil {
-			out.Doc, out.Events = report.Content.Doc, report.Content.Events
+			out.Doc, out.Parts, out.Events = report.Content.Last(), len(report.Content.Parts), report.Content.Events
 		}
 	}
 	return out

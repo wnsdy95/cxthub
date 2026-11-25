@@ -474,7 +474,7 @@ func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 	if original.Content == nil || original.Content.Events != 4 || original.Segments[0].FirstEvent != 0 || original.Segments[0].Events != 4 {
 		t.Fatalf("original content = %+v segment = %+v", original.Content, original.Segments[0].AnchoredRange)
 	}
-	raw, events := fake.document(t, string(original.Content.Doc))
+	raw, events := fake.document(t, string(original.Content.Last()))
 	if len(events) != 4 || events[0]["kind"] != "message" || events[1]["kind"] != "tool_call" || events[2]["kind"] != "tool_result" || !strings.Contains(raw, "committed") {
 		t.Fatalf("original document: %s", raw)
 	}
@@ -483,7 +483,7 @@ func TestSegmentsPushUploadsEachSessionAndWritesOnlyBranchIDs(t *testing.T) {
 	if fork.Content == nil || fork.Content.Events != 1 || fork.Uncommitted.FirstEvent != 0 || fork.Uncommitted.Events != 1 {
 		t.Fatalf("fork content = %+v part = %+v", fork.Content, fork.Uncommitted.AnchoredRange)
 	}
-	if raw, events := fake.document(t, string(fork.Content.Doc)); len(events) != 1 || !strings.Contains(raw, "continue elsewhere") || strings.Contains(raw, "commit it") {
+	if raw, events := fake.document(t, string(fork.Content.Last())); len(events) != 1 || !strings.Contains(raw, "continue elsewhere") || strings.Contains(raw, "commit it") {
 		t.Fatalf("fork document: %s", raw)
 	}
 	if helper.Content == nil || helper.Content.Events != 1 {

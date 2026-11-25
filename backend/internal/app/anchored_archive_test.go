@@ -30,7 +30,7 @@ func TestArchivedSessionIsLeftOutOfListsAndStillOpened(t *testing.T) {
 	}
 	talked := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 2,
-		Content: &domain.AnchoredContent{Doc: anchoredSearchDoc(t, fixture, "Plan the parser.", "The parser is committed."), Events: 2},
+		Content: &domain.AnchoredContent{Events: 2, Parts: []domain.AnchoredContentPart{{Doc: anchoredSearchDoc(t, fixture, "Plan the parser.", "The parser is committed."), Events: 2}}},
 		Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 			Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber}}}},
 	}
@@ -141,7 +141,7 @@ func TestArchivedSessionIsLeftOutOfListsAndStillOpened(t *testing.T) {
 	if shared, err := service.GetAnchoredSession(bob, repo, domain.ProviderClaude, "session-1"); err != nil || shared.ArchivedAt == nil || shared.ArchivedBy != "" || len(shared.Body.Segments) != 1 {
 		t.Fatalf("another member opening it: %+v %v", shared, err)
 	}
-	if access, err := service.AnchoredSessionContentAccess(bob, repo, domain.ProviderClaude, "session-1"); err != nil || access.Doc == "" {
+	if access, err := service.AnchoredSessionContentAccess(bob, repo, domain.ProviderClaude, "session-1"); err != nil || len(access.Parts) != 1 {
 		t.Fatalf("its conversation: %+v %v", access, err)
 	}
 

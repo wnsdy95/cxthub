@@ -199,7 +199,7 @@ func TestOpenViewHoldsOnlyWhatIsOpen(t *testing.T) {
 		t.Fatalf("second segment open: %+v", view.Body)
 	}
 	// What is the uploader's alone is not in the view.
-	if view.Uploader != "member-a" || view.Body.Machine != "" || view.Body.AgentCalls != nil || view.Body.Content == nil || view.Body.Content.Doc != "" ||
+	if view.Uploader != "member-a" || view.Body.Machine != "" || view.Body.AgentCalls != nil || view.Body.Content == nil || len(view.Body.Content.Parts) != 0 ||
 		view.Body.Content.Events != 10 || view.Body.Records != 2 || view.Body.EndedAt != nil {
 		t.Fatalf("what the view carries: %+v", view.Body)
 	}
@@ -244,5 +244,28 @@ func TestOpenViewHoldsOnlyWhatIsOpen(t *testing.T) {
 		if err := report.Validate(); !errors.Is(err, ErrValidation) {
 			t.Errorf("a report with %s was accepted: %v", name, err)
 		}
+	}
+}
+
+// An event is read from the document that holds it, at its place within that
+// document.
+func TestAnchoredContentAccessFindsTheDocumentOfAnEvent(t *testing.T) {
+	first, second, third := HashContent([]byte("first")), HashContent([]byte("second")), HashContent([]byte("third"))
+	access := AnchoredContentAccess{Parts: []AnchoredContentPart{{Doc: first, Events: 4}, {Doc: second, Events: 1}, {Doc: third, Events: 5}}, Events: 10}
+	for index, want := range map[int]struct {
+		doc        ContentHash
+		first, end int
+		found      bool
+	}{
+		0: {first, 0, 4, true}, 3: {first, 0, 4, true}, 4: {second, 4, 5, true}, 5: {third, 5, 10, true}, 9: {third, 5, 10, true},
+		10: {}, -1: {}, 1000: {},
+	} {
+		doc, begins, end, found := access.Part(index)
+		if doc != want.doc || begins != want.first || end != want.end || found != want.found {
+			t.Errorf("event %d: document %s, events [%d, %d), found %v", index, doc, begins, end, found)
+		}
+	}
+	if _, _, _, found := (AnchoredContentAccess{}).Part(0); found {
+		t.Fatal("a conversation without documents held an event")
 	}
 }

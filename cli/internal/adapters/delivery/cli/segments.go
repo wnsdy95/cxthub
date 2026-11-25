@@ -350,7 +350,7 @@ func RunSegmentsLog(ctx context.Context, care inbound.SegmentCare, cwd string, s
 		}
 		switch {
 		case listing.ConversationKept && listing.Doc != "":
-			fmt.Fprintf(w, "  conversation copy  kept; the report names %d events in %s\n", listing.Events, listing.Doc)
+			fmt.Fprintf(w, "  conversation copy  kept; the report names %d events in %d documents, the last %s\n", listing.Events, listing.Parts, listing.Doc)
 		case listing.ConversationKept:
 			fmt.Fprintln(w, "  conversation copy  kept; the report names no conversation")
 		default:

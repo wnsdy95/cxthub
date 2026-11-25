@@ -141,7 +141,7 @@ func (f *uploadRecordsStore) ReadSessionUpload(_ context.Context, _ string, key 
 
 func TestUploadLogListsEverySessionOrOneWithItsWholeLog(t *testing.T) {
 	claude, codex := domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "session-1"}, domain.SessionUploadKey{Provider: domain.ProviderCodex, SessionID: "thread-1"}
-	body := domain.AnchoredSessionBody{RuleVersion: 1, Records: 5, Segments: []domain.AnchoredSegment{{}, {}}, Content: &domain.AnchoredContent{Doc: "sha256:doc", Events: 9}}
+	body := domain.AnchoredSessionBody{RuleVersion: 1, Records: 5, Segments: []domain.AnchoredSegment{{}, {}}, Content: &domain.AnchoredContent{Events: 9, Parts: []domain.AnchoredContentPart{{Doc: "sha256:first", Events: 7}, {Doc: "sha256:doc", Events: 2}}}}
 	store := &uploadRecordsStore{records: map[domain.SessionUploadKey]domain.SessionUploadRecord{
 		claude: {Provider: claude.Provider, SessionID: claude.SessionID, Report: &body, ConversationKept: true, Log: []domain.SessionUploadLogEntry{
 			{At: "2031-01-02T03:00:00Z", Report: domain.SegmentPushStored, Revision: 1}, {At: "2031-01-02T03:01:00Z", Report: domain.SegmentPushStored, Revision: 2}}},
@@ -153,7 +153,7 @@ func TestUploadLogListsEverySessionOrOneWithItsWholeLog(t *testing.T) {
 		t.Fatalf("all: %+v %v", all, err)
 	}
 	// Every session with what its copies hold and its last line only.
-	if first := all[0]; first.SessionID != "session-1" || !first.ReportKept || !first.ConversationKept || first.Segments != 2 || first.Records != 5 || first.Doc != "sha256:doc" || first.Events != 9 ||
+	if first := all[0]; first.SessionID != "session-1" || !first.ReportKept || !first.ConversationKept || first.Segments != 2 || first.Records != 5 || first.Doc != "sha256:doc" || first.Parts != 2 || first.Events != 9 ||
 		first.ReportHash != domain.Fingerprint(body) || first.Lines != 2 || len(first.Log) != 1 || first.Log[0].Revision != 2 {
 		t.Fatalf("first: %+v", first)
 	}

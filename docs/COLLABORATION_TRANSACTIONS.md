@@ -14,7 +14,7 @@ multi-file or multi-server ACID transactions.
 |---|---|
 | Conversation document | The verified document, the repository's ownership of it, its read index, the completion of its finalization job and transactional storage accounting |
 | Session report | The report, the index from commits to its segments, and the ranges that the report opens; the role of the caller is rechecked in the same transaction |
-| Session removal | The report with its commit links, its summaries and its open ranges, the remembered removal, and the deletion of the conversation document when no other report uses it |
+| Session removal | The report with its commit links, its summaries and its open ranges, the remembered removal, and the deletion of each document of the conversation that no other report uses |
 | Delivered push | The branch ledger observation and the request for a read of the remote |
 | Encrypted secrets | Replace the exact editing revision and enqueue its notification in the same transaction |
 | New member accepts invite | Membership change and notification; concurrent acceptance creates one event |

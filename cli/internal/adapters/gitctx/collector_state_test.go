@@ -20,7 +20,7 @@ func TestCollectorStateIsAMemoryThatMayBeLost(t *testing.T) {
 	}
 	state := domain.CollectorState{Version: domain.CollectorStateVersion, EnabledAt: "2031-01-02T03:04:05Z", Target: "repository",
 		Sessions: map[string]domain.CollectorSessionState{"claude/s1": {Sent: "fingerprint", ContentKey: "key",
-			Content: &domain.AnchoredContent{Doc: domain.HashContent([]byte("doc")), Events: 3}, FirstEvent: []int{0, 2}, Events: []int{2, 1}}},
+			Content: &domain.AnchoredContent{Events: 3, Parts: []domain.AnchoredContentPart{{Doc: domain.HashContent([]byte("doc")), Events: 3}}}, FirstEvent: []int{0, 2}, Events: []int{2, 1}}},
 		Branches: "branches", LastRun: &domain.CollectorRun{At: "2031-01-02T03:05:00Z", Stored: 1}}
 	if err := files.SaveCollectorState(ctx, repo, state); err != nil {
 		t.Fatal(err)

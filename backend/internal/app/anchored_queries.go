@@ -15,9 +15,10 @@ const anchoredFragmentEvents = 50
 // ReadAnchoredSessionFragments reads a session's conversation from one event
 // on, as pieces of JSON within a byte budget, and only what the caller may
 // read of it. Where the event asked for is not open, reading goes on at the
-// next open part; a page never crosses into a part that is not open. The
-// document is read with the server's own access once that is decided, as the
-// search does; its hash is never answered.
+// next open part; a page never crosses into a part that is not open. A page
+// also ends where the document that holds its events ends; the next page goes
+// on in the next document. The documents are read with the server's own
+// access once that is decided, as the search does; no hash is ever answered.
 func (s *Service) ReadAnchoredSessionFragments(ctx context.Context, repo domain.ContentHash, provider domain.ProviderKind, sessionID string, index, offset, limit, budget int) (domain.AnchoredFragmentPage, error) {
 	if index < 0 || offset < 0 || limit < 1 || limit > anchoredFragmentEvents || budget < 1 {
 		return domain.AnchoredFragmentPage{}, fmt.Errorf("%w: invalid event range", domain.ErrValidation)
@@ -34,30 +35,40 @@ func (s *Service) ReadAnchoredSessionFragments(ctx context.Context, repo domain.
 	if start != index {
 		offset = 0
 	}
-	if limit > span[1]-start {
-		limit = span[1] - start
+	// The parts of a stored report hold every event of it, so an open event
+	// lies in one. Were it in none, the reader below would be asked for no
+	// event of no document, which it refuses.
+	doc, first, end, _ := access.Part(start)
+	if end > span[1] {
+		end = span[1]
 	}
-	read, err := s.ReadDocFragments(inbound.WithSystemActor(ctx), repo, access.Doc, start, offset, limit, budget)
+	if limit > end-start {
+		limit = end - start
+	}
+	read, err := s.ReadDocFragments(inbound.WithSystemActor(ctx), repo, doc, start-first, offset, limit, budget)
 	if err != nil {
 		return domain.AnchoredFragmentPage{}, err
 	}
 	// What the reader returned is held to what was asked: from the start, in
-	// order, and never past the end of the open span.
+	// order, and never past the end of the open span or of the document.
+	// The reader counts events within its document; the page counts them
+	// within the conversation.
 	last := start
 	for _, fragment := range read.Fragments {
-		if fragment.Index < last || fragment.Index >= span[1] || len(page.Fragments) >= limit+1 {
+		fragment.Index += first
+		if fragment.Index < last || fragment.Index >= end || len(page.Fragments) >= limit+1 {
 			break
 		}
 		last = fragment.Index
 		page.Fragments = append(page.Fragments, fragment)
 	}
-	next, nextOffset := read.NextIndex, read.NextOffset
+	next, nextOffset := read.NextIndex+first, read.NextOffset
 	if next < start || (next == start && nextOffset <= offset) {
 		return domain.AnchoredFragmentPage{}, fmt.Errorf("%w: a conversation page did not advance", domain.ErrIntegrity)
 	}
-	if next >= span[1] {
-		// The span is read; go on at the next open one, if any.
-		next, nextOffset = span[1], 0
+	if next >= end {
+		// The span or the document is read; go on at the next open event, if any.
+		next, nextOffset = end, 0
 	}
 	if following, _, more := access.From(next); more {
 		if following != next {

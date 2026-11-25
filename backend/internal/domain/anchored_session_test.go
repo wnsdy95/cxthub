@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -265,7 +266,7 @@ func TestAnchoredTurnMarksGoForwardThroughTheUncommittedPart(t *testing.T) {
 // report in a content document of ten events; the second range holds none.
 func anchoredTestBodyWithContent() AnchoredSessionBody {
 	body := anchoredTestBody()
-	body.Content = &AnchoredContent{Doc: HashContent([]byte("synthetic content")), Events: 10}
+	body.Content = &AnchoredContent{Events: 10, Parts: []AnchoredContentPart{{Doc: HashContent([]byte("synthetic content")), Events: 10}}}
 	body.Segments[0].FirstEvent, body.Segments[0].Events = 0, 6
 	body.Segments[1].FirstEvent, body.Segments[1].Events = 6, 0
 	body.Uncommitted.FirstEvent, body.Uncommitted.Events = 6, 4
@@ -277,15 +278,61 @@ func TestAnchoredSessionContentCoversItsDocumentExactly(t *testing.T) {
 		t.Fatalf("a well-formed report with content was rejected: %v", err)
 	}
 	root := anchoredTestBodyWithContent()
-	root.Content.Identity = DocumentIdentityRootV1
+	root.Content.Parts[0].Identity = DocumentIdentityRootV1
 	if err := root.Validate(); err != nil {
 		t.Fatalf("a root document was rejected: %v", err)
 	}
+	other := HashContent([]byte("the second document"))
+	parts := func(events ...int) []AnchoredContentPart {
+		out := make([]AnchoredContentPart, len(events))
+		for index, count := range events {
+			out[index] = AnchoredContentPart{Doc: HashContent([]byte{byte(index), byte(index >> 8)}), Events: count}
+		}
+		return out
+	}
+	// A conversation in several documents, up to the most a report may name.
+	several := anchoredTestBodyWithContent()
+	several.Content.Parts = parts(6, 1, 3)
+	if err := several.Validate(); err != nil {
+		t.Fatalf("a conversation in three documents was rejected: %v", err)
+	}
+	// most is a report whose conversation is one event in each of count documents.
+	most := func(count int) AnchoredSessionBody {
+		body := anchoredTestBodyWithContent()
+		body.Content.Events, body.Content.Parts = count, parts(make([]int, count)...)
+		for index := range body.Content.Parts {
+			body.Content.Parts[index].Events = 1
+		}
+		body.Uncommitted.Events = count - 6
+		return body
+	}
+	if err := most(4096).Validate(); err != nil {
+		t.Fatalf("a conversation in 4096 documents was rejected: %v", err)
+	}
+	if err := most(4097).Validate(); !errors.Is(err, ErrValidation) {
+		t.Fatalf("a conversation in 4097 documents was accepted: %v", err)
+	}
 	for name, change := range map[string]func(*AnchoredSessionBody){
-		"a document that is not a hash":       func(b *AnchoredSessionBody) { b.Content.Doc = "content" },
-		"an unknown identity":                 func(b *AnchoredSessionBody) { b.Content.Identity = "another-identity" },
-		"a document without events":           func(b *AnchoredSessionBody) { b.Content.Events = 0 },
-		"more events than a document holds":   func(b *AnchoredSessionBody) { b.Content.Events = 100_000_001 },
+		"a document that is not a hash": func(b *AnchoredSessionBody) { b.Content.Parts[0].Doc = "content" },
+		"an unknown identity":           func(b *AnchoredSessionBody) { b.Content.Parts[0].Identity = "another-identity" },
+		// Every range holds no event, so that only the missing parts are wrong.
+		"content without a document": func(b *AnchoredSessionBody) {
+			b.Content.Events, b.Content.Parts = 0, nil
+			b.Segments[0].Events, b.Segments[1].FirstEvent, b.Uncommitted.FirstEvent, b.Uncommitted.Events = 0, 0, 0, 0
+		},
+		"a document without events": func(b *AnchoredSessionBody) {
+			b.Content.Parts = []AnchoredContentPart{b.Content.Parts[0], {Doc: other}}
+		},
+		"documents that hold fewer events": func(b *AnchoredSessionBody) { b.Content.Parts = parts(6, 3) },
+		"documents that hold more events":  func(b *AnchoredSessionBody) { b.Content.Parts = parts(6, 5) },
+		// Counts that add up to ten only because the sum wraps around.
+		"event counts that overflow": func(b *AnchoredSessionBody) { b.Content.Parts = parts(math.MaxInt, math.MaxInt, 12) },
+		"a document named as two parts": func(b *AnchoredSessionBody) {
+			b.Content.Parts = []AnchoredContentPart{{Doc: other, Events: 6}, {Doc: other, Events: 4}}
+		},
+		"more events than a conversation holds": func(b *AnchoredSessionBody) {
+			b.Content.Events, b.Content.Parts[0].Events, b.Uncommitted.Events = 100_000_001, 100_000_001, 100_000_001-6
+		},
 		"a gap between two ranges":            func(b *AnchoredSessionBody) { b.Segments[1].FirstEvent = 7 },
 		"an overlap of two ranges":            func(b *AnchoredSessionBody) { b.Uncommitted.FirstEvent = 5 },
 		"a range that does not start at zero": func(b *AnchoredSessionBody) { b.Segments[0].FirstEvent = 1 },
@@ -302,7 +349,7 @@ func TestAnchoredSessionContentCoversItsDocumentExactly(t *testing.T) {
 	}
 	// Content is part of what the report says: another document is another report.
 	first, second := anchoredTestBodyWithContent(), anchoredTestBodyWithContent()
-	second.Content.Doc = HashContent([]byte("another document"))
+	second.Content.Parts[0].Doc = HashContent([]byte("another document"))
 	a, errA := first.Canonical().Hash()
 	b, errB := second.Canonical().Hash()
 	plain, errC := anchoredTestBody().Canonical().Hash()
@@ -311,8 +358,11 @@ func TestAnchoredSessionContentCoversItsDocumentExactly(t *testing.T) {
 	}
 	// The canonical form does not share the caller's content value.
 	canonical := first.Canonical()
-	canonical.Content.Events = 99
-	if first.Content.Events != 10 {
+	canonical.Content.Events, canonical.Content.Parts[0].Events = 99, 99
+	if first.Content.Events != 10 || first.Content.Parts[0].Events != 10 {
 		t.Fatal("the canonical form shares its content with the report it was made from")
+	}
+	if docs := several.Content.Docs(); len(docs) != 3 || docs[0] != several.Content.Parts[0].Doc || docs[2] != several.Content.Parts[2].Doc || (*AnchoredContent)(nil).Docs() != nil {
+		t.Fatalf("the documents of a conversation: %v", docs)
 	}
 }

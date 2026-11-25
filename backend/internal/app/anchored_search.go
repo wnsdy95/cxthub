@@ -13,8 +13,8 @@ import (
 // anchoredSearchSession is one conversation the query is looked for in: the
 // document that holds it, and the session as the reader may read it.
 type anchoredSearchSession struct {
-	doc  domain.ContentHash
-	view domain.AnchoredSession
+	parts []domain.AnchoredContentPart
+	view  domain.AnchoredSession
 }
 
 // anchoredSearchFound is what the repository itself answers: everything but
@@ -166,7 +166,7 @@ func (s *Service) searchAnchoredRepository(ctx context.Context, repo domain.Cont
 			}
 		}
 		if content := session.Body.Content; content != nil {
-			found.sessions = append(found.sessions, anchoredSearchSession{doc: content.Doc, view: view})
+			found.sessions = append(found.sessions, anchoredSearchSession{parts: content.Parts, view: view})
 		}
 	}
 	return found, nil
@@ -189,7 +189,11 @@ func (s *Service) searchAnchoredConversations(ctx context.Context, repo domain.C
 	}
 	read := 0
 	for _, session := range sessions {
-		if matching != nil && !matching[session.doc] {
+		holds := matching == nil
+		for _, part := range session.parts {
+			holds = holds || matching[part.Doc]
+		}
+		if !holds {
 			continue
 		}
 		if len(hits) >= domain.AnchoredSearchKindLimit || read == domain.AnchoredSearchSessions {
@@ -197,30 +201,39 @@ func (s *Service) searchAnchoredConversations(ctx context.Context, repo domain.C
 			break
 		}
 		read++
-		// More events are asked for than are kept: a match in a part that is
-		// not open to the reader is passed over.
-		events, err := s.SearchDocEvents(reads, repo, session.doc, query, -1, 200)
-		if err != nil {
-			// A conversation that cannot be read yet is left out; the next
-			// search may find it.
-			truncated = true
-			continue
-		}
-		kept := 0
-		for _, event := range events {
-			segmentNo, rest, ok := session.view.Body.EventPart(event.Index)
-			if !ok {
+		// The conversation is its documents one after another: a match is
+		// placed by where its document begins in the conversation.
+		kept, first, full := 0, 0, false
+		for _, part := range session.parts {
+			begins := first
+			first += part.Events
+			if full || (matching != nil && !matching[part.Doc]) {
 				continue
 			}
-			if kept == domain.AnchoredSearchSessionHits || len(hits) == domain.AnchoredSearchKindLimit {
+			// More events are asked for than are kept: a match in a part
+			// that is not open to the reader is passed over.
+			events, err := s.SearchDocEvents(reads, repo, part.Doc, query, -1, 200)
+			if err != nil {
+				// A conversation that cannot be read yet is left out; the
+				// next search may find it.
 				truncated = true
-				break
+				continue
 			}
-			snippet, _ := domain.AnchoredSnippet(event.Text, query)
-			index := event.Index
-			hits = append(hits, domain.AnchoredSearchHit{Kind: domain.AnchoredHitSegment, Title: event.Role, Snippet: snippet,
-				Provider: session.view.Provider, SessionID: session.view.SessionID, SegmentNo: segmentNo, Rest: rest, Event: &index, At: session.view.Body.EndedAt})
-			kept++
+			for _, event := range events {
+				index := begins + event.Index
+				segmentNo, rest, ok := session.view.Body.EventPart(index)
+				if !ok {
+					continue
+				}
+				if kept == domain.AnchoredSearchSessionHits || len(hits) == domain.AnchoredSearchKindLimit {
+					truncated, full = true, true
+					break
+				}
+				snippet, _ := domain.AnchoredSnippet(event.Text, query)
+				hits = append(hits, domain.AnchoredSearchHit{Kind: domain.AnchoredHitSegment, Title: event.Role, Snippet: snippet,
+					Provider: session.view.Provider, SessionID: session.view.SessionID, SegmentNo: segmentNo, Rest: rest, Event: &index, At: session.view.Body.EndedAt})
+				kept++
+			}
 		}
 	}
 	return hits, truncated, nil

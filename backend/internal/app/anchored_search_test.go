@@ -13,14 +13,38 @@ import (
 // anchoredSearchDoc stores a content document whose events say the texts.
 func anchoredSearchDoc(t *testing.T, fixture *remoteGitTestFixture, texts ...string) domain.ContentHash {
 	t.Helper()
+	return anchoredConversationDoc(t, fixture, 0, texts...)
+}
+
+// anchoredConversationParts stores a conversation of one message for each
+// text as documents of the given sizes, one after another, and returns them
+// as the parts of a report's content.
+func anchoredConversationParts(t *testing.T, fixture *remoteGitTestFixture, texts []string, sizes ...int) *domain.AnchoredContent {
+	t.Helper()
+	content := &domain.AnchoredContent{Events: len(texts)}
+	first := 0
+	for _, size := range sizes {
+		content.Parts = append(content.Parts, domain.AnchoredContentPart{Doc: anchoredConversationDoc(t, fixture, first, texts[first:first+size]...), Events: size})
+		first += size
+	}
+	if first != len(texts) {
+		t.Fatalf("the sizes hold %d events, the conversation has %d", first, len(texts))
+	}
+	return content
+}
+
+// anchoredConversationDoc stores a document of one message for each text;
+// the first message is the one at position first of its conversation.
+func anchoredConversationDoc(t *testing.T, fixture *remoteGitTestFixture, first int, texts ...string) domain.ContentHash {
+	t.Helper()
 	doc := domain.SessionDoc{CIR: domain.CIRDocument{}}
 	doc.CIR.Envelope.CIRVersion, doc.CIR.Envelope.SourceProvider = "1", "claude"
 	for index, text := range texts {
 		role := domain.Role("user")
-		if index%2 == 1 {
+		if (first+index)%2 == 1 {
 			role = "assistant"
 		}
-		doc.CIR.Events = append(doc.CIR.Events, domain.CIREvent{Kind: domain.EventMessage, Seq: index, Role: role, Blocks: []domain.ContentBlock{{Type: "text", Text: text}}})
+		doc.CIR.Events = append(doc.CIR.Events, domain.CIREvent{Kind: domain.EventMessage, Seq: first + index, Role: role, Blocks: []domain.ContentBlock{{Type: "text", Text: text}}})
 	}
 	raw, err := domain.CanonicalBytes(doc.CIR)
 	if err != nil {
@@ -52,7 +76,15 @@ func anchoredSearchKinds(result domain.AnchoredSearchResult) []string {
 
 // One query is looked for in pull requests, branches, commits, conversations
 // and notes, and a reader is answered only from what that reader may read.
+// A conversation kept in several documents is searched as the same
+// conversation kept in one.
 func TestSearchFindsWhatTheReaderMayRead(t *testing.T) {
+	for name, sizes := range map[string][]int{"in one document": {5}, "in three documents": {2, 1, 2}, "a document for each event": {1, 1, 1, 1, 1}} {
+		t.Run(name, func(t *testing.T) { searchFindsWhatTheReaderMayRead(t, sizes) })
+	}
+}
+
+func searchFindsWhatTheReaderMayRead(t *testing.T, sizes []int) {
 	fixture := anchoredPublicationFixture(t)
 	service, provider, repo := fixture.service, fixture.provider, fixture.repo
 	alice, bob, visitor := anchoredActor("member-a"), anchoredActor("member-b"), context.Background()
@@ -68,9 +100,10 @@ func TestSearchFindsWhatTheReaderMayRead(t *testing.T) {
 	if _, err := fixture.pass(t); err != nil {
 		t.Fatal(err)
 	}
+	texts := []string{"Plan the parser.", "The parser is committed.", "A hidden parser idea.", "Nothing here.", "Parser leftovers."}
 	body := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 5, Machine: "laptop",
-		Content: &domain.AnchoredContent{Doc: anchoredSearchDoc(t, fixture, "Plan the parser.", "The parser is committed.", "A hidden parser idea.", "Nothing here.", "Parser leftovers."), Events: 5},
+		Content: anchoredConversationParts(t, fixture, texts, sizes...),
 		Segments: []domain.AnchoredSegment{
 			{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber, Subject: "Add the Parser"}}},
@@ -108,6 +141,9 @@ func TestSearchFindsWhatTheReaderMayRead(t *testing.T) {
 		switch {
 		case hit.Kind == domain.AnchoredHitSegment && (hit.Provider != domain.ProviderClaude || hit.SessionID != "session-1" || hit.Event == nil):
 			t.Fatalf("a conversation hit does not say where it is: %+v", hit)
+		// The event is numbered by its place in the conversation, whichever document holds it.
+		case hit.Kind == domain.AnchoredHitSegment && (*hit.Event < 0 || *hit.Event >= len(texts) || texts[*hit.Event] != hit.Snippet):
+			t.Fatalf("a conversation hit names another event than the one it shows: %+v", hit)
 		case hit.Kind == domain.AnchoredHitSegment && strings.HasPrefix(hit.Snippet, "A hidden") && (hit.SegmentNo != 2 || hit.Rest || hit.Title != "user"):
 			t.Fatalf("the hit of the second segment: %+v", hit)
 		case hit.Kind == domain.AnchoredHitPull && (hit.Pull != 7 || hit.Branch != "topic-7"):

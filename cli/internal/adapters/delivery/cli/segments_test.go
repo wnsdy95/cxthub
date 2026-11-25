@@ -377,7 +377,7 @@ func (f *segmentCareFake) UploadLog(_ context.Context, _ string, key *domain.Ses
 func TestSegmentsLogSaysWhatIsKeptAndWhatHappened(t *testing.T) {
 	doc := domain.ContentHash("sha256:" + strings.Repeat("a", 64))
 	care := &segmentCareFake{listings: []domain.SessionUploadListing{
-		{Provider: domain.ProviderClaude, SessionID: "session-1", ReportKept: true, ConversationKept: true, Segments: 2, Records: 9, Doc: doc, Events: 14, Lines: 3,
+		{Provider: domain.ProviderClaude, SessionID: "session-1", ReportKept: true, ConversationKept: true, Segments: 2, Records: 9, Doc: doc, Parts: 3, Events: 14, Lines: 3,
 			Log: []domain.SessionUploadLogEntry{{At: "2031-01-02T03:04:05Z", Automatic: true, Report: domain.SegmentPushStored, Revision: 4, Content: domain.SegmentContentStored, Events: 14, Summaries: 1}}},
 		{Provider: domain.ProviderCodex, SessionID: "thread-1", Lines: 2,
 			Log: []domain.SessionUploadLogEntry{{At: "2031-01-02T03:05:05Z", Report: domain.SegmentPushRefused, Reason: "synthetic refusal"}}},
@@ -390,7 +390,7 @@ func TestSegmentsLogSaysWhatIsKeptAndWhatHappened(t *testing.T) {
 		"Upload records kept under .cxt/sessions (2 sessions)",
 		"claude session-1",
 		"  report copy        2 segments, 9 records",
-		"  conversation copy  kept; the report names 14 events in " + string(doc),
+		"  conversation copy  kept; the report names 14 events in 3 documents, the last " + string(doc),
 		"  last of 3 log lines:",
 		"  2031-01-02T03:04:05Z  automatic  report stored (revision 4) · conversation of 14 events · 1 summaries stored",
 		"codex thread-1",

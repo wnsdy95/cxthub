@@ -83,7 +83,7 @@ func TestSessionOpensToTheTeamAsWhatItExplainsIsPushed(t *testing.T) {
 	local, written := anchoredTestSHA("b"), remoteGitTestTime(50)
 	body := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 7, Machine: "laptop",
-		Content: &domain.AnchoredContent{Doc: anchoredPublicationDoc(t, fixture, 7), Events: 7},
+		Content: &domain.AnchoredContent{Events: 7, Parts: []domain.AnchoredContentPart{{Doc: anchoredPublicationDoc(t, fixture, 7), Events: 7}}},
 		Segments: []domain.AnchoredSegment{
 			{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber}}},
@@ -123,7 +123,7 @@ func TestSessionOpensToTheTeamAsWhatItExplainsIsPushed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if access.Doc != body.Content.Doc || access.Events != 7 {
+		if !reflect.DeepEqual(access.Parts, body.Content.Parts) || access.Events != 7 {
 			t.Fatalf("content access: %+v", access)
 		}
 		return access.Open
@@ -133,7 +133,7 @@ func TestSessionOpensToTheTeamAsWhatItExplainsIsPushed(t *testing.T) {
 	view := read(bob)
 	if view.Uploader != "member-a" || len(view.Body.Segments) != 2 || view.Body.Segments[0].Hidden || view.Body.Segments[0].Last != "m2" ||
 		!reflect.DeepEqual(view.Body.Segments[1], domain.AnchoredSegment{Commits: []domain.AnchoredCommit{}, Hidden: true}) ||
-		view.Body.Uncommitted != nil || view.Body.Records != 2 || view.Body.Machine != "" || view.Body.Content.Doc != "" {
+		view.Body.Uncommitted != nil || view.Body.Records != 2 || view.Body.Machine != "" || len(view.Body.Content.Parts) != 0 {
 		t.Fatalf("what another member reads at first: %+v", view.Body)
 	}
 	if open := events(bob); !reflect.DeepEqual(open, [][2]int{{0, 2}}) {
@@ -157,7 +157,7 @@ func TestSessionOpensToTheTeamAsWhatItExplainsIsPushed(t *testing.T) {
 		!reflect.DeepEqual(own.Commits[1].OnRemote, &missing) || len(own.Commits[1].Copies) != 0 {
 		t.Fatalf("what the uploader sees listed: %+v", own)
 	}
-	if full := read(alice); full.Body.Machine != "laptop" || full.Body.Uncommitted == nil || full.Body.Content.Doc != body.Content.Doc || full.Body.Segments[1].Hidden {
+	if full := read(alice); full.Body.Machine != "laptop" || full.Body.Uncommitted == nil || !reflect.DeepEqual(full.Body.Content, body.Content) || full.Body.Segments[1].Hidden {
 		t.Fatalf("what the uploader reads: %+v", full.Body)
 	}
 	if open := events(alice); !reflect.DeepEqual(open, [][2]int{{0, 7}}) {
@@ -402,7 +402,7 @@ func TestAReaderWithoutAnAccountReadsWhatIsOpen(t *testing.T) {
 	}
 	body := domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.AnchoredScopeFolder, Records: 5, Machine: "laptop",
-		Content: &domain.AnchoredContent{Doc: anchoredPublicationDoc(t, fixture, 5), Events: 5},
+		Content: &domain.AnchoredContent{Events: 5, Parts: []domain.AnchoredContentPart{{Doc: anchoredPublicationDoc(t, fixture, 5), Events: 5}}},
 		Segments: []domain.AnchoredSegment{
 			{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", FirstOrdinal: 0, LastOrdinal: 1, FirstEvent: 0, Events: 2},
 				Commits: []domain.AnchoredCommit{{SHA: pushed, Rule: domain.AnchoredLinkPrintedNumber}}},
@@ -445,7 +445,7 @@ func TestAReaderWithoutAnAccountReadsWhatIsOpen(t *testing.T) {
 	}
 	seen, err := service.GetAnchoredSession(visitor, repo, domain.ProviderClaude, "session-1")
 	if err != nil || !reflect.DeepEqual(seen, theirs) || seen.Body.Segments[0].Hidden || !seen.Body.Segments[1].Hidden || seen.Body.Uncommitted != nil ||
-		seen.Body.Machine != "" || seen.Body.Content.Doc != "" || len(seen.Body.AgentCalls) != 0 {
+		seen.Body.Machine != "" || len(seen.Body.Content.Parts) != 0 || len(seen.Body.AgentCalls) != 0 {
 		t.Fatalf("what a reader without an account reads: %+v %v", seen.Body, err)
 	}
 	listed, err := service.ListAnchoredSessions(visitor, repo)

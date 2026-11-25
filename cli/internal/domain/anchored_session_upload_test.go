@@ -136,21 +136,39 @@ func TestAnchoredUploadPlacesEveryTurnOfTheUncommittedPartInTheContent(t *testin
 	if !reflect.DeepEqual(body.Uncommitted.Turns, want) || body.Uncommitted.FirstOrdinal != 3 || body.Uncommitted.LastOrdinal != 7 {
 		t.Fatalf("uncommitted part = %+v", body.Uncommitted)
 	}
-	ref := DocumentRef{Hash: HashContent([]byte("synthetic content")), Identity: DocumentIdentityLegacy}
+	// The conversation is kept in two documents, of six and of three events.
+	parts := []AnchoredContentPart{
+		{Doc: HashContent([]byte("synthetic content")), Identity: DocumentIdentityLegacy, Events: 6},
+		{Doc: HashContent([]byte("synthetic content goes on")), Identity: DocumentIdentityLegacy, Events: 3},
+	}
 	// One range for the segment and one for each turn; a turn may hold no event.
-	if !body.AttachContent(ref, 9, []int{0, 4, 7, 7}, []int{4, 3, 0, 2}) {
+	if !body.AttachContent(parts, []int{0, 4, 7, 7}, []int{4, 3, 0, 2}) {
 		t.Fatal("content with one range per turn was not attached")
 	}
 	if body.Segments[0].FirstEvent != 0 || body.Segments[0].Events != 4 || body.Uncommitted.FirstEvent != 4 || body.Uncommitted.Events != 5 ||
-		body.Uncommitted.Turns[0].FirstEvent != 4 || body.Uncommitted.Turns[1].FirstEvent != 7 || body.Uncommitted.Turns[2].FirstEvent != 7 || body.Content.Events != 9 {
+		body.Uncommitted.Turns[0].FirstEvent != 4 || body.Uncommitted.Turns[1].FirstEvent != 7 || body.Uncommitted.Turns[2].FirstEvent != 7 {
 		t.Fatalf("placed content: %+v %+v", body.Segments[0].AnchoredRange, body.Uncommitted)
 	}
+	// The report names the documents in order, says how many events they
+	// hold together, and does not share the list it was given.
+	if !reflect.DeepEqual(body.Content, &AnchoredContent{Events: 9, Parts: parts}) || body.Content.Last() != parts[1].Doc || (AnchoredContent{}).Last() != "" {
+		t.Fatalf("the content of the report: %+v", body.Content)
+	}
+	parts[0].Events = 100
+	if body.Content.Parts[0].Events != 6 {
+		t.Fatal("the report shares the list of documents with its caller")
+	}
+	parts[0].Events = 6
 	// Content read in other ranges than the report has is not attached.
 	for name, counts := range map[string][]int{"one range for the whole part": {4, 5}, "one range too many": {4, 3, 0, 1, 1}} {
 		other := BuildAnchoredUploadPlan(report, nil, "laptop").Uploads[0].Body
-		if other.AttachContent(ref, 9, make([]int, len(counts)), counts) {
+		if other.AttachContent(parts, make([]int, len(counts)), counts) {
 			t.Errorf("%s was attached", name)
 		}
+	}
+	// A conversation without a document is none.
+	if other := BuildAnchoredUploadPlan(report, nil, "laptop").Uploads[0].Body; other.AttachContent(nil, []int{0, 4, 7, 7}, []int{4, 3, 0, 2}) || other.Content != nil {
+		t.Fatal("content without a document was attached")
 	}
 }
 
