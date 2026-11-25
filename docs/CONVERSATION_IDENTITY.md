@@ -86,9 +86,9 @@ differently:
 
 If the earlier document is no longer owned at publication, every chunk is
 checked as before. The hint that names the earlier document is per process, so
-after a restart the next document is finalized in full. This targets a session
-that grows: each upload of its document repeats almost all of the previous
-one.
+after a restart the next document is finalized in full. This targets the last
+document of a session that goes on: until it is full, each upload of it
+repeats almost all of the previous one.
 
 ## Rollout requirements
 

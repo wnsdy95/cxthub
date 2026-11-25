@@ -21,11 +21,78 @@ import (
 type CodexContent struct {
 	home string
 	rows SQLiteRows
+	// partBytes is where a part of a conversation is sealed.
+	partBytes int
 }
 
 // NewCodexContent reads the databases under the Codex home directory.
 func NewCodexContent(home string) *CodexContent {
-	return &CodexContent{home: home, rows: sqliteProgramRows}
+	return &CodexContent{home: home, rows: sqliteProgramRows, partBytes: domain.SessionPartBytes}
+}
+
+// ReadSessionParts converts the records named by ids, in order, into the
+// parts of the thread's conversation that follow what from stands for. A
+// record that is no longer among the thread's items is listed as missing,
+// never skipped silently. The thread's items are asked for anew every time:
+// no place to go on from is remembered.
+func (c *CodexContent) ReadSessionParts(ctx context.Context, repoRoot string, records domain.SessionRecordRanges, ids []string, from domain.SessionPartResume) (domain.SessionPartsRead, error) {
+	out := domain.SessionPartsRead{}
+	if records.Provider != domain.ProviderCodex || !codexThreadID.MatchString(records.ID) {
+		return out, fmt.Errorf("no Codex thread is recorded for session %s", records.ID)
+	}
+	items, err := c.threadItems(ctx, records.ID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		if errors.Is(err, errSQLiteMissing) {
+			return out, fmt.Errorf("session %s: the sqlite3 program is not installed, so the thread's items were not read", records.ID)
+		}
+		if errors.Is(err, errCodexHistoryMissing) {
+			return out, fmt.Errorf("session %s: %w", records.ID, err)
+		}
+		return out, fmt.Errorf("session %s: %s", records.ID, codexReadFailure(ctx, c.home, c.rows, err))
+	}
+	sizes := make([]int, len(ids))
+	for index, id := range ids {
+		item, ok := items[id]
+		if !ok {
+			out.Missing = append(out.Missing, id)
+			continue
+		}
+		sizes[index] = len(item.JSON)
+	}
+	if len(out.Missing) > 0 {
+		return out, nil
+	}
+	cut, sealed := domain.CutSessionParts(sizes, c.partBytes)
+	envelope, events, at := from.Envelope, from.Events, 0
+	// The thread is named by the report's own identifier.
+	envelope.SessionOriginID = records.ID
+	for index, held := range cut {
+		if err := ctx.Err(); err != nil {
+			return domain.SessionPartsRead{}, err
+		}
+		chosen := make([]codec.CodexItem, 0, held)
+		for _, id := range ids[at : at+held] {
+			item := items[id]
+			// The same two masking steps capture applies: the repository's
+			// listed secret values on the tool's bytes, then the pattern scrub
+			// on events.
+			item.JSON, _ = capture.ScrubSecrets(item.JSON, repoRoot)
+			chosen = append(chosen, item)
+		}
+		doc, counts, err := codec.DecodeCodexItemsCounted(chosen, envelope, events)
+		if err != nil {
+			return domain.SessionPartsRead{}, fmt.Errorf("session %s: %w", records.ID, err)
+		}
+		doc = capture.ScrubDoc(doc, repoRoot)
+		envelope = doc.Envelope
+		events += len(doc.Events)
+		out.Parts = append(out.Parts, domain.SessionPartRead{Counts: counts, Events: doc.Events, Envelope: envelope, Sealed: sealed || index < len(cut)-1})
+		at += held
+	}
+	return out, nil
 }
 
 // errCodexHistoryMissing reports that Codex keeps no thread history database
@@ -62,58 +129,4 @@ func (c *CodexContent) threadItems(ctx context.Context, threadID string) (map[st
 		return nil, err
 	}
 	return items, nil
-}
-
-// ReadSessionContent reads the named records of the thread records.ID. A
-// record that is no longer among the thread's items is listed as missing,
-// never skipped silently.
-func (c *CodexContent) ReadSessionContent(ctx context.Context, repoRoot string, records domain.SessionRecordRanges) (domain.SessionContent, error) {
-	out := domain.SessionContent{Ranges: make([][]domain.Event, len(records.Ranges))}
-	if records.Provider != domain.ProviderCodex || !codexThreadID.MatchString(records.ID) {
-		return out, fmt.Errorf("no Codex thread is recorded for session %s", records.ID)
-	}
-	items, err := c.threadItems(ctx, records.ID)
-	if err != nil {
-		if ctx.Err() != nil {
-			return out, ctx.Err()
-		}
-		if errors.Is(err, errSQLiteMissing) {
-			return out, fmt.Errorf("session %s: the sqlite3 program is not installed, so the thread's items were not read", records.ID)
-		}
-		if errors.Is(err, errCodexHistoryMissing) {
-			return out, fmt.Errorf("session %s: %w", records.ID, err)
-		}
-		return out, fmt.Errorf("session %s: %s", records.ID, codexReadFailure(ctx, c.home, c.rows, err))
-	}
-	envelope, events := domain.Envelope{}, 0
-	for index, ids := range records.Ranges {
-		chosen := make([]codec.CodexItem, 0, len(ids))
-		for _, id := range ids {
-			item, ok := items[id]
-			if !ok {
-				out.Missing = append(out.Missing, id)
-				continue
-			}
-			// The same two masking steps capture applies: the repository's
-			// listed secret values on the tool's bytes, then the pattern scrub
-			// on events.
-			scrubbed, _ := capture.ScrubSecrets(item.JSON, repoRoot)
-			item.JSON = scrubbed
-			chosen = append(chosen, item)
-		}
-		if err := ctx.Err(); err != nil {
-			return out, err
-		}
-		doc, err := codec.DecodeCodexItems(chosen, envelope, events)
-		if err != nil {
-			return out, fmt.Errorf("session %s: %w", records.ID, err)
-		}
-		doc = capture.ScrubDoc(doc, repoRoot)
-		envelope = doc.Envelope
-		events += len(doc.Events)
-		out.Ranges[index] = doc.Events
-	}
-	envelope.SessionOriginID = records.ID
-	out.Envelope = envelope
-	return out, nil
 }

@@ -15,24 +15,29 @@ type uploadRecordsFake struct {
 	err  error
 }
 
+// uploadRecordKept is one call to keep a copy: events is how many events the
+// documents built in that run hold, -1 when none was built, and built names
+// those documents.
 type uploadRecordKept struct {
 	cwd, session string
 	events       int
+	built        []domain.ContentHash
 	entry        domain.SessionUploadLogEntry
 }
 
-func (f *uploadRecordsFake) KeepSessionUpload(_ context.Context, cwd string, upload domain.AnchoredSessionUpload, conversation *domain.CIRDocument, entry domain.SessionUploadLogEntry) error {
+func (f *uploadRecordsFake) KeepSessionUpload(_ context.Context, cwd string, upload domain.AnchoredSessionUpload, built []domain.SessionPartDocument, entry domain.SessionUploadLogEntry) error {
 	if f.err != nil {
 		return f.err
 	}
-	events := -1
-	if conversation != nil {
-		events = len(conversation.Events)
+	kept := uploadRecordKept{cwd: cwd, session: domain.CollectorSessionKey(upload.Provider, upload.SessionID), events: -1, entry: entry}
+	for _, part := range built {
+		kept.events = max(kept.events, 0) + len(part.Document.Events)
+		kept.built = append(kept.built, part.Doc)
 	}
 	if entry.ReportHash != domain.Fingerprint(upload.Body) {
 		return errors.New("the entry does not name the report that was sent")
 	}
-	f.kept = append(f.kept, uploadRecordKept{cwd: cwd, session: domain.CollectorSessionKey(upload.Provider, upload.SessionID), events: events, entry: entry})
+	f.kept = append(f.kept, kept)
 	return nil
 }
 

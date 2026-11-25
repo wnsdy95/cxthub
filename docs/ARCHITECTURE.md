@@ -152,18 +152,27 @@ both modules carry for the conversation manifest byte for byte identical.
 
 ## Conversation documents
 
-The conversation of a session is one document. The upload negotiates which
-chunks the server lacks (`POST /push/negotiate`), sends only those
-(`POST /push/chunks`), and submits the document for finalization
-(`POST /push/doc-jobs`, with `GET /push/doc-jobs/{jobID}` for its state). The
-finalization worker verifies the whole document before it is published. A
-session that grew sends what was appended. `POST /push/objects` takes
-conversation documents; a batch that carries a capture is refused.
+The conversation of a session is kept in one or more documents, one after
+another. The CLI takes the session's own records in order and seals a part
+where the bytes of its records, as the tool keeps them, reach 4 MiB. A sealed
+part never changes, so a session that goes on gets a further document for what
+was added, and only that is converted and sent.
 
-A report names its document and, for every segment and for the uncommitted
-part, where the range starts in the document and how many events it holds. A
-report that names a document the repository does not hold is refused. When a
-report names another document than the one before, the earlier document is
+Each document is uploaded the same way. The upload negotiates which chunks the
+server lacks (`POST /push/negotiate`), sends only those (`POST /push/chunks`),
+and submits the document for finalization (`POST /push/doc-jobs`, with
+`GET /push/doc-jobs/{jobID}` for its state). The finalization worker verifies
+the whole document before it is published. The process that stored the job
+wakes its own worker when the job is committed, and a worker takes the jobs
+that wait one after another; a worker in another process finds a job by
+looking once a second. `POST /push/objects` takes conversation documents; a
+batch that carries a capture is refused.
+
+A report names its documents in order, with the number of events in each
+(`content.parts`), and, for every segment and for the uncommitted part, where
+the range starts in the conversation and how many events it holds. A report
+that names a document the repository does not hold is refused. When a report
+no longer names a document the report before it named, that document is
 deleted when no other report uses it.
 
 Two document identities exist: the hash of the canonical document, and the

@@ -51,20 +51,30 @@ var codexItemLocal = map[string]struct{}{"cwd": {}, "processId": {}, "scriptPath
 // the same thread. An item that is not a JSON object with a type is an error:
 // that is not an item at all.
 func DecodeCodexItems(items []CodexItem, previous domain.Envelope, start int) (domain.CIRDocument, error) {
+	doc, _, err := DecodeCodexItemsCounted(items, previous, start)
+	return doc, err
+}
+
+// DecodeCodexItemsCounted is DecodeCodexItems that also says how many events
+// each item gave, in order. An item is converted on its own, so the counts
+// place every item in the events.
+func DecodeCodexItemsCounted(items []CodexItem, previous domain.Envelope, start int) (domain.CIRDocument, []int, error) {
 	doc := domain.CIRDocument{Envelope: previous}
 	doc.Envelope.SourceModels = append([]string(nil), previous.SourceModels...)
 	doc.Envelope.CIRVersion = domain.CIRVersionV1
 	doc.Envelope.SourceProvider = domain.ProviderCodex
 	doc.Envelope.Fidelity = domain.FidelityFull
+	counts := make([]int, 0, len(items))
 	for _, item := range items {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(item.JSON, &fields); err != nil {
-			return domain.CIRDocument{}, fmt.Errorf("codex item: %w", err)
+			return domain.CIRDocument{}, nil, fmt.Errorf("codex item: %w", err)
 		}
 		kind, id := codexString(fields["type"]), codexString(fields["id"])
 		if kind == "" {
-			return domain.CIRDocument{}, fmt.Errorf("codex item %q has no type", id)
+			return domain.CIRDocument{}, nil, fmt.Errorf("codex item %q has no type", id)
 		}
+		held := len(doc.Events)
 		for _, event := range codexItemEvents(kind, id, fields) {
 			event.Seq = start + len(doc.Events)
 			if event.ID == "" {
@@ -75,8 +85,9 @@ func DecodeCodexItems(items []CodexItem, previous domain.Envelope, start int) (d
 			}
 			doc.Events = append(doc.Events, event)
 		}
+		counts = append(counts, len(doc.Events)-held)
 	}
-	return doc, nil
+	return doc, counts, nil
 }
 
 // codexItemEvents gives the events one item becomes: a message, a reasoning

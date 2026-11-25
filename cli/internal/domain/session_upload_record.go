@@ -59,8 +59,10 @@ type SessionUploadRecord struct {
 	// ConversationKept says that a copy of the conversation is kept, whether
 	// or not it was read into Conversation.
 	ConversationKept bool
-	Conversation     *CIRDocument
-	Log              []SessionUploadLogEntry
+	// Parts holds the documents of the conversation in the order the report
+	// names them, when they were asked for and every one of them is kept.
+	Parts []SessionPartDocument
+	Log   []SessionUploadLogEntry
 }
 
 // SessionUploadListing is what the records kept on this computer say about

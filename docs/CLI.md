@@ -298,22 +298,27 @@ server, marked removed, so that a note you wrote about it stays readable. Two
 folders with the same name are listed once. Only you can read the list. A list
 the server refuses does not stop the reports; the next run sends it again.
 
-The conversation is uploaded as one document per session:
+The conversation is uploaded in documents, one or more per session:
 
-- It holds the session's own records only, in order. A record copied from an
+- They hold the session's own records only, in order. A record copied from an
   earlier session is stored once, with that session, so a forked session's
-  document holds only what the fork added.
+  documents hold only what the fork added.
+- A part of the conversation is sealed where the bytes of its records, as the
+  tool keeps them, reach 4 MiB. A sealed part is one document and never
+  changes. What follows the last sealed part is one more document, which is
+  built again while the session goes on. A session shorter than that is one
+  document.
 - The records are read back from where the tool keeps them, converted to one
   format for both tools, and masked by two steps: the values listed
   in `.cxtsecrets`, then the pattern scrub of the repository's `secrets.scrub`
   tier.
-- It goes through the existing document path. The server says which chunks it
-  lacks, only those are sent, and the server verifies the whole document. A
-  session that grew sends what was appended; one that did not change sends
-  nothing.
-- The report names the document and, for every segment and for the uncommitted
-  part, where it starts in the document and how many events it holds.
-- The document's own header names the session, and no folder or branch. What
+- Each document goes through the existing document path. The server says
+  which chunks it lacks, only those are sent, and the server verifies the
+  whole document. A session that did not change sends nothing.
+- The report names the documents in order and, for every segment and for the
+  uncommitted part, where it starts in the conversation and how many events
+  it holds.
+- A document's own header names the session, and no folder or branch. What
   the conversation itself says, including paths in commands and their output,
   is uploaded as recorded, after masking.
 
@@ -330,8 +335,8 @@ records were listed from, one record per item of the thread:
   a file stay on this computer.
 
 A session is uploaded as its report alone, and listed as without conversation,
-when its records changed while they were read, when its document was not taken
-by the server, or when a Codex thread's items could not be read (no `sqlite3`
+when its records changed while they were read, when a document of it was not
+taken by the server, or when a Codex thread's items could not be read (no `sqlite3`
 program, or a database Codex laid out another way); each one says why. That is
 not a failure of the command: the next run uploads it.
 
@@ -473,28 +478,33 @@ keeps what it sent for a session in the repository's `.cxt` folder, which Git
 ignores:
 
 ```text
-.cxt/sessions/<tool>/<session id>/report.json           the report as it was last sent and taken
-.cxt/sessions/<tool>/<session id>/conversation.json.gz  the conversation document as it was last sent
-.cxt/sessions/<tool>/<session id>/log.jsonl             one line per run that sent something or failed
+.cxt/sessions/<tool>/<session id>/report.json                      the report as it was last sent and taken
+.cxt/sessions/<tool>/<session id>/conversation/<document>.json.gz  each document of the conversation that report names
+.cxt/sessions/<tool>/<session id>/log.jsonl                        one line per run that sent something or failed
 ```
 
 - They are a record, kept so that the server and this computer can be compared
   when they do not agree, and so that what was sent can be sent again after
   the tool removed its own files. No upload is computed from them: every run
   still reads the tools' records and Git.
-- The conversation copy is the masked document that was uploaded, not the
-  tool's file. It is written again only when the document changed. Together
-  the copies take about as much disk as the conversations uploaded from this
-  computer, compressed.
+- A conversation is uploaded in parts, one document each, and the copy is
+  those documents, each named by the hash the report names it by. They are the
+  masked documents that were uploaded, not the tool's file. A session that
+  goes on gets a file for what was added and another one for its last part;
+  the files of the parts before stay as they are, and a file of a document the
+  kept report no longer names is removed. Together the copies take about as
+  much disk as the conversations uploaded from this computer, compressed.
 - A log line says when the run was, whether a person asked for it or the
   collector ran, what the server did with the report (`stored` with its
-  revision, `unchanged`, or `refused` with the reason), which document the
-  report names for the conversation, how many summaries were stored, and why
-  something was not. A run in which nothing was sent and nothing failed leaves
+  revision, `unchanged`, or `refused` with the reason), how many documents the
+  report names for the conversation (`parts`) and which is the last of them
+  (`doc`), how many summaries were stored, and why something was not. A run in which nothing was sent and nothing failed leaves
   no line, and a failure that repeats is logged once.
-- The files are readable by you alone. A copy that cannot be written does not
-  stop the upload: the result says so under `local_records` (`kept`,
-  `not_kept`) and the next run tries again. In a repository where cxt is not
+- The files are readable by you alone. A copy that cannot be written, or
+  that lacks a document its report names, does not stop the upload: the
+  result says so under `local_records` (`kept`, `not_kept`). The next run
+  that reads that session's conversation builds all of it and writes the copy
+  whole; `cxt segments push` does that at once. In a repository where cxt is not
   set up, nothing is kept.
 
 ### `cxt segments log`
@@ -507,8 +517,10 @@ cxt segments log claude|codex <session id> [--json]
 Shows what `.cxt/sessions` keeps, from this computer alone: every session with
 what its copies hold and its last log line, or one session with its whole log.
 It reads only and needs no server. `--json` prints one object with `version`
-and `sessions`; each session carries `report_kept`, `conversation_kept`,
-`segments`, `records`, `doc`, `events`, `report_hash`, `lines` and `log`.
+and `sessions`; each session carries `report_kept`, `conversation_kept`
+(true when every document the report names is kept), `segments`, `records`,
+`parts`, `doc` (the last of the documents), `events`, `report_hash`, `lines`
+and `log`.
 `report_hash` is the fingerprint of the report copy; the last `stored` or
 `unchanged` line of the log carries the same value when the copy is the report
 the server last took.
@@ -759,9 +771,13 @@ only by a run that is about to send something.
 One collector runs per repository at a time, detached from the hook that woke
 it. A wake that arrives while one runs is answered by one more run afterwards.
 Two runs start at least 10 seconds apart. A run that took long is followed by
-a longer pause, six times what it took and at most 10 minutes: a run reads a
-session that went on from its beginning, which takes about a second for a
-6 MB session file and about ten seconds for an 80 MB one. After a run that
+a longer pause, six times what it took and at most 10 minutes. A run converts
+and sends only what follows the last sealed part of a session that went on,
+which takes about a second also for a session file of more than 100 MB. It
+reads a session from its beginning, which takes about ten seconds for such a
+file, when it sees the session for the first time, when a summary is written
+(a summary is written from the whole conversation), when the masking rules
+changed, and when the copy on this computer was not whole. After a run that
 failed for a reason that holds for every session (no login, no access, a
 server without these routes, no connection) the next one waits 10 minutes. A failed run never
 fails the hook, Git or the agent.
@@ -769,8 +785,9 @@ fails the hook, Git or the agent.
 What it keeps on this computer:
 
 - beside Git's own files of the repository (`<git-dir>/cxt/`): what was last
-  sent (`collector-v1.json`, with the moment automatic reading began and how
-  the last run ended), a lock and a request marker. This is a memory of what
+  sent (`collector-v1.json`, with the moment automatic reading began, how
+  the last run ended and, for each session, where its sealed parts end and
+  which documents hold them), a lock and a request marker. This is a memory of what
   was sent, not a source of facts: deleting it only makes the next run begin
   again from now and send more.
 - in your user cache directory (`cxthub/session-records-v1`): what the readers
@@ -780,7 +797,7 @@ What it keeps on this computer:
 - in the repository's `.cxt` folder (`.cxt/sessions`): the same copies
   `cxt segments push` keeps, each log line marked as automatic. A run that
   did not read a session's conversation back, because nothing of it changed,
-  leaves the conversation copy as it is.
+  leaves the conversation copies as they are.
   It can be deleted at any time.
 
 `cxt segments` and `cxt segments push` use neither: they read everything again

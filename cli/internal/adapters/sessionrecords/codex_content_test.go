@@ -40,7 +40,7 @@ func codexContentInsert(thread, turn, id string, ordinal int, item map[string]an
 		strings.ReplaceAll(string(raw), "'", "''") + "','" + item["type"].(string) + "',0,NULL,NULL);\n"
 }
 
-func TestCodexContentReadsTheNamedRecordsRangeByRange(t *testing.T) {
+func TestCodexContentReadsTheNamedRecords(t *testing.T) {
 	home := codexContentHome(t,
 		codexContentInsert("lead", "t1", "u", 1, map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "Add the parser, it's needed."}}})+
 			codexContentInsert("lead", "t1", "c", 2, map[string]any{"type": "commandExecution", "command": "git commit -m parser", "cwd": "/work/app", "aggregatedOutput": "[main abc1234] parser", "exitCode": 0, "status": "completed"})+
@@ -48,20 +48,21 @@ func TestCodexContentReadsTheNamedRecordsRangeByRange(t *testing.T) {
 			codexContentInsert("lead", "t2", "n", 4, map[string]any{"type": "holoDeck", "scene": "bridge"})+
 			codexContentInsert("other", "t1", "u", 1, map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "Another thread."}}}))
 	before, _ := os.ReadDir(home)
-	content, err := NewCodexContent(home).ReadSessionContent(context.Background(), t.TempDir(), domain.SessionRecordRanges{
-		Provider: domain.ProviderCodex, ID: "lead", Ranges: [][]string{{"t1/u", "t1/c"}, {}, {"t2/a", "t2/n"}}})
+	read, err := NewCodexContent(home).ReadSessionParts(context.Background(), t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"},
+		[]string{"t1/u", "t1/c", "t2/a", "t2/n"}, domain.SessionPartResume{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(content.Missing) != 0 || len(content.Ranges) != 3 || len(content.Ranges[0]) != 3 || len(content.Ranges[1]) != 0 || len(content.Ranges[2]) != 2 {
-		t.Fatalf("ranges: %+v missing %v", content.Ranges, content.Missing)
+	// A thread this short is one open part; the command is a call and its result.
+	if len(read.Missing) != 0 || len(read.Parts) != 1 || read.Parts[0].Sealed || !reflect.DeepEqual(read.Parts[0].Counts, []int{1, 2, 1, 1}) {
+		t.Fatalf("parts: %+v missing %v", read.Parts, read.Missing)
 	}
-	if content.Envelope.SourceProvider != domain.ProviderCodex || content.Envelope.SessionOriginID != "lead" {
-		t.Fatalf("envelope: %+v", content.Envelope)
+	doc := domain.SessionPartsConversation(read.Parts)
+	if doc.Envelope.SourceProvider != domain.ProviderCodex || doc.Envelope.SessionOriginID != "lead" || len(doc.Events) != 5 {
+		t.Fatalf("envelope: %+v events %d", doc.Envelope, len(doc.Events))
 	}
-	doc, first, count := content.Document()
-	if !reflect.DeepEqual(first, []int{0, 3, 3}) || !reflect.DeepEqual(count, []int{3, 0, 2}) || len(doc.Events) != 5 {
-		t.Fatalf("document: first %v count %v events %d", first, count, len(doc.Events))
+	if _, err := domain.CanonicalBytes(read.Parts[0].Document()); err != nil {
+		t.Fatalf("the part is not a canonical document: %v", err)
 	}
 	var kinds []string
 	for index, event := range doc.Events {
@@ -94,11 +95,11 @@ func TestCodexContentMasksLikeCapture(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".cxtsecrets"), []byte("synthetic-listed-value-123\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	content, err := NewCodexContent(home).ReadSessionContent(context.Background(), dir, domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead", Ranges: [][]string{{"t1/u", "t1/c"}}})
+	read, err := NewCodexContent(home).ReadSessionParts(context.Background(), dir, domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}, []string{"t1/u", "t1/c"}, domain.SessionPartResume{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, _, _ := content.Document()
+	doc := domain.SessionPartsConversation(read.Parts)
 	raw, _ := json.Marshal(doc)
 	if strings.Contains(string(raw), "synthetic-listed-value-123") || strings.Contains(string(raw), "synthetic-password") {
 		t.Fatalf("a secret reached the content: %s", raw)
@@ -112,38 +113,38 @@ func TestCodexContentNamesWhatItCannotReadBack(t *testing.T) {
 	home := codexContentHome(t, codexContentInsert("lead", "t1", "u", 1, map[string]any{"type": "agentMessage", "text": "kept"}))
 	reader := NewCodexContent(home)
 	ctx := context.Background()
-	// A record that is gone is named, and the rest is still read.
-	content, err := reader.ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead", Ranges: [][]string{{"t1/u", "t9/gone"}}})
-	if err != nil || !reflect.DeepEqual(content.Missing, []string{"t9/gone"}) || len(content.Ranges[0]) != 1 {
-		t.Fatalf("a missing record: %+v %v", content, err)
+	// A record that is gone is named, and nothing is returned of the rest.
+	read, err := reader.ReadSessionParts(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}, []string{"t1/u", "t9/gone"}, domain.SessionPartResume{})
+	if err != nil || !reflect.DeepEqual(read.Missing, []string{"t9/gone"}) || len(read.Parts) != 0 {
+		t.Fatalf("a missing record: %+v %v", read, err)
 	}
 	// A thread with no item is all missing.
-	if content, err := reader.ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "nobody", Ranges: [][]string{{"t1/u"}}}); err != nil || len(content.Missing) != 1 {
-		t.Fatalf("an unknown thread: %+v %v", content, err)
+	if read, err := reader.ReadSessionParts(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "nobody"}, []string{"t1/u"}, domain.SessionPartResume{}); err != nil || len(read.Missing) != 1 {
+		t.Fatalf("an unknown thread: %+v %v", read, err)
 	}
 	for name, records := range map[string]domain.SessionRecordRanges{
 		"another tool's session":        {Provider: domain.ProviderClaude, ID: "lead"},
 		"an identifier that is not one": {Provider: domain.ProviderCodex, ID: "lead' OR '1'='1"},
 	} {
-		if _, err := reader.ReadSessionContent(ctx, t.TempDir(), records); err == nil {
+		if _, err := reader.ReadSessionParts(ctx, t.TempDir(), records, []string{"t1/u"}, domain.SessionPartResume{}); err == nil {
 			t.Fatalf("%s was read", name)
 		}
 	}
 	// No database, a database of another layout, and no sqlite3 program are
 	// each said in words.
-	if _, err := NewCodexContent(t.TempDir()).ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}); err == nil || !strings.Contains(err.Error(), "no Codex thread history database") {
+	if _, err := NewCodexContent(t.TempDir()).ReadSessionParts(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}, []string{"t1/u"}, domain.SessionPartResume{}); err == nil || !strings.Contains(err.Error(), "no Codex thread history database") {
 		t.Fatalf("no database: %v", err)
 	}
 	changed := t.TempDir()
 	if out, err := exec.Command("sqlite3", filepath.Join(changed, "thread_history_2.sqlite"), "CREATE TABLE thread_items (thread_id TEXT, payload TEXT);").CombinedOutput(); err != nil {
 		t.Fatalf("sqlite3: %v\n%s", err, out)
 	}
-	if _, err := NewCodexContent(changed).ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}); err == nil || !strings.Contains(err.Error(), "thread_history_2.sqlite: table thread_items has no column") || !strings.Contains(err.Error(), "A newer cxt is needed") {
+	if _, err := NewCodexContent(changed).ReadSessionParts(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}, []string{"t1/u"}, domain.SessionPartResume{}); err == nil || !strings.Contains(err.Error(), "thread_history_2.sqlite: table thread_items has no column") || !strings.Contains(err.Error(), "A newer cxt is needed") {
 		t.Fatalf("another layout: %v", err)
 	}
 	missing := NewCodexContent(home)
 	missing.rows = func(context.Context, string, string, func(json.RawMessage) error) error { return errSQLiteMissing }
-	if _, err := missing.ReadSessionContent(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}); err == nil || !strings.Contains(err.Error(), "sqlite3 program is not installed") {
+	if _, err := missing.ReadSessionParts(ctx, t.TempDir(), domain.SessionRecordRanges{Provider: domain.ProviderCodex, ID: "lead"}, []string{"t1/u"}, domain.SessionPartResume{}); err == nil || !strings.Contains(err.Error(), "sqlite3 program is not installed") {
 		t.Fatalf("no sqlite3 program: %v", err)
 	}
 }

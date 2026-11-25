@@ -323,6 +323,35 @@ git push -q origin "$PROBE2:refs/heads/probe2" 2>"$TMP/push2.err"
 expect "the collector runs within seconds of the push although its pause is nine minutes" "$(until_true 30 ran_after_long && echo ran)" "ran"
 expect "that run tells the server of the push" "$(until_true 30 origin_of "$PROBE2" probe2 >/dev/null && origin_of "$PROBE2" probe2)" "cxt claimed own well"
 
+echo "── C6. a long session is kept in several documents, and going on leaves the earlier ones as they are"
+# A conversation is uploaded in parts: a part is sealed where the records of it reach four megabytes. This session
+# is a prompt and four answers of two and a half megabytes each, which is two sealed parts. When it goes on, the two
+# documents stay the documents they were and a third holds what follows them.
+python3 - "$(project_dir "$PWD")/sync-long.jsonl" "$PWD" "$(at 6)" <<'PYLONG'
+import json, sys
+path, cwd, moment = sys.argv[1:4]
+def record(kind, uuid, content, **more):
+    return json.dumps(dict({"type": kind, "uuid": uuid, "sessionId": "sync-long", "timestamp": moment, "cwd": cwd, "gitBranch": "main", "message": {"role": kind, "content": content}}, **more)) + "\n"
+with open(path, "w") as out:
+    out.write(record("user", "l0", "write four long answers", promptId="lp0"))
+    for index in range(1, 5):
+        out.write(record("assistant", "l%d" % index, [{"type": "text", "text": ("long answer %d " % index) * 180000}]))
+PYLONG
+parts_of() { on_server "$1" | python3 -c 'import json,sys;print(" ".join(p["doc"][7:19]+":"+str(p["events"]) for p in json.load(sys.stdin)["body"]["content"]["parts"]))'; }
+quiet
+printf '%s' "{\"session_id\":\"sync-long\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+until_true 90 on_server sync-long
+LONG1="$(parts_of sync-long)"
+expect "the long session is uploaded in two documents, of three and of two events" "$(echo "$LONG1" | wc -w | tr -d ' ') $(echo "$LONG1" | sed 's/[0-9a-f]*://g')" "2 3 2"
+session_goes_on "$PWD" sync-long main l5 "$(at 7)"
+quiet
+printf '%s' "{\"session_id\":\"sync-long\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+until_true 90 revision_is sync-long 2
+LONG2="$(parts_of sync-long)"
+expect "after it went on the two documents are the same and a third holds what was added" "$(echo "$LONG2" | wc -w | tr -d ' ') $([ "${LONG2#"$LONG1" }" != "$LONG2" ] && echo same) ${LONG2##*:}" "3 same 1"
+expect "a page of the conversation ends where its document ends and goes on in the next" "$(for offset in 0 3 5; do curl -fsSb "$J" "$B/repos/$RID/anchored-sessions/claude/sync-long/events?offset=$offset&limit=20" | python3 -c 'import json,sys;p=json.load(sys.stdin);print(len(p["events"]),p["events"][0]["event_index"],p["next"],end=" / ")'; done)" "3 0 3 / 2 3 5 / 1 5 -1 / "
+expect "the copy on this computer is the three documents" "$(ls .cxt/sessions/claude/sync-long/conversation | wc -l | tr -d ' ') $(cxt segments log claude sync-long --json | python3 -c 'import json,sys;s=json.load(sys.stdin)["sessions"][0];print(s["conversation_kept"],s["parts"],s["events"])')" "3 True 3 6"
+
 echo "── C4. the Git remote cxt follows need not be named origin"
 # What cxt reads of a Git remote is read of one remote: origin, unless setup is told another name or the repository
 # has no origin and exactly one remote. Nothing here talks to the server, and nothing here is committed: these are

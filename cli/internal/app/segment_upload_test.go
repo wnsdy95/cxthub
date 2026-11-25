@@ -139,32 +139,51 @@ func TestSegmentUploadStopsBeforeUploadingWhenItCannotRead(t *testing.T) {
 }
 
 type segmentContentSourceFake struct {
-	read    []domain.SessionRecordRanges
-	roots   []string
-	answer  func(domain.SessionRecordRanges) (domain.SessionContent, error)
+	read  []domain.SessionRecordRanges
+	roots []string
+	// asked and from are what each read was asked for and where it went on from.
+	asked   [][]string
+	from    []domain.SessionPartResume
+	answer  func(domain.SessionRecordRanges, []string, domain.SessionPartResume) (domain.SessionPartsRead, error)
 	missing map[string][]string
+	// sealedAt is how many records seal a part; zero reads everything as one open part.
+	sealedAt int
 }
 
-func (f *segmentContentSourceFake) ReadSessionContent(_ context.Context, root string, records domain.SessionRecordRanges) (domain.SessionContent, error) {
+func (f *segmentContentSourceFake) ReadSessionParts(_ context.Context, root string, records domain.SessionRecordRanges, ids []string, from domain.SessionPartResume) (domain.SessionPartsRead, error) {
 	f.read = append(f.read, records)
 	f.roots = append(f.roots, root)
+	f.asked = append(f.asked, append([]string(nil), ids...))
+	f.from = append(f.from, from)
 	if f.answer != nil {
-		return f.answer(records)
+		return f.answer(records, ids, from)
+	}
+	if missing := f.missing[records.ID]; len(missing) > 0 {
+		return domain.SessionPartsRead{Missing: missing}, nil
 	}
 	// Two events for every record, so ranges and events never coincide.
-	content := domain.SessionContent{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: records.Provider, SessionOriginID: records.ID}, Missing: f.missing[records.ID]}
-	seq := 0
-	for _, ids := range records.Ranges {
-		var events []domain.Event
-		for _, id := range ids {
+	out := domain.SessionPartsRead{}
+	envelope := domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: records.Provider, SessionOriginID: records.ID, Cwd: "/work/app"}
+	size, seq := f.sealedAt, from.Events
+	if size <= 0 {
+		size = len(ids) + 1
+	}
+	for at := 0; at < len(ids); at += size {
+		end := min(at+size, len(ids))
+		part := domain.SessionPartRead{Envelope: envelope, Sealed: end-at == size}
+		for _, id := range ids[at:end] {
+			part.Counts = append(part.Counts, 2)
 			for _, half := range []string{"a", "b"} {
-				events = append(events, domain.Event{Kind: domain.EventMessage, Seq: seq, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: id + half}}})
+				part.Events = append(part.Events, domain.Event{Kind: domain.EventMessage, Seq: seq, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: id + half}}})
 				seq++
 			}
 		}
-		content.Ranges = append(content.Ranges, events)
+		if part.Sealed {
+			part.Token = "after " + ids[end-1]
+		}
+		out.Parts = append(out.Parts, part)
 	}
-	return content, nil
+	return out, nil
 }
 
 type segmentContentRemoteFake struct {
@@ -177,7 +196,16 @@ func (f *segmentContentRemoteFake) PutSessionContent(_ context.Context, _ string
 	if f.answer != nil {
 		return f.answer(doc)
 	}
-	return domain.DocumentRef{Hash: domain.HashContent([]byte(doc.Envelope.SessionOriginID))}, nil
+	// A document that begins a conversation is known by its session; one that
+	// follows others also by where it begins and what it says.
+	name := doc.Envelope.SessionOriginID
+	if len(doc.Events) > 0 && doc.Events[0].Seq > 0 {
+		name += fmt.Sprintf(" from %d", doc.Events[0].Seq)
+		for _, event := range doc.Events {
+			name += " " + event.Blocks[0].Text
+		}
+	}
+	return domain.DocumentRef{Hash: domain.HashContent([]byte(name))}, nil
 }
 
 func TestSegmentUploadNamesTheConversationInTheReport(t *testing.T) {
@@ -228,15 +256,20 @@ func TestSegmentUploadKeepsAReportWhoseConversationCannotGoUp(t *testing.T) {
 	}{
 		"no reader for the tool":  {source: &segmentContentSourceFake{}, content: &segmentContentRemoteFake{}, reason: "is not read yet"},
 		"records gone since read": {source: &segmentContentSourceFake{missing: map[string][]string{"with-commit": {"m2"}}}, content: &segmentContentRemoteFake{}, sources: true, reason: "1 records changed while they were read"},
-		"the source cannot be read": {source: &segmentContentSourceFake{answer: func(domain.SessionRecordRanges) (domain.SessionContent, error) {
-			return domain.SessionContent{}, failure
+		"the source cannot be read": {source: &segmentContentSourceFake{answer: func(domain.SessionRecordRanges, []string, domain.SessionPartResume) (domain.SessionPartsRead, error) {
+			return domain.SessionPartsRead{}, failure
 		}}, content: &segmentContentRemoteFake{}, sources: true, reason: "synthetic read failure"},
 		"the document is refused": {source: &segmentContentSourceFake{}, sources: true, reason: "synthetic status 413", content: &segmentContentRemoteFake{answer: func(domain.CIRDocument) (domain.DocumentRef, error) {
 			return domain.DocumentRef{}, segmentUploadStatus(413)
 		}}},
-		"read in other ranges": {sources: true, reason: "other ranges", content: &segmentContentRemoteFake{}, source: &segmentContentSourceFake{answer: func(records domain.SessionRecordRanges) (domain.SessionContent, error) {
+		// The reader answers for one record fewer than it was asked for, or for one more.
+		"read for fewer records": {sources: true, reason: "other ranges", content: &segmentContentRemoteFake{}, source: &segmentContentSourceFake{answer: func(_ domain.SessionRecordRanges, ids []string, _ domain.SessionPartResume) (domain.SessionPartsRead, error) {
 			event := domain.Event{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "one"}}}
-			return domain.SessionContent{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1}, Ranges: [][]domain.Event{{event}, {event}, {event}}}, nil
+			return domain.SessionPartsRead{Parts: []domain.SessionPartRead{{Counts: make([]int, len(ids)-1), Events: []domain.Event{event}, Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1}}}}, nil
+		}}},
+		"read for more records": {sources: true, reason: "other ranges", content: &segmentContentRemoteFake{}, source: &segmentContentSourceFake{answer: func(_ domain.SessionRecordRanges, ids []string, _ domain.SessionPartResume) (domain.SessionPartsRead, error) {
+			event := domain.Event{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "one"}}}
+			return domain.SessionPartsRead{Parts: []domain.SessionPartRead{{Counts: make([]int, len(ids)+1), Events: []domain.Event{event}, Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1}}}}, nil
 		}}},
 	} {
 		remote := &segmentRemoteFake{}
@@ -252,6 +285,10 @@ func TestSegmentUploadKeepsAReportWhoseConversationCannotGoUp(t *testing.T) {
 		if first.Content != domain.SegmentContentNotUploaded || !strings.Contains(first.ContentReason, test.reason) || result.ContentNotUploaded == 0 {
 			t.Fatalf("%s: session=%+v result=%+v", name, first, result)
 		}
+		// Nothing of a conversation that was read for other records is sent.
+		if test.reason == "other ranges" && len(test.content.docs) != 0 {
+			t.Fatalf("%s: %d documents were sent", name, len(test.content.docs))
+		}
 		// The report went up as it would have without content: no range names an event.
 		body := remote.uploads[0].Body
 		if body.Content != nil || body.Segments[0].FirstEvent != 0 || body.Segments[0].Events != 0 {
@@ -260,8 +297,9 @@ func TestSegmentUploadKeepsAReportWhoseConversationCannotGoUp(t *testing.T) {
 	}
 	// A session whose records hold no conversation has none, and that is not a gap.
 	remote := &segmentRemoteFake{}
-	empty := &segmentContentSourceFake{answer: func(records domain.SessionRecordRanges) (domain.SessionContent, error) {
-		return domain.SessionContent{Ranges: make([][]domain.Event, len(records.Ranges))}, nil
+	// Its records are read, and none of them gives an event.
+	empty := &segmentContentSourceFake{answer: func(_ domain.SessionRecordRanges, ids []string, _ domain.SessionPartResume) (domain.SessionPartsRead, error) {
+		return domain.SessionPartsRead{Parts: []domain.SessionPartRead{{Counts: make([]int, len(ids))}}}, nil
 	}}
 	content := &segmentContentRemoteFake{}
 	result, err := segmentUploadFixture(remote).WithSessionContent(content, map[domain.ProviderKind]outbound.SessionContentSource{domain.ProviderClaude: empty}).PushSegments(context.Background(), "/work/app")

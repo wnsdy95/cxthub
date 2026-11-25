@@ -502,8 +502,8 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		if auto != nil {
 			remembered = auto.state.Sessions[key]
 		}
-		// The conversation as it was read in this run; nil when it was not read.
-		var conversation *domain.CIRDocument
+		// What this run built of the conversation; nothing when it was not read.
+		var attached attachedContent
 		if s.contentRemote != nil {
 			contentKey := ""
 			if auto != nil {
@@ -529,15 +529,25 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 					notSent(session, key, removal)
 					continue
 				}
-				var first, count []int
-				state, reason, first, count, conversation, err = s.attachContent(ctx, string(repo.ID), inputs.Git.Root, records[index], &upload.Body)
+				// The parts sealed in an earlier run hold while the epoch is
+				// the same: the masking and the document identity.
+				var sealed []domain.SessionPartState
+				if auto != nil && remembered.PartsEpoch == auto.epoch {
+					sealed = remembered.Parts
+				}
+				attached, err = s.attachContent(ctx, string(repo.ID), inputs.Git.Root, records[index], &upload.Body, sealed)
 				if err != nil {
 					return result, stopped(err)
 				}
+				state, reason = attached.state, attached.reason
 				remembered.ContentKey, remembered.Content, remembered.FirstEvent, remembered.Events = "", nil, nil, nil
 				switch state {
 				case domain.SegmentContentStored:
-					remembered.ContentKey, remembered.Content, remembered.FirstEvent, remembered.Events = contentKey, upload.Body.Content, first, count
+					remembered.ContentKey, remembered.Content, remembered.FirstEvent, remembered.Events = contentKey, upload.Body.Content, attached.first, attached.count
+					remembered.PartsEpoch, remembered.Parts = "", attached.sealed
+					if auto != nil {
+						remembered.PartsEpoch = auto.epoch
+					}
 				case domain.SegmentContentNone:
 					remembered.ContentKey = contentKey
 				}
@@ -595,12 +605,12 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 		}
 		// The report is on the server: its summaries can be stored. They are
 		// made from the conversation read in this run.
-		if s.summaryRemote != nil && s.summarizer != nil && conversation != nil && session.State != domain.SegmentPushRefused {
+		if s.summaryRemote != nil && s.summarizer != nil && attached.whole != nil && session.State != domain.SegmentPushRefused {
 			folder := folders[key]
 			if folder == "" {
 				folder = inputs.Git.Root
 			}
-			written, reason, err := s.pushSummaries(ctx, string(repo.ID), folder, upload, *conversation, &remembered, auto != nil)
+			written, reason, err := s.pushSummaries(ctx, string(repo.ID), folder, upload, attached.whole, &remembered, auto != nil)
 			session.Summaries, session.SummaryReason = written, reason
 			result.Summaries += written
 			if err != nil {
@@ -625,9 +635,18 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 			if result.LocalRecords == nil {
 				result.LocalRecords = &domain.SegmentPushLocalRecords{}
 			}
-			if err := s.uploadRecords.KeepSessionUpload(context.WithoutCancel(ctx), cwd, upload, conversation, entry); err != nil {
+			if err := s.uploadRecords.KeepSessionUpload(context.WithoutCancel(ctx), cwd, upload, attached.built, entry); err != nil {
 				if result.LocalRecords.NotKept == "" {
 					result.LocalRecords.NotKept = err.Error()
+				}
+				// The copy is not whole. An automatic run builds only what
+				// follows the sealed parts, so they are forgotten: the next
+				// run that reads this conversation builds all of it, and
+				// with it the copy.
+				if auto != nil {
+					forgotten := auto.state.Sessions[key]
+					forgotten.Parts = nil
+					auto.state.Sessions[key] = forgotten
 				}
 			} else {
 				result.LocalRecords.Kept++
@@ -638,48 +657,127 @@ func (s *SegmentUploadService) push(ctx context.Context, cwd string, auto *colle
 	return result, nil
 }
 
+// attachedContent is what one run built of a session's conversation.
+type attachedContent struct {
+	state  domain.SegmentContentState
+	reason string
+	// first and count place the report's ranges in the conversation.
+	first, count []int
+	// built holds the documents this run built and sent: the parts that
+	// follow the sealed ones it went on from.
+	built []domain.SessionPartDocument
+	// sealed is what the next run goes on from.
+	sealed []domain.SessionPartState
+	// whole reads the conversation from its start, for what is made from all
+	// of it. It is nil when no conversation is stored.
+	whole func() (domain.CIRDocument, error)
+}
+
 // attachContent uploads the conversation of one session's own records and
-// names it in body. A session whose content cannot be read back or is refused
-// keeps its report without content and a reason; an error is returned only
-// for what would stop every session.
-func (s *SegmentUploadService) attachContent(ctx context.Context, repoID, repoRoot string, records domain.SessionRecordRanges, body *domain.AnchoredSessionBody) (state domain.SegmentContentState, reason string, first, count []int, conversation *domain.CIRDocument, err error) {
+// names it in body. The conversation is kept in parts: the sealed parts an
+// earlier run remembered, as far as they still hold the same records, are
+// neither read nor sent again, and what follows them is. A session whose
+// content cannot be read back or is refused keeps its report without content
+// and a reason; an error is returned only for what would stop every session.
+func (s *SegmentUploadService) attachContent(ctx context.Context, repoID, repoRoot string, records domain.SessionRecordRanges, body *domain.AnchoredSessionBody, remembered []domain.SessionPartState) (attachedContent, error) {
+	notUploaded := func(reason string) (attachedContent, error) {
+		return attachedContent{state: domain.SegmentContentNotUploaded, reason: reason}, nil
+	}
 	if body.Records == 0 {
-		return domain.SegmentContentNone, "", nil, nil, nil, nil
+		return attachedContent{state: domain.SegmentContentNone}, nil
 	}
 	source := s.content[records.Provider]
 	if source == nil {
-		return domain.SegmentContentNotUploaded, "the conversation of this tool's records is not read yet", nil, nil, nil, nil
+		return notUploaded("the conversation of this tool's records is not read yet")
 	}
-	content, err := source.ReadSessionContent(ctx, repoRoot, records)
+	var ids []string
+	for _, held := range records.Ranges {
+		ids = append(ids, held...)
+	}
+	sealed := remembered[:domain.KeptSessionParts(remembered, ids)]
+	from, at, chain := domain.SessionPartResume{}, 0, ""
+	var parts []domain.AnchoredContentPart
+	var counts []int
+	for _, part := range sealed {
+		from, at, chain = part.Resume, at+part.Records(), part.Chain
+		counts = append(counts, part.Counts...)
+		if part.Part.Events > 0 {
+			parts = append(parts, part.Part)
+		}
+	}
+	read, err := source.ReadSessionParts(ctx, repoRoot, records, ids[at:], from)
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", "", nil, nil, nil, ctxErr
+		return attachedContent{}, ctxErr
 	}
 	if err != nil {
-		return domain.SegmentContentNotUploaded, err.Error(), nil, nil, nil, nil
+		return notUploaded(err.Error())
 	}
-	if len(content.Missing) > 0 {
-		return domain.SegmentContentNotUploaded, fmt.Sprintf("%d records changed while they were read; the next run uploads the conversation", len(content.Missing)), nil, nil, nil, nil
+	if len(read.Missing) > 0 {
+		return notUploaded(fmt.Sprintf("%d records changed while they were read; the next run uploads the conversation", len(read.Missing)))
 	}
-	doc, first, count := content.Document()
-	if len(doc.Events) == 0 {
-		return domain.SegmentContentNone, "", nil, nil, nil, nil
+	// Every range of the report is placed before anything is sent: what was
+	// read holds a count for exactly the records it was asked for, or nothing
+	// of it is used.
+	for _, part := range read.Parts {
+		counts = append(counts, part.Counts...)
 	}
-	ref, err := s.contentRemote.PutSessionContent(ctx, repoID, doc)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", "", nil, nil, nil, ctxErr
+	first, count, placed := domain.SessionRangeEvents(records.Ranges, counts)
+	if !placed {
+		return notUploaded("the conversation was read in other ranges than the report has")
 	}
-	switch {
-	case err == nil:
-	case refusedSessionReport(err), errors.Is(err, domain.ErrInvalidCIR), errors.Is(err, domain.ErrConversationManifest), errors.Is(err, domain.ErrSessionContentNotAccepted):
-		// This one document was refused or cannot be built; others can be.
-		return domain.SegmentContentNotUploaded, err.Error(), nil, nil, nil, nil
-	default:
-		return "", "", nil, nil, nil, err
+	out := attachedContent{sealed: append([]domain.SessionPartState(nil), sealed...)}
+	events := from.Events
+	for _, part := range read.Parts {
+		// A part whose records gave no event is no document; its records
+		// still have their place among the others.
+		named := domain.AnchoredContentPart{}
+		if len(part.Events) > 0 {
+			doc := part.Document()
+			ref, err := s.contentRemote.PutSessionContent(ctx, repoID, doc)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return attachedContent{}, ctxErr
+			}
+			switch {
+			case err == nil:
+			case refusedSessionReport(err), errors.Is(err, domain.ErrInvalidCIR), errors.Is(err, domain.ErrConversationManifest), errors.Is(err, domain.ErrSessionContentNotAccepted):
+				// This one document was refused or cannot be built; others can be.
+				return notUploaded(err.Error())
+			default:
+				return attachedContent{}, err
+			}
+			named = domain.AnchoredContentPart{Doc: ref.Hash, Identity: ref.Identity, Events: len(part.Events)}
+			parts = append(parts, named)
+			out.built = append(out.built, domain.SessionPartDocument{Doc: ref.Hash, Document: doc})
+		}
+		chain = domain.SessionRecordChain(chain, ids[at:at+part.Records()])
+		at, events = at+part.Records(), events+len(part.Events)
+		if part.Sealed {
+			out.sealed = append(out.sealed, domain.SessionPartState{Chain: chain, Counts: part.Counts, Part: named,
+				Resume: domain.SessionPartResume{Envelope: part.Envelope, Events: events, Token: part.Token}})
+		}
 	}
-	if !body.AttachContent([]domain.AnchoredContentPart{{Doc: ref.Hash, Identity: ref.Identity, Events: len(doc.Events)}}, first, count) {
-		return domain.SegmentContentNotUploaded, "the conversation was read in other ranges than the report has", nil, nil, nil, nil
+	if len(parts) == 0 {
+		return attachedContent{state: domain.SegmentContentNone}, nil
 	}
-	return domain.SegmentContentStored, "", first, count, &doc, nil
+	if !body.AttachContent(parts, first, count) {
+		return notUploaded("the conversation was read in other ranges than the report has")
+	}
+	out.state, out.first, out.count = domain.SegmentContentStored, first, count
+	out.whole = func() (domain.CIRDocument, error) {
+		if len(sealed) == 0 {
+			// This run read the conversation from its start.
+			return domain.SessionPartsConversation(read.Parts), nil
+		}
+		all, err := source.ReadSessionParts(ctx, repoRoot, records, ids, domain.SessionPartResume{})
+		if err != nil {
+			return domain.CIRDocument{}, err
+		}
+		if len(all.Missing) > 0 {
+			return domain.CIRDocument{}, fmt.Errorf("%d records changed while they were read", len(all.Missing))
+		}
+		return domain.SessionPartsConversation(all.Parts), nil
+	}
+	return out, nil
 }
 
 // pushSummaries writes the session down at each commit it made and stores the
@@ -687,7 +785,7 @@ func (s *SegmentUploadService) attachContent(ctx context.Context, repoID, repoRo
 // run a person asked for writes every one again. A summary that could not be
 // made or stored is said in reason and tried again by the next run; an error
 // is returned only when the run was cancelled.
-func (s *SegmentUploadService) pushSummaries(ctx context.Context, repoID, folder string, upload domain.AnchoredSessionUpload, conversation domain.CIRDocument, remembered *domain.CollectorSessionState, automatic bool) (written int, reason string, err error) {
+func (s *SegmentUploadService) pushSummaries(ctx context.Context, repoID, folder string, upload domain.AnchoredSessionUpload, whole func() (domain.CIRDocument, error), remembered *domain.CollectorSessionState, automatic bool) (written int, reason string, err error) {
 	points := domain.AnchoredSummaryPoints(upload.Body)
 	done := map[string]struct{}{}
 	if automatic {
@@ -711,7 +809,17 @@ func (s *SegmentUploadService) pushSummaries(ctx context.Context, repoID, folder
 		remembered.ContentKey = ""
 	}
 	if len(wanted) > 0 {
-		digests, err := s.summarizer.Summarize(ctx, folder, upload.Provider, upload.SessionID, conversation, ends)
+		// The conversation is read from its start only now, when a summary
+		// is to be written: a run that goes on from sealed parts holds only
+		// what follows them.
+		conversation, err := whole()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return written, reason, ctxErr
+		}
+		var digests []domain.MemoryDigest
+		if err == nil {
+			digests, err = s.summarizer.Summarize(ctx, folder, upload.Provider, upload.SessionID, conversation, ends)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return written, reason, ctxErr
 		}
@@ -786,17 +894,20 @@ func (s *SegmentUploadService) ResendSession(ctx context.Context, cwd string, ke
 		}
 	}
 	// The conversation first, as in every upload: the report may only name
-	// a document the repository holds.
+	// documents the repository holds. Each document of the copy is sent, and
+	// each must be the one the report names in its place.
 	if content := upload.Body.Content; content != nil {
-		if record.Conversation == nil || s.contentRemote == nil {
+		if len(record.Parts) != len(content.Parts) || len(record.Parts) == 0 || s.contentRemote == nil {
 			return result, fmt.Errorf("the report of %s names a conversation, and no copy of it is kept under .cxt/sessions", name)
 		}
-		ref, err := s.contentRemote.PutSessionContent(ctx, string(repo.ID), *record.Conversation)
-		if err != nil {
-			return result, fmt.Errorf("the copy of the conversation of %s was not taken: %w", name, err)
-		}
-		if len(content.Parts) != 1 || ref.Hash != content.Parts[0].Doc {
-			return result, fmt.Errorf("the copy of the conversation of %s is not the document its report names; nothing was sent of the report", name)
+		for index, part := range record.Parts {
+			ref, err := s.contentRemote.PutSessionContent(ctx, string(repo.ID), part.Document)
+			if err != nil {
+				return result, fmt.Errorf("the copy of the conversation of %s was not taken: %w", name, err)
+			}
+			if ref.Hash != content.Parts[index].Doc {
+				return result, fmt.Errorf("the copy of the conversation of %s is not the document its report names; nothing was sent of the report", name)
+			}
 		}
 		session.Content = domain.SegmentContentStored
 	}
@@ -811,9 +922,10 @@ func (s *SegmentUploadService) ResendSession(ctx context.Context, cwd string, ke
 	default:
 		return result, err
 	}
-	if s.summaryRemote != nil && s.summarizer != nil && record.Conversation != nil && session.State != domain.SegmentPushRefused {
+	if s.summaryRemote != nil && s.summarizer != nil && len(record.Parts) > 0 && session.State != domain.SegmentPushRefused {
 		remembered := domain.CollectorSessionState{}
-		written, reason, err := s.pushSummaries(ctx, string(repo.ID), cwd, upload, *record.Conversation, &remembered, false)
+		whole := func() (domain.CIRDocument, error) { return domain.SessionDocumentsConversation(record.Parts), nil }
+		written, reason, err := s.pushSummaries(ctx, string(repo.ID), cwd, upload, whole, &remembered, false)
 		session.Summaries, session.SummaryReason, result.Summaries = written, reason, written
 		if err != nil {
 			return result, err

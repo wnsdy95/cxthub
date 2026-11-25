@@ -48,6 +48,12 @@ type CollectorSessionState struct {
 	Content    *AnchoredContent `json:"content,omitempty"`
 	FirstEvent []int            `json:"first_event,omitempty"`
 	Events     []int            `json:"events,omitempty"`
+	// PartsEpoch and Parts remember the sealed parts of the conversation, so
+	// that a session that went on is read from where they end. PartsEpoch is
+	// the content epoch they were built in: in another epoch they are other
+	// documents.
+	PartsEpoch string             `json:"parts_epoch,omitempty"`
+	Parts      []SessionPartState `json:"parts,omitempty"`
 	// Summarized lists the session's commits whose summary the server
 	// stored, so that a later run does not write them down again.
 	Summarized []string `json:"summarized,omitempty"`

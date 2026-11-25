@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
@@ -20,9 +21,13 @@ import (
 // SessionUploadFiles keeps what was uploaded for each session in the
 // repository's .cxt folder:
 //
-//	.cxt/sessions/<tool>/<session id>/report.json           the report as it was last sent
-//	.cxt/sessions/<tool>/<session id>/conversation.json.gz  the conversation document as it was last sent
-//	.cxt/sessions/<tool>/<session id>/log.jsonl             one line per run that sent something or failed
+//	.cxt/sessions/<tool>/<session id>/report.json                    the report as it was last sent
+//	.cxt/sessions/<tool>/<session id>/conversation/<document>.json.gz  each document of the conversation the report names
+//	.cxt/sessions/<tool>/<session id>/log.jsonl                      one line per run that sent something or failed
+//
+// The conversation is kept in the documents it is sent in, named by their
+// hash: a session that goes on adds a file and replaces its last one, and the
+// files of the documents before stay as they are.
 //
 // The files are the user's own, readable by the user alone. Nothing is
 // computed from them: they are what the server can be compared with.
@@ -39,9 +44,88 @@ func NewSessionUploadFiles(root func(ctx context.Context, cwd string) (string, b
 
 const (
 	sessionUploadReport       = "report.json"
-	sessionUploadConversation = "conversation.json.gz"
+	sessionUploadConversation = "conversation"
+	sessionUploadDocument     = ".json.gz"
 	sessionUploadLog          = "log.jsonl"
+	// sessionUploadWhole is the one file an earlier build kept the whole
+	// conversation in. It is removed when the documents are kept.
+	sessionUploadWhole = "conversation.json.gz"
 )
+
+// sessionUploadPart is where the copy of one document of a conversation is
+// kept, by the hash the server knows the document by.
+func sessionUploadPart(dir string, doc domain.ContentHash) (string, error) {
+	if err := domain.ValidateContentHash(doc); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, sessionUploadConversation, strings.TrimPrefix(string(doc), "sha256:")+sessionUploadDocument), nil
+}
+
+// keepSessionUploadParts makes the conversation folder hold the documents
+// the kept report names: those of built that it names and that are not kept
+// yet are written, and files of documents it does not name are removed. It
+// reports whether a document was written, and how many of the documents the
+// report names are not kept afterwards.
+func keepSessionUploadParts(root, dir string, report *domain.AnchoredSessionBody, built []domain.SessionPartDocument) (written bool, lacking int, err error) {
+	named := map[string]struct{}{}
+	if report != nil && report.Content != nil {
+		for _, part := range report.Content.Parts {
+			relative, err := sessionUploadPart(dir, part.Doc)
+			if err != nil {
+				return false, 0, err
+			}
+			named[filepath.Base(relative)] = struct{}{}
+		}
+	}
+	for _, part := range built {
+		relative, err := sessionUploadPart(dir, part.Doc)
+		if err != nil {
+			return written, 0, err
+		}
+		if _, wanted := named[filepath.Base(relative)]; !wanted {
+			continue
+		}
+		if _, found, err := readSessionUploadFile(root, relative); err != nil {
+			return written, 0, err
+		} else if found {
+			continue
+		}
+		var packed bytes.Buffer
+		writer := gzip.NewWriter(&packed)
+		if err := json.NewEncoder(writer).Encode(part.Document); err != nil {
+			return written, 0, err
+		}
+		if err := writer.Close(); err != nil {
+			return written, 0, err
+		}
+		if err := writeSessionUploadFile(root, relative, packed.Bytes()); err != nil {
+			return written, 0, err
+		}
+		written = true
+	}
+	folder, err := providerfs.EnsureRepoDir(root, filepath.Join(dir, sessionUploadConversation), 0o700)
+	if err != nil {
+		return written, 0, err
+	}
+	entries, err := os.ReadDir(folder)
+	if err != nil {
+		return written, 0, err
+	}
+	lacking = len(named)
+	for _, entry := range entries {
+		if _, wanted := named[entry.Name()]; wanted {
+			lacking--
+			continue
+		}
+		if err := os.Remove(filepath.Join(folder, entry.Name())); err != nil {
+			return written, 0, err
+		}
+	}
+	if path, err := providerfs.PrepareRepoFile(root, filepath.Join(dir, sessionUploadWhole), 0o700); err == nil {
+		_ = os.Remove(path)
+	}
+	return written, lacking, nil
+}
 
 // sessionUploadReportFile is report.json: the session's key and the report.
 type sessionUploadReportFile struct {
@@ -121,15 +205,21 @@ func appendSessionUploadLog(root, dir string, entry domain.SessionUploadLogEntry
 	return err
 }
 
-// KeepSessionUpload stores the report and, when one is given, the
-// conversation, and logs the run. Where cxt is not set up it keeps nothing.
-func (f *SessionUploadFiles) KeepSessionUpload(ctx context.Context, cwd string, upload domain.AnchoredSessionUpload, conversation *domain.CIRDocument, entry domain.SessionUploadLogEntry) error {
+// KeepSessionUpload stores the report and the documents of its conversation
+// that this run built, and logs the run. Where cxt is not set up it keeps
+// nothing. A copy that lacks a document its report names is an error, said
+// after everything else was kept.
+func (f *SessionUploadFiles) KeepSessionUpload(ctx context.Context, cwd string, upload domain.AnchoredSessionUpload, built []domain.SessionPartDocument, entry domain.SessionUploadLogEntry) error {
 	key := domain.SessionUploadKey{Provider: upload.Provider, SessionID: upload.SessionID}
 	root, dir, ok, err := f.place(ctx, cwd, key)
 	if err != nil || !ok {
 		return err
 	}
-	changed := false
+	changed, lacking := false, 0
+	kept, found, err := readSessionUploadFile(root, filepath.Join(dir, sessionUploadReport))
+	if err != nil {
+		return err
+	}
 	// The report of a refused upload is not what the server holds; the copy
 	// kept stays the one that was last sent and taken.
 	if entry.Report != domain.SegmentPushRefused {
@@ -138,61 +228,41 @@ func (f *SessionUploadFiles) KeepSessionUpload(ctx context.Context, cwd string, 
 			return err
 		}
 		report = append(report, '\n')
-		kept, _, err := readSessionUploadFile(root, filepath.Join(dir, sessionUploadReport))
-		if err != nil {
-			return err
-		}
 		if !bytes.Equal(kept, report) {
 			if err := writeSessionUploadFile(root, filepath.Join(dir, sessionUploadReport), report); err != nil {
 				return err
 			}
 			changed = true
 		}
+		kept, found = report, true
+	}
+	// The documents kept are those of the report that is kept.
+	if found {
+		var file sessionUploadReportFile
+		if err := json.Unmarshal(kept, &file); err != nil {
+			return fmt.Errorf("%s: %w", filepath.Join(dir, sessionUploadReport), err)
+		}
+		// A document that was written is a change to the copy, and is logged.
+		written, missing, err := keepSessionUploadParts(root, dir, &file.Body, built)
+		if err != nil {
+			return err
+		}
+		changed, lacking = changed || written, missing
 	}
 	log, err := readSessionUploadLog(root, dir)
 	if err != nil {
 		return err
 	}
-	if conversation != nil && entry.Content == domain.SegmentContentStored {
-		// The copy kept is the document the last line names; another
-		// document, or no copy at all, is written.
-		_, found, err := readSessionUploadFile(root, filepath.Join(dir, sessionUploadConversation))
-		if err != nil {
+	repeated := len(log) > 0 && !changed && (!entry.Eventful() || log[len(log)-1].SameOutcome(entry))
+	if !repeated {
+		if err := appendSessionUploadLog(root, dir, entry); err != nil {
 			return err
 		}
-		if !found || len(log) == 0 || lastSessionUploadDoc(log) != entry.Doc {
-			var packed bytes.Buffer
-			writer := gzip.NewWriter(&packed)
-			if err := json.NewEncoder(writer).Encode(conversation); err != nil {
-				return err
-			}
-			if err := writer.Close(); err != nil {
-				return err
-			}
-			if err := writeSessionUploadFile(root, filepath.Join(dir, sessionUploadConversation), packed.Bytes()); err != nil {
-				return err
-			}
-			changed = true
-		}
 	}
-	if !changed && !entry.Eventful() && len(log) > 0 {
-		return nil
+	if lacking > 0 {
+		return fmt.Errorf("the copy of the conversation lacks %d of the documents its report names", lacking)
 	}
-	if len(log) > 0 && log[len(log)-1].SameOutcome(entry) && !changed {
-		return nil
-	}
-	return appendSessionUploadLog(root, dir, entry)
-}
-
-// lastSessionUploadDoc is the document the newest line with a stored
-// conversation names.
-func lastSessionUploadDoc(log []domain.SessionUploadLogEntry) domain.ContentHash {
-	for index := len(log) - 1; index >= 0; index-- {
-		if log[index].Content == domain.SegmentContentStored && log[index].Doc != "" {
-			return log[index].Doc
-		}
-	}
-	return ""
+	return nil
 }
 
 func writeSessionUploadFile(root, relative string, data []byte) error {
@@ -279,31 +349,47 @@ func (f *SessionUploadFiles) ReadSessionUpload(ctx context.Context, cwd string, 
 	if !found && len(record.Log) == 0 {
 		return record, domain.ErrNotFound
 	}
-	if path, err := providerfs.PrepareRepoFile(root, filepath.Join(dir, sessionUploadConversation), 0o700); err == nil {
-		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
-			record.ConversationKept = true
-		}
+	// The conversation is kept when every document the report names is.
+	if record.Report == nil || record.Report.Content == nil || len(record.Report.Content.Parts) == 0 {
+		return record, nil
 	}
-	if withConversation {
-		packed, found, err := readSessionUploadFile(root, filepath.Join(dir, sessionUploadConversation))
+	var parts []domain.SessionPartDocument
+	for _, part := range record.Report.Content.Parts {
+		relative, err := sessionUploadPart(dir, part.Doc)
+		if err != nil {
+			return record, fmt.Errorf("%s: %w", filepath.Join(dir, sessionUploadReport), err)
+		}
+		if !withConversation {
+			path, err := providerfs.PrepareRepoFile(root, relative, 0o700)
+			if err != nil {
+				return record, err
+			}
+			if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+				return record, nil
+			}
+			continue
+		}
+		packed, found, err := readSessionUploadFile(root, relative)
 		if err != nil {
 			return record, err
 		}
-		if found {
-			reader, err := gzip.NewReader(bytes.NewReader(packed))
-			if err != nil {
-				return record, fmt.Errorf("%s: %w", filepath.Join(dir, sessionUploadConversation), err)
-			}
-			plain, err := io.ReadAll(reader)
-			if err != nil {
-				return record, fmt.Errorf("%s: %w", filepath.Join(dir, sessionUploadConversation), err)
-			}
-			var doc domain.CIRDocument
-			if err := json.Unmarshal(plain, &doc); err != nil {
-				return record, fmt.Errorf("%s: %w", filepath.Join(dir, sessionUploadConversation), err)
-			}
-			record.Conversation = &doc
+		if !found {
+			return record, nil
 		}
+		reader, err := gzip.NewReader(bytes.NewReader(packed))
+		if err != nil {
+			return record, fmt.Errorf("%s: %w", relative, err)
+		}
+		plain, err := io.ReadAll(reader)
+		if err != nil {
+			return record, fmt.Errorf("%s: %w", relative, err)
+		}
+		var doc domain.CIRDocument
+		if err := json.Unmarshal(plain, &doc); err != nil {
+			return record, fmt.Errorf("%s: %w", relative, err)
+		}
+		parts = append(parts, domain.SessionPartDocument{Doc: part.Doc, Document: doc})
 	}
+	record.ConversationKept, record.Parts = true, parts
 	return record, nil
 }

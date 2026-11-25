@@ -85,7 +85,7 @@ func (f *collectorFixture) began(at time.Time) {
 
 func (f *collectorFixture) run(t *testing.T) domain.SegmentPushResult {
 	t.Helper()
-	f.remote.uploads, f.source.read, f.content.docs = nil, nil, nil
+	f.remote.uploads, f.source.read, f.source.asked, f.source.from, f.content.docs = nil, nil, nil, nil, nil
 	result, err := f.service.CollectSegments(context.Background(), "/work/app")
 	if err != nil {
 		t.Fatal(err)

@@ -275,8 +275,8 @@ MCP server has no filesystem mode.
 
 ## Reading conversations
 
-A session's conversation is stored as one document, and it is read through the
-read index stored with that document. A document gets its index when it is
+A session's conversation is stored in one or more documents, and each is read
+through the read index stored with it. A document gets its index when it is
 stored. `cxtd index` is a restartable maintenance command that builds the
 index for documents stored without one. Run it with the same PostgreSQL build,
 database secret, and migration directory as the server:

@@ -10,7 +10,12 @@ import (
 // reads the conversation of the named records. It applies the repository's
 // masking policy exactly as capture does. It reads only.
 type SessionContentSource interface {
-	ReadSessionContent(ctx context.Context, repoRoot string, records domain.SessionRecordRanges) (domain.SessionContent, error)
+	// ReadSessionParts converts the records named by ids, in order, into the
+	// parts of the conversation that follow what from stands for. ids are
+	// records of the session records names. The parts are cut by
+	// domain.CutSessionParts, so reading only what follows a sealed part
+	// gives the parts that reading everything gives.
+	ReadSessionParts(ctx context.Context, repoRoot string, records domain.SessionRecordRanges, ids []string, from domain.SessionPartResume) (domain.SessionPartsRead, error)
 }
 
 // SessionContentRemote stores a session's content document on the server and

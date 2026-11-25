@@ -172,3 +172,46 @@ func TestCodexItemsOfAnotherVersionAreStillRead(t *testing.T) {
 		t.Fatalf("no items: %+v %v", empty, err)
 	}
 }
+
+// Every item is converted on its own: the counts say how many events each
+// gave, and converting the items in two runs, the second going on from where
+// the first ended, gives what converting them in one run gives.
+func TestCodexItemsAreCountedAndConvertInRunsAsInOne(t *testing.T) {
+	items := []CodexItem{
+		codexTestItem("t1", 1000, map[string]any{"type": "userMessage", "id": "u1", "content": []any{map[string]any{"type": "text", "text": "Add the parser.", "text_elements": []any{}}}}),
+		codexTestItem("t1", 1001, map[string]any{"type": "commandExecution", "id": "c1", "command": "git commit -m parser", "aggregatedOutput": "[main abc1234] parser", "exitCode": 0, "status": "completed"}),
+		codexTestItem("t1", 1002, map[string]any{"type": "commandExecution", "id": "c2", "command": "sleep 100", "aggregatedOutput": nil, "exitCode": nil, "status": "inProgress"}),
+		codexTestItem("t2", 1003, map[string]any{"type": "agentMessage", "id": "a1", "text": "Committed."}),
+	}
+	whole, counts, err := DecodeCodexItemsCounted(items, domain.Envelope{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A command that ended is a call and its result; one still running is a call.
+	if !reflect.DeepEqual(counts, []int{1, 2, 1, 1}) || len(whole.Events) != 5 {
+		t.Fatalf("counts=%v events=%d", counts, len(whole.Events))
+	}
+	if plain, err := DecodeCodexItems(items, domain.Envelope{}, 0); err != nil || !reflect.DeepEqual(plain, whole) {
+		t.Fatalf("the plain form differs: %v", err)
+	}
+	if doc, counts, err := DecodeCodexItemsCounted(nil, domain.Envelope{}, 0); err != nil || len(counts) != 0 || len(doc.Events) != 0 {
+		t.Fatalf("no items: counts=%v events=%d %v", counts, len(doc.Events), err)
+	}
+	for cut := 1; cut < len(items); cut++ {
+		first, firstCounts, err := DecodeCodexItemsCounted(items[:cut], domain.Envelope{}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, secondCounts, err := DecodeCodexItemsCounted(items[cut:], first.Envelope, len(first.Events))
+		if err != nil {
+			t.Fatal(err)
+		}
+		events := append(append([]domain.Event(nil), first.Events...), second.Events...)
+		if !reflect.DeepEqual(events, whole.Events) || !reflect.DeepEqual(second.Envelope, whole.Envelope) || !reflect.DeepEqual(append(append([]int{}, firstCounts...), secondCounts...), counts) {
+			t.Fatalf("cut after %d items: %d events, envelope %+v", cut, len(events), second.Envelope)
+		}
+	}
+	if _, counts, err := DecodeCodexItemsCounted([]CodexItem{items[0], {JSON: []byte(`{"id":"x"}`)}}, domain.Envelope{}, 0); err == nil || counts != nil {
+		t.Fatalf("an item without a type: counts=%v %v", counts, err)
+	}
+}

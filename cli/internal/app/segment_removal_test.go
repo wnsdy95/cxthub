@@ -434,7 +434,8 @@ func TestResendSendsTheKeptCopyAndNothingFromTheTool(t *testing.T) {
 	doc := domain.HashContent([]byte(key.SessionID)) // what the content fake answers for this conversation
 	body := domain.AnchoredSessionBody{RuleVersion: 1, Scope: domain.SessionScopeFolder, Records: 2, Content: &domain.AnchoredContent{Events: 2, Parts: []domain.AnchoredContentPart{{Doc: doc, Events: 2}}},
 		Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "m1", Last: "m2", LastOrdinal: 1, Events: 2}, Commits: []domain.AnchoredCommit{{SHA: sha, Rule: domain.SegmentLinkPrintedNumber}}}}}
-	records := &resendRecords{record: domain.SessionUploadRecord{Provider: key.Provider, SessionID: key.SessionID, Report: &body, ConversationKept: true, Conversation: &conversation}}
+	kept := []domain.SessionPartDocument{{Doc: doc, Document: conversation}}
+	records := &resendRecords{record: domain.SessionUploadRecord{Provider: key.Provider, SessionID: key.SessionID, Report: &body, ConversationKept: true, Parts: kept}}
 	remote, source, content := &segmentRemoteFake{}, &segmentContentSourceFake{}, &segmentContentRemoteFake{}
 	summarizer, summaries := &segmentSummarizerFake{}, &segmentSummaryRemoteFake{}
 	removals := &removalRemoteFake{}
@@ -469,12 +470,32 @@ func TestResendSendsTheKeptCopyAndNothingFromTheTool(t *testing.T) {
 		t.Fatalf("another document: %v uploads=%d", err, len(remote.uploads))
 	}
 	content.answer = nil
-	// The copy is one document: a report that names two is not sent from it.
+	// A conversation kept in two documents: each is sent, in order, and each
+	// must be the document the report names in its place.
+	later := domain.CIRDocument{Envelope: conversation.Envelope, Events: []domain.Event{{Seq: 2, Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "one more"}}}}}
+	laterDoc := domain.HashContent([]byte(key.SessionID + " from 2 one more")) // what the content fake answers for a document that follows others
 	two := body
-	two.Content = &domain.AnchoredContent{Events: 2, Parts: []domain.AnchoredContentPart{{Doc: doc, Events: 1}, {Doc: domain.HashContent([]byte("a second document")), Events: 1}}}
-	records.record.Report = &two
+	two.Content = &domain.AnchoredContent{Events: 3, Parts: []domain.AnchoredContentPart{{Doc: doc, Events: 2}, {Doc: laterDoc, Events: 1}}}
+	records.record.Report, records.record.Parts = &two, []domain.SessionPartDocument{kept[0], {Doc: laterDoc, Document: later}}
+	content.docs, records.entries, summarizer.asked = nil, nil, nil
+	if result, err := service.ResendSession(context.Background(), "/work/app", key); err != nil || result.Stored != 1 || len(content.docs) != 2 || len(content.docs[0].Events) != 2 || len(content.docs[1].Events) != 1 ||
+		len(remote.uploads) != 1 || !reflect.DeepEqual(remote.uploads[0].Body, two) || len(records.entries) != 1 || records.entries[0].Doc != laterDoc || records.entries[0].Parts != 2 || records.entries[0].Events != 3 {
+		t.Fatalf("a conversation of two documents: %+v %v documents=%d uploads=%d log=%+v", result, err, len(content.docs), len(remote.uploads), records.entries)
+	}
+	// The summary is written from the documents one after another.
+	if len(summarizer.asked) != 1 || !strings.Contains(summarizer.asked[0], " 3 events ") {
+		t.Fatalf("the summary of a conversation of two documents was asked for as %v", summarizer.asked)
+	}
+	// The documents in another order are not what the report names.
+	remote.uploads = nil
+	records.record.Parts = []domain.SessionPartDocument{{Doc: laterDoc, Document: later}, kept[0]}
 	if _, err := service.ResendSession(context.Background(), "/work/app", key); err == nil || !strings.Contains(err.Error(), "is not the document its report names") || len(remote.uploads) != 0 {
-		t.Fatalf("a report of two documents: %v uploads=%d", err, len(remote.uploads))
+		t.Fatalf("documents in another order: %v uploads=%d", err, len(remote.uploads))
+	}
+	// A copy that holds fewer documents than the report names is no copy of it.
+	records.record.Parts = kept
+	if _, err := service.ResendSession(context.Background(), "/work/app", key); err == nil || !strings.Contains(err.Error(), "no copy of it is kept") || len(remote.uploads) != 0 {
+		t.Fatalf("a copy of one of two documents: %v uploads=%d", err, len(remote.uploads))
 	}
 	records.record.Report = &body
 	// A removed session is not sent from its copy either.
@@ -488,11 +509,11 @@ func TestResendSendsTheKeptCopyAndNothingFromTheTool(t *testing.T) {
 	if _, err := service.ResendSession(context.Background(), "/work/app", domain.SessionUploadKey{Provider: domain.ProviderClaude, SessionID: "never-kept"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("no copy: %v", err)
 	}
-	records.record.Conversation = nil
+	records.record.Parts = nil
 	if _, err := service.ResendSession(context.Background(), "/work/app", key); err == nil || !strings.Contains(err.Error(), "no copy of it is kept") {
 		t.Fatalf("no conversation copy: %v", err)
 	}
-	records.record.Conversation = &conversation
+	records.record.Parts = kept
 	remote.answer = func(domain.AnchoredSessionUpload) (domain.AnchoredSessionReceipt, error) {
 		return domain.AnchoredSessionReceipt{}, segmentUploadStatus(409)
 	}

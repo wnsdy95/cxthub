@@ -720,11 +720,20 @@ func TestSegmentsPushKeepsCopiesThatSegmentsLogReads(t *testing.T) {
 		t.Fatalf("local records = %+v", result.LocalRecords)
 	}
 	dir := filepath.Join(repo, ".cxt", "sessions", "claude", "original")
-	for _, name := range []string{"report.json", "conversation.json.gz", "log.jsonl"} {
+	for _, name := range []string{"report.json", "log.jsonl"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: %v %v", name, info, err)
 		}
+	}
+	// The conversation is kept in the one document it was sent in, the
+	// user's alone, under the hash the report names it by.
+	documents, err := os.ReadDir(filepath.Join(dir, "conversation"))
+	if err != nil || len(documents) != 1 || !strings.HasSuffix(documents[0].Name(), ".json.gz") {
+		t.Fatalf("conversation copies: %v %v", documents, err)
+	}
+	if info, err := documents[0].Info(); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("%s: %v %v", documents[0].Name(), info, err)
 	}
 	// The copy of the report is the report that was sent: it names no folder
 	// of this computer either.

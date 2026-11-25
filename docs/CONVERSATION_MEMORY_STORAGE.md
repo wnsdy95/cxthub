@@ -1,7 +1,8 @@
 # Conversation storage
 
-The conversation of a session is stored on the server as one document. This
-page describes how that document is stored and identified. What a session is,
+The conversation of a session is stored on the server as one or more
+documents, one after another. This page describes how a document is stored and
+identified. What a session is,
 and who may read which part of it, is described in the
 [architecture overview](ARCHITECTURE.md) and the [CLI reference](CLI.md).
 
@@ -9,16 +10,19 @@ and who may read which part of it, is described in the
 
 - A document is stored as immutable content-addressed chunks and their ordered
   manifest.
-- An upload transfers only chunks the destination repository does not own. A
-  session that grew sends what was appended.
+- An upload transfers only chunks the destination repository does not own.
+- A conversation is cut into documents where the bytes of its records, as the
+  tool keeps them, reach 4 MiB. A document that is full never changes, so a
+  session that goes on sends only the documents after its last full one.
 - Byte-chunk identity is distinct from event identity: one event of a
   conversation can cross a chunk boundary.
-- A session's report names its document and, for every segment and for the
-  uncommitted part, where the range starts in the document and how many events
-  it holds. The report is stored separately from the document.
-- When a report names another document than the one before, because the
-  session grew or was masked another way, the earlier document is deleted when
-  no other report uses it. The pieces it was stored in stay in the server's
+- A session's report names its documents in order, with the number of events
+  in each, and, for every segment and for the uncommitted part, where the
+  range starts in the conversation and how many events it holds. The report
+  is stored separately from the documents.
+- When a report no longer names a document the report before it named,
+  because the session went on or was masked another way, that document is
+  deleted when no other report uses it. The pieces it was stored in stay in the server's
   storage until pieces no document uses are removed; with the file store that
   is `cxtd repack`, and the PostgreSQL store has no such step yet.
 
@@ -53,8 +57,8 @@ Publication follows this sequence:
    manifest. This also applies to a conversation with no events.
 4. The worker verifies current owned bytes, ordered occurrences and CIR
    semantics before the document is accepted.
-5. Store the session's report, which names the document, only after the
-   document is on the server. A report that names a document the repository
+5. Store the session's report, which names the documents, only after every
+   one of them is on the server. A report that names a document the repository
    does not hold is refused.
 
 Full current-byte checks remain mandatory. A root makes identity hashing
