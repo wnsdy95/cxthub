@@ -58,8 +58,16 @@ func NewDocumentWorkers(config DocumentWorkersConfig) (*DocumentWorkers, error) 
 	return &DocumentWorkers{Finalization: finalization}, nil
 }
 
+// DocumentWorkersForProfile builds the document worker over the service's
+// stores. From then on the service wakes it when a document job it stored is
+// committed, so that an upload does not wait for the worker's next look.
 func (service *Service) DocumentWorkersForProfile(profile documentquery.Profile) (*DocumentWorkers, error) {
-	return NewDocumentWorkers(DocumentWorkersConfig{
+	workers, err := NewDocumentWorkers(DocumentWorkersConfig{
 		Metadata: service.meta, Blobs: service.blobs, Verifier: &service.docVerifier, Profile: profile,
 	})
+	if err != nil {
+		return nil, err
+	}
+	service.documentJobStored = workers.Finalization.Wake
+	return workers, nil
 }

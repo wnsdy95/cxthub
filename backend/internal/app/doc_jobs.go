@@ -80,6 +80,9 @@ func (s *Service) submitDocFinalizationWithPolicy(ctx context.Context, repo doma
 		}
 	}
 	j, err = st.EnqueueDocJob(ctx, j)
+	if err == nil && s.documentJobStored != nil {
+		afterRepositoryCommit(ctx, s.documentJobStored)
+	}
 	return docJobStatus(j), err
 }
 

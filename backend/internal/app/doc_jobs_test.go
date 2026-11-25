@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -91,4 +93,42 @@ func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {
 	if err := runDocJob(ctx, svc, st, recovered); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A document job wakes the document worker of the process that stored it:
+// the upload is finished without waiting for the worker's next look.
+func TestStoredDocumentJobWakesTheDocumentWorker(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	repo := hh(t.Name())
+	bindCommitTestRepo(t, st, repo)
+	ctx := systemTestContext()
+	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "woken"}}}}}
+	raw, _ := domain.CanonicalBytes(cir)
+	plan, _ := domain.PlanDocChunks(raw)
+	if _, _, err := st.PutChunks(ctx, repo, plan.Bodies); err != nil {
+		t.Fatal(err)
+	}
+	wire := inbound.ChunkedDoc{Hash: domain.HashContent(raw), Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}
+	synctest.Test(t, func(t *testing.T) {
+		workers, err := svc.DocumentWorkersForProfile(documentquery.LegacyCompatibility)
+		if err != nil {
+			t.Fatal(err)
+		}
+		running, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); workers.Finalization.Run(running) }()
+		defer func() { cancel(); <-done }()
+		// The worker looked, found nothing, and waits for its next look.
+		synctest.Wait()
+		began := time.Now()
+		accepted, err := svc.SubmitDocFinalization(ctx, repo, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		job, err := st.GetDocJob(ctx, repo, accepted.ID)
+		if err != nil || job.State != "completed" || !time.Now().Equal(began) {
+			t.Fatalf("the job is %q after %s: %v", job.State, time.Since(began), err)
+		}
+	})
 }

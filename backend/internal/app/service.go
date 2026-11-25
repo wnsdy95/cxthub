@@ -22,6 +22,9 @@ type Service struct {
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
 	repositories outbound.RepositoryStore
+	// documentJobStored wakes this process's document worker when a job it
+	// stored is committed; nil where no worker runs. Configured before serving.
+	documentJobStored func()
 }
 
 // NewService creates a Service with an outbound port injected.
