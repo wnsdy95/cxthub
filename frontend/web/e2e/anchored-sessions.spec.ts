@@ -592,9 +592,9 @@ test('a commit without a session says where it was pushed from, and the owner of
   expect(unexpected).toEqual([]);
 });
 
-test('a member is told that the repository is not connected to GitHub and where an owner connects it', async ({ page }) => {
+test('a member is told that the repository is not connected to GitHub and where a maintainer connects it', async ({ page }) => {
   const errors = capturePageErrors(page);
-  const connectAt = 'https://example.test/connect/github?namespace=ns_owner';
+  const connectAt = 'https://example.test/connect/github';
   const state = { role: 'member', revision: '1.0.0', connection: { state: 'not_connected', connect_url: connectAt } as { state: string; connect_url?: string }, asked: 0 };
   const unexpected = await installApiFixture(page, request => {
     if (request.method === 'GET' && request.pathname === '/api/v1/repos/repo/revision') return { body: { revision: state.revision } };

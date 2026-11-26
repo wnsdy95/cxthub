@@ -331,7 +331,7 @@ func TestDiagnoseReadsThisComputerAndTheServer(t *testing.T) {
 	}
 	removals.github = domain.GitHubRepositoryConnection{State: domain.GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github"}
 	if diagnosis, err = care.Diagnose(context.Background(), "/work/app"); err != nil || diagnosisCode(diagnosis, "github-not-connected") == nil ||
-		diagnosisCode(diagnosis, "github-not-connected").Fix != "an owner of the repository connects it at https://example.test/connect/github" {
+		diagnosisCode(diagnosis, "github-not-connected").Fix != "a maintainer of the repository connects it at https://example.test/connect/github" {
 		t.Fatalf("a repository that is not connected to GitHub: %+v %v", diagnosis.Findings, err)
 	}
 	removals.githubErr = errors.New("synthetic status 500")

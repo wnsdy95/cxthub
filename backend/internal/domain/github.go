@@ -60,19 +60,19 @@ type GitHubConnection struct {
 type GitHubRepositoryState string
 
 const (
-	// GitHubRepositoryConnected: the installation of the repository's owner
-	// is in use, and it was told to read this repository.
+	// GitHubRepositoryConnected: an installation in use was told to read this
+	// repository.
 	GitHubRepositoryConnected GitHubRepositoryState = "connected"
-	// GitHubRepositoryNotConnected: the owner has no installation in use, or
-	// the installation was not told to read this repository.
+	// GitHubRepositoryNotConnected: no installation in use was told to read
+	// this repository.
 	GitHubRepositoryNotConnected GitHubRepositoryState = "not_connected"
 	// GitHubAppNotConfigured: this server has no GitHub App to connect with.
 	GitHubAppNotConfigured GitHubRepositoryState = "not_configured"
 )
 
 // GitHubRepositoryConnection is what a reader of a repository is told about
-// its connection with GitHub. ConnectURL is the page where an owner of the
-// repository connects it; a server without a GitHub App has no such page.
+// its connection with GitHub. ConnectURL is the page where a maintainer of
+// the repository connects it; a server without a GitHub App has no such page.
 type GitHubRepositoryConnection struct {
 	State      GitHubRepositoryState `json:"state"`
 	ConnectURL string                `json:"connect_url,omitempty"`

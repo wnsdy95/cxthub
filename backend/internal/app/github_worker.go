@@ -328,7 +328,7 @@ func (g *GitHubWorker) binding(ctx context.Context, c domain.GitHubConnection, b
 	if err != nil {
 		return domain.Repo{}, err
 	}
-	if local.OwnerNamespaceID != c.NamespaceID || local.Archived {
+	if local.Archived {
 		return domain.Repo{}, domain.ErrForbidden
 	}
 	repo, err := g.metadata.GetRepo(ctx, b.ContextRepoID)

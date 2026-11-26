@@ -28,9 +28,9 @@ func TestReadGitHubConnection(t *testing.T) {
 	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
 	ctx := context.Background()
 
-	answer = `{"state":"not_connected","connect_url":"https://example.test/connect/github?namespace=ns_owner"}`
+	answer = `{"state":"not_connected","connect_url":"https://example.test/connect/github"}`
 	got, err := client.ReadGitHubConnection(ctx, repo)
-	want := domain.GitHubRepositoryConnection{State: domain.GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github?namespace=ns_owner"}
+	want := domain.GitHubRepositoryConnection{State: domain.GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github"}
 	if err != nil || got != want || method != http.MethodGet || path != "/api/v1/repos/"+repo+"/github-connection" {
 		t.Fatalf("not connected: %+v %v (%s %s)", got, err, method, path)
 	}

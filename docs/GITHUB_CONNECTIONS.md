@@ -182,9 +182,13 @@ create an App, issue credentials, or run `terraform apply`.
    or GitHub organization administrator membership. Pending organization approval
    grants nothing; after approval, restart Connect from this page.
 4. Select an installed GitHub repository and an existing CXTHub repository
-   with the same Git origin. Binding also requires the CXTHub repository's owner
-   role. Organization owners inherit that role; organization administrators do
-   not. Connection management never reveals another private repository's metadata.
+   with the same Git origin. Binding requires that you maintain the CXTHub
+   repository, as a maintainer or an owner. The repository can be in another
+   owner space than the installation: the code of a repository often lies in
+   the GitHub account of a collaborator, who then connects it through their
+   own installation. Organization owners inherit the owner role; organization
+   administrators do not. Connection management never reveals another private
+   repository's metadata.
 5. Optionally map teams and explicitly enable **Sync members**. Both verified
    GitHub identity and current CXTHub organization membership are required. The
    workflow does not create accounts, invite outsiders, mirror GitHub roles or
@@ -200,8 +204,8 @@ repository, one of three states.
 
 | State | Meaning |
 | --- | --- |
-| `connected` | the installation of the repository's owner is in use and was told to read this repository: the server reads it on GitHub with that installation |
-| `not_connected` | the owner has no installation in use, or the installation was not told to read this repository |
+| `connected` | an installation in use was told to read this repository: the server reads it on GitHub with that installation |
+| `not_connected` | no installation in use was told to read this repository |
 | `not_configured` | this server has no GitHub App |
 
 An installation is in use while it is enabled, not suspended, and GitHub
@@ -210,8 +214,9 @@ that gives the reader of GitHub its credential, so a repository is told as
 connected exactly while the server reads it with the installation.
 
 Except on a server without a GitHub App the answer carries `connect_url`, the
-GitHub connections page of the repository's owner. A repository that is not
-connected is said in three places:
+GitHub connections page, where a maintainer of the repository connects it
+through an installation they manage. A repository that is not connected is
+said in three places:
 
 - the Sessions tab shows a member a notice with a link to that page; one who
   only views the repository is not told, and is not asked for;
@@ -224,9 +229,10 @@ the next section describes. A server from before this route answers 404, which
 cxt and the web read as a server that does not say.
 
 To know before an owner installs the App: from then on the server reads that
-owner's repositories only through the installation. A repository of the owner
-that was not chosen on the connections page is no longer read with
-`CXT_GITHUB_TOKEN`, and is told as `not_connected`.
+owner's repositories only through an installation. A repository of the owner
+that no connection was told to read is no longer read with `CXT_GITHUB_TOKEN`,
+and is told as `not_connected`. A repository that was bound through the
+installation of another owner space is read through that installation.
 
 ## Two ways GitHub tells the server
 
@@ -252,7 +258,11 @@ hundred. The Terraform files of this repository set the webhook secret and no
 
 - One installation is linked to one CXTHub owner namespace. Multiple repository
   bindings share that installation; an external repository is bound once within
-  it. An unrelated GitHub account cannot replace it through a reconnect.
+  it, and a CXTHub repository in at most one connection. A binding ends when a
+  maintainer of the repository who manages the connection removes it, when the
+  connection is disconnected, or when the GitHub repository leaves the
+  installation. An unrelated GitHub account cannot replace an installation
+  through a reconnect.
 - Source repository and account IDs survive GitHub renames. Verified API requests
   use the new name while the stored origin remains unchanged. Transfers
   to another GitHub owner require new authorized installation and binding.

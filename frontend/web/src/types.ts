@@ -452,9 +452,9 @@ export interface PushCollector { by?: string; machine?: string; cxt_version?: st
 export interface PushOrigin { branch: string; sha: string; at: string; state: 'cxt' | 'cxt_error' | 'no_cxt' | 'unknown'; collector?: number; claimed_at?: string; waiting?: number[] }
 export interface PushOriginView { collectors: PushCollector[]; pushes: PushOrigin[] }
 /**
- * Whether the server reads the repository on GitHub through the GitHub App. `connected`: the installation of the
- * repository's owner is in use and was told to read it. `not_connected`: it is not. `not_configured`: the server has
- * no GitHub App. `connect_url` is the page where an owner of the repository connects it.
+ * Whether the server reads the repository on GitHub through the GitHub App. `connected`: an installation in
+ * use was told to read it. `not_connected`: it is not. `not_configured`: the server has
+ * no GitHub App. `connect_url` is the page where a maintainer of the repository connects it.
  */
 export interface GitHubRepositoryConnection { state: 'connected' | 'not_connected' | 'not_configured'; connect_url?: string }
 export interface RemoteBranch { name: string; sha: string }

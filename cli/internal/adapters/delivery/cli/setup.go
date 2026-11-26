@@ -291,7 +291,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	}
 
 	if githubMissing {
-		return fmt.Errorf("not complete: this repository is not connected to GitHub — an owner of the repository connects it at %s; everything on this computer is set up", connectGitHubAt)
+		return fmt.Errorf("not complete: this repository is not connected to GitHub — a maintainer of the repository connects it at %s; everything on this computer is set up", connectGitHubAt)
 	}
 	fmt.Println("Complete — use Claude Code/Codex as usual; your sessions are read from their own records and shown with your commits once you push them. Check with: cxt doctor")
 	return nil
@@ -315,7 +315,7 @@ func setupGitHubLine(connection domain.GitHubRepositoryConnection, err error) (s
 	case connection.State == domain.GitHubRepositoryConnected:
 		return setupDone, "GitHub connected (the server reads what is pushed through the GitHub App)"
 	case connection.State == domain.GitHubRepositoryNotConnected:
-		return setupMissing, "GitHub is not connected — an owner of the repository connects it at " + connection.ConnectURL
+		return setupMissing, "GitHub is not connected — a maintainer of the repository connects it at " + connection.ConnectURL
 	}
 	return "", ""
 }

@@ -15,17 +15,16 @@ type repositoryGitHubConnections struct {
 	GitHubConnections
 	asked     []domain.ContentHash
 	connected bool
-	namespace string
 	err       error
 }
 
-func (g *repositoryGitHubConnections) RepositoryConnection(_ context.Context, repo domain.ContentHash) (bool, string, error) {
+func (g *repositoryGitHubConnections) RepositoryConnection(_ context.Context, repo domain.ContentHash) (bool, error) {
 	g.asked = append(g.asked, repo)
-	return g.connected, g.namespace, g.err
+	return g.connected, g.err
 }
 
 // Whoever may view a repository is told whether the server reads it on GitHub
-// through the GitHub App, and where an owner connects it.
+// through the GitHub App, and where a maintainer connects it.
 func TestGitHubRepositoryConnectionHTTP(t *testing.T) {
 	const page = "https://example.test/connect/github"
 	for _, test := range []struct {
@@ -35,7 +34,6 @@ func TestGitHubRepositoryConnectionHTTP(t *testing.T) {
 		authed    bool
 		app       bool
 		connected bool
-		namespace string
 		err       error
 		status    int
 		answer    map[string]any
@@ -45,18 +43,16 @@ func TestGitHubRepositoryConnectionHTTP(t *testing.T) {
 		{name: "writing_it", method: http.MethodPost, role: domain.RoleOwner, authed: true, app: true, status: 405},
 		{name: "a_server_without_the_app", method: http.MethodGet, role: domain.RoleViewer, authed: true, status: 200,
 			answer: map[string]any{"state": "not_configured"}},
-		{name: "connected", method: http.MethodGet, role: domain.RoleViewer, authed: true, app: true, connected: true, namespace: "ns_owner", status: 200,
-			answer: map[string]any{"state": "connected", "connect_url": page + "?namespace=ns_owner"}},
-		{name: "not_connected", method: http.MethodGet, role: domain.RoleMember, authed: true, app: true, namespace: "ns owner&x", status: 200,
-			answer: map[string]any{"state": "not_connected", "connect_url": page + "?namespace=ns+owner%26x"}},
-		{name: "a_repository_without_an_owner", method: http.MethodGet, role: domain.RoleViewer, authed: true, app: true, status: 200,
+		{name: "connected", method: http.MethodGet, role: domain.RoleViewer, authed: true, app: true, connected: true, status: 200,
+			answer: map[string]any{"state": "connected", "connect_url": page}},
+		{name: "not_connected", method: http.MethodGet, role: domain.RoleMember, authed: true, app: true, status: 200,
 			answer: map[string]any{"state": "not_connected", "connect_url": page}},
-		{name: "the_service_failed", method: http.MethodGet, role: domain.RoleViewer, authed: true, app: true, connected: true, namespace: "ns_owner", err: domain.ErrConflict, status: 409},
+		{name: "the_service_failed", method: http.MethodGet, role: domain.RoleViewer, authed: true, app: true, connected: true, err: domain.ErrConflict, status: 409},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			backend := &collectorHTTPBackend{repo: domain.Repo{ID: domain.HashContent([]byte(t.Name())), RepositoryID: "ws_" + strings.Repeat("e", 32)}}
 			server := NewServer(backend, branchPullHTTPIdentity{repo: domain.Repository{ID: backend.repo.RepositoryID}, role: test.role})
-			connections := &repositoryGitHubConnections{connected: test.connected, namespace: test.namespace, err: test.err}
+			connections := &repositoryGitHubConnections{connected: test.connected, err: test.err}
 			if test.app {
 				server.SetGitHubConnections(connections, "fixture-secret", page)
 			}

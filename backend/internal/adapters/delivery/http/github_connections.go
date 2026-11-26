@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app"
@@ -22,7 +21,7 @@ type GitHubConnections interface {
 	Edit(context.Context, string, string, int64, string, domain.GitHubBinding, domain.GitHubTeamMapping) error
 	Enterprise(context.Context, string, string) ([]app.GitHubEnterpriseConnection, error)
 	Receive(context.Context, string, string, []byte) error
-	RepositoryConnection(context.Context, domain.ContentHash) (bool, string, error)
+	RepositoryConnection(context.Context, domain.ContentHash) (bool, error)
 }
 
 func (s *Server) SetGitHubConnections(g GitHubConnections, secret, returnURL string) {
@@ -59,19 +58,16 @@ func (s *Server) githubConnectionsView(w http.ResponseWriter, r *http.Request) {
 }
 
 // getGitHubConnection tells a reader of a repository whether the server reads
-// it on GitHub through the GitHub App, and where an owner connects it.
+// it on GitHub through the GitHub App, and where a maintainer connects it.
 func (s *Server) getGitHubConnection(w http.ResponseWriter, r *http.Request) {
 	if s.githubConnections == nil {
 		s.respond(w, domain.GitHubRepositoryConnection{State: domain.GitHubAppNotConfigured}, nil)
 		return
 	}
-	connected, namespace, err := s.githubConnections.RepositoryConnection(r.Context(), s.repoID(r))
+	connected, err := s.githubConnections.RepositoryConnection(r.Context(), s.repoID(r))
 	view := domain.GitHubRepositoryConnection{State: domain.GitHubRepositoryNotConnected, ConnectURL: s.githubReturnURL}
 	if connected {
 		view.State = domain.GitHubRepositoryConnected
-	}
-	if namespace != "" {
-		view.ConnectURL += "?namespace=" + url.QueryEscape(namespace)
 	}
 	s.respond(w, view, err)
 }

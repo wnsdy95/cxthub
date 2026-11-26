@@ -61,6 +61,24 @@ func (storage *wave48GitHubSourceStore) GetGitHubConnection(ctx context.Context,
 	return storage.FSStore.GetGitHubConnection(ctx, namespaceID)
 }
 
+func (storage *wave48GitHubSourceStore) FindGitHubBinding(ctx context.Context, repoID domain.ContentHash) (domain.GitHubConnection, error) {
+	if storage.checkContext != nil {
+		storage.checkContext(ctx)
+	}
+	if storage.connectionError != nil {
+		return domain.GitHubConnection{}, storage.connectionError
+	}
+	if storage.connection != nil {
+		for _, binding := range storage.connection.Bindings {
+			if binding.ContextRepoID == repoID {
+				return *storage.connection, nil
+			}
+		}
+		return domain.GitHubConnection{}, domain.ErrNotFound
+	}
+	return storage.FSStore.FindGitHubBinding(ctx, repoID)
+}
+
 func wave48GitHubSourceFixture(test *testing.T) (*GitHubWorker, *wave48GitHubSourceStore, domain.Repo, domain.Repository, domain.GitHubConnection) {
 	test.Helper()
 	_, original, repo := githubPRObservationFixture(test)

@@ -485,15 +485,15 @@ done
 curl2 -sb "$J2" -X POST "$B2/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE2\"}" >/dev/null
 wait "$LPID"; LPID=""
 cxt setup "$ORIGIN2/$OWN2/$SLUG2" --no-login >"$TMP/hub-setup.out" 2>&1; HUB=$?
-expect "setup ends as not complete and says where an owner connects the repository" \
-  "$([ "$HUB" -ne 0 ] && echo stopped) $(grep -c "✗ GitHub is not connected — an owner of the repository connects it at $ORIGIN2/connect/github?namespace=ns_" "$TMP/hub-setup.out") $(grep -c '^Complete' "$TMP/hub-setup.out") $(grep -c "not complete: this repository is not connected to GitHub — an owner of the repository connects it at $ORIGIN2/connect/github?namespace=ns_" "$TMP/hub-setup.out")" "stopped 1 0 1"
+expect "setup ends as not complete and says where a maintainer connects the repository" \
+  "$([ "$HUB" -ne 0 ] && echo stopped) $(grep -c "✗ GitHub is not connected — a maintainer of the repository connects it at $ORIGIN2/connect/github$" "$TMP/hub-setup.out") $(grep -c '^Complete' "$TMP/hub-setup.out") $(grep -c "not complete: this repository is not connected to GitHub — a maintainer of the repository connects it at $ORIGIN2/connect/github;" "$TMP/hub-setup.out")" "stopped 1 0 1"
 expect "everything on this computer is set up all the same" "$([ -f .cxt/HEAD ] && echo mark) $(grep -cF 'git-hook wake' .git/hooks/pre-push 2>/dev/null)" "mark 1"
 RID2="$(curl -fsSb "$J2" "$B2/repos?repository=$(curl -fsSb "$J2" "$B2/repositories" | jget "[0]['id']")" | jget "[0]['id']")"
-expect "the server says the same to whoever may view the repository" "$(curl -sb "$J2" "$B2/repos/$RID2/github-connection" | python3 -c 'import json,sys;v=json.load(sys.stdin);print(v["state"], v["connect_url"].startswith(sys.argv[1]))' "$ORIGIN2/connect/github?namespace=ns_")" "not_connected True"
+expect "the server says the same to whoever may view the repository" "$(curl -sb "$J2" "$B2/repos/$RID2/github-connection" | python3 -c 'import json,sys;v=json.load(sys.stdin);print(v["state"], v["connect_url"] == sys.argv[1])' "$ORIGIN2/connect/github")" "not_connected True"
 expect "the diagnosis names the connection that is missing, with where to connect" "$(cxt doctor --json | python3 -c 'import json,sys
 d = json.load(sys.stdin)
 found = [f for f in d["findings"] if f["code"] == "github-not-connected"]
-print("github-connection" in d["checked"], len(found), found and found[0]["problem"], found and found[0]["fix"].startswith("an owner of the repository connects it at " + sys.argv[1]))' "$ORIGIN2/connect/github?namespace=ns_")" "True 1 True True"
+print("github-connection" in d["checked"], len(found), found and found[0]["problem"], found and found[0]["fix"] == "a maintainer of the repository connects it at " + sys.argv[1])' "$ORIGIN2/connect/github")" "True 1 True True"
 cd "$TMP/repo" || exit 1
 
 echo

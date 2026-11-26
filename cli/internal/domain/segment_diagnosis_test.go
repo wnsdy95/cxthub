@@ -100,8 +100,8 @@ func TestDiagnosisNamesEachThingThatDoesNotFitWithItsFix(t *testing.T) {
 		}, "records-gone", false, "", "no longer hold the records of 1 sessions"},
 		"the server cannot be read": {func(in *SegmentDiagnosisInput) { in.Server, in.ServerError = nil, "server answered 401: token expired" }, "server-not-read", true, "cxt login", "could not be read"},
 		"the repository is not connected to GitHub": {func(in *SegmentDiagnosisInput) {
-			in.Server.GitHub = GitHubRepositoryConnection{State: GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github?namespace=ns_owner"}
-		}, "github-not-connected", true, "an owner of the repository connects it at https://example.test/connect/github?namespace=ns_owner", "not connected to GitHub"},
+			in.Server.GitHub = GitHubRepositoryConnection{State: GitHubRepositoryNotConnected, ConnectURL: "https://example.test/connect/github"}
+		}, "github-not-connected", true, "a maintainer of the repository connects it at https://example.test/connect/github", "not connected to GitHub"},
 		"a removed session": {func(in *SegmentDiagnosisInput) {
 			in.Server.Sessions = nil
 			in.Server.Removed = []AnchoredSessionRemoval{{Provider: ProviderClaude, SessionID: "session-1", RemovedAt: "2031-01-02T03:00:00Z", ByYou: true}}

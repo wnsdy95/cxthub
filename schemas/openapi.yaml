@@ -3096,7 +3096,7 @@ paths:
     get:
       operationId: getGitHubRepositoryConnection
       summary: Read whether the server reads the repository on GitHub through the GitHub App
-      description: Readable by whoever may view the repository. `connected` means the GitHub App installation of the repository's owner is in use and was told to read this repository, so the server reads its branches, commits and pull requests with that installation. It is in use while it is enabled, not suspended, and GitHub answered for it within the last 10 minutes. `not_connected` means the owner has no installation in use, or the installation was not told to read this repository. `not_configured` means this server has no GitHub App. `connect_url` is the page where an owner of the repository connects it, absent on a server without a GitHub App.
+      description: Readable by whoever may view the repository. `connected` means a GitHub App installation in use was told to read this repository, so the server reads its branches, commits and pull requests with that installation; the installation can belong to another owner space than the repository. It is in use while it is enabled, not suspended, and GitHub answered for it within the last 10 minutes. `not_connected` means no installation in use was told to read this repository. `not_configured` means this server has no GitHub App. `connect_url` is the page where a maintainer of the repository connects it, absent on a server without a GitHub App.
       tags: [remote-git]
       responses:
         '200':

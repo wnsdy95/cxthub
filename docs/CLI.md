@@ -69,7 +69,7 @@ an existing remote that points somewhere else. An explicitly requested
 different repository is rejected while the existing connection is preserved.
 
 Where the server has a GitHub App and says the repository is not connected to
-it, setup prints the page where an owner of the repository connects it and ends
+it, setup prints the page where a maintainer of the repository connects it and ends
 as not complete, with exit status 1, after everything on the computer was set
 up: the server sees what is pushed through that connection. Run setup again once
 it is connected. A server without a GitHub App is not asked for more; see
@@ -592,7 +592,7 @@ said. `checked` lists what was looked at, so that no finding means something.
 | `server-behind` | the server holds fewer records of a session than this computer | `cxt segments push <tool> <session>` |
 | `server-differs` | the report on the server is not the one this computer last sent | `cxt segments push <tool> <session>` |
 | `push-not-seen` | a commit is on origin here, but the server has not seen it on GitHub | `cxt segments refresh` |
-| `github-not-connected` | the server has a GitHub App and this repository is not connected to it | none: an owner of the repository opens the page the finding names |
+| `github-not-connected` | the server has a GitHub App and this repository is not connected to it | none: a maintainer of the repository opens the page the finding names |
 | `summary-missing` | a session has no summary at one of its commits | `cxt segments push <tool> <session>` |
 | `removed` | a session was removed from the server | `cxt segments allow <tool> <session>` |
 | `archived` | a session is archived on the server | `cxt segments unarchive <tool> <session>` |
