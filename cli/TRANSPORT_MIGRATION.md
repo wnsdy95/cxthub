@@ -11,10 +11,11 @@ cxt remote -v
 
 Keep the original repository URL as the remote, for example
 `http://localhost:5173/acme/project`. Do not remove it and add the public URL
-instead: the hash of the normalized URL is the immutable RepoID under which the
-repository's sessions are stored. `set-endpoint` rewrites nothing on this
-computer besides the configuration, and it creates no repository on the
-server.
+instead: the hash of the normalized URL is the RepoID under which the
+repository's sessions are stored, until an operator moves the stored repository
+to the public URL ([below](#moving-the-stored-repository-to-the-servers-address)).
+`set-endpoint` rewrites nothing on this computer besides the configuration, and
+it creates no repository on the server.
 
 ## Verification
 
@@ -50,6 +51,29 @@ that host.
 Changing the endpoint, moving the server's data, installing the CLI and
 deploying services are separate operations, not effects of this command.
 
+## Moving the stored repository to the server's address
+
+A clone set up with the public URL derives another RepoID than the stored one,
+so the server refuses it while the repository is stored under the old URL. An
+operator of the server ends that by moving the stored repository, in the
+database, to the address its workspace is reached at now: `cxt-admin
+repo-address` in [Database migrations](../docs/DATABASE_MIGRATIONS.md#moving-a-repository-to-another-address).
+Then, on each computer with a clone:
+
+```sh
+cxt setup https://cxthub.io/acme/project
+cxt remote -v
+```
+
+Setup replaces `origin` with that address when the clone's endpoint binding pins
+the workspace the server now names under it. Before the server's move it stops
+and changes nothing. A clone without an endpoint binding proves no workspace and
+is not moved: run `cxt remote remove origin`, then the same `cxt setup`. The
+endpoint binding of the old URL stays in `.cxt/config` and is no longer used.
+An active `capture.identity` root preference is confirmed again for the new
+origin, as `set-endpoint` does. The collector reads each session again once
+after the move; the server finds what it already holds unchanged.
+
 ## Device login across API and frontend hosts
 
 Device pairing accepts the server's optional `verification_uri_complete`, such
@@ -63,4 +87,7 @@ the browser host.
 ## Validation
 
 `TestEndpoint*` tests in `cli/cmd/cxt`, `cli/internal/adapters/remotecfg` and
-`cli/internal/adapters/delivery/cli` cover this command.
+`cli/internal/adapters/delivery/cli` cover this command. `TestSetupFollows*` and
+`TestSetupMoves*` in `cli/internal/adapters/delivery/cli` cover setup following
+a moved repository, and section J of `scripts/e2e-sync.sh` moves one with the
+real programs on PostgreSQL.

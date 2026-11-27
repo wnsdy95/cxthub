@@ -266,6 +266,51 @@ Uncontrolled old binaries continuing to run against the migrated database remain
 unproven. A successful new startup check does not validate old-process behavior,
 rolling upgrades, or arbitrary mixed-version operation.
 
+## Moving a repository to another address
+
+A repository is stored under the hash of the address it was first connected
+with. One connected against a development server keeps that address when its
+database is served elsewhere: its clones reach the server through a
+[transport endpoint](../cli/TRANSPORT_MIGRATION.md), and a clone set up with the
+server's own address is refused. `cxt-admin repo-address` gives the stored
+repository the address its workspace is reached at now. It runs on PostgreSQL,
+against a database of exactly this release (run `migrate --apply` first), with
+the operator credential in `CXT_POSTGRES_DSN`:
+
+```sh
+cxt-admin repo-address --list
+cxt-admin repo-address --from http://localhost:5173/acme/project --to https://cxthub.io/acme/project
+cxt-admin repo-address --from http://localhost:5173/acme/project --to https://cxthub.io/acme/project --apply
+```
+
+The operator image runs `migrate` by default; name the executable instead:
+`docker run --rm --read-only --env CXT_POSTGRES_DSN --entrypoint /app/cxt-admin "$CXT_MIGRATE_IMAGE" repo-address --list`.
+
+- `--list` prints each stored repository's identifier, address and workspace.
+- Without `--apply` the move runs in a transaction that is rolled back and
+  prints what it would change (`changed`), what it leaves (`kept`) and how many
+  finished document jobs it removes. With `--apply` the same transaction
+  commits.
+- The new address must name the workspace the stored repository belongs to,
+  and nothing may be stored under it yet.
+- Every column that names the old identifier is given the new one in one
+  statement, with the tables' own triggers off, and nothing outside what is
+  left may name the old identifier at the end. Storage is counted by owner and
+  content hash, which a move does not change.
+- Left as they are: conversation content (what was said, addressed by its
+  hash), settings objects addressed by their hash, and what records what
+  happened (migration, ownership, storage ledger and audit records).
+- A document of the repository that is still being finished stops the move;
+  finished document jobs are removed, since their identifiers are computed from
+  the repository's.
+- Stop the API, MCP and worker processes and take a backup first, as for a
+  migration. The command waits at most 15 seconds for locks, and a running
+  process keeps what it read in memory.
+
+Then, on each computer with a clone, run `cxt setup <new address>`: it moves the
+clone's origin when its endpoint pins the workspace the server names under the
+new address.
+
 ## Failure and rollback
 
 The exact file/checksum/unknown-newer guard intentionally fails closed when an

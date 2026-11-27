@@ -14,6 +14,7 @@
 #   G. a folder not set up  → hooks leave it alone
 #   H. removed commands     → unknown commands, not silent successes
 #   I. a server with a GitHub App → setup and cxt doctor say that the repository is not connected
+#   J. a repository stored under another address than the server's → an operator moves it there, and setup follows
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
 # CXT_E2E_DSN=<disposable PostgreSQL DSN> exercises production storage instead of FS.
@@ -495,6 +496,83 @@ d = json.load(sys.stdin)
 found = [f for f in d["findings"] if f["code"] == "github-not-connected"]
 print("github-connection" in d["checked"], len(found), found and found[0]["problem"], found and found[0]["fix"] == "a maintainer of the repository connects it at " + sys.argv[1])' "$ORIGIN2/connect/github")" "True 1 True True"
 cd "$TMP/repo" || exit 1
+
+echo "── J. a repository stored under another address than the server's is moved there, and setup follows it"
+# A repository can be stored under an address its server is not reached at: one made against a development server
+# whose database was then served elsewhere. The clone's origin is the old address, and a transport endpoint points it
+# at the server. An operator gives the stored repository the address its workspace is reached at now, in the
+# database and with the server stopped; cxt setup with that address then moves the clone's origin to it. What the
+# repository held reads under the new address, and what follows is uploaded there. Here the old address is this
+# server under another name. Only the PostgreSQL store can be moved.
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  echo "  (PostgreSQL only: the operator command moves a repository in the database)"
+else
+  SLUG3=$(ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d "{\"name\":\"Moved$SUFFIX\"}" | jget "['slug']")
+  WS3=$(curl -fsSb "$J" "$B/repositories" | python3 -c 'import json,sys;print(next(r["id"] for r in json.load(sys.stdin) if r["slug"] == sys.argv[1]))' "$SLUG3")
+  OLD3="http://localhost:$PORT/$OWN/$SLUG3"
+  NEW3="$ORIGIN/$OWN/$SLUG3"
+  stored3() { curl -fsSb "$J" "$B/repos?repository=$WS3" | python3 -c 'import json,sys;print(" ".join(r["id"] for r in json.load(sys.stdin)))'; }
+  origin3() { python3 -c 'import json;print(json.load(open(".cxt/config"))["remotes"].get("origin", "none"))'; }
+  on3() { curl -fsSb "$J" "$B/repos/$1/anchored-sessions/claude/sync-moved"; }
+  rev3() { on3 "$1" | jget "['revision']"; }
+  admin3() { CXT_ENV_FILE=/dev/null CXT_POSTGRES_DSN="$CXT_E2E_DSN" CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" "$TMP/bin/cxt-admin" repo-address "$@"; }
+  git init -q --bare "$TMP/moved.git"
+  mkdir -p "$TMP/moved"; cd "$TMP/moved" || exit 1
+  git init -q; git remote add origin "$TMP/moved.git"
+  git commit -q --allow-empty -m "before cxt"
+  # The old address has a login of its own, as the development server had.
+  CXT_NO_BROWSER=1 cxt login --server "http://localhost:$PORT" >"$TMP/login3.out" 2>&1 &
+  LPID=$!
+  DCODE3=""
+  for i in $(seq 1 40); do
+    DCODE3=$(grep -o '[B-Z2-9]\{3\}-[B-Z2-9]\{3\}' "$TMP/login3.out" 2>/dev/null | head -1)
+    [ -n "$DCODE3" ] && break; sleep 0.25
+  done
+  ccurl -sb "$J" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE3\"}" >/dev/null
+  wait "$LPID"; LPID=""
+  cxt setup "$OLD3" --no-login >"$TMP/moved-setup.out" 2>&1; SET3=$?
+  cxt remote set-endpoint origin "$B" >"$TMP/moved-endpoint.out" 2>&1; ENDPOINT3=$?
+  OLDID3="$(stored3)"
+  expect "a clone is connected under the old address, and an endpoint points it at the server" "$SET3 $ENDPOINT3 $(origin3) $([ -n "$OLDID3" ] && echo stored)" "0 0 $OLD3 stored"
+  STATE="$(git rev-parse --absolute-git-dir)/cxt/collector-v1.json"
+  T3="$(at 8)"
+  commit_at "$T3" "first moved"
+  until_true 20 test -f "$STATE"
+  claude_session "$PWD" sync-moved main "$(git rev-parse HEAD)" "$T3"
+  quiet
+  git commit -q --allow-empty -m "second moved"
+  expect "a session is uploaded under the old address" "$(until_true 30 on3 "$OLDID3" && rev3 "$OLDID3")" 1
+  quiet
+  cxt setup "$NEW3" --no-login >"$TMP/moved-early.out" 2>&1; EARLY3=$?
+  expect "before the move, setup with the new address stops and changes nothing" "$([ "$EARLY3" -ne 0 ] && echo stopped) $(origin3)" "stopped $OLD3"
+
+  kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
+  expect "the operator finds the repository stored under the old address" "$(admin3 --list | python3 -c 'import json,sys;e=next(e for e in json.load(sys.stdin) if e["id"] == sys.argv[1]);print(e["address"] == sys.argv[2], e["path"] == sys.argv[3])' "$OLDID3" "$OLD3" "$OWN/$SLUG3")" "True True"
+  admin3 --from "$OLD3" --to "$NEW3" >"$TMP/move-preview.json" 2>"$TMP/move-preview.err"; LOOK3=$?
+  expect "looking at the move says what it would change, and changes nothing" "$LOOK3 $(python3 -c 'import json,sys;m=json.load(open(sys.argv[1]));print(m["applied"], {"table": "anchored_sessions", "column": "repo_id", "rows": 1} in m["changed"])' "$TMP/move-preview.json") $(grep -c 'nothing was changed' "$TMP/move-preview.err")" "0 False True 1"
+  admin3 --from "$OLD3" --to "$NEW3" --apply >"$TMP/move.json" 2>"$TMP/move.err"; MOVE3=$?
+  expect "the move is applied, and says to run setup with the new address" "$MOVE3 $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["applied"])' "$TMP/move.json") $(grep -cF "cxt setup $NEW3" "$TMP/move.err")" "0 True 1"
+  "${fixture_server[@]}" >"$TMP/srv-moved.log" 2>&1 &
+  SRV_PID=$!
+  until_true 15 curl -sf -o /dev/null "$B/repos"
+
+  cxt setup "$NEW3" --no-login >"$TMP/moved-setup2.out" 2>&1; SET4=$?
+  NEWID3="$(stored3)"
+  expect "setup with the new address moves the origin of the clone" "$SET4 $(grep -cF "remote origin moved from $OLD3" "$TMP/moved-setup2.out") $(origin3)" "0 1 $NEW3"
+  expect "the server keeps the repository under the new address only" "$([ -n "$NEWID3" ] && [ "$NEWID3" != "$OLDID3" ] && echo moved) $(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$OLDID3/anchored-sessions/claude/sync-moved")" "moved 404"
+  expect "what was uploaded reads under the new address" "$(rev3 "$NEWID3")" 1
+  quiet
+  REWOUND="$(last_run_at)"
+  git commit -q --allow-empty -m "after the move"
+  expect "after the move a commit wakes the collector, and the session it reads again is unchanged" "$(until_true 40 ran_again && echo ran) $(rev3 "$NEWID3")" "ran 1"
+  session_goes_on "$PWD" sync-moved main mm5 "$(at 9)"
+  quiet
+  printf '%s' "{\"session_id\":\"sync-moved\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+  rev3_is() { [ "$(rev3 "$NEWID3" 2>/dev/null)" = "$1" ]; }
+  expect "the session that went on is uploaded under the new address" "$(until_true 30 rev3_is 2 && rev3 "$NEWID3")" 2
+  expect "the diagnosis finds nothing that does not fit" "$(cxt doctor --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin).get("findings") or []))')" 0
+  cd "$TMP/repo" || exit 1
+fi
 
 echo
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: all passed ✓"; else echo "SYNC E2E: FAILED ✗"; fi

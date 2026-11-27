@@ -68,6 +68,16 @@ Rerunning the command reports and repairs missing setup steps without replacing
 an existing remote that points somewhere else. An explicitly requested
 different repository is rejected while the existing connection is preserved.
 
+The one exception is a repository the server moved. A clone that reaches its
+server through a [transport endpoint](../cli/TRANSPORT_MIGRATION.md) keeps the
+workspace the endpoint was verified for. When the server keeps that workspace's
+repository under the requested address, because an operator moved it there
+with `cxt-admin repo-address`, setup replaces `origin` with the requested
+address. An active `capture.identity` root preference is confirmed again for the
+new origin; when the server does not confirm it, setup says so and conversation
+documents are sent in the legacy identity. Before the move, setup with the new
+address stops and changes nothing.
+
 Where the server has a GitHub App and says the repository is not connected to
 it, setup prints the page where a maintainer of the repository connects it and ends
 as not complete, with exit status 1, after everything on the computer was set

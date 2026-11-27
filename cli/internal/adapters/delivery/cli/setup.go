@@ -182,10 +182,21 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 			if err != nil {
 				return err
 			}
-			if matches {
+			moved := false
+			if !matches {
+				if moved, err = setupOriginMoved(ctx, c, cwd, cur, remoteURL); err != nil {
+					return err
+				}
+			}
+			switch {
+			case matches:
 				ok("remote origin already registered = %s", cur)
-			} else {
+			case !moved:
 				return fmt.Errorf("requested repository differs from configured origin (%s); preserved without attachment — change: cxt remote remove origin then setup", cur)
+			default:
+				if err := setupMoveOrigin(ctx, c, cwd, cur, remoteURL); err != nil {
+					return err
+				}
 			}
 		} else if rerr := runRemote(ctx, c, cwd, []string{"add", "origin", remoteURL}); rerr != nil {
 			// Git origin mismatch is server rejection — invalid folder, so stop setup.
@@ -333,6 +344,73 @@ func setupRemoteMatches(ctx context.Context, c *Container, existing, requested s
 		return false, err
 	}
 	return remotecfg.RepoIDFor(existing) == remotecfg.RepoIDFor(stable), nil
+}
+
+// setupOriginMoved says whether the repository this clone is connected to was
+// moved on the server to the requested address. A clone connected through
+// another address than the server's own keeps the workspace it was connected
+// to; when the server names that same workspace under the requested address,
+// the repository moved there. Without such a record nothing is proven.
+func setupOriginMoved(ctx context.Context, c *Container, cwd, current, requested string) (bool, error) {
+	if c.ResolveConnection == nil {
+		return false, nil
+	}
+	observed, err := remotecfg.Observe(ctx, cwd)
+	if err != nil {
+		return false, err
+	}
+	pinned, err := observed.ResolveEndpoint(current)
+	if err != nil || pinned.RepositoryID == "" {
+		return false, err
+	}
+	canonical, err := remotecfg.CanonicalURL(requested)
+	if err != nil {
+		return false, err
+	}
+	resolved, err := c.ResolveConnection(ctx, canonical)
+	if err != nil {
+		return false, fmt.Errorf("the server did not say which repository %s is: %w", canonical, err)
+	}
+	if _, err := ValidatedRepositoryURL(canonical, resolved); err != nil {
+		return false, err
+	}
+	return resolved.RepositoryID == pinned.RepositoryID, nil
+}
+
+// setupMoveOrigin points this clone at the address the server keeps its
+// repository under now. The identity the clone's conversation documents are
+// sent in is bound to the origin, so it is confirmed again for the new one,
+// as cxt remote set-endpoint does; without that confirmation the documents
+// are sent in the legacy identity.
+func setupMoveOrigin(ctx context.Context, c *Container, cwd, current, requested string) error {
+	observed, err := remotecfg.Observe(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	identity, err := observed.CaptureIdentity()
+	if err != nil {
+		return err
+	}
+	if err := remotecfg.Remove(ctx, observed, "origin"); err != nil {
+		return err
+	}
+	if err := runRemote(ctx, c, cwd, []string{"add", "origin", requested}); err != nil {
+		return fmt.Errorf("the origin %s was removed and %s could not be registered; run cxt setup %s again: %w", current, requested, requested, err)
+	}
+	fmt.Printf("  ✓ remote origin moved from %s: the server keeps this repository under %s now\n", current, requested)
+	if identity == domain.DocumentIdentityLegacy {
+		return nil
+	}
+	err = errors.New("capture identity configuration unavailable")
+	if c.SetCaptureIdentity != nil {
+		err = c.SetCaptureIdentity(ctx, cwd, identity)
+	}
+	if err != nil {
+		fmt.Printf("  ⚠ capture.identity %s was not confirmed for the moved origin (%v); conversation documents are sent in the legacy identity until this succeeds: cxt config capture.identity %s\n", identity, err, identity)
+		return nil
+	}
+	fmt.Printf("  ✓ capture.identity %s confirmed for the moved origin\n", identity)
+	return nil
 }
 
 // authTokenPresent indicates the presence of a stored token on the origin host (validity is determined by the first request).

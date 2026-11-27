@@ -29,6 +29,10 @@ the upgrade notes before deploying.
   in the Sessions tab, in `cxt setup` and in `cxt doctor`.
 - A long session's conversation is kept in several documents, so a session
   that goes on converts and sends only what was added.
+- `cxt-admin repo-address` moves a stored repository, in the database, to the
+  address its workspace is reached at now. `cxt setup` with that address then
+  moves the origin of a clone that reaches the server through a transport
+  endpoint.
 - The tool server reads sessions through tools of their own.
 - A copy of what was uploaded for each session, kept under `.cxt/sessions`.
 - PostgreSQL migrations 0161 to 0168 and 0170 for sessions, branch name
