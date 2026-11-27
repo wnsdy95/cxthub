@@ -544,7 +544,7 @@ else
   expect "a session is uploaded under the old address" "$(until_true 30 on3 "$OLDID3" && rev3 "$OLDID3")" 1
   quiet
   cxt setup "$NEW3" --no-login >"$TMP/moved-early.out" 2>&1; EARLY3=$?
-  expect "before the move, setup with the new address stops and changes nothing" "$([ "$EARLY3" -ne 0 ] && echo stopped) $(origin3)" "stopped $OLD3"
+  expect "before the move, setup with the new address says where the repository is kept, and changes nothing" "$([ "$EARLY3" -ne 0 ] && echo stopped) $(grep -cF "the server keeps this repository under $OLD3, the address this clone is connected to" "$TMP/moved-early.out") $(origin3)" "stopped 1 $OLD3"
 
   kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
   expect "the operator finds the repository stored under the old address" "$(admin3 --list | python3 -c 'import json,sys;e=next(e for e in json.load(sys.stdin) if e["id"] == sys.argv[1]);print(e["address"] == sys.argv[2], e["path"] == sys.argv[3])' "$OLDID3" "$OLD3" "$OWN/$SLUG3")" "True True"

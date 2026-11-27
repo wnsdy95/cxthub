@@ -62,6 +62,51 @@ func TestSetupFollowsARepositoryTheServerMoved(t *testing.T) {
 	}
 }
 
+// Before the server moved the repository, it answers for the requested
+// address with the repository under the address the clone is connected to.
+// Setup says so, and what changes it, instead of an invalid identity; any
+// other answer it cannot take keeps the error it had.
+func TestSetupSaysWhereTheServerKeepsARepositoryItDidNotMove(t *testing.T) {
+	ctx := context.Background()
+	const old, moved = "http://localhost:5173/acme/project", "https://cxthub.example/acme/project"
+	reply := domain.RepositoryConnection{RepositoryID: "repository-fixture", RepoID: remotecfg.RepoIDFor(old), RemoteURL: old}
+	var failure error
+	c := &Container{ResolveConnection: func(_ context.Context, requested string) (domain.RepositoryConnection, error) {
+		if requested != moved {
+			t.Fatalf("asked about %s", requested)
+		}
+		return reply, failure
+	}}
+	same, err := setupRemoteMatches(ctx, c, old, moved)
+	if same || err == nil || !strings.Contains(err.Error(), "the server keeps this repository under "+old+", the address this clone is connected to, not under "+moved+"; nothing was changed") || !strings.Contains(err.Error(), "cxt-admin repo-address") {
+		t.Fatalf("a repository the server did not move: %v %v", same, err)
+	}
+	const other = "http://localhost:5173/acme/other"
+	for name, answer := range map[string]domain.RepositoryConnection{
+		"another repository on another server":     {RepositoryID: "repository-fixture", RepoID: remotecfg.RepoIDFor(other), RemoteURL: other},
+		"this repository without a workspace":      {RepoID: remotecfg.RepoIDFor(old), RemoteURL: old},
+		"an identifier that is not of its address": {RepositoryID: "repository-fixture", RepoID: remotecfg.RepoIDFor(old), RemoteURL: other},
+	} {
+		reply = answer
+		if same, err := setupRemoteMatches(ctx, c, old, moved); same || err == nil || !strings.Contains(err.Error(), "invalid identity or a different server") {
+			t.Fatalf("%s: %v %v", name, same, err)
+		}
+	}
+	reply, failure = domain.RepositoryConnection{}, errors.New("synthetic outage")
+	if same, err := setupRemoteMatches(ctx, c, old, moved); same || err == nil || !strings.Contains(err.Error(), "repository identity could not be verified") {
+		t.Fatalf("a server that does not answer: %v %v", same, err)
+	}
+	// Moved: the requested address is another repository's identity, which
+	// the moved origin then takes.
+	reply, failure = domain.RepositoryConnection{RepositoryID: "repository-fixture", RepoID: remotecfg.RepoIDFor(moved), RemoteURL: moved}, nil
+	if same, err := setupRemoteMatches(ctx, c, old, moved); same || err != nil {
+		t.Fatalf("a repository the server moved: %v %v", same, err)
+	}
+	if same, err := setupRemoteMatches(ctx, &Container{}, old, moved); same || err != nil {
+		t.Fatalf("without a way to ask the server: %v %v", same, err)
+	}
+}
+
 // The origin of the clone becomes the address the server keeps its repository
 // under. The identity its conversation documents are sent in is bound to the
 // origin: it is confirmed for the new origin, and without that confirmation

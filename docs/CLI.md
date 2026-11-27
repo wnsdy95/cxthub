@@ -76,7 +76,8 @@ with `cxt-admin repo-address`, setup replaces `origin` with the requested
 address. An active `capture.identity` root preference is confirmed again for the
 new origin; when the server does not confirm it, setup says so and conversation
 documents are sent in the legacy identity. Before the move, setup with the new
-address stops and changes nothing.
+address says that the server keeps the repository under the clone's address,
+and changes nothing.
 
 Where the server has a GitHub App and says the repository is not connected to
 it, setup prints the page where a maintainer of the repository connects it and ends

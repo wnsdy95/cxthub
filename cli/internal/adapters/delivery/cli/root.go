@@ -543,9 +543,15 @@ func resolvedRepositoryURL(ctx context.Context, c *Container, rawURL string) (st
 	}
 	resolved, err := c.ResolveConnection(ctx, canonical)
 	if err != nil {
-		return "", fmt.Errorf("repository identity could not be verified; remote was not saved (use cxt setup <url> or cxt login --server <server-url> first): %w", err)
+		return "", unverifiedRepository(err)
 	}
 	return ValidatedRepositoryURL(canonical, resolved)
+}
+
+// unverifiedRepository is the error of a server that did not say which
+// repository an address is.
+func unverifiedRepository(err error) error {
+	return fmt.Errorf("repository identity could not be verified; remote was not saved (use cxt setup <url> or cxt login --server <server-url> first): %w", err)
 }
 
 // ValidatedRepositoryURL preserves the server/identity checks for both setup

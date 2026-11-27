@@ -66,8 +66,8 @@ cxt remote -v
 ```
 
 Setup replaces `origin` with that address when the clone's endpoint binding pins
-the workspace the server now names under it. Before the server's move it stops
-and changes nothing. A clone without an endpoint binding proves no workspace and
+the workspace the server now names under it. Before the server's move it says
+that the server keeps the repository under the old URL, and changes nothing. A clone without an endpoint binding proves no workspace and
 is not moved: run `cxt remote remove origin`, then the same `cxt setup`. The
 endpoint binding of the old URL stays in `.cxt/config` and is no longer used.
 An active `capture.identity` root preference is confirmed again for the new

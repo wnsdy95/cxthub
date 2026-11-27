@@ -339,7 +339,20 @@ func setupRemoteMatches(ctx context.Context, c *Container, existing, requested s
 	if remotecfg.RepoIDFor(existing) == remotecfg.RepoIDFor(canonical) {
 		return true, nil // An unchanged connection also works offline.
 	}
-	stable, err := resolvedRepositoryURL(ctx, c, canonical)
+	if c.ResolveConnection == nil {
+		return false, nil
+	}
+	resolved, err := c.ResolveConnection(ctx, canonical)
+	if err != nil {
+		return false, unverifiedRepository(err)
+	}
+	stable, err := ValidatedRepositoryURL(canonical, resolved)
+	if err != nil && resolved.RepositoryID != "" && resolved.RepoID == remotecfg.RepoIDFor(existing) && remotecfg.RepoIDFor(resolved.RemoteURL) == resolved.RepoID {
+		// The server keeps this clone's repository under the address the
+		// clone is connected to, on another server address than the one
+		// asked: the repository was not moved to the requested address.
+		return false, fmt.Errorf("the server keeps this repository under %s, the address this clone is connected to, not under %s; nothing was changed — once an operator of the server moves it there (cxt-admin repo-address), cxt setup %s moves this clone", resolved.RemoteURL, canonical, canonical)
+	}
 	if err != nil {
 		return false, err
 	}
