@@ -4,17 +4,14 @@ package serverruntime_test
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -440,15 +437,6 @@ func (child *executionProcessChild) expect(test *testing.T, ctx context.Context,
 	}
 }
 
-func (child *executionProcessChild) assertReady(test *testing.T, ctx context.Context, want bool) {
-	test.Helper()
-	token := domain.NewID("ready-")
-	child.send(test, executionProcessCommand{Operation: "ready", Token: token})
-	if event := child.expect(test, ctx, "ready", token); event.Ready != want {
-		test.Fatal("real root readiness did not reflect the exact role roster", child.role, event.Ready, want)
-	}
-}
-
 func (child *executionProcessChild) waitReady(test *testing.T, ctx context.Context, want bool) {
 	test.Helper()
 	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -657,134 +645,4 @@ func (fixture *executionProcessFixture) terminateControl(test *testing.T, ctx co
 	if err := fixture.observer.QueryRow(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND application_name=$1`, fixture.controlName(role)).Scan(&terminated); err != nil || !terminated {
 		test.Fatal("terminate exactly the owned child control session", role)
 	}
-}
-
-func (fixture *executionProcessFixture) waitDocumentJob(test *testing.T, ctx context.Context) {
-	test.Helper()
-	deadline, cancel := context.WithTimeout(executionProcessSystemContext(ctx), 10*time.Second)
-	defer cancel()
-	for {
-		job, err := fixture.storage.GetDocJob(deadline, fixture.repo, fixture.job.ID)
-		if err != nil {
-			test.Fatal("read original durable document receipt")
-		}
-		if job.State == "completed" {
-			if job.Attempts < 1 || job.Version < 1 || job.DocumentRef() != fixture.job.DocumentRef() {
-				test.Fatal("worker publication lost original identity or lease/version receipt")
-			}
-			have, err := fixture.storage.HasDocs(deadline, fixture.repo, []domain.ContentHash{fixture.job.DocHash})
-			if err != nil || len(have) != 1 {
-				test.Fatal("actual worker completed without useful durable publication")
-			}
-			test.Logf("actual worker root completed original document receipt attempts=%d version=%d", job.Attempts, job.Version)
-			return
-		}
-		if job.State == "rejected" {
-			test.Fatal("actual worker rejected the useful fixture document")
-		}
-		select {
-		case <-deadline.Done():
-			test.Fatal("actual worker Run did not process its durable document job", job.State)
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
-}
-
-func (fixture *executionProcessFixture) publishSnapshot(test *testing.T, ctx context.Context) {
-	test.Helper()
-	ctx = executionProcessSystemContext(ctx)
-	hash := fixture.job.DocHash
-	if err := fixture.storage.PutSnapshot(ctx, domain.Snapshot{ID: hash, RepoID: fixture.repo, DocHash: hash, DocIdentity: domain.DocumentIdentityRootV1,
-		Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, CreatedAt: time.Now().UTC()}); err != nil {
-		test.Fatal("publish original snapshot only after worker receipt")
-	}
-	if err := fixture.storage.CompareAndSwapRef(ctx, fixture.repo, domain.Ref{RepoID: fixture.repo, Kind: domain.RefBranch, Name: "main", Target: hash}, ""); err != nil {
-		test.Fatal("publish original ref through its unchanged CAS fence")
-	}
-}
-
-func (fixture *executionProcessFixture) assertDocumentReads(test *testing.T, ctx context.Context, api, mcp *executionProcessChild) {
-	test.Helper()
-	client := &http.Client{
-		Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	defer client.CloseIdleConnections()
-	for _, foreign := range []bool{false, true, false} {
-		repo := fixture.repo
-		if foreign {
-			repo = fixture.foreign
-		}
-		path := api.url + "/api/v1/repos/" + string(repo) + "/docs/" + string(fixture.job.DocHash) + "/events?offset=0&limit=1"
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
-		if err != nil {
-			test.Fatal("construct actual API document request")
-		}
-		request.Header.Set("Authorization", "Bearer "+fixture.session)
-		request.Header.Set("X-Cxt-Doc-Identities", string(domain.DocumentIdentityRootV1))
-		status, body := executionProcessHTTP(test, client, request)
-		if foreign {
-			if status != http.StatusForbidden || bytes.Contains(body, []byte(fixture.marker)) {
-				test.Fatal("actual API foreign authority exposed document content", status)
-			}
-		} else {
-			if status != http.StatusOK || !bytes.Contains(body, []byte(fixture.marker)) {
-				test.Fatal("actual API current authorized document read failed", status)
-			}
-		}
-		encoded, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 39, "method": "tools/call", "params": map[string]any{
-			"name": "context_fetch", "arguments": map[string]any{"repository": string(repo), "ref": string(fixture.job.DocHash), "branch": "main", "limit": 1},
-		}})
-		if err != nil {
-			test.Fatal("construct actual MCP document tool call")
-		}
-		request, err = http.NewRequestWithContext(ctx, http.MethodPost, mcp.url+"/mcp", bytes.NewReader(encoded))
-		if err != nil {
-			test.Fatal("construct actual MCP HTTP request")
-		}
-		request.Header.Set("Authorization", "Bearer "+fixture.mcpToken)
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Accept", "application/json, text/event-stream")
-		status, body = executionProcessHTTP(test, client, request)
-		var rpc struct {
-			Result struct {
-				IsError bool `json:"isError"`
-				Content []struct {
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"result"`
-		}
-		if status != http.StatusOK || json.Unmarshal(body, &rpc) != nil || rpc.Result.IsError != foreign || len(rpc.Result.Content) == 0 {
-			test.Fatal("actual MCP current/foreign authority result changed", status, foreign)
-		}
-		content := ""
-		for _, item := range rpc.Result.Content {
-			content += item.Text
-		}
-		if strings.Contains(content, fixture.marker) == foreign {
-			test.Fatal("actual MCP lost useful content or exposed it across authority", foreign)
-		}
-	}
-}
-
-func executionProcessHTTP(test *testing.T, client *http.Client, request *http.Request) (int, []byte) {
-	test.Helper()
-	parsed := request.URL
-	host := net.ParseIP(parsed.Hostname())
-	if parsed.Scheme != "http" || host == nil || !host.IsLoopback() {
-		test.Fatal("fixture refuses non-loopback HTTP requests")
-	}
-	if _, err := strconv.Atoi(parsed.Port()); err != nil {
-		test.Fatal("fixture HTTP endpoint has no explicit port")
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		test.Fatal("actual loopback process request failed")
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 128<<10))
-	if err != nil {
-		test.Fatal("read bounded actual process response")
-	}
-	return response.StatusCode, body
 }

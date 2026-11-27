@@ -26,16 +26,6 @@ type DocEventIndex struct {
 	Text   string      `json:"text,omitempty"`
 }
 
-type DocEventPage struct {
-	Hash      ContentHash `json:"hash"`
-	Envelope  CIREnvelope `json:"envelope"`
-	Events    []CIREvent  `json:"events"`
-	Total     int         `json:"total"`
-	Offset    int         `json:"offset"`
-	Next      int         `json:"next"` // -1 means exhausted
-	Inherited int         `json:"inherited"`
-}
-
 func SearchableEventText(e CIREvent) string {
 	if e.Kind == EventReasoning {
 		return e.RedactedSummary
@@ -74,11 +64,10 @@ func (doc VerifiedSessionDoc) ReadIndex() (DocReadIndex, error) {
 // a spooled source whose event length and hash are checked on every read.
 // Adapters may reuse a search projection keyed by the exact canonical event hash.
 type DocReadPlan struct {
-	index          DocReadIndex
-	stream         canonicalSegments
-	source         VerifiedDocStream
-	bodies         []canonicalSpan
-	sequencesKnown bool // Exact sequences retained by a chunk-backed proof.
+	index  DocReadIndex
+	stream canonicalSegments
+	source VerifiedDocStream
+	bodies []canonicalSpan
 }
 
 func (doc VerifiedSessionDoc) PlanReadIndex() (DocReadPlan, error) {
@@ -117,7 +106,7 @@ func (doc VerifiedSessionDoc) PlanReadIndexContext(ctx context.Context) (DocRead
 		if err := ctx.Err(); err != nil {
 			return DocReadPlan{}, err
 		}
-		return DocReadPlan{index: out, stream: stream, bodies: spans, sequencesKnown: true}, nil
+		return DocReadPlan{index: out, stream: stream, bodies: spans}, nil
 	}
 	hasher := newCanonicalSpanHasher()
 	err = stream.visit(ctx, func(span canonicalSpan) error {
@@ -153,48 +142,6 @@ func (p DocReadPlan) Build(reusedSearch map[ContentHash]bool) (DocReadIndex, err
 // BuildContext derives the full search projection with cooperative cancellation.
 func (p DocReadPlan) BuildContext(ctx context.Context, reusedSearch map[ContentHash]bool) (DocReadIndex, error) {
 	return p.build(ctx, reusedSearch, false)
-}
-
-// BuildMetadataContext derives locations, sequence and exact role strings from
-// verified bytes without decoding event payloads or retaining searchable text.
-// It is for role-aware readers, not for publishing or querying a search index.
-func (p DocReadPlan) BuildMetadataContext(ctx context.Context) (DocReadIndex, error) {
-	return p.build(ctx, nil, true)
-}
-
-// BuildRangesContext returns owned locations, hashes and exact sequences, with
-// Role and Text empty. Chunk-backed proofs need no event-byte scan. Legacy
-// plans without retained sequences use the metadata decoder rather than treating
-// their zero-valued planning fields as verified event sequences.
-func (p DocReadPlan) BuildRangesContext(ctx context.Context) (DocReadIndex, error) {
-	if err := ctx.Err(); err != nil {
-		return DocReadIndex{}, err
-	}
-	if p.index.Hash == "" {
-		return DocReadIndex{}, ErrIntegrity
-	}
-	var out DocReadIndex
-	if p.sequencesKnown {
-		out = p.index
-		out.Envelope = p.Envelope()
-		out.Events = append([]DocEventIndex{}, p.index.Events...)
-	} else {
-		var err error
-		out, err = p.BuildMetadataContext(ctx)
-		if err != nil {
-			return DocReadIndex{}, err
-		}
-	}
-	for i := range out.Events {
-		if err := ctx.Err(); err != nil {
-			return DocReadIndex{}, err
-		}
-		out.Events[i].Role, out.Events[i].Text = "", ""
-	}
-	if err := ctx.Err(); err != nil {
-		return DocReadIndex{}, err
-	}
-	return out, nil
 }
 
 func (p DocReadPlan) build(ctx context.Context, reusedSearch map[ContentHash]bool, metadataOnly bool) (DocReadIndex, error) {

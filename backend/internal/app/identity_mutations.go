@@ -135,12 +135,6 @@ func (s *IdentityService) UpdateOrganizationMember(ctx context.Context, actorID,
 	})
 }
 
-func (s *IdentityService) RemoveOrganizationMember(ctx context.Context, actorID, organizationID, targetID string) error {
-	return s.withIdentity(ctx, func(ctx context.Context) error {
-		return s.mutateRemoveOrganizationMember(ctx, actorID, organizationID, targetID)
-	})
-}
-
 func (s *IdentityService) UpdateOrganizationPolicy(ctx context.Context, actorID string, policy domain.OrganizationPolicy) (domain.OrganizationPolicy, error) {
 	return identityResult(ctx, s, func(ctx context.Context) (domain.OrganizationPolicy, error) {
 		return s.mutateUpdateOrganizationPolicy(ctx, actorID, policy)

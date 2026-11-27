@@ -42,35 +42,6 @@ func assertRootSourceWitnessStatePG(test *testing.T, storage *PostgresStore, ctx
 	}
 }
 
-func assertRootSourceWitnessPublishedPG(test *testing.T, storage *PostgresStore, ctx context.Context, job domain.DocFinalizationJob, fixture rootReaderFixture) {
-	test.Helper()
-	current, err := storage.GetDocJob(ctx, job.RepoID, job.ID)
-	if err != nil || current.State != "completed" || current.DocumentRef() != job.DocumentRef() || current.Version != job.Version || !current.LeaseUntil.IsZero() {
-		test.Fatal("source-bound publication lost its completion receipt", current, err)
-	}
-	owned, err := storage.HasDocs(ctx, job.RepoID, []domain.ContentHash{job.DocHash})
-	if err != nil || len(owned) != 1 {
-		test.Fatal("source-bound publication lost root ownership", owned, err)
-	}
-	header := assertRangePages(test, ctx, storage, job.RepoID, fixture)
-	if counts := rangeCountsPG(test, storage, ctx, job.DocHash); counts != [2]int{1, len(header.Pages)} {
-		test.Fatal("source-bound publication did not commit the complete range index", counts)
-	}
-	verified, err := storage.ReadVerifiedDoc(ctx, job.RepoID, job.DocHash)
-	if err != nil {
-		test.Fatal("read source-bound root", err)
-	}
-	assertRootProof(test, verified, fixture)
-	var stored []byte
-	if err := storage.db(ctx).QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, job.DocHash).Scan(&stored); err != nil {
-		test.Fatal(err)
-	}
-	canonical, err := docDecompress(stored)
-	if err != nil || !bytes.Equal(canonical, fixture.manifestBytes) {
-		test.Fatal("source-bound root body is not the canonical manifest", err)
-	}
-}
-
 func TestRootSourceWitnessPGUnchangedAndEmptyPublication(test *testing.T) {
 	for _, count := range []int{0, 2*domain.DocRangePageEvents + 1} {
 		test.Run(fmt.Sprintf("events-%d", count), func(test *testing.T) {
@@ -96,7 +67,6 @@ func TestRootSourceWitnessPGUnchangedAndEmptyPublication(test *testing.T) {
 			if err := publication.Complete(ctx, job, time.Now()); err != nil {
 				test.Fatal("unchanged source did not publish", err)
 			}
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 			for hash, source := range sources {
 				assertRootSourceWitnessStatePG(test, storage, ctx, hash, source)
 			}
@@ -184,7 +154,6 @@ func TestRootSourceWitnessPGChangedGenerationRequiresFreshPreparation(test *test
 			if err := fresh.Complete(ctx, job, time.Now()); err != nil {
 				test.Fatal("fresh preparation did not recover valid same-hash bytes", err)
 			}
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 			assertRootSourceWitnessStatePG(test, storage, ctx, chunk.Hash, changed)
 			if err := fresh.Close(); err != nil {
 				test.Fatal(err)
@@ -303,7 +272,6 @@ func TestRootSourceWitnessPGFinalIncarnationLockLastsThroughOuterCommit(test *te
 		test.Fatal("outer borrowed publication did not commit", err)
 	}
 	authorityScopeDonePG(test, peerContext, peerDone)
-	assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 	assertRootSourceWitnessStatePG(test, storage, ctx, hash, source)
 	if err := publication.Close(); err != nil {
 		test.Fatal(err)

@@ -37,47 +37,6 @@ type DocFinalizationStatus struct {
 	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
-func (s DocFinalizationStatus) DocumentRef() DocumentRef {
-	return DocumentRef{Hash: s.DocHash, Identity: s.DocIdentity}
-}
-
-// ValidateFor binds a receipt to the expected document. Roots require the
-// independently computed job ID. Legacy peers retain opaque first-ID behavior;
-// the caller must pin that ID through polling. This does not verify bodies.
-func (s DocFinalizationStatus) ValidateFor(repo ContentHash, expected DocumentRepresentation) error {
-	if err := ValidateContentHash(repo); err != nil {
-		return err
-	}
-	if err := expected.DocumentRef().Validate(); err != nil {
-		return err
-	}
-	if err := s.DocumentRef().Validate(); err != nil {
-		return err
-	}
-	if err := ValidateContentHash(ContentHash(s.ID)); err != nil {
-		return err
-	}
-	if s.DocumentRef() != expected.DocumentRef() {
-		return ErrIntegrity
-	}
-	switch s.State {
-	case "waiting", "running", "retrying", "completed", "rejected":
-	default:
-		return ErrIntegrity
-	}
-	if expected.Identity == DocumentIdentityRootV1 {
-		id, err := RootDocFinalizationID(repo, expected)
-		if err != nil {
-			return err
-		}
-		if s.ID != id {
-			return ErrIntegrity
-		}
-	} else if expected.RootManifest != nil {
-		return ErrIntegrity
-	}
-	return nil
-}
 func (s *DocFinalizationStatus) UnmarshalJSON(raw []byte) error {
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return ErrIntegrity

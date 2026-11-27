@@ -23,17 +23,20 @@ type ProductionStore interface {
 	RepositoryAccessLocker
 	RepositoryRevisions
 	EvidenceRevisions
-	HistoryStore
-	PRJobStore
-	PRJobFence
 	DocJobStore
 	NotificationStore
 	RuntimeStore
 	StorageAccounting
 	SecretsCASStore
-	GitChangeStore
-	GitScanStore
-	GitHeadScanStore
-	GitTreeStore
 	DocReadStore
+	AnchoredSessionStore
+	BranchLedgerStore
+	AnchoredNoteStore
+	ReportedWorktreeStore
+	RemoteGitStore
+	RemotePushStore
+	AnchoredPublicationStore
+	AnchoredSummaryStore
+	AnchoredRemovalStore
+	CollectorStore
 }

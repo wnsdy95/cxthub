@@ -21,45 +21,18 @@ var ErrInvalidCIR = errors.New("invalid CIR")
 // ErrInvalidRef indicates a violation of the ref kind/name/target format.
 var ErrInvalidRef = errors.New("invalid ref")
 
-// ErrUnsupportedProvider indicates an unregistered ProviderKind in the registry.
-// Occurs during codec/capture routing.
-var ErrUnsupportedProvider = errors.New("unsupported provider")
-
 // ErrUnsupportedCIRVersion indicates that a peer or local object uses a CIR
 // version this binary cannot safely interpret.
 var ErrUnsupportedCIRVersion = errors.New("unsupported CIR version")
-
-// ErrUnsupportedFidelity indicates that the requested fidelity mode cannot be satisfied.
-// Example: Occurs during full request in cross-provider.
-// Occurs in LoadSession.
-var ErrUnsupportedFidelity = errors.New("unsupported fidelity")
 
 // ErrSyncConflict indicates a pull merge conflict (fast-forward not possible).
 // Occurs in SyncRepo.Pull.
 var ErrSyncConflict = errors.New("sync conflict")
 
-// ErrContextProtocolRequired needs repository onboarding or an explicit policy
-// migration. Retrying the same selected publication with append cannot fix it.
-var ErrContextProtocolRequired = errors.New("branch history protection is required for selected publication")
-
-// Initialization conflicts require explicit recovery; append/force cannot make
-// an existing repository new or enlarge an immutable creation receipt.
-var ErrRepositoryInitializationConflict = errors.New("repository initialization conflicts with existing server state")
-var ErrRepositoryInitializationUnsupported = errors.New("server does not support atomic repository initialization")
-
 // ErrNoActiveSession indicates the absence of an active session file in the cwd.
 // This error occurs in CaptureSource.LocateActiveSession.
 // Auto hooks gracefully exit as no-op when encountering this error.
 var ErrNoActiveSession = errors.New("no active session")
-
-// ErrBranchExists indicates an attempt to fork (checkout -b) an existing branch.
-// This error has the same meaning as in git (Invariant F2): it fails silently without moving the existing branch.
-var ErrBranchExists = errors.New("branch already exists")
-
-// ErrBranchArchived prevents a stale replica from recreating a branch pointer
-// after a newer immutable lifecycle event archived it. Creating the branch
-// explicitly records a newer active event before restoring the pointer.
-var ErrBranchArchived = errors.New("branch is archived")
 
 // ErrNotGitRepo indicates the cwd is not part of a git worktree.
 // cxt is a shadow of git — repository information is always read from the local .git,
@@ -69,15 +42,6 @@ var ErrNotGitRepo = errors.New("not a git repository (or any of the parent direc
 // ErrSelectionChanged stops prompt installation after a concurrent worktree move.
 var ErrSelectionChanged = errors.New("context selection changed")
 
-// ErrEffectiveMemoryCursorStale identifies the server's explicit stale effective-memory
-// cursor response. Callers must revalidate selection and content before retrying.
-var ErrEffectiveMemoryCursorStale = errors.New("effective memory cursor stale")
-
 // ErrMemoryContention means concurrent writers prevented bounded replay; it
 // does not establish divergence and must never suggest a forced pull.
 var ErrMemoryContention = errors.New("memory attachment kept changing during upload")
-
-// ErrPRLocalReconciliation means the exact server promotion succeeded and its
-// local delivery acknowledgement is durable, but local graph refresh did not.
-// It must not be reported as a failed server merge or block later PR discovery.
-var ErrPRLocalReconciliation = errors.New("PR promotion completed; local synchronization deferred")

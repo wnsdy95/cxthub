@@ -124,9 +124,7 @@ func TestBlobRepresentationOrdersPGDocumentBeforeRoot(test *testing.T) {
 			if err := publication.Complete(ctx, job, time.Now()); err != nil {
 				test.Fatal("document replay invalidated the prepared root without any source repair", err)
 			}
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 			assertRepresentationOrdersReplaysPG(test, storage, ctx, owners, document, source)
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 		})
 	}
 }
@@ -177,9 +175,7 @@ func TestBlobRepresentationOrdersPGLazyManifestAfterRootPin(test *testing.T) {
 			if err := publication.Complete(ctx, job, time.Now()); err != nil {
 				test.Fatal("public lazy repack invalidated an already prepared root", err)
 			}
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 			assertRepresentationOrdersReplaysPG(test, storage, ctx, owners, document, source)
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 		})
 	}
 }

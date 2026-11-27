@@ -6,14 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func p9Tree(t *testing.T, dir string) map[string]string {
@@ -38,7 +36,7 @@ func p9Tree(t *testing.T, dir string) map[string]string {
 	return out
 }
 func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
-	modes := []string{"settings", "transfer", "member", "remove-member", "invite", "accept-invite", "revoke-invite", "backfill", "team-grant", "team-revoke", "team-member", "team-remove", "team-delete", "organization-member", "organization-remove", "organization-policy", "offboard", "break-glass", "namespace-rename", "namespace-transfer", "notification-list", "notification-retry"}
+	modes := []string{"settings", "transfer", "member", "remove-member", "invite", "accept-invite", "revoke-invite", "backfill", "team-grant", "team-revoke", "team-member", "team-remove", "team-delete", "organization-member", "offboard-retain", "organization-policy", "offboard-revoke", "break-glass", "namespace-rename", "namespace-transfer", "notification-list", "notification-retry"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
@@ -130,11 +128,11 @@ func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
 				err = s.DeleteTeam(ctx, f.owner.ID, f.organization.ID, f.team.ID)
 			case "organization-member":
 				err = s.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationAdmin)
-			case "organization-remove":
-				err = s.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID)
+			case "offboard-retain":
+				err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain")
 			case "organization-policy":
 				_, err = s.UpdateOrganizationPolicy(ctx, f.owner.ID, policy)
-			case "offboard":
+			case "offboard-revoke":
 				err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "revoke")
 			case "break-glass":
 				_, err = s.CreateBreakGlassGrant(ctx, f.owner.ID, f.organization.ID, f.repository.ID, "synthetic audit", 5)
@@ -166,69 +164,6 @@ func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
 	}
 }
 
-type p9ReadBoundaryKey struct{}
-type p9AggregateStore struct {
-	outbound.MetadataStore
-	outbound.HistoryStore
-	repos []domain.Repo
-	calls int
-}
-
-func (s *p9AggregateStore) WithinRepository(context.Context, domain.ContentHash, func(context.Context) error) error {
-	panic("unexpected write")
-}
-func (s *p9AggregateStore) WithinReadSnapshot(ctx context.Context, fn func(context.Context) error) error {
-	return fn(context.WithValue(ctx, p9ReadBoundaryKey{}, true))
-}
-func (s *p9AggregateStore) ListRepos(ctx context.Context, _ string) ([]domain.Repo, error) {
-	if ctx.Value(p9ReadBoundaryKey{}) != true {
-		panic("unpinned inventory")
-	}
-	return s.repos, nil
-}
-func (s *p9AggregateStore) ListHistoryEvents(ctx context.Context, id domain.ContentHash) ([]domain.HistoryEvent, error) {
-	if ctx.Value(p9ReadBoundaryKey{}) != true || id != s.repos[0].ID {
-		panic("unsupported or unpinned payload")
-	}
-	s.calls++
-	return []domain.HistoryEvent{{ID: strings.Repeat("1", 32), RepoID: string(id), Branch: "main", BranchID: "main", Kind: "publish", Source: hh("snapshot"), Target: hh("snapshot"), GitAfter: strings.Repeat("a", 40), CreatedAt: time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)}}, nil
-}
-func TestP9CoherentDiscoveryAggregates(t *testing.T) {
-	st := &p9AggregateStore{repos: []domain.Repo{{ID: hh("legacy"), RepositoryID: "legacy"}, {ID: hh("root"), RepositoryID: "root", RequiredDocIdentity: domain.DocumentIdentityRootV1}}}
-	svc := NewService(st, nil, nil, nil, nil)
-	ctx := context.Background()
-	if repos, err := svc.ListRepos(ctx, "default"); err != nil || len(repos) != 2 {
-		t.Fatal(repos, err)
-	}
-	if got, err := svc.Contributions(ctx, []string{"legacy", "root"}); err != nil || got["2026-10-08"] != 1 {
-		t.Fatal(got, err)
-	}
-	createdAt := time.Date(2026, time.October, 8, 0, 0, 0, 0, time.UTC)
-	got, err := svc.Activity(ctx, []domain.Repository{{ID: "legacy"}, {ID: "root", CreatedAt: createdAt}})
-	if err != nil || len(got) != 1 || got[0].Month != "2026-10" || got[0].CommitTotal != 1 || len(got[0].Created) != 1 || got[0].Created[0].Date != "2026-10-08" {
-		t.Fatal(got, err)
-	}
-	st.repos[1].RequiredDocIdentity = "unknown"
-	if _, err := svc.Contributions(ctx, []string{"root"}); err == nil {
-		t.Fatal("malformed requirement ignored")
-	}
-}
-func TestP9WorkerDeclarationIsActualAndNonprivileged(t *testing.T) {
-	svc := &Service{}
-	root := []domain.DocumentIdentity{domain.DocumentIdentityRootV1}
-	for _, ctx := range []context.Context{context.Background(), inbound.WithRepositoryActor(context.Background(), "actor"), inbound.WithSystemActor(context.Background())} {
-		user, system := inbound.RepositoryActor(ctx)
-		got := svc.DocumentIdentityWorkerContext(inbound.WithDocumentIdentities(ctx, root))
-		u, s := inbound.RepositoryActor(got)
-		if u != user || s != system || hasDocumentIdentity(inbound.DocumentIdentities(got), domain.DocumentIdentityRootV1) {
-			t.Fatal("worker declaration escalated")
-		}
-	}
-	if err := svc.ConfigureConversationRootPublication(true); !errors.Is(err, domain.ErrRootPublicationDisabled) {
-		t.Fatal(err)
-	}
-}
-
 func TestP9IdentityAdminSupportedPeerAndAuthorization(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	f := makeTeamFixture(t, st)
@@ -241,7 +176,7 @@ func TestP9IdentityAdminSupportedPeerAndAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	archived := true
-	svc := NewService(st, st, nil, nil, st)
+	svc := NewService(st, st, st)
 	_, err := f.identity.UpdateRepositorySettings(ctx, f.owner.ID, f.repository.ID, RepositoryPatch{Archived: &archived})
 	if hasDocumentIdentity(svc.DocumentIdentitiesSupported(), domain.DocumentIdentityRootV1) {
 		if err != nil {

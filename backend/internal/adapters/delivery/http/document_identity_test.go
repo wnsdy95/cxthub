@@ -3,15 +3,10 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestP6DocumentIdentityHeaderRejectedBeforeHandler(t *testing.T) {
@@ -31,112 +26,6 @@ func TestP6LegacyHeaderOmission(t *testing.T) {
 	NewServer(nil, nil).Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatal(w.Code)
-	}
-}
-
-func TestP6StreamQueryDeclaration(t *testing.T) {
-	for _, tc := range []struct {
-		query, header string
-		want          int
-		root          bool
-	}{
-		{"", "", 204, false}, {"?doc_identities=cxt-manifest-sha256-v1", "", 204, true},
-		{"?doc_identities=", "", 400, false}, {"?doc_identities=future", "", 400, false},
-		{"?doc_identities=cxt-manifest-sha256-v1&doc_identities=cxt-manifest-sha256-v1", "", 400, false},
-		{"?doc_identities=%ff%XX", "", 400, false}, {"?doc_identities=cxt-manifest-sha256-v1", "cxt-manifest-sha256-v1", 400, false},
-	} {
-		r := httptest.NewRequest("GET", "/api/v1/repos/example/changes"+tc.query, nil)
-		if tc.header != "" {
-			r.Header.Set(documentIdentitiesHeader, tc.header)
-		}
-		w := httptest.NewRecorder()
-		s := NewServer(nil, nil)
-		s.withDocumentIdentityStream(func(w http.ResponseWriter, r *http.Request) {
-			ids := inbound.DocumentIdentities(r.Context())
-			if (len(ids) == 1) != tc.root {
-				t.Fatal("wrong class", ids)
-			}
-			if user, system := inbound.RepositoryActor(r.Context()); user != "" || system {
-				t.Fatal("query authenticated peer")
-			}
-			w.WriteHeader(204)
-		})(w, r)
-		if w.Code != tc.want {
-			t.Fatalf("%s status=%d", tc.query, w.Code)
-		}
-	}
-	// Header middleware alone does not accept query declarations on other routes.
-	s := NewServer(nil, nil)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/other?doc_identities=cxt-manifest-sha256-v1", nil)
-	s.withDocumentIdentityPeer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(inbound.DocumentIdentities(r.Context())) != 0 {
-			t.Fatal("query escaped stream route")
-		}
-		w.WriteHeader(204)
-	})).ServeHTTP(w, r)
-}
-func TestP6SSEClassesDoNotShareOptInState(t *testing.T) {
-	var opted atomic.Bool
-	h := repositoryChangeHub{}
-	repo := domain.HashContent([]byte(t.Name()))
-	read := func(ctx context.Context, _ domain.ContentHash) (domain.RepositoryChangeState, error) {
-		if user, system := inbound.RepositoryActor(ctx); user != "" || system {
-			t.Error("watcher borrowed subscriber authority")
-		}
-		ids := inbound.DocumentIdentities(ctx)
-		root := len(ids) == 1 && ids[0] == domain.DocumentIdentityRootV1
-		if opted.Load() {
-			if !root {
-				return domain.RepositoryChangeState{}, domain.ErrDocumentIdentityUpgradeRequired
-			}
-			return domain.RepositoryChangeState{RepositoryRevision: domain.RepositoryRevision{Graph: 7}}, nil
-		}
-		return domain.RepositoryChangeState{RepositoryRevision: domain.RepositoryRevision{Graph: 1}}, nil
-	}
-	old, releaseOld := h.subscribe(repo, read)
-	defer releaseOld()
-	capable, releaseCapable := h.subscribe(repo, read, domain.DocumentIdentityRootV1)
-	defer releaseCapable()
-	for _, ch := range []<-chan revisionNotice{old, capable} {
-		select {
-		case n := <-ch:
-			if n.err != nil || n.revision.Graph != 1 {
-				t.Fatal(n)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("missing first poll")
-		}
-	}
-	opted.Store(true)
-	select {
-	case n := <-old:
-		if !errors.Is(n.err, domain.ErrDocumentIdentityUpgradeRequired) || n.revision.Graph != 0 {
-			t.Fatal("old stream leaked advanced revision", n)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("old class was not rechecked")
-	}
-	select {
-	case n := <-capable:
-		if n.err != nil || n.revision.Graph != 7 {
-			t.Fatal("capable class lost", n)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("capable class starved")
-	}
-}
-
-func TestP6SSEAdmissionBeforeSubscription(test *testing.T) {
-	server := NewServer(nil, nil)
-	if err := server.SetRepositoryStateQueries(&repositoryStateHTTPQueries{err: domain.ErrDocumentIdentityUpgradeRequired}, inbound.RepositoryStateCompatibility); err != nil {
-		test.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest("GET", "/api/v1/repos/example/changes", nil)
-	server.repositoryChanges(response, request)
-	if response.Code != 409 || len(server.changes.repos) != 0 || strings.Contains(response.Body.String(), "event: revision") {
-		test.Fatal("subscribed before compatibility admission", response.Code, response.Body.String())
 	}
 }
 

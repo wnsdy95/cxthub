@@ -286,7 +286,6 @@ func TestPGDocJobLifetimeOfflineResetRejectsStaleCommands(test *testing.T) {
 		test.Fatal("close the successful post-maintenance root spool", err)
 	}
 	assertRangeSpoolsRemoved(test, directory)
-	assertRootSourceWitnessPublishedPG(test, storage, ctx, fresh, root)
 	current, err = storage.GetDocJob(ctx, repo, fresh.ID)
 	if err != nil || current.RepositoryEpoch != resetEpoch || current.State != "completed" || current.Version != fresh.Version {
 		test.Fatal("fresh completion receipt lost the post-maintenance lifetime", current, err)

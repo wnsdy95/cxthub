@@ -72,17 +72,6 @@ func TestPGSnapshotCredentialsDoNotMutate(test *testing.T) {
 		if _, err := foreign.ResolveUserForSnapshot(bound, token); !errors.Is(err, domain.ErrConflict) {
 			test.Fatal("foreign store escaped snapshot", err)
 		}
-		if resolved, err := identity.ResolveMCPUserForSnapshot(bound, pair.AccessToken, resource); err != nil || resolved.ID != user.ID {
-			test.Fatal("MCP access denied", err)
-		}
-		if _, err := identity.ResolveMCPUserForSnapshot(bound, pair.AccessToken, "https://other.example.test/mcp"); !errors.Is(err, domain.ErrUnauthorized) {
-			test.Fatal("MCP audience ignored", err)
-		}
-		for _, credential := range []string{token, legacy.Token, pair.RefreshToken} {
-			if _, err := identity.ResolveMCPUserForSnapshot(bound, credential, resource); !errors.Is(err, domain.ErrUnauthorized) {
-				test.Fatal("invalid MCP credential accepted", err)
-			}
-		}
 		return nil
 	}); err != nil {
 		test.Fatal(err)
@@ -103,18 +92,6 @@ func TestPGSnapshotCredentialsDoNotMutate(test *testing.T) {
 	}
 	if _, err := storage.GetSession(ctx, legacy.Token); !errors.Is(err, domain.ErrNotFound) {
 		test.Fatal("admission did not migrate legacy session", err)
-	}
-	if err := identity.RevokeMCPToken(ctx, pair.AccessToken, "snapshot-client"); err != nil {
-		test.Fatal(err)
-	}
-	if err := storage.WithinReadSnapshot(ctx, func(bound context.Context) error {
-		_, err := identity.ResolveMCPUserForSnapshot(bound, pair.AccessToken, resource)
-		if !errors.Is(err, domain.ErrUnauthorized) {
-			test.Fatal("revoked MCP grant accepted", err)
-		}
-		return nil
-	}); err != nil {
-		test.Fatal(err)
 	}
 }
 

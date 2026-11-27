@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -37,16 +36,4 @@ func enqueueRepositoryNotificationWithQueue(ctx context.Context, outbox Reposito
 	return outbox.EnqueueNotification(ctx, outbound.NotificationDelivery{Destination: repositoryRecord.WebhookURL, Job: domain.NotificationJob{
 		ID: domain.NewID("evt_"), RepositoryID: repositoryRecord.ID, Kind: kind, Text: text, State: "pending", CreatedAt: now, UpdatedAt: now, NextAttempt: now,
 	}})
-}
-
-func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash, ref domain.Ref, forced, created bool) error {
-	return notifyRefUpdateFromStores(ctx, s.meta, s.repositories, repoID, ref, forced, created)
-}
-
-func shortHash(h domain.ContentHash) string {
-	s := strings.TrimPrefix(string(h), "sha256:")
-	if len(s) > 10 {
-		return s[:10]
-	}
-	return s
 }

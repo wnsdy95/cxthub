@@ -21,8 +21,6 @@ async function profileFixture(page: Page, options: { anonymous?: boolean; failLi
     if (pathname === '/api/v1/public/users/bob') return { body: { user, repositories: state.repositories.filter(repository => repository.id === own.id) } };
     if (pathname === '/api/v1/public/users/alice') return { body: { user: { ...user, id: 'alice', username: 'alice', name: 'Alice' }, repositories: [publicRepo] } };
     if (pathname.startsWith('/api/v1/public/organizations/')) return { status: 404, body: {} };
-    if (pathname.endsWith('/contributions')) return { body: { total: 0, days: [] } };
-    if (pathname.endsWith('/activity')) return { body: { months: [] } };
     return undefined;
   });
   return { state, reads, unexpected };

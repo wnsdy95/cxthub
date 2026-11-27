@@ -11,6 +11,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/webhookdelivery"
+	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -35,7 +36,7 @@ func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 		w.WriteHeader(status)
 	}))
 	defer receiver.Close()
-	configureNotificationTestSender(t, svc, receiver.Client())
+	notifications := notificationTestWorker(t, svc, receiver.Client())
 	repositoryRecord.WebhookURL = receiver.URL + "/private-credential"
 	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
@@ -43,7 +44,7 @@ func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 	if err := enqueueRepositoryNotification(ctx, st, repositoryRecord, "secrets_updated", "metadata only"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ProcessNotification(ctx); err != nil {
+	if _, err := notifications.Process(ctx); err != nil {
 		t.Fatal(err)
 	}
 	jobs, _ := st.ListNotifications(ctx, repositoryRecord.ID)
@@ -55,7 +56,7 @@ func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	status = 204
-	if _, err := svc.ProcessNotification(ctx); err != nil {
+	if _, err := notifications.Process(ctx); err != nil {
 		t.Fatal(err)
 	}
 	jobs, _ = st.ListNotifications(ctx, repositoryRecord.ID)
@@ -121,7 +122,7 @@ func TestNotificationChangedDestinationRequiresExplicitRetry(t *testing.T) {
 		t.Fatal("changed destination reached transport", request.URL)
 		return nil, domain.ErrForbidden
 	})}
-	configureNotificationTestSender(t, svc, client)
+	notifications := notificationTestWorker(t, svc, client)
 	if err := enqueueRepositoryNotification(ctx, st, repositoryRecord, "ref_updated", "safe metadata"); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestNotificationChangedDestinationRequiresExplicitRetry(t *testing.T) {
 	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ProcessNotification(ctx); err != nil {
+	if _, err := notifications.Process(ctx); err != nil {
 		t.Fatal(err)
 	}
 	jobs, _ := st.ListNotifications(ctx, repositoryRecord.ID)
@@ -155,7 +156,7 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 			}))
 			defer receiver.Close()
 			client := receiver.Client()
-			configureNotificationTestSender(t, svc, client)
+			notifications := notificationTestWorker(t, svc, client)
 			repositoryRecord.WebhookURL = receiver.URL
 			if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 				t.Fatal(err)
@@ -165,7 +166,7 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 			if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: repositoryRecord.WebhookURL}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := svc.ProcessNotification(ctx); err != nil {
+			if _, err := notifications.Process(ctx); err != nil {
 				t.Fatal(err)
 			}
 			jobs, _ := st.ListNotifications(ctx, repositoryRecord.ID)
@@ -179,13 +180,17 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 	}
 }
 
-func configureNotificationTestSender(test testing.TB, service *Service, client *http.Client) {
+// notificationTestWorker builds the notification worker the way the program
+// does, over the service's own stores, sending through client.
+func notificationTestWorker(test testing.TB, service *Service, client *http.Client) *notificationworker.Worker {
 	test.Helper()
 	sender, err := webhookdelivery.NewWithClient(client)
 	if err != nil {
 		test.Fatal(err)
 	}
-	if err := service.ConfigureNotificationSender(sender); err != nil {
+	worker, err := NewNotificationWorker(NotificationWorkerConfig{Metadata: service.meta, Blobs: service.blobs, Repositories: service.repositories, Sender: sender})
+	if err != nil {
 		test.Fatal(err)
 	}
+	return worker
 }

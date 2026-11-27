@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -17,15 +16,5 @@ func repositoryReadForRepoWithWork[Result any](ctx context.Context, work *reposi
 			return zero, err
 		}
 		return read(bound)
-	})
-}
-
-func listHistoryWithWork(ctx context.Context, work *repositoryWork, repo domain.ContentHash) ([]domain.HistoryEvent, error) {
-	return repositoryReadForRepoWithWork(ctx, work, repo, func(bound context.Context) ([]domain.HistoryEvent, error) {
-		store, ok := work.meta.(outbound.HistoryStore)
-		if !ok {
-			return nil, fmt.Errorf("context history storage unavailable")
-		}
-		return store.ListHistoryEvents(bound, repo)
 	})
 }

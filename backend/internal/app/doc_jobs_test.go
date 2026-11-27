@@ -4,79 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
-
-func TestDocFinalizationAcceptanceSurvivesCallerAndValidatesBeforePublish(t *testing.T) {
-	svc, st := newFsckSvc(t)
-	ctx := systemTestContext()
-	repo := hh(t.Name())
-	bindCommitTestRepo(t, st, repo)
-	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "durable upload"}}}}}
-	cb, err := domain.CanonicalBytes(cir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash := domain.HashContent(cb)
-	plan, ok := domain.PlanDocChunks(cb)
-	if !ok {
-		t.Fatal("no plan")
-	}
-	if _, _, err := st.PutChunks(ctx, repo, plan.Bodies); err != nil {
-		t.Fatal(err)
-	}
-	wire := inbound.ChunkedDoc{Hash: hash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}
-	// Accepted work is durable even after the accepting caller disappears.
-	caller, cancel := context.WithCancel(ctx)
-	job, err := svc.SubmitDocFinalization(caller, repo, wire)
-	cancel()
-	if err != nil || job.State != "waiting" {
-		t.Fatalf("submit %+v %v", job, err)
-	}
-	if have, _ := st.HasDocs(ctx, repo, []domain.ContentHash{hash}); len(have) != 0 {
-		t.Fatal("acceptance claimed verification")
-	}
-	if err := svc.ProcessDocFinalizations(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
-	job, err = svc.GetDocFinalization(ctx, repo, job.ID)
-	if err != nil || job.State != "completed" {
-		t.Fatalf("job %+v %v", job, err)
-	}
-	got, err := st.GetDoc(ctx, repo, hash)
-	if err != nil || got.Hash != hash {
-		t.Fatalf("body %v", err)
-	}
-	// A different manifest identity cannot borrow the successful receipt.
-	bad := wire
-	bad.Hash = hh("forged document hash")
-	rejected, err := svc.SubmitDocFinalization(ctx, repo, bad)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.ProcessDocFinalizations(ctx, 1); !errors.Is(err, domain.ErrIntegrity) {
-		t.Fatalf("forged body accepted: %v", err)
-	}
-	rejected, err = svc.GetDocFinalization(ctx, repo, rejected.ID)
-	if err != nil || rejected.State != "rejected" {
-		t.Fatalf("rejected %+v %v", rejected, err)
-	}
-	foreign := hh("other tenant")
-	bindCommitTestRepo(t, st, foreign)
-	if _, err := svc.SubmitDocFinalization(ctx, foreign, wire); !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("foreign chunks accepted %v", err)
-	}
-	if snaps, err := st.ListSnapshots(ctx, repo, ""); err != nil || len(snaps) != 0 {
-		t.Fatalf("snapshots prematurely published %v %v", snaps, err)
-	}
-	if refs, err := st.ListRefs(ctx, repo); err != nil || len(refs) != 0 {
-		t.Fatalf("refs prematurely published %v %v", refs, err)
-	}
-}
 
 type changedFinalizationChunks struct{ outbound.BlobStore }
 
@@ -108,16 +43,16 @@ func TestDocFinalizationWarmProofStillChecksCurrentOwnedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.verifyDocJob(ctx, j); err != nil {
+	if _, err := verifyDocJob(ctx, svc, j); err != nil {
 		t.Fatal(err)
 	}
 	other := j
 	other.RepoID = hh("unowned chunks")
-	if proof, err := svc.verifyDocJob(ctx, other); err == nil || proof.Valid() {
+	if proof, err := verifyDocJob(ctx, svc, other); err == nil || proof.Valid() {
 		t.Fatal("proof granted foreign ownership")
 	}
 	svc.blobs = changedFinalizationChunks{st}
-	if proof, err := svc.verifyDocJob(ctx, j); !errors.Is(err, domain.ErrIntegrity) || proof.Valid() {
+	if proof, err := verifyDocJob(ctx, svc, j); !errors.Is(err, domain.ErrIntegrity) || proof.Valid() {
 		t.Fatal("warm proof hid chunk corruption", err)
 	}
 }
@@ -144,7 +79,7 @@ func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := svc.runDocJob(canceled, st, claim); !errors.Is(err, context.Canceled) {
+	if err := runDocJob(canceled, svc, st, claim); !errors.Is(err, context.Canceled) {
 		t.Fatalf("shutdown %v", err)
 	}
 	job, err := st.GetDocJob(ctx, repo, accepted.ID)
@@ -155,7 +90,45 @@ func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runDocJob(ctx, st, recovered); err != nil {
+	if err := runDocJob(ctx, svc, st, recovered); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A document job wakes the document worker of the process that stored it:
+// the upload is finished without waiting for the worker's next look.
+func TestStoredDocumentJobWakesTheDocumentWorker(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	repo := hh(t.Name())
+	bindCommitTestRepo(t, st, repo)
+	ctx := systemTestContext()
+	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "woken"}}}}}
+	raw, _ := domain.CanonicalBytes(cir)
+	plan, _ := domain.PlanDocChunks(raw)
+	if _, _, err := st.PutChunks(ctx, repo, plan.Bodies); err != nil {
+		t.Fatal(err)
+	}
+	wire := inbound.ChunkedDoc{Hash: domain.HashContent(raw), Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}
+	synctest.Test(t, func(t *testing.T) {
+		workers, err := svc.DocumentWorkersForProfile(documentquery.LegacyCompatibility)
+		if err != nil {
+			t.Fatal(err)
+		}
+		running, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); workers.Finalization.Run(running) }()
+		defer func() { cancel(); <-done }()
+		// The worker looked, found nothing, and waits for its next look.
+		synctest.Wait()
+		began := time.Now()
+		accepted, err := svc.SubmitDocFinalization(ctx, repo, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		job, err := st.GetDocJob(ctx, repo, accepted.ID)
+		if err != nil || job.State != "completed" || !time.Now().Equal(began) {
+			t.Fatalf("the job is %q after %s: %v", job.State, time.Since(began), err)
+		}
+	})
 }

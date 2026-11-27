@@ -12,43 +12,40 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 type githubWebhookBackend struct {
 	Backend
-	promoted int
-	err      error
-	calls    []githubWebhookPromotion
+	repositories int
+	calls        []githubWebhookPush
+	// pulls are the origins a pull request delivery asked a read for.
+	pulls []string
 }
 
-type githubWebhookPromotion struct {
-	gitURL string
-	base   string
-	head   string
-	pr     domain.PullRequestMerge
+func (backend *githubWebhookBackend) ObserveRemotePullRequest(_ context.Context, origin string) (int, error) {
+	backend.pulls = append(backend.pulls, origin)
+	return backend.repositories, nil
 }
 
-func (b *githubWebhookBackend) PromoteMergedPR(
-	_ context.Context,
-	gitURL string, pr domain.PullRequestMerge,
-) (int, error) {
-	b.calls = append(b.calls, githubWebhookPromotion{
-		gitURL: gitURL,
-		base:   pr.BaseBranch,
-		head:   pr.HeadBranch,
-		pr:     pr,
-	})
-	return b.promoted, b.err
+type githubWebhookPush struct {
+	origin, ref, before, after string
+	forced                     bool
+	delivery                   string
+}
+
+func (backend *githubWebhookBackend) ObserveRemotePush(_ context.Context, origin, ref, before, after string, forced bool, delivery string) (int, error) {
+	backend.calls = append(backend.calls, githubWebhookPush{origin, ref, before, after, forced, delivery})
+	return backend.repositories, nil
 }
 
 type policyDownIdentity struct {
@@ -72,12 +69,9 @@ func (p policyDownIdentity) RoleOf(context.Context, string, string) (domain.Memb
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	delivery := NewServer(svc, idSvc)
-	if err := delivery.SetMemorySnapshotQueries(memorySnapshotQueriesForTest(t, svc)); err != nil {
-		t.Fatal(err)
-	}
 	setServiceDocumentEventQueries(t, delivery, svc)
 	return httptest.NewServer(delivery.Handler())
 }
@@ -141,107 +135,110 @@ func githubWebhookRequest(t *testing.T, handler http.Handler, secret, event stri
 	return rec
 }
 
-func TestGitHubWebhookSecurityAndPromotion(t *testing.T) {
+// The plain webhook is told about pushes and pull requests. A push to a
+// branch is handed on, so that the branch ledger learns it and the remote is
+// read again. A pull request delivery asks for that read only: a pull request
+// that was opened, closed or retitled moves no branch, so no push tells of it.
+func TestGitHubWebhookSecurityAndPushes(t *testing.T) {
 	const secret = "test-webhook-secret"
-	merged := []byte(`{
-		"action":"closed", "number":7,
-		"pull_request":{
-			"merged":true, "merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"base":{"ref":"main"},
-			"head":{"ref":"feature/x","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"acme/project"}}
-		},
-		"repository":{
-			"full_name":"acme/project",
-			"html_url":"https://github.com/acme/project",
-			"clone_url":"https://github.com/acme/project.git"
-		}
-	}`)
+	head := strings.Repeat("a", 40)
+	push := []byte(`{"ref":"refs/heads/topic","before":"` + strings.Repeat("0", 40) + `","after":"` + head + `","forced":false,
+		"repository":{"html_url":"https://github.com/acme/project","clone_url":"https://github.com/acme/project.git"}}`)
+	opened := []byte(`{"action":"opened","number":7,"pull_request":{"merged":false,"title":"never read from a delivery"},
+		"repository":{"full_name":"acme/project","html_url":"https://github.com/acme/project","clone_url":"https://github.com/acme/project.git"}}`)
+	unnamed := []byte(`{"action":"closed","number":7,"pull_request":{"merged":true},"repository":{"full_name":"acme/project"}}`)
 
 	t.Run("disabled when secret is unset", func(t *testing.T) {
 		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", "")
 		backend := &githubWebhookBackend{}
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "", "pull_request", merged)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404", rec.Code)
-		}
-		if len(backend.calls) != 0 {
-			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "", "push", push)
+		if rec.Code != http.StatusNotFound || len(backend.calls) != 0 {
+			t.Fatalf("status = %d, calls = %#v", rec.Code, backend.calls)
 		}
 	})
 
 	t.Run("rejects bad signature", func(t *testing.T) {
 		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
 		backend := &githubWebhookBackend{}
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/github", bytes.NewReader(merged))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/github", bytes.NewReader(push))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-GitHub-Event", "push")
 		req.Header.Set("X-Hub-Signature-256", "sha256=bad")
 		rec := httptest.NewRecorder()
 		NewServer(backend, nil).Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", rec.Code)
-		}
-		if len(backend.calls) != 0 {
-			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		if rec.Code != http.StatusUnauthorized || len(backend.calls) != 0 {
+			t.Fatalf("status = %d, calls = %#v", rec.Code, backend.calls)
 		}
 	})
 
-	t.Run("ignores other events", func(t *testing.T) {
+	for _, event := range []struct {
+		name string
+		body []byte
+	}{{"ping", []byte(`{"zen":"safe"}`)}, {"pull_request", unnamed}, {"issues", opened}, {"", opened}} {
+		t.Run("ignores "+event.name, func(t *testing.T) {
+			t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+			backend := &githubWebhookBackend{}
+			rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, event.name, event.body)
+			var response map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if rec.Code != http.StatusOK || response["status"] != "ignored" || len(backend.calls) != 0 || len(backend.pulls) != 0 {
+				t.Fatalf("status = %d, response = %#v, calls = %#v, pulls = %#v", rec.Code, response, backend.calls, backend.pulls)
+			}
+		})
+	}
+
+	t.Run("a pull request asks for a read of its repository", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{repositories: 2}
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", opened)
+		var response map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		// Only the origin is taken from the delivery, and no push is made of it.
+		if rec.Code != http.StatusOK || response["status"] != "accepted" || response["queued"] != float64(2) ||
+			!reflect.DeepEqual(backend.pulls, []string{"https://github.com/acme/project.git"}) || len(backend.calls) != 0 {
+			t.Fatalf("status = %d, response = %#v, pulls = %#v, calls = %#v", rec.Code, response, backend.pulls, backend.calls)
+		}
+		// The page address stands in when the delivery names no clone address.
+		backend = &githubWebhookBackend{}
+		paged := bytes.Replace(opened, []byte(`,"clone_url":"https://github.com/acme/project.git"`), nil, 1)
+		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", paged); rec.Code != http.StatusOK ||
+			!reflect.DeepEqual(backend.pulls, []string{"https://github.com/acme/project"}) {
+			t.Fatalf("status = %d, pulls = %#v", rec.Code, backend.pulls)
+		}
+		// A body that is no object is refused, and a wrong signature is as for a push.
+		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", []byte(`[]`)); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("a pull request delivery that is no object: status = %d", rec.Code)
+		}
+		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "another secret", "pull_request", opened); rec.Code != http.StatusUnauthorized || len(backend.pulls) != 1 {
+			t.Fatalf("a pull request delivery with a wrong signature: status = %d, pulls = %#v", rec.Code, backend.pulls)
+		}
+	})
+
+	t.Run("ignores a push that is not to a branch", func(t *testing.T) {
 		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
 		backend := &githubWebhookBackend{}
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "ping", []byte(`{"zen":"safe"}`))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if len(backend.calls) != 0 {
-			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		tag := bytes.Replace(push, []byte("refs/heads/topic"), []byte("refs/tags/v1"), 1)
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "push", tag)
+		if rec.Code != http.StatusOK || len(backend.calls) != 0 {
+			t.Fatalf("status = %d, calls = %#v", rec.Code, backend.calls)
 		}
 	})
 
-	t.Run("ignores unmerged pull request", func(t *testing.T) {
+	t.Run("hands a push to a branch on", func(t *testing.T) {
 		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{}
-		body := bytes.Replace(merged, []byte(`"merged":true`), []byte(`"merged":false`), 1)
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", body)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if len(backend.calls) != 0 {
-			t.Fatalf("promotion calls = %#v, want none", backend.calls)
-		}
-	})
-
-	t.Run("ignores fork head", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{}
-		body := bytes.Replace(merged, []byte(`"full_name":"acme/project"}}`), []byte(`"full_name":"fork/project"}}`), 1)
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", body)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if len(backend.calls) != 0 {
-			t.Fatalf("promotion calls = %#v, want none", backend.calls)
-		}
-	})
-
-	t.Run("promotes same-repository merged head", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{promoted: 1}
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", merged)
+		backend := &githubWebhookBackend{repositories: 1}
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "push", push)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 		}
-		if len(backend.calls) != 1 {
-			t.Fatalf("promotion calls = %#v, want one", backend.calls)
-		}
-		want := githubWebhookPromotion{
-			gitURL: "https://github.com/acme/project.git",
-			base:   "main",
-			head:   "feature/x",
-			pr:     domain.PullRequestMerge{Number: 7, BaseBranch: "main", HeadBranch: "feature/x", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)},
-		}
-		if backend.calls[0] != want {
-			t.Fatalf("promotion call = %#v, want %#v", backend.calls[0], want)
+		// A branch that did not exist before has no commit to come from.
+		want := githubWebhookPush{origin: "https://github.com/acme/project.git", ref: "refs/heads/topic", after: head}
+		if len(backend.calls) != 1 || backend.calls[0] != want {
+			t.Fatalf("calls = %#v, want %#v", backend.calls, want)
 		}
 		var response map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
@@ -251,107 +248,6 @@ func TestGitHubWebhookSecurityAndPromotion(t *testing.T) {
 			t.Fatalf("response = %#v, want status accepted and queued 1", response)
 		}
 	})
-}
-
-func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
-	const secret = "integration-webhook-secret"
-	t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-
-	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
-	repoID := domain.HashContent([]byte("github.com/acme/project"))
-	if _, err := st.PutRepo(systemTestContext(), domain.Repo{
-		ID:            repoID,
-		DefaultBranch: "main",
-		GitRemoteURL:  "git@github.com:acme/project.git",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	put := func(text string, parents ...domain.ContentHash) domain.ContentHash {
-		doc := domain.SessionDoc{CIR: domain.CIRDocument{}}
-		doc.CIR.Envelope.CIRVersion = "1"
-		doc.CIR.Envelope.SourceProvider = "claude"
-		doc.CIR.Events = []domain.CIREvent{{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: text}}}}
-		raw, err := domain.CanonicalBytes(doc.CIR)
-		if err != nil {
-			t.Fatal(err)
-		}
-		doc.Hash = domain.HashContent(raw)
-		if _, err := st.PutDoc(systemTestContext(), repoID, doc); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.PutSnapshot(systemTestContext(), domain.Snapshot{ID: doc.Hash, RepoID: repoID, DocHash: doc.Hash, Branch: map[bool]string{true: "feature/x", false: "main"}[text == "feature"], Message: "work [git aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]", Parents: parents}); err != nil {
-			t.Fatal(err)
-		}
-		return doc.Hash
-	}
-	base := put("base")
-	mainTip := put("main", base)
-	featureTip := put("feature", base)
-	observation := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repoID), BranchID: "feature", Branch: "feature/x", Kind: "position", Source: featureTip, Target: featureTip, GitAfter: strings.Repeat("a", 40), CreatedAt: time.Now().UTC()}
-	if err := svc.RecordHistory(systemTestContext(), observation); err != nil {
-		t.Fatal(err)
-	}
-	publication := observation
-	publication.ID, publication.Kind = strings.Repeat("2", 32), "publish"
-	if err := svc.RecordHistory(systemTestContext(), publication); err != nil {
-		t.Fatal(err)
-	}
-	for name, target := range map[string]domain.ContentHash{"main": mainTip, "feature/x": featureTip} {
-		if err := st.CompareAndSwapRef(systemTestContext(), repoID, domain.Ref{
-			Kind: domain.RefBranch, Name: name, RepoID: repoID, Target: target,
-		}, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	body := []byte(`{
-		"action":"closed", "number":7,
-		"pull_request":{
-			"merged":true, "merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"base":{"ref":"main"},
-			"head":{"ref":"feature/x","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"acme/project"}}
-		},
-		"repository":{
-			"full_name":"acme/project",
-			"clone_url":"https://github.com/acme/project.git"
-		}
-	}`)
-	handler := NewServer(svc, nil).Handler()
-	for attempt := 1; attempt <= 2; attempt++ {
-		rec := githubWebhookRequest(t, handler, secret, "pull_request", body)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("attempt %d status = %d, body=%s", attempt, rec.Code, rec.Body.String())
-		}
-		var response struct {
-			Queued int `json:"queued"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatal(err)
-		}
-		want := 1
-		if response.Queued != want {
-			t.Fatalf("attempt %d promoted = %d, want %d", attempt, response.Queued, want)
-		}
-	}
-
-	if err := svc.ProcessPRPromotions(systemTestContext(), 8); err != nil {
-		t.Fatal(err)
-	}
-	mainRef, err := st.GetRef(systemTestContext(), repoID, domain.RefBranch, "main")
-	if err != nil || mainRef.Target != featureTip {
-		t.Fatalf("main ref = (%s, %v), want feature tip %s", mainRef.Target, err, featureTip)
-	}
-	promoted, err := st.GetSnapshot(systemTestContext(), repoID, featureTip)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(promoted.Parents) != 1 || promoted.Parents[0] != base {
-		t.Fatalf("natural parents changed: %v, want [%s]", promoted.Parents, base)
-	}
-	if len(promoted.GraftParents) != 1 || promoted.GraftParents[0] != mainTip {
-		t.Fatalf("graft parents = %v, want prior main tip %s", promoted.GraftParents, mainTip)
-	}
 }
 
 func TestHealthIsPublicAndMinimal(t *testing.T) {
@@ -389,260 +285,6 @@ func TestHealthIsPublicAndMinimal(t *testing.T) {
 		if got := resp.Header.Get(name); got != want {
 			t.Errorf("health %s = %q, want %q", name, got, want)
 		}
-	}
-}
-
-func TestDeletePendingExpectedTargetCAS(t *testing.T) {
-	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
-	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
-	ts := httptest.NewServer(NewServer(svc, idSvc).Handler())
-	defer ts.Close()
-
-	var me struct {
-		Username string `json:"username"`
-	}
-	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
-		t.Fatalf("me status=%d", code)
-	}
-	var repositoryRecord struct {
-		Slug string `json:"slug"`
-	}
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repositories", map[string]any{"name": "PendingCAS"}, &repositoryRecord); code != http.StatusOK {
-		t.Fatalf("repository status=%d", code)
-	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
-	repoID := repoIDForRemoteURLForTest(remoteURL)
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
-		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
-	}, nil); code != http.StatusOK {
-		t.Fatalf("repo status=%d", code)
-	}
-	target := domain.HashContent([]byte("pending target"))
-	if err := st.PutSnapshot(systemTestContext(), domain.Snapshot{
-		ID: target, RepoID: repoID, DocHash: target, Branch: "main", Message: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.PutPending(systemTestContext(), repoID, "session-cas", domain.Pending{Target: target, Branch: "main"}); err != nil {
-		t.Fatal(err)
-	}
-	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID)) + "/pending/session-cas"
-	var out map[string]string
-	wrong := domain.HashContent([]byte("wrong target"))
-	if code := doJSON(t, http.MethodDelete, base+"?expect="+url.QueryEscape(string(wrong)), nil, &out); code != http.StatusOK || out["status"] != "kept" {
-		t.Fatalf("stale CAS status=%d body=%v", code, out)
-	}
-	out = nil
-	if code := doJSON(t, http.MethodDelete, base+"?expect="+url.QueryEscape(string(target)), nil, &out); code != http.StatusOK || out["status"] != "deleted" {
-		t.Fatalf("matching CAS status=%d body=%v", code, out)
-	}
-}
-
-func TestPushChunksRejectsOversizedJSONBody(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
-
-	var me struct {
-		Username string `json:"username"`
-	}
-	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK || me.Username == "" {
-		t.Fatalf("me status=%d username=%q", code, me.Username)
-	}
-	var repositoryRecord struct {
-		Slug string `json:"slug"`
-	}
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repositories", map[string]any{"name": "ChunkLimit"}, &repositoryRecord); code != http.StatusOK {
-		t.Fatalf("repository status=%d", code)
-	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
-	repoID := repoIDForRemoteURLForTest(remoteURL)
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
-		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
-	}, nil); code != http.StatusOK {
-		t.Fatalf("repo status=%d", code)
-	}
-
-	// Four raw MiB becomes >4 MiB after JSON base64 expansion, so the HTTP
-	// boundary must return our explicit 413 before service/hash validation.
-	body := map[string]any{"chunks": []map[string]any{{
-		"hash": domain.HashContent([]byte("not the oversized body")),
-		"data": bytes.Repeat([]byte{'x'}, 4<<20),
-	}}}
-	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID))
-	if code := doJSON(t, http.MethodPost, base+"/push/chunks", body, nil); code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversized push/chunks status=%d, want %d", code, http.StatusRequestEntityTooLarge)
-	}
-	pullBody := map[string]any{"chunk_wants": []string{strings.Repeat("x", inbound.MaxChunkWantJSONBody)}}
-	if code := doJSON(t, http.MethodPost, base+"/pull/chunks", pullBody, nil); code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversized pull/chunks status=%d, want %d", code, http.StatusRequestEntityTooLarge)
-	}
-}
-
-// TestPushPullRoundtrip: validates the round trip of negotiate → objects → ref PUT → manifest → pull.
-func TestPushPullRoundtrip(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.Close()
-
-	// 0) Repository creation + repo registration — actual CLI flow (web repositoryRecord creation → Connect → EnsureRepo).
-	// Unowned repos have a write rejection policy (review #5), so they must be registered with the binding remote URL.
-	var me struct {
-		Username string `json:"username"`
-	}
-	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != 200 || me.Username == "" {
-		t.Fatalf("me lookup failed (code %d, username %q)", 0, me.Username)
-	}
-	var repositoryRecord struct {
-		Slug string `json:"slug"`
-	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Roundtrip"}, &repositoryRecord); code != 200 || repositoryRecord.Slug == "" {
-		t.Fatalf("repository creation failed (slug %q)", repositoryRecord.Slug)
-	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug // repository URL (2-segment)
-	rid := repoIDForRemoteURLForTest(remoteURL)
-	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid))
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remoteURL, "default_branch": "main"}, nil); code != 200 {
-		t.Fatalf("repo create code %d", code)
-	}
-
-	// content-addressed snapshot/doc configuration
-	cir := domain.CIRDocument{
-		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, Fidelity: domain.FidelityFull, GitBranch: "main"},
-		Events:   []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "hi"}}}},
-	}
-	cb, _ := domain.CanonicalBytes(cir)
-	h := domain.HashContent(cb)
-	doc := domain.SessionDoc{Hash: h, CIR: cir}
-	snap := domain.Snapshot{
-		ID: h, RepoID: rid, Branch: "main", Branches: []string{"forged-client-projection"},
-		DocHash: h, Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull, Message: "first",
-	}
-
-	// 1) negotiate: server is empty, both want
-	var neg struct {
-		SnapshotWants []domain.ContentHash `json:"snapshot_wants"`
-		DocWants      []domain.ContentHash `json:"doc_wants"`
-	}
-	if code := doJSON(t, "POST", base+"/push/negotiate", map[string]any{"snapshot_haves": []domain.ContentHash{h}, "doc_haves": []domain.ContentHash{h}}, &neg); code != 200 {
-		t.Fatalf("negotiate code %d", code)
-	}
-	if len(neg.SnapshotWants) != 1 || len(neg.DocWants) != 1 {
-		t.Fatalf("expected 1/1 wants, got %d/%d", len(neg.SnapshotWants), len(neg.DocWants))
-	}
-
-	// 2) objects upload
-	if code := doJSON(t, "POST", base+"/push/objects", map[string]any{"snapshots": []domain.Snapshot{snap}, "docs": []domain.SessionDoc{doc}}, nil); code != 200 {
-		t.Fatalf("objects code %d", code)
-	}
-	// Paging uses the same repository viewer guard as the full archive route.
-	eventURL := base + "/docs/" + url.PathEscape(string(h)) + "/events"
-	var eventPage domain.DocEventPage
-	if code := doJSON(t, "GET", eventURL+"?offset=0&limit=1", nil, &eventPage); code != 200 || len(eventPage.Events) != 1 || eventPage.Total != 1 || eventPage.Next != -1 {
-		t.Fatalf("event page: %d %+v", code, eventPage)
-	}
-	for _, suffix := range []string{"?offset=-2", "?offset=bad", "?offset=2", "?limit=101", "?base=bad"} {
-		if code := doJSON(t, "GET", eventURL+suffix, nil, nil); code != 422 {
-			t.Fatalf("range %s: %d", suffix, code)
-		}
-	}
-	if code := doJSONAs(t, "", "GET", eventURL, nil, nil); code != 401 {
-		t.Fatalf("anonymous event page: %d", code)
-	}
-	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", eventURL, nil, nil); code != 403 {
-		t.Fatalf("foreign event page: %d", code)
-	}
-	// expected_seq is a necessary CAS to prevent the delayed queue from reviving the supersede of join.
-	if code := doJSON(t, "POST", base+"/snapshots/"+url.PathEscape(string(h))+"/graft", map[string]any{
-		"parents": []domain.ContentHash{h},
-	}, nil); code != http.StatusUnprocessableEntity {
-		t.Fatalf("missing expected_seq code %d (want 422)", code)
-	}
-
-	// 3) ref PUT (fast-forward, new)
-	if code := doJSON(t, "PUT", base+"/refs/branch/main", map[string]any{"target": h}, nil); code != 200 {
-		t.Fatalf("ref put code %d", code)
-	}
-
-	// 3b) bounded ref batch: lifecycle event precedes its mutable branch
-	// projection, and a later archive removes only that projection.
-	const batchBranchName = "feature/batch-lifecycle"
-	activeEvent, err := domain.NewBranchLifecycleRef(rid, batchBranchName, h, 1, domain.BranchActive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	batchBranch := domain.Ref{Kind: domain.RefBranch, Name: batchBranchName, RepoID: rid, Target: h}
-	var batchOut inbound.UpdateRefsOutput
-	if code := doJSON(t, "POST", base+"/refs/batch", map[string]any{"updates": []map[string]any{
-		{"ref": activeEvent}, {"ref": batchBranch},
-	}}, &batchOut); code != 200 || batchOut.Applied != 2 {
-		t.Fatalf("ref batch create code=%d out=%+v", code, batchOut)
-	}
-	archiveEvent, err := domain.NewBranchLifecycleRef(rid, batchBranchName, h, 2, domain.BranchArchived)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := doJSON(t, "POST", base+"/refs/batch", map[string]any{"updates": []map[string]any{{"ref": archiveEvent}}}, &batchOut); code != 200 || batchOut.Applied != 1 {
-		t.Fatalf("ref batch archive code=%d out=%+v", code, batchOut)
-	}
-	var projectedRefs []domain.Ref
-	if code := doJSON(t, "GET", base+"/refs", nil, &projectedRefs); code != 200 {
-		t.Fatalf("list projected refs code %d", code)
-	}
-	foundArchivedBranch, foundArchiveEvent := false, false
-	for _, ref := range projectedRefs {
-		foundArchivedBranch = foundArchivedBranch || (ref.Kind == domain.RefBranch && ref.Name == batchBranchName)
-		foundArchiveEvent = foundArchiveEvent || ref.Name == archiveEvent.Name
-	}
-	if foundArchivedBranch || !foundArchiveEvent {
-		t.Fatalf("batch archive projection refs=%+v", projectedRefs)
-	}
-
-	// 4) negotiate re-request → no longer want (dedup)
-	var neg2 struct {
-		SnapshotWants []domain.ContentHash `json:"snapshot_wants"`
-		DocWants      []domain.ContentHash `json:"doc_wants"`
-	}
-	doJSON(t, "POST", base+"/push/negotiate", map[string]any{"snapshot_haves": []domain.ContentHash{h}, "doc_haves": []domain.ContentHash{h}}, &neg2)
-	if len(neg2.SnapshotWants) != 0 || len(neg2.DocWants) != 0 {
-		t.Fatalf("after push expected 0 wants, got %d/%d", len(neg2.SnapshotWants), len(neg2.DocWants))
-	}
-
-	// 5) manifest: snapshot index + ref
-	var man domain.Manifest
-	if code := doJSON(t, "GET", base+"/manifest", nil, &man); code != 200 {
-		t.Fatalf("manifest code %d", code)
-	}
-	if len(man.SnapshotIndex) != 1 || man.SnapshotIndex[0] != h {
-		t.Fatalf("manifest index: %+v", man.SnapshotIndex)
-	}
-	foundRef := false
-	for _, r := range man.Refs {
-		if r.Kind == domain.RefBranch && r.Name == "main" && r.Target == h {
-			foundRef = true
-		}
-	}
-	if !foundRef {
-		t.Fatalf("manifest missing main ref: %+v", man.Refs)
-	}
-
-	// 6) pull: snapshot + doc download
-	var pull struct {
-		Snapshots []domain.Snapshot   `json:"snapshots"`
-		Docs      []domain.SessionDoc `json:"docs"`
-	}
-	doJSON(t, "POST", base+"/pull/objects", map[string]any{"snapshot_wants": []domain.ContentHash{h}}, &pull)
-	if len(pull.Snapshots) != 1 || pull.Snapshots[0].Message != "first" {
-		t.Fatalf("pull snapshots: %+v", pull.Snapshots)
-	}
-	if len(pull.Snapshots[0].Branches) != 0 {
-		t.Fatalf("client-supplied branch projection persisted: %+v", pull.Snapshots[0].Branches)
-	}
-	var pull2 struct {
-		Docs []domain.SessionDoc `json:"docs"`
-	}
-	doJSON(t, "POST", base+"/pull/objects", map[string]any{"doc_wants": []domain.ContentHash{h}}, &pull2)
-	if len(pull2.Docs) != 1 || pull2.Docs[0].Hash != h {
-		t.Fatalf("pull docs: %+v", pull2.Docs)
 	}
 }
 
@@ -843,7 +485,7 @@ func TestOrganizationOwnerReadsWritesAndDiscoversAllRepositories(t *testing.T) {
 		t.Fatalf("register organization repo code %d", code)
 	}
 	repoBase := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID))
-	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusOK {
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/anchored-sessions", nil, nil); code != http.StatusOK {
 		t.Fatalf("organization owner denied private context read: code %d", code)
 	}
 	repositoryPath := ts.URL + "/api/v1/public/repositories/acme/" + url.PathEscape(repository.Slug)
@@ -860,7 +502,7 @@ func TestOrganizationOwnerReadsWritesAndDiscoversAllRepositories(t *testing.T) {
 	if grant.RepositoryID != repository.ID {
 		t.Fatalf("grant repository = %q, want %q", grant.RepositoryID, repository.ID)
 	}
-	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusOK {
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/anchored-sessions", nil, nil); code != http.StatusOK {
 		t.Fatalf("break-glass read code %d", code)
 	}
 	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusOK {
@@ -1262,7 +904,7 @@ func TestRateLimitDoesNotCountRejectedRequests(t *testing.T) {
 
 func TestCookieUnsafeMethodsRequireTrustedOriginAndCSRFHeader(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	user := domain.User{ID: "cookie-user", Email: "cookie@example.com", Name: "Cookie", Username: "cookie"}
 	if err := st.UpsertUser(systemTestContext(), user); err != nil {
@@ -1320,7 +962,7 @@ func TestConfiguredProxyOriginPassesCookieCSRF(t *testing.T) {
 	t.Setenv("CXT_CORS_ORIGINS", "https://cxthub.com")
 
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	user := domain.User{ID: "proxy-user", Email: "proxy@example.com", Name: "Proxy", Username: "proxy"}
 	if err := st.UpsertUser(systemTestContext(), user); err != nil {
@@ -1354,7 +996,7 @@ func TestConfiguredProxyOriginPassesCookieCSRF(t *testing.T) {
 
 func TestUnboundRepoHiddenAndRejected(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	ts := httptest.NewServer(NewServer(svc, idSvc).Handler())
 	defer ts.Close()
@@ -1428,7 +1070,7 @@ func TestAboutWebsiteRejectsUnsafeScheme(t *testing.T) {
 
 func TestRepositoryPolicyLookupFailureBlocksAction(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	id := policyDownIdentity{
 		IdentityService: idSvc,
@@ -1496,42 +1138,82 @@ func TestPublicPullerCannotManageRepositoryOrTeamAssets(t *testing.T) {
 	}
 }
 
-func TestPRJobRepositoryAuthorization(t *testing.T) {
-	ts := newTestServer(t)
+// A repository that gets its Git origin was never read from the Git host.
+// Registering it asks for that first read, so that it starts with the
+// registration and not at the reader's next look for due repositories. A
+// registration that changes nothing, which every `cxt setup` sends, asks for
+// nothing.
+func TestRegisteringARepositoryWithAGitOriginAsksForItsFirstRead(t *testing.T) {
+	st := store.NewFSStore(t.TempDir())
+	svc := app.NewService(st, st, st)
+	delivery := NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st))
+	setServiceDocumentEventQueries(t, delivery, svc)
+	ts := httptest.NewServer(delivery.Handler())
 	defer ts.Close()
+	var mu sync.Mutex
+	var told []domain.ContentHash
+	stop, err := st.ListenRemoteGitRequests(func(repo domain.ContentHash) {
+		mu.Lock()
+		defer mu.Unlock()
+		told = append(told, repo)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	asked := func() []domain.ContentHash {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]domain.ContentHash{}, told...)
+	}
+
 	var me struct {
 		Username string `json:"username"`
 	}
-	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var repositoryRecord struct {
-		ID   string `json:"id"`
-		Slug string `json:"slug"`
+	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != 200 || me.Username == "" {
+		t.Fatalf("me lookup failed (code %d)", code)
 	}
-	if status := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "PRJobs"}, &repositoryRecord); status != 200 {
-		t.Fatal(status)
+	slugs := map[string]string{}
+	register := func(name, gitURL string) (domain.ContentHash, int) {
+		t.Helper()
+		if slugs[name] == "" {
+			var repositoryRecord struct {
+				Slug string `json:"slug"`
+			}
+			if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": name}, &repositoryRecord); code != 200 || repositoryRecord.Slug == "" {
+				t.Fatalf("repository %s was not created (code %d)", name, code)
+			}
+			slugs[name] = repositoryRecord.Slug
+		}
+		remoteURL := "http://cxthub.test/" + me.Username + "/" + slugs[name]
+		rid := repoIDForRemoteURLForTest(remoteURL)
+		return rid, doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remoteURL, "default_branch": "main", "git_remote_url": gitURL}, nil)
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
-	rid := repoIDForRemoteURLForTest(remote)
-	if status := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remote, "git_remote_url": "https://github.com/acme/queue", "default_branch": "main"}, nil); status != 200 {
-		t.Fatal(status)
+	// A repository without a Git origin has nothing to read.
+	bare, code := register("Bare", "")
+	if code != 200 || len(asked()) != 0 {
+		t.Fatalf("a registration without a Git origin: code %d, asked %v", code, asked())
 	}
-	endpoint := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/prs/promotions"
-	outsider := "dev:other@t.io:Other"
-	for _, method := range []string{"GET", "POST"} {
-		if code := doJSONAs(t, outsider, method, endpoint, map[string]any{}, nil); code != 403 {
-			t.Fatalf("outsider %s=%d", method, code)
+	// It gets its origin: the first read is asked for.
+	if _, code := register("Bare", "https://github.com/acme/bare.git"); code != 200 || !reflect.DeepEqual(asked(), []domain.ContentHash{bare}) {
+		t.Fatalf("the registration that set the Git origin: code %d, asked %v", code, asked())
+	}
+	// A repository registered with its origin at once.
+	app1, code := register("App", "https://github.com/acme/app.git")
+	if code != 200 || !reflect.DeepEqual(asked(), []domain.ContentHash{bare, app1}) {
+		t.Fatalf("a first registration with a Git origin: code %d, asked %v", code, asked())
+	}
+	// The same registration again, in either form of the address, and a
+	// registration that is refused, ask for nothing.
+	for _, gitURL := range []string{"https://github.com/acme/app.git", "git@github.com:acme/app.git"} {
+		if _, code := register("App", gitURL); code != 200 {
+			t.Fatalf("registering %s again: code %d", gitURL, code)
 		}
 	}
-	if code := doJSON(t, "GET", endpoint, nil, nil); code != 200 {
-		t.Fatalf("owner list=%d", code)
+	if _, code := register("App", "https://github.com/evil/other.git"); code != http.StatusConflict {
+		t.Fatalf("a registration with another origin: code %d", code)
 	}
-	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+repositoryRecord.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
-		t.Fatal(code)
-	}
-	if code := doJSONAs(t, "", "GET", endpoint, nil, nil); code != 200 {
-		t.Fatalf("public read=%d", code)
-	}
-	if code := doJSONAs(t, "", "POST", endpoint+"/unknown/retry", map[string]any{}, nil); code != 401 && code != 403 {
-		t.Fatalf("public retry=%d", code)
+	if got := asked(); !reflect.DeepEqual(got, []domain.ContentHash{bare, app1}) {
+		t.Fatalf("registrations that changed nothing asked for a read: %v", got)
 	}
 }

@@ -16,11 +16,17 @@ func TestMigrationCatalogMatchesOnlyReleasedBundle(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	if len(manifest) != 160 {
-		test.Fatal("released source catalog must contain all 160 SQL files", len(manifest))
+	if len(manifest) != 170 {
+		test.Fatal("released source catalog must contain all 170 SQL files", len(manifest))
 	}
 	if err := verifyMigrationCatalog(manifest); err != nil {
 		test.Fatal("complete source catalog does not match the compiled release digest", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:169]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("the bundle without the collector tables was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:168]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("the bundle that still holds the capture tables was accepted for the current image", err)
 	}
 	if err := verifyMigrationCatalog(manifest[:155]); !errors.Is(err, ErrSchemaMismatch) {
 		test.Fatal("pre-parser release bundle was accepted for Stage checkpoint readers", err)
@@ -30,6 +36,30 @@ func TestMigrationCatalogMatchesOnlyReleasedBundle(test *testing.T) {
 	}
 	if err := verifyMigrationCatalog(manifest[:159]); !errors.Is(err, ErrSchemaMismatch) {
 		test.Fatal("pre-insert-accounting release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:160]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-anchored-session release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:161]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-branch-ledger release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:162]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-notes release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:163]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-remote-git release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:164]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-publication release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:165]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-summary release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:166]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("pre-archive release bundle was accepted for the current image", err)
+	}
+	if err := verifyMigrationCatalog(manifest[:167]); !errors.Is(err, ErrSchemaMismatch) {
+		test.Fatal("the session archive release bundle was accepted for the current image", err)
 	}
 	for _, mutation := range []string{"altered", "incomplete", "extra", "renamed"} {
 		test.Run(mutation, func(test *testing.T) {

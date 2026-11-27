@@ -4,12 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
@@ -79,48 +75,6 @@ func TestEndpointCASPreservesIdentityAndCapture(t *testing.T) {
 	wrong.RepositoryID = "different-owner"
 	if err := SetEndpoint(ctx, current, "origin", wrong, true); err == nil || !sameObservation(current, observeConfig(t, root)) {
 		t.Fatal("repository binding drift accepted", err)
-	}
-}
-
-func TestEndpointLinkedWorktreeSharedCASAndGate(t *testing.T) {
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	root, linked := t.TempDir(), filepath.Join(t.TempDir(), "linked")
-	git := func(args ...string) {
-		t.Helper()
-		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git: %s %v", out, err)
-		}
-	}
-	git("init", "--template=", "-q", "-b", "main")
-	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.test", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture")
-	git("worktree", "add", "-qb", "linked", linked)
-	ctx := context.Background()
-	if err := configFixtureSave(root, Remotes{"origin": migrationIdentity}); err != nil {
-		t.Fatal(err)
-	}
-	observed := observeConfig(t, linked)
-	if err := storage.NewFileStore(root).WithCaptureTrackingGate(ctx, func(held context.Context) error {
-		if err := SetEndpoint(held, observed, "origin", migrationBinding(), false); !errors.Is(err, domain.ErrSyncConflict) {
-			t.Fatal("nested gate upgrade accepted", err)
-		}
-		wait, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
-		defer cancel()
-		if err := SetEndpoint(wait, observed, "origin", migrationBinding(), false); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatal("migration bypassed shared capture gate", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := SetEndpoint(ctx, observed, "origin", migrationBinding(), false); err != nil {
-		t.Fatal(err)
-	}
-	if binding, err := ResolveEndpoint(ctx, root, migrationIdentity); err != nil || binding != migrationBinding() {
-		t.Fatal(binding, err)
-	}
-	if _, err := os.Stat(filepath.Join(linked, ".cxt")); !os.IsNotExist(err) {
-		t.Fatal("migration wrote linked worktree config", err)
 	}
 }
 

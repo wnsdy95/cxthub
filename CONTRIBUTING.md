@@ -1,7 +1,7 @@
 # Contributing to CXTHub
 
-Thank you for helping make coding-agent context portable, inspectable, and
-safe to share.
+Thank you for helping keep coding-agent sessions with the commits they
+produced, inspectable and safe to share.
 
 ## Start with the problem
 
@@ -20,7 +20,7 @@ pure refactors that do not demonstrate a user or maintenance benefit.
 
 ## Development setup
 
-Prerequisites are Go 1.26+, Node.js 22+, npm, and Git 2.28+.
+Prerequisites are Go 1.26.11+, Node.js 22+, npm, and Git 2.28+.
 
 ```bash
 git clone https://github.com/wnsdy95/cxthub.git
@@ -35,13 +35,13 @@ Useful checks:
 ```bash
 make lint
 make e2e
-CXT_E2E_DSN="${DISPOSABLE_POSTGRES_DSN:?set a disposable PostgreSQL 16 DSN}" make e2e-sync
+make e2e-sync
 make public-check
 ```
 
-Use a disposable database: conditional automatic-merge append requires PostgreSQL
-transactions. The default FS sync E2E run is legacy compatibility coverage only;
-see [storage requirements](docs/AUTOMATIC_CONTEXT_LINKING.md#conditional-append-storage-requirement).
+`make e2e-sync` runs the chain a Git hook starts with the real binaries. It
+uses the file store by default. To run it against PostgreSQL, set `CXT_E2E_DSN`
+to a disposable PostgreSQL 16 database; never point it at data you keep.
 
 PostgreSQL adapter or migration changes should run `make test-postgres` against
 PostgreSQL 16. Web changes should run `npm ci` and `npm run build` from
@@ -65,21 +65,28 @@ dismiss stale approvals.
 
 ## Engineering invariants
 
-- Snapshot identity is content-addressed.
-- Natural snapshot parents are immutable.
-- Graph algorithms must account for both natural and active overlay parents.
+- cxt reads what the agent tools and Git recorded. Nothing is judged by
+  whether a hook or cxt itself ran at some moment, and a hook only wakes the
+  reading.
+- A session is cut and linked to commits by stated rules, and every link names
+  its rule. No relation is inferred, and a record that could not be read is
+  listed, never skipped.
+- What a reader other than the uploader may read is decided by the server from
+  its own read of the hosting provider, never from what a client says.
+- A conversation document's identity is content-addressed.
 - CLI and backend Go modules remain independently buildable.
 - Shared wire and persistence contracts live under `schemas/`.
-- Provider-specific Claude Code and Codex formats stay at codec, capture, and
-  materialization boundaries.
+- Provider-specific Claude Code and Codex formats stay in the readers and
+  codecs of the CLI.
 - Cloning the repository must never activate local coding-agent hooks.
 - Never add real agent sessions, `.cxt`, `cxt-data`, credentials, local
   databases, production inputs, or private repository data to tests or
   fixtures.
 - User-facing web copy must keep Korean and English locale keys aligned.
 
-Changes that affect identity, graph reachability, persistence, synchronization,
-provider conversion, authentication, authorization, or migrations require an
+Changes that affect identity, the rules that cut and link sessions, who may
+read what, persistence, uploads, provider conversion, authentication,
+authorization, or migrations require an
 explicit compatibility and data-integrity explanation in the pull request.
 
 ## AI-assisted contributions
@@ -88,7 +95,7 @@ AI-assisted contributions are welcome, but the author remains responsible for
 every submitted line.
 
 Disclose material AI assistance in the pull request. Review generated code,
-tests, licenses, and citations; remove private context; and verify the change
+tests, licenses, and citations; remove private data; and verify the change
 locally. Do not submit raw agent output or large generated rewrites without
 human validation.
 

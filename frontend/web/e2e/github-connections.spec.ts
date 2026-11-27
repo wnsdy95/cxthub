@@ -6,7 +6,7 @@ test('GitHub repository and optional team mapping keep separate choices and gene
  const connection = { namespace_id: 'ns_org', generation: 4, enabled: true, status: 'connected', checked_at: '2026-09-25T00:00:00Z', next_sync: '2099-01-01T00:00:00Z', installation: { id: 17, account_id: 21, login: 'acme', kind: 'Organization', suspended: false }, repositories: [{ id: 25, account_id: 21, full_name: 'acme/api', private: true }], bindings: [], teams: [{ id: 8, slug: 'backend', name: 'Backend' }], mappings: [], unresolved_members: 0 };
  const unexpected = await installApiFixture(page, ({ method, pathname }) => {
   if (pathname === '/api/v1/me') return { body: { id: 'owner', email: 'owner@example.test', name: 'Owner', username: 'owner', locale: 'en' } };
-  if (pathname === '/api/v1/github/connections') return { body: { enabled: true, identity: { external_id: 99, login: 'operator' }, owners: [{ namespace: { id: 'ns_org', slug: 'acme', kind: 'organization' }, connection, repositories: [{ id: 'local-api', slug: 'api' }], context_repos: [{ id: 'context-id', repository_id: 'local-api', git_remote_url: 'https://github.com/acme/api' }], teams: [{ id: 'team-backend', name: 'Platform' }] }] } };
+  if (pathname === '/api/v1/github/connections') return { body: { enabled: true, identity: { external_id: 99, login: 'operator' }, owners: [{ namespace: { id: 'ns_org', slug: 'acme', kind: 'organization' }, connection, repositories: [{ id: 'local-api', slug: 'api' }, { id: 'local-side', slug: 'side', owner_username: 'jane' }], context_repos: [{ id: 'context-id', repository_id: 'local-api', git_remote_url: 'https://github.com/acme/api' }, { id: 'side-id', repository_id: 'local-side', git_remote_url: 'https://github.com/acme/side' }], teams: [{ id: 'team-backend', name: 'Platform' }] }] } };
   if (method === 'POST' && pathname === '/api/v1/github/connections/ns_org') return { body: { saved: true } };
  });
  page.on('request', r => { if (r.method() === 'POST' && r.url().endsWith('/github/connections/ns_org')) mutations.push(r.postDataJSON()); });
@@ -14,6 +14,8 @@ test('GitHub repository and optional team mapping keep separate choices and gene
  await expect(page.getByRole('heading', { name: 'GitHub connections', exact: true })).toBeVisible();
  await expect(page.getByLabel('Synchronize team members')).not.toBeChecked();
  await page.getByRole('combobox', { name: 'GitHub repository', exact: true }).selectOption('25');
+ // A repository the person maintains in another owner's space is offered with that owner's name.
+ await expect(page.getByRole('combobox', { name: 'CXTHub repository', exact: true }).locator('option')).toHaveText(['Choose…', 'api · https://github.com/acme/api', 'jane/side · https://github.com/acme/side']);
  await page.getByRole('combobox', { name: 'CXTHub repository', exact: true }).selectOption('context-id');
  await page.getByRole('button', { name: 'Save connection', exact: true }).first().click();
  await expect.poll(() => mutations.length).toBe(1);

@@ -23,10 +23,6 @@ type UploadPolicy struct {
 
 type uploadPolicyKey struct{}
 
-func WithUploadPolicy(ctx context.Context, policy UploadPolicy) context.Context {
-	return context.WithValue(ctx, uploadPolicyKey{}, policy)
-}
-
 func UploadPolicyFromContext(ctx context.Context) (UploadPolicy, bool) {
 	policy, ok := ctx.Value(uploadPolicyKey{}).(UploadPolicy)
 	return policy, ok && policy.StallBudget > 0

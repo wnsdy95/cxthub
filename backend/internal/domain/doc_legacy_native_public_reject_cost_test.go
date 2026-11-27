@@ -109,71 +109,6 @@ func (source *legacyNativePublicRejectCostSource) Read(ctx context.Context, offs
 	return body, err
 }
 
-func (source *legacyNativePublicRejectCostSource) reset() {
-	clear(source.visited)
-	source.readBytes, source.coveredBytes = 0, 0
-	source.loads, source.zeroEOF, source.oneEOF, source.unexpectedReads = 0, 0, 0, 0
-}
-
-type legacyNativePublicRejectCost struct {
-	steps            int
-	maxStepLoads     int
-	maxStepReadBytes int64
-	maxRetained      int64
-}
-
-func legacyNativePublicRejectCostMeasure(test testing.TB, source *legacyNativePublicRejectCostSource) legacyNativePublicRejectCost {
-	test.Helper()
-	source.reset()
-	ctx := context.Background()
-	decoder, err := NewLegacyNormalizationDecoder(ctx, LegacyByteSource{Bytes: source.bytes, Parts: source.parts, Read: source.Read})
-	if err != nil || decoder == nil || source.loads != 0 || source.readBytes != 0 || source.zeroEOF != 0 || source.oneEOF != 0 || source.unexpectedReads != 0 {
-		test.Fatal("public decoder constructor failed or eagerly read the generated source", err)
-	}
-	var cost legacyNativePublicRejectCost
-	observe := func() {
-		retained, retainedErr := decoder.RetainedBytes()
-		if retainedErr != nil || retained <= 0 || retained > 16<<20 {
-			test.Fatal("numeric rejection lost retained accounting or exceeded the parked heap gate", retained, retainedErr)
-		}
-		cost.maxRetained = max(cost.maxRetained, retained)
-	}
-	observe()
-	for allowance := 64 + 32*len(source.parts); cost.steps < allowance; {
-		beforeLoads, beforeBytes := source.loads, source.readBytes
-		step, failure := decoder.Step(ctx)
-		cost.steps++
-		loads, readBytes := source.loads-beforeLoads, source.readBytes-beforeBytes
-		cost.maxStepLoads = max(cost.maxStepLoads, loads)
-		cost.maxStepReadBytes = max(cost.maxStepReadBytes, readBytes)
-		if loads > 2 || readBytes > 2*ConversationManifestChunkBytes || source.unexpectedReads != 0 {
-			test.Fatal("public rejection escaped authenticated bounded part reads", cost.steps, loads, readBytes, source.unexpectedReads)
-		}
-		observe()
-		if step.Complete || len(step.Events) != 0 || len(step.Envelope) != 0 || step.Count != 0 {
-			test.Fatal("overflow document exposed a provisional event or successful result", cost.steps)
-		}
-		if failure == nil {
-			continue
-		}
-		if failure != ErrIntegrity || step.Reset {
-			test.Fatalf("public overflow did not end with an atomic ErrIntegrity: type=%T integrity=%t private=%t", failure, errors.Is(failure, ErrIntegrity), errors.Is(failure, ErrPreparedDocRangeObject))
-		}
-		if source.coveredBytes != int64(source.bytes) || source.readBytes < int64(source.bytes) || source.readBytes > 8*int64(source.bytes)+2 ||
-			source.zeroEOF == 0 || source.oneEOF == 0 || cost.steps <= len(source.parts) {
-			test.Fatal("public rejection did not consume the full source and EOF within linear work", source.bytes, source.coveredBytes, source.readBytes, source.zeroEOF, source.oneEOF, cost.steps)
-		}
-		for ordinal, visited := range source.visited {
-			if !visited {
-				test.Fatal("public rejection omitted an authenticated source part", ordinal)
-			}
-		}
-		return cost
-	}
-	test.Fatal("public rejection exhausted its finite per-part step allowance", cost.steps, source.readBytes)
-	return cost
-}
-
 func TestLegacyNativePublicRejectCostGeneratedSourceOffsets(test *testing.T) {
 	const extent = 2*ConversationManifestChunkBytes + 37
 	source := newLegacyNativePublicRejectCostSource(test, extent)
@@ -228,44 +163,4 @@ func TestLegacyNativePublicRejectCostGeneratedSourceOffsets(test *testing.T) {
 	if body, err := source.Read(ctx, 0, ConversationManifestChunkBytes); len(body) != 0 || !errors.Is(err, context.Canceled) {
 		test.Fatal("generated source ignored the current canceled context", len(body), err)
 	}
-}
-
-func TestLegacyNativePublicRejectCost16MiB(test *testing.T) {
-	const extent = 16 << 20
-	source := newLegacyNativePublicRejectCostSource(test, extent)
-	cost := legacyNativePublicRejectCostMeasure(test, source)
-	test.Logf("sourcebytes=%d steps=%d readbytes=%d partloads=%d eof=%d/%d maxretained=%d maxloads/step=%d maxreadbytes/step=%d",
-		source.bytes, cost.steps, source.readBytes, source.loads, source.zeroEOF, source.oneEOF, cost.maxRetained, cost.maxStepLoads, cost.maxStepReadBytes)
-}
-
-func BenchmarkLegacyNativePublicRejectMax512MiB(benchmark *testing.B) {
-	if MaxFinalizedDocBytes != 512<<20 || ConversationManifestChunkBytes != 512<<10 {
-		benchmark.Fatal("maximum rejection cost requires the real 512 MiB document and 512 KiB source parts")
-	}
-	source := newLegacyNativePublicRejectCostSource(benchmark, MaxFinalizedDocBytes)
-	benchmark.ReportAllocs()
-	benchmark.SetBytes(int64(source.bytes))
-	benchmark.ResetTimer()
-	var totalSteps, totalLoads, totalEOF int64
-	var totalReadBytes, maxRetained, maxStepReadBytes int64
-	var maxStepLoads int
-	for operation := 0; operation < benchmark.N; operation++ {
-		cost := legacyNativePublicRejectCostMeasure(benchmark, source)
-		totalSteps += int64(cost.steps)
-		totalLoads += int64(source.loads)
-		totalEOF += int64(source.zeroEOF + source.oneEOF)
-		totalReadBytes += source.readBytes
-		maxRetained = max(maxRetained, cost.maxRetained)
-		maxStepLoads = max(maxStepLoads, cost.maxStepLoads)
-		maxStepReadBytes = max(maxStepReadBytes, cost.maxStepReadBytes)
-	}
-	benchmark.StopTimer()
-	benchmark.ReportMetric(float64(totalSteps)/float64(benchmark.N), "steps/op")
-	benchmark.ReportMetric(float64(totalReadBytes)/float64(benchmark.N), "readbytes/op")
-	benchmark.ReportMetric(float64(totalLoads)/float64(benchmark.N), "part-loads/op")
-	benchmark.ReportMetric(float64(totalEOF)/float64(benchmark.N), "eof-probes/op")
-	benchmark.ReportMetric(float64(source.bytes), "sourcebytes/op")
-	benchmark.ReportMetric(float64(maxRetained), "max-retained-B")
-	benchmark.ReportMetric(float64(maxStepLoads), "max-part-loads/step")
-	benchmark.ReportMetric(float64(maxStepReadBytes), "max-readbytes/step")
 }

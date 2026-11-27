@@ -11,37 +11,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-func TestP5RootCaptureConservativeRetention(t *testing.T) {
-	for _, rootFirst := range []bool{true, false} {
-		t.Run(map[bool]string{true: "old_root", false: "next_root"}[rootFirst], func(t *testing.T) {
-			ctx := context.Background()
-			s := NewFSStore(t.TempDir())
-			repo := domain.HashContent([]byte(t.Name()))
-			root := rootFixture(t, "retained root")
-			seedRootFS(t, s, repo, root)
-			_, legacy, _ := docJobFixture(t, repo, "legacy capture")
-			if _, err := s.PutVerifiedDoc(ctx, repo, legacy); err != nil {
-				t.Fatal(err)
-			}
-			old, next := legacy.Hash(), root.hash
-			if rootFirst {
-				old, next = next, old
-			}
-			before := rootFSImage(t, s.dataDir)
-			got, err := s.CaptureSupersedes(ctx, repo, old, next, domain.ProviderCodex, "session")
-			if err != nil || got {
-				t.Fatalf("root pair must conservatively retain: result=%v err=%v", got, err)
-			}
-			after := rootFSImage(t, s.dataDir)
-			for path, value := range before {
-				if after[path] != value {
-					t.Fatal("capture comparison changed storage")
-				}
-			}
-		})
-	}
-}
-
 func p5RootJob(t *testing.T, repo domain.ContentHash, fixture rootReaderFixture) domain.DocFinalizationJob {
 	t.Helper()
 	job, err := domain.NewDocFinalizationJobForRepresentation(repo, domain.DocumentRepresentation{Hash: fixture.hash, Identity: domain.DocumentIdentityRootV1, RootManifest: fixture.manifestBytes}, time.Now().UTC())

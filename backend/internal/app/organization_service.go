@@ -247,17 +247,6 @@ func (s *IdentityService) checkOrganizationRemoval(ctx context.Context, actorID,
 	}
 	return nil
 }
-func (s *IdentityService) mutateRemoveOrganizationMember(ctx context.Context, actorID, organizationID, targetID string) error {
-	if err := s.checkOrganizationRemoval(ctx, actorID, organizationID, targetID); err != nil {
-		return err
-	}
-	if err := s.checkOrganizationDocumentIdentities(ctx, organizationID); err != nil {
-		return err
-	}
-	audit := organizationAudit(ctx, organizationID, actorID, "organization.member.removed", "user", targetID, "", time.Now().UTC())
-	return s.organization.RemoveOrganizationMemberWithAudit(ctx, organizationID, targetID, audit)
-}
-
 func (s *IdentityService) GetOrganizationPolicy(ctx context.Context, actorID, organizationID string) (domain.OrganizationPolicy, error) {
 	if role, ok := s.OrganizationRoleOf(ctx, organizationID, actorID); !ok || !role.AtLeast(domain.OrganizationMember) {
 		return domain.OrganizationPolicy{}, domain.ErrForbidden

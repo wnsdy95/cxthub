@@ -347,7 +347,6 @@ func blobRepresentationSchedulePG(test *testing.T, storage *PostgresStore, ctx c
 	if err := publication.Complete(ctx, claimed, time.Now()); err != nil {
 		test.Fatal("root required a manual raw repair, producer retry, or fresh preparation", err)
 	}
-	assertRootSourceWitnessPublishedPG(test, storage, ctx, claimed, fixture)
 	rootProjectionNoIndex(test, storage, ctx, fixture.hash)
 	assertBlobRepresentationDocumentPG(test, storage, ctx, docRepo, document, canonical, plan, true)
 	assertBlobRepresentationDocumentPG(test, storage, ctx, otherDocRepo, document, canonical, plan, false)

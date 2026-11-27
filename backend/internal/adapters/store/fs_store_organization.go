@@ -403,13 +403,6 @@ func (s *FSStore) GetOrganizationMembership(_ context.Context, organizationID, u
 	return s.organizationMembership(organizationID, userID)
 }
 
-func (s *FSStore) RemoveOrganizationMember(ctx context.Context, organizationID, userID string) error {
-	lock := s.organizationMutationLock()
-	lock.Lock()
-	defer lock.Unlock()
-	return s.removeOrganizationMemberUnlocked(ctx, organizationID, userID)
-}
-
 func (s *FSStore) removeOrganizationMemberUnlocked(ctx context.Context, organizationID, userID string) error {
 	if err := domain.ValidateOrganizationID(organizationID); err != nil {
 		return err

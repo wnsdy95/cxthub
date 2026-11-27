@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitevidence"
@@ -40,25 +39,6 @@ type applicationWorkerEnvironment struct {
 func applicationWorkerEnvironmentFromEnvironment() (applicationWorkerEnvironment, error) {
 	var environment applicationWorkerEnvironment
 	environment.configuration.NotificationSender = webhookdelivery.New()
-	for _, selection := range []struct {
-		variable string
-		selected *[]domain.ContentHash
-	}{
-		{"CXT_PENDING_PROJECTION_REPOS", &environment.configuration.PendingRepositories},
-		{"CXT_GRAPH_PROJECTION_REPOS", &environment.configuration.GraphRepositories},
-		{"CXT_GRAPH_SHADOW_REPOS", &environment.configuration.QualificationRepositories},
-		{"CXT_MEMORY_PREPARATION_REPOS", &environment.configuration.MemoryRepositories},
-	} {
-		repositories, err := serverruntime.WorkerRepositories(selection.variable, os.Getenv(selection.variable))
-		if err != nil {
-			return applicationWorkerEnvironment{}, err
-		}
-		*selection.selected = repositories
-	}
-	if len(environment.configuration.MemoryRepositories) > domain.MaxMemoryReadWorkerRepos {
-		return applicationWorkerEnvironment{}, domain.ErrValidation
-	}
-	slices.Sort(environment.configuration.QualificationRepositories)
 	if key := strings.TrimSpace(os.Getenv("RESEND_API_KEY")); key != "" {
 		environment.configuration.InvitationSender = resend.New(key)
 	}

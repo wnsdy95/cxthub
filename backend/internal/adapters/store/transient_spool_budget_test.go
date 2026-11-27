@@ -71,16 +71,6 @@ func transientSpoolBudgetRange(test *testing.T) *docRangeSpool {
 	return spool
 }
 
-func transientSpoolBudgetNormalization(test *testing.T) *legacyNormalizationSpool {
-	test.Helper()
-	storage, err := newLegacyNormalizationSpool(context.Background())
-	if err != nil {
-		test.Fatal(err)
-	}
-	test.Cleanup(func() { storage.Close() })
-	return storage
-}
-
 func transientSpoolBudgetAssertFile(test testing.TB, file *os.File, expected string) {
 	test.Helper()
 	body, err := os.ReadFile(file.Name())
@@ -201,41 +191,6 @@ func TestTransientSpoolBudgetConfigurationRejectsInvalidAndOverlappingLimits(tes
 	}
 }
 
-func TestTransientSpoolBudgetEmbeddedFilesFenceConfiguration(test *testing.T) {
-	for _, kind := range []string{"allocation", "legacy", "range", "normalization"} {
-		test.Run(kind, func(test *testing.T) {
-			var closeAllocation func()
-			files := 1
-			switch kind {
-			case "allocation":
-				allocation := transientSpoolBudgetAllocation(test)
-				closeAllocation = allocation.Close
-			case "legacy":
-				spool := transientSpoolBudgetLegacy(test)
-				closeAllocation = func() { spool.Close() }
-			case "range":
-				spool := transientSpoolBudgetRange(test)
-				closeAllocation = func() { spool.Close() }
-			case "normalization":
-				storage := transientSpoolBudgetNormalization(test)
-				closeAllocation = func() { storage.Close() }
-				files = domain.LegacyNormalizationSlots
-			}
-			transientSpoolBudgetAssertUsage(test, 0, 0, files)
-			restore, err := configureTransientSpoolBudget(8)
-			if restore != nil {
-				test.Cleanup(func() { restore() })
-			}
-			if err == nil {
-				test.Fatal("configured over a pre-existing empty allocation", kind)
-			}
-			transientSpoolBudgetAssertUsage(test, 0, 0, files)
-			closeAllocation()
-			transientSpoolBudgetConfigure(test, 8)
-		})
-	}
-}
-
 func TestTransientSpoolBudgetFSStoresSharePrivateOwner(test *testing.T) {
 	var first outbound.TransientSpoolBudgetStore = NewFSStore(test.TempDir())
 	var second outbound.TransientSpoolBudgetStore = NewFSStore(test.TempDir())
@@ -314,13 +269,6 @@ func TestTransientSpoolBudgetDrainRestoresOnlyAfterLastAllocation(test *testing.
 		},
 		func() error {
 			spool, err := newDocRangeSpool()
-			if spool != nil {
-				spool.Close()
-			}
-			return err
-		},
-		func() error {
-			spool, err := newLegacyNormalizationSpool(ctx)
 			if spool != nil {
 				spool.Close()
 			}
@@ -435,7 +383,6 @@ func TestTransientSpoolBudgetCanceledAndExpiredOperationsDoNotWrite(test *testin
 		want := selected.Err()
 		for _, operation := range []func() error{
 			func() error { return legacy.Append(selected, []byte("blocked")) },
-			func() error { return legacy.Truncate(selected) },
 			func() error { return ranged.Append(selected, []byte("blocked")) },
 			func() error { return ranged.Flush(selected) },
 			func() error {
@@ -501,39 +448,6 @@ func TestTransientSpoolBudgetCancellationAfterWriteRetainsAcceptedBytes(test *te
 	transientSpoolBudgetAssertUsage(test, 8, 8, 2)
 }
 
-func TestTransientSpoolBudgetNormalizationCancellationCleansPartialCreation(test *testing.T) {
-	transientSpoolBudgetConfigure(test, 8)
-	for _, scenario := range []struct {
-		name       string
-		checkpoint int
-	}{
-		{name: "one-open-slot", checkpoint: 2},
-		{name: "all-open-slots", checkpoint: domain.LegacyNormalizationSlots + 1},
-	} {
-		test.Run(scenario.name, func(test *testing.T) {
-			directory := test.TempDir()
-			for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
-				test.Setenv(name, directory)
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			selected := &transientSpoolBudgetCancelContext{Context: ctx, cancel: cancel, checkpoint: scenario.checkpoint}
-			storage, err := newLegacyNormalizationSpool(selected)
-			if storage != nil {
-				storage.Close()
-			}
-			if !errors.Is(err, context.Canceled) || errors.Is(err, domain.ErrResourceOverloaded) || errors.Is(err, domain.ErrPreparedDocRangeObject) {
-				test.Fatal("partial normalization cancellation changed error class", err)
-			}
-			transientSpoolBudgetAssertUsage(test, 8, 0, 0)
-			remaining, err := os.ReadDir(directory)
-			if err != nil || len(remaining) != 0 {
-				test.Fatal("partial normalization construction retained files", remaining, err)
-			}
-		})
-	}
-}
-
 func TestTransientSpoolBudgetCreationFailureRollsBackRegistration(test *testing.T) {
 	transientSpoolBudgetConfigure(test, 8)
 	missing := filepath.Join(test.TempDir(), "absent")
@@ -556,13 +470,6 @@ func TestTransientSpoolBudgetCreationFailureRollsBackRegistration(test *testing.
 		test.Fatal("range creation did not reach the missing temp directory", err)
 	}
 	transientSpoolBudgetAssertUsage(test, 8, 0, 0)
-	storage, err := newLegacyNormalizationSpool(context.Background())
-	if storage != nil {
-		storage.Close()
-	}
-	if err == nil || !errors.Is(err, domain.ErrPreparedDocRangeObject) {
-		test.Fatal("normalization creation lost its private error", err)
-	}
 	transientSpoolBudgetAssertUsage(test, 8, 0, 0)
 }
 
@@ -677,154 +584,6 @@ func TestTransientSpoolBudgetLegacyWriteFailureRollsBackReservation(test *testin
 		test.Fatal("idempotent close changed the stored error", err)
 	}
 	transientSpoolBudgetAssertUsage(test, 8, 4, 1)
-}
-
-func TestTransientSpoolBudgetNormalizationResetReleasesOnlyItsSlot(test *testing.T) {
-	transientSpoolBudgetConfigure(test, 10)
-	storage := transientSpoolBudgetNormalization(test)
-	peer := transientSpoolBudgetRange(test)
-	ctx := context.Background()
-	if err := storage.Append(ctx, 0, []byte("abcdef")); err != nil {
-		test.Fatal(err)
-	}
-	if err := peer.Append(ctx, []byte("page")); err != nil {
-		test.Fatal(err)
-	}
-	transientSpoolBudgetAssertOverloaded(test, storage.Append(ctx, 1, []byte("x")))
-	transientSpoolBudgetAssertUsage(test, 10, 10, domain.LegacyNormalizationSlots+1)
-	resources, err := storage.RetainedResources()
-	if err != nil || resources.SpoolBytes != 6 {
-		test.Fatal("normalization resources omitted actual slot bytes", resources, err)
-	}
-	if err := storage.Reset(ctx, 0); err != nil {
-		test.Fatal(err)
-	}
-	transientSpoolBudgetAssertUsage(test, 10, 4, domain.LegacyNormalizationSlots+1)
-	transientSpoolBudgetAssertFile(test, storage.spools[0].file, "")
-	if err := storage.Reset(ctx, 0); err != nil {
-		test.Fatal("empty reset was not idempotent", err)
-	}
-	if err := storage.Append(ctx, 1, []byte("123456")); err != nil {
-		test.Fatal("successful truncate did not recover capacity", err)
-	}
-	body, err := storage.Read(ctx, 1, 0, 6)
-	if err != nil || string(body) != "123456" {
-		test.Fatal("replacement scratch data was not readable", string(body), err)
-	}
-	transientSpoolBudgetAssertUsage(test, 10, 10, domain.LegacyNormalizationSlots+1)
-	if err := storage.Close(); err != nil {
-		test.Fatal(err)
-	}
-	if err := storage.Close(); err != nil {
-		test.Fatal("normalization close was not idempotent", err)
-	}
-	transientSpoolBudgetAssertUsage(test, 10, 4, 1)
-	if err := peer.Append(ctx, []byte("123456")); err != nil {
-		test.Fatal("normalization cleanup did not release slot reservations", err)
-	}
-	transientSpoolBudgetAssertUsage(test, 10, 10, 1)
-}
-
-func TestTransientSpoolBudgetNormalizationResetRejectsCanceledReadonlyAndInvalidSlots(test *testing.T) {
-	transientSpoolBudgetConfigure(test, 6)
-	storage := transientSpoolBudgetNormalization(test)
-	ctx := context.Background()
-	if err := storage.Append(ctx, 0, []byte("retain")); err != nil {
-		test.Fatal(err)
-	}
-	canceled, cancel := context.WithCancel(ctx)
-	cancel()
-	if err := storage.Reset(canceled, 0); !errors.Is(err, context.Canceled) {
-		test.Fatal("canceled reset changed error class", err)
-	}
-	for _, slot := range []int{-1, domain.LegacyNormalizationSlots} {
-		if err := storage.Reset(ctx, slot); !errors.Is(err, domain.ErrIntegrity) {
-			test.Fatal("invalid slot changed error class", slot, err)
-		}
-	}
-	storage.readOnly = true
-	if err := storage.Reset(ctx, 0); !errors.Is(err, domain.ErrIntegrity) {
-		test.Fatal("read-only reset accepted mutation", err)
-	}
-	if err := storage.Append(ctx, 0, []byte("x")); !errors.Is(err, domain.ErrIntegrity) {
-		test.Fatal("read-only append lost its original error", err)
-	}
-	transientSpoolBudgetAssertUsage(test, 6, 6, domain.LegacyNormalizationSlots)
-	transientSpoolBudgetAssertFile(test, storage.spools[0].file, "retain")
-	storage.readOnly = false
-	if err := storage.Reset(ctx, 0); err != nil {
-		test.Fatal(err)
-	}
-	transientSpoolBudgetAssertUsage(test, 6, 0, domain.LegacyNormalizationSlots)
-}
-
-func TestTransientSpoolBudgetFailedTruncateDoesNotReleaseCapacity(test *testing.T) {
-	transientSpoolBudgetConfigure(test, 8)
-	storage := transientSpoolBudgetNormalization(test)
-	peer := transientSpoolBudgetLegacy(test)
-	ctx := context.Background()
-	if err := storage.Append(ctx, 0, []byte("retain")); err != nil {
-		test.Fatal(err)
-	}
-	if err := peer.Append(ctx, []byte("ok")); err != nil {
-		test.Fatal(err)
-	}
-	spool := storage.spools[0]
-	readOnly, err := os.Open(spool.file.Name())
-	if err != nil {
-		test.Fatal(err)
-	}
-	if err := spool.file.Close(); err != nil {
-		readOnly.Close()
-		test.Fatal(err)
-	}
-	spool.file = readOnly
-	if err := storage.Reset(ctx, 0); !errors.Is(err, domain.ErrPreparedDocRangeObject) || errors.Is(err, domain.ErrResourceOverloaded) {
-		test.Fatal("truncate failure did not preserve private error class", err)
-	}
-	transientSpoolBudgetAssertUsage(test, 8, 8, domain.LegacyNormalizationSlots+1)
-	transientSpoolBudgetAssertFile(test, spool.file, "retain")
-	if spool.size != 6 {
-		test.Fatal("failed truncate changed logical size", spool.size)
-	}
-	transientSpoolBudgetAssertOverloaded(test, peer.Append(ctx, []byte("x")))
-	if err := storage.Close(); err != nil {
-		test.Fatal(err)
-	}
-	transientSpoolBudgetAssertUsage(test, 8, 2, 1)
-}
-
-func TestTransientSpoolBudgetLegacyTruncateReusesFileAndCapacity(test *testing.T) {
-	transientSpoolBudgetConfigure(test, 8)
-	spool := transientSpoolBudgetLegacy(test)
-	ctx := context.Background()
-	if err := spool.Append(ctx, []byte("original")); err != nil {
-		test.Fatal(err)
-	}
-	path := spool.file.Name()
-	if err := spool.Truncate(ctx); err != nil {
-		test.Fatal(err)
-	}
-	if spool.size != 0 || spool.file.Name() != path {
-		test.Fatal("truncate replaced the allocation or retained its old size")
-	}
-	transientSpoolBudgetAssertUsage(test, 8, 0, 1)
-	transientSpoolBudgetAssertFile(test, spool.file, "")
-	if err := spool.Append(ctx, []byte("new")); err != nil {
-		test.Fatal(err)
-	}
-	body, err := spool.Read(ctx, 0, 3)
-	if err != nil || string(body) != "new" {
-		test.Fatal("append after truncate retained old bytes", string(body), err)
-	}
-	transientSpoolBudgetAssertUsage(test, 8, 3, 1)
-	if err := spool.Close(); err != nil {
-		test.Fatal(err)
-	}
-	if err := spool.Truncate(ctx); err == nil {
-		test.Fatal("closed spool accepted truncation")
-	}
-	transientSpoolBudgetAssertUsage(test, 8, 0, 0)
 }
 
 func TestTransientSpoolBudgetNotExistCleanupReleasesReservations(test *testing.T) {

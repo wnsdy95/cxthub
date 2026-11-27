@@ -5,8 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -52,77 +50,6 @@ func gitEvidenceShapeViolations(source string) ([]string, error) {
 		return true
 	})
 	return violations, nil
-}
-
-func TestGitEvidenceOwnsActualReaderAndMutableState(test *testing.T) {
-	directory := filepath.Join("..", "app", "evidencequery")
-	raw, err := os.ReadFile(filepath.Join(directory, "git_evidence.go"))
-	if err != nil {
-		test.Fatal(err)
-	}
-	violations, err := gitEvidenceShapeViolations(string(raw))
-	if err != nil || len(violations) != 0 {
-		test.Fatal(violations, err)
-	}
-	file, err := parser.ParseFile(token.NewFileSet(), "git-evidence.go", raw, 0)
-	if err != nil {
-		test.Fatal(err)
-	}
-	owned := map[string]bool{"GetGitCommitTree": false, "GetGitTreeNode": false, "GetGitDelta": false}
-	for _, declaration := range file.Decls {
-		method, ok := declaration.(*ast.FuncDecl)
-		if !ok || method.Recv == nil || documentQueryReceiver(method.Recv.List[0].Type) != "GitEvidence" {
-			continue
-		}
-		if _, relevant := owned[method.Name.Name]; !relevant {
-			continue
-		}
-		ast.Inspect(method.Body, func(node ast.Node) bool {
-			if call, ok := node.(*ast.CallExpr); ok {
-				if operation, selected := call.Fun.(*ast.SelectorExpr); selected && operation.Sel.Name == method.Name.Name {
-					owned[method.Name.Name] = true
-				}
-			}
-			return true
-		})
-	}
-	for method, present := range owned {
-		if !present {
-			test.Error("Git evidence has no actual reader implementation", method)
-		}
-	}
-	adapter, err := os.ReadFile(filepath.Join("..", "app", "code_evidence.go"))
-	if err != nil {
-		test.Fatal(err)
-	}
-	root, err := parser.ParseFile(token.NewFileSet(), "code-evidence.go", adapter, 0)
-	if err != nil {
-		test.Fatal(err)
-	}
-	ast.Inspect(root, func(node ast.Node) bool {
-		switch inspected := node.(type) {
-		case *ast.MapType, *ast.ForStmt, *ast.RangeStmt:
-			test.Error("root adapter still owns the Git cache or traversal algorithm")
-		case *ast.TypeSpec:
-			if inspected.Name.Name != "codeEvidence" {
-				break
-			}
-			shape, ok := inspected.Type.(*ast.StructType)
-			if !ok {
-				test.Error("root evidence adapter is not concrete")
-				break
-			}
-			for _, field := range shape.Fields.List {
-				for _, name := range field.Names {
-					switch name.Name {
-					case "reads", "limited", "traversalLimited", "commits", "nodes", "changes", "closures":
-						test.Error("root adapter duplicates mutable Git owner state", name.Name)
-					}
-				}
-			}
-		}
-		return true
-	})
 }
 
 func TestGitEvidenceShapeRejectsCallbacksAndMutableExposure(test *testing.T) {

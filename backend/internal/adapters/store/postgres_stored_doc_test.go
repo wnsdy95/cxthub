@@ -54,7 +54,7 @@ func TestPGStoredDocProofOwnershipRollbackAndCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if p, err := s.VerifyStoredDoc(ctx, repo, doc.Hash); err != nil || !p.Matches(domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash}) {
+		if p, err := s.VerifyStoredDoc(ctx, repo, doc.Hash); err != nil || !p.Valid() || p.DocumentRef() != (domain.DocumentRef{Hash: doc.Hash}) {
 			t.Fatal("valid proof", p, err)
 		}
 	}
@@ -157,7 +157,7 @@ func requireStoredDocProofPG(t *testing.T, s *PostgresStore, ctx context.Context
 	// The first read admits changed physical bytes; the second exercises reuse.
 	for i := 0; i < 2; i++ {
 		proof, err := s.VerifyStoredDoc(ctx, repo, hash)
-		if err != nil || !proof.Matches(domain.Snapshot{ID: hash, DocHash: hash}) {
+		if err != nil || !proof.Valid() || proof.DocumentRef() != (domain.DocumentRef{Hash: hash}) {
 			t.Fatalf("verification %d: proof=%v error=%v", i, proof, err)
 		}
 	}
@@ -308,7 +308,7 @@ func TestPGStoredDocChunkProofUsesTransactionOwnership(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if !proof.Matches(domain.Snapshot{ID: doc.Hash(), DocHash: doc.Hash()}) {
+				if !proof.Valid() || proof.DocumentRef() != (domain.DocumentRef{Hash: doc.Hash()}) {
 					t.Error("transaction-local grant produced the wrong document proof")
 				}
 			}

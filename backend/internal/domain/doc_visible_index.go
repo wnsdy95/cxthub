@@ -1,10 +1,7 @@
 package domain
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"sort"
 )
 
 const DocVisibleAlgorithm = 1
@@ -58,30 +55,6 @@ func (unit DocVisibleUnit) Validate(total int, mode string) error {
 	return nil
 }
 
-func (unit DocVisibleUnit) Clip(start, renderedBefore, total int, mode string) (DocVisibleUnit, error) {
-	if err := unit.Validate(total, mode); err != nil {
-		return DocVisibleUnit{}, err
-	}
-	if start < unit.From || start >= unit.To || renderedBefore < unit.RenderedBefore || renderedBefore > unit.RenderedEnd() ||
-		renderedBefore-unit.RenderedBefore > start-unit.From || start == unit.From && renderedBefore != unit.RenderedBefore ||
-		unit.EventIndex >= 0 && unit.EventIndex < start && renderedBefore == unit.RenderedBefore {
-		return DocVisibleUnit{}, ErrIntegrity
-	}
-	end := unit.RenderedEnd()
-	if unit.EventIndex < start {
-		unit.EventIndex = -1
-	}
-	unit.From, unit.RenderedBefore = start, renderedBefore
-	unit.FoldRows = end - renderedBefore
-	if unit.EventIndex >= 0 {
-		unit.FoldRows--
-	}
-	if err := unit.Validate(total, mode); err != nil {
-		return DocVisibleUnit{}, err
-	}
-	return unit, nil
-}
-
 type DocVisibleRoot struct {
 	Hash  ContentHash `json:"hash"`
 	Units int         `json:"units"`
@@ -122,18 +95,6 @@ func (generation DocVisibleGeneration) Encode() ([]byte, error) {
 		return nil, ErrIntegrity
 	}
 	return raw, nil
-}
-
-func DecodeDocVisibleGeneration(hash, ranges, expected ContentHash, raw []byte) (DocVisibleGeneration, error) {
-	var generation DocVisibleGeneration
-	if len(raw) == 0 || len(raw) > MaxDocVisibleGenerationBytes || HashContent(raw) != expected || json.Unmarshal(raw, &generation) != nil || generation.Validate(hash, ranges) != nil {
-		return DocVisibleGeneration{}, ErrIntegrity
-	}
-	canonical, err := generation.Encode()
-	if err != nil || !bytes.Equal(raw, canonical) {
-		return DocVisibleGeneration{}, ErrIntegrity
-	}
-	return generation, nil
 }
 
 type docVisibleSpan struct {
@@ -359,116 +320,4 @@ func buildDocVisibleGeneration(ctx context.Context, proof VerifiedDocRangeGenera
 		return DocVisibleGeneration{}, err
 	}
 	return generation, nil
-}
-
-func ReadDocVisibleUnit(ctx context.Context, generation DocVisibleGeneration, mode string, position int, byEvent bool, load func(context.Context, ContentHash) ([]byte, error)) (DocVisibleUnit, int, error) {
-	return readDocVisibleUnit(ctx, generation, mode, position, byEvent, load, nil)
-}
-
-func readDocVisibleUnit(ctx context.Context, generation DocVisibleGeneration, mode string, position int, byEvent bool, load func(context.Context, ContentHash) ([]byte, error), cache *docVisibleDecodedCache) (DocVisibleUnit, int, error) {
-	if err := ctx.Err(); err != nil {
-		return DocVisibleUnit{}, 0, err
-	}
-	if err := generation.Validate(generation.Hash, generation.RangeGeneration); err != nil {
-		return DocVisibleUnit{}, 0, err
-	}
-	root, exists := generation.Views[mode]
-	limit := root.Units
-	if byEvent {
-		limit = generation.Events
-	}
-	if !exists || load == nil || position < 0 || position >= limit {
-		return DocVisibleUnit{}, 0, ErrValidation
-	}
-	readObject := func(hash ContentHash, value any) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		raw, err := load(ctx, hash)
-		if err != nil {
-			return err
-		}
-		if len(raw) == 0 || len(raw) > MaxDocVisibleObjectBytes || HashContent(raw) != hash {
-			return ErrIntegrity
-		}
-		if cache.restore(hash, value) {
-			return ctx.Err()
-		}
-		if json.Unmarshal(raw, value) != nil {
-			return ErrIntegrity
-		}
-		canonical, err := canonicalJSON(value)
-		if err != nil || !bytes.Equal(raw, canonical) {
-			return ErrIntegrity
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		cache.remember(hash, value)
-		return ctx.Err()
-	}
-	level, _ := docRangeDirectoryLevel((root.Units + DocVisiblePageUnits - 1) / DocVisiblePageUnits)
-	span := docVisibleSpan{Hash: root.Hash, Limit: root.Units, To: generation.Events, Rendered: generation.Rendered}
-	for ; level >= 0; level-- {
-		var directory docVisibleDirectory
-		if err := readObject(span.Hash, &directory); err != nil {
-			return DocVisibleUnit{}, 0, err
-		}
-		childUnits := DocVisiblePageUnits
-		for depth := 0; depth < level; depth++ {
-			childUnits *= DocRangeDirectoryFanout
-		}
-		if directory.Level != level || len(directory.Children) != (span.Limit-span.First+childUnits-1)/childUnits || len(directory.Children) == 0 || len(directory.Children) > DocRangeDirectoryFanout {
-			return DocVisibleUnit{}, 0, ErrIntegrity
-		}
-		first, from, rank := span.First, span.From, span.Rank
-		for _, child := range directory.Children {
-			if ValidateContentHash(child.Hash) != nil || child.First != first || child.Limit != min(span.Limit, first+childUnits) || child.From != from || child.To <= from || child.To > span.To ||
-				child.Limit-child.First > child.To-child.From || child.Rank != rank || child.Rendered < rank || child.Rendered > span.Rendered || child.Rendered-rank > child.To-child.From {
-				return DocVisibleUnit{}, 0, ErrIntegrity
-			}
-			first, from, rank = child.Limit, child.To, child.Rendered
-		}
-		if first != span.Limit || from != span.To || rank != span.Rendered {
-			return DocVisibleUnit{}, 0, ErrIntegrity
-		}
-		selected := sort.Search(len(directory.Children), func(index int) bool {
-			if byEvent {
-				return directory.Children[index].To > position
-			}
-			return directory.Children[index].Limit > position
-		})
-		if selected == len(directory.Children) {
-			return DocVisibleUnit{}, 0, ErrIntegrity
-		}
-		span = directory.Children[selected]
-	}
-	var page docVisiblePage
-	if err := readObject(span.Hash, &page); err != nil {
-		return DocVisibleUnit{}, 0, err
-	}
-	if page.Start != span.First || len(page.Units) != span.Limit-span.First || len(page.Units) == 0 || len(page.Units) > DocVisiblePageUnits {
-		return DocVisibleUnit{}, 0, ErrIntegrity
-	}
-	from, rank := span.From, span.Rank
-	for _, unit := range page.Units {
-		if unit.Validate(generation.Events, mode) != nil || unit.From != from || unit.RenderedBefore != rank {
-			return DocVisibleUnit{}, 0, ErrIntegrity
-		}
-		from, rank = unit.To, unit.RenderedEnd()
-	}
-	if from != span.To || rank != span.Rendered {
-		return DocVisibleUnit{}, 0, ErrIntegrity
-	}
-	selected := position - page.Start
-	if byEvent {
-		selected = sort.Search(len(page.Units), func(index int) bool { return page.Units[index].To > position })
-	}
-	if selected < 0 || selected >= len(page.Units) {
-		return DocVisibleUnit{}, 0, ErrIntegrity
-	}
-	if err := ctx.Err(); err != nil {
-		return DocVisibleUnit{}, 0, err
-	}
-	return page.Units[selected], page.Start + selected, nil
 }

@@ -87,7 +87,7 @@ Do not substitute a broad recursive copy or an ad hoc push script.
 |---|---|---|
 | CLI | Build, vet, ordinary package tests, bounded delivery/CLI test batches | No sibling backend; cross-module parity and integration stay in the monorepo |
 | Backend | Default and `postgres` builds/vet, `cxtd` build, root Docker build | Full backend/cross-module/PostgreSQL test execution stays in the monorepo |
-| Frontend | `test:unit`, architecture, locale, Vercel checks, typecheck/build | Go-backed graph contract suites and full-stack Playwright remain mandatory in monorepo CI |
+| Frontend | `test:unit`, architecture, locale, Vercel checks, typecheck/build | Full-stack Playwright remains mandatory in monorepo CI |
 | MCP | Default and `postgres` builds/vet, `cxt-mcp` build, root Docker build | Full backend/cross-module/OAuth/PostgreSQL test execution stays in the monorepo |
 
 Mirror CI validates distribution packaging; it does not replace source CI.

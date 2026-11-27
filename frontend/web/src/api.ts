@@ -1,24 +1,19 @@
-import { decodeGraphState, type GraphWire } from './graphWire';
-import { validateGraphState } from './graphState';
 // Backend cxtd REST client.
 //
 // Authentication uses HttpOnly session cookies — JS does not store or attach tokens.
 // All requests include 'credentials: 'include' to automatically send cookies to the browser.
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
-import type { StorageUsageReport, RefLogEntry, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
-import { normalizeActivityResponse } from './activity';
-import { validateContextSemantics } from './graphEvidence';
-import type { DocumentIdentity, DocFragmentPage, DocViewEvent, DocViewMode } from './types';
+import type { StorageUsageReport, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, SettingsUpload, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
+import type { DocFragmentPage, GitHubRepositoryConnection, PushOriginView } from './types';
 import { DOCUMENT_DETAIL_BYTES, DOCUMENT_FRAGMENT_BYTES, DOCUMENT_FRAGMENT_RESPONSE_BYTES, DOCUMENT_PAGE_BYTES, readDocumentResponse, scheduleDocumentRead } from './documentReads';
-import { DOCUMENT_VISIBLE_MESSAGES, validateDocEventDetail, validateDocFragment, validateDocViewPage } from './documentPaging';
-import { validatePendingState } from './pendingState';
+import { DOCUMENT_VISIBLE_MESSAGES, validateAnchoredEventPage, validateDocFragment, type AnchoredEventPage } from './documentPaging';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
 // To serve from a different origin, use an absolute URL with VITE_API_BASE, but cookies must be same-site.
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
 
-export interface SessionResponse {
+interface SessionResponse {
   user: User;
   expires_at: string;
 }
@@ -87,23 +82,11 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
   return (text ? JSON.parse(text) : null) as T;
 }
 
-export interface DocEventPage {
-  hash: string;
-  envelope: SessionDoc['cir']['envelope'];
-  events: SessionDoc['cir']['events'];
-  total: number;
-  offset: number;
-  next: number;
-  inherited: number;
-}
-
-export interface DocViewEventPage extends Omit<DocEventPage, 'events'> {
-  doc_identity?: DocumentIdentity;
-  events: DocViewEvent[];
+function anchoredSessionPath(repoId: string, provider: string, sessionId: string) {
+  return `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`;
 }
 
 export const api = {
-  setSessionArchived: (repo: string, snapshot: string, archived: boolean) => call<{archived: boolean}>('POST', `/repos/${encodeURIComponent(repo)}/snapshots/${encodeURIComponent(snapshot)}/archive`, {archived}),
   githubOverview: () => call<import('./github').GitHubOverview>('GET', '/github/connections'),
   githubStart: (namespace_id = '', installation_id = 0) => call<{ url: string }>('POST', '/github/requests', { namespace_id, installation_id }),
   githubEdit: (namespace: string, edit: import('./github').GitHubEdit) => call<{ saved: boolean }>('POST', `/github/connections/${encodeURIComponent(namespace)}`, edit),
@@ -119,50 +102,72 @@ export const api = {
  listCollaborationInvitations: (kind: 'organization' | 'enterprise', id: string) => call<import('./types').CollaborationInvitation[]>('GET', `/${kind}s/${encodeURIComponent(id)}/invitations`),
  createCollaborationInvitation: (kind: 'organization' | 'enterprise', id: string, recipient: string, role: OrganizationRole) => call<import('./types').CollaborationInvitation>('POST', `/${kind}s/${encodeURIComponent(id)}/invitations`, { recipient, role }),
  actOnCollaborationInvitation: (id: string, action: 'accept' | 'decline' | 'revoke' | 'resend') => call<import('./types').CollaborationInvitation>('POST', `/invitations/${encodeURIComponent(id)}/${action}`, {}),
- checkGitHubSync: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').SyncAuditPage>('POST', `/repos/${encodeURIComponent(repo)}/github-sync-check`, {cursor}, undefined, signal),
- memoryPositions: (repo: string, snapshot: string, event: string | undefined, signal?: AbortSignal) => {
-  const params = new URLSearchParams({snapshot_id: snapshot});
-  if (event) params.set('event_id', event);
-  return call<import('./types').MemoryPositions>('GET', `/repos/${encodeURIComponent(repo)}/effective-memory/positions?${params}`, undefined, undefined, signal);
- },
- effectiveMemory: (repo: string, selection: import('./types').EffectiveMemorySelection, cursor: string, signal?: AbortSignal) => {
-  const params = new URLSearchParams({snapshot_id: selection.snapshot_id, code_commit: selection.code_commit, cursor, limit: '20'});
-  if (selection.memory_hash) params.set('memory_hash', selection.memory_hash);
-  if (selection.branch) params.set('branch', selection.branch);
-  return call<import('./types').EffectiveMemoryPage>('GET', `/repos/${encodeURIComponent(repo)}/effective-memory?${params}`, undefined, undefined, signal);
- },
- codeApplicability: (repo: string, selection: import('./types').CodeSelection, signal?: AbortSignal) => {
-  const params = new URLSearchParams({code_commit: selection.code_commit, source_commit: selection.source_commit});
-  if (selection.source_parent) params.set('source_parent', selection.source_parent);
-  for (const path of selection.paths) params.append('path', path);
-  return call<import('./types').CodeApplicabilityResult>('GET', `/repos/${encodeURIComponent(repo)}/code-applicability?${params}`, undefined, undefined, signal);
- },
- gitScans: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitScanPage>('GET', `/repos/${encodeURIComponent(repo)}/git-scans?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
- retryGitScan: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-scans/${encodeURIComponent(id)}/retry`, {}),
- gitChanges: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitChangePage>('GET', `/repos/${encodeURIComponent(repo)}/git-changes?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
- retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
-  repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes?doc_identities=cxt-manifest-sha256-v1`,
-  repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
-  repositoryBootstrap: (repo: string, branch?: string, signal?: AbortSignal) =>
-    call<import('./types').RepositoryBootstrap>('GET', `/repos/${encodeURIComponent(repo)}/bootstrap${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`, undefined, undefined, signal),
-  pendingState: async (repo: string, signal?: AbortSignal) => validatePendingState(
-    await call<import('./types').PendingStateView>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?projection=on-hold-v1`, undefined, undefined, signal)),
-  pendingView: async (repo: string, signal?: AbortSignal) => {
-    const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?graph_encoding=indexed-v2`, undefined, undefined, signal);
-    const graph = decodeGraphState(view.graph);
-    validateGraphState(graph, view.revision);
-    return {...view, graph};
-  },
   notifications: (repository: string, signal?: AbortSignal) => call<import('./types').NotificationJob[]>('GET', `/repositories/${encodeURIComponent(repository)}/notifications`, undefined, undefined, signal),
   retryNotification: (repository: string, id: string) => call('POST', `/repositories/${encodeURIComponent(repository)}/notifications/${encodeURIComponent(id)}/retry`, {}),
   storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),
   reconcileStorage: (namespace: string) => call<{ reconciled: boolean }>('POST', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage/reconcile`, {}),
-  gitAssociations: (repo: string, kind: import('./types').GitAssociationKind, state: import('./types').GitAssociationFilter, cursor: string, signal?: AbortSignal) => {
-    const params = new URLSearchParams({kind, state, cursor, limit: '30'});
-    return call<import('./types').GitAssociationStatusPage>('GET', `/repos/${encodeURIComponent(repo)}/git/associations?${params}`, undefined, undefined, signal);
-  },
-  prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
-  retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
+  anchoredSessions: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSessionSummary[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions`, undefined, undefined, signal),
+  anchoredSession: (repoId: string, provider: string, sessionId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSession>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}`, undefined, undefined, signal),
+  anchoredCommit: (repoId: string, sha: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredCommitSegment[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}`, undefined, undefined, signal),
+  /** The summaries written at a commit that the caller may read. */
+  setAnchoredSessionArchived: (repoId: string, provider: string, sessionId: string, archived: boolean) =>
+    call<import('./types').AnchoredSessionArchive>('PUT', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/archive`, { archived }),
+  anchoredCommitSummaries: (repoId: string, sha: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSummary[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-commits/${encodeURIComponent(sha)}/summaries`, undefined, undefined, signal),
+  /** Looks for a query in what the sessions tab shows, as far as the caller may read it. */
+  anchoredSearch: (repoId: string, query: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredSearchResult>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-search?q=${encodeURIComponent(query)}`, undefined, undefined, signal),
+  branchLifetimes: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').BranchLifetime[]>('GET', `/repos/${encodeURIComponent(repoId)}/branch-lifetimes`, undefined, undefined, signal),
+  /** A page of a session's conversation, read by the session: the server holds it to what the caller may read. */
+  anchoredEvents: (repoId: string, provider: string, sessionId: string, offset: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const params = new URLSearchParams({ offset: String(offset), limit: String(DOCUMENT_VISIBLE_MESSAGES) });
+      const page = await call<AnchoredEventPage>('GET', `${anchoredSessionPath(repoId, provider, sessionId)}/events?${params}`, undefined, undefined, signal, DOCUMENT_PAGE_BYTES);
+      return validateAnchoredEventPage(page, offset, DOCUMENT_VISIBLE_MESSAGES);
+    }, signal),
+  /** One event of a session's conversation in full, for a body its page deferred. */
+  anchoredEvent: (repoId: string, provider: string, sessionId: string, index: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const page = await call<AnchoredEventPage>('GET', `${anchoredSessionPath(repoId, provider, sessionId)}/events?view=raw&offset=${index}&limit=1`, undefined, undefined, signal, DOCUMENT_DETAIL_BYTES);
+      const checked = validateAnchoredEventPage(page, index, 1);
+      if (checked.events.length !== 1) throw new Error('Invalid session conversation event');
+      return checked.events[0];
+    }, signal),
+  anchoredEventFragment: (repoId: string, provider: string, sessionId: string, index: number, offset: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const params = new URLSearchParams({ index: String(index), offset: String(offset), budget: String(DOCUMENT_FRAGMENT_BYTES) });
+      const page = await call<DocFragmentPage>('GET', `${anchoredSessionPath(repoId, provider, sessionId)}/event-fragments?${params}`, undefined, undefined, signal, DOCUMENT_FRAGMENT_RESPONSE_BYTES);
+      return validateDocFragment(page, index, offset);
+    }, signal),
+  anchoredSessionCalls: (repoId: string, provider: string, sessionId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredAgentCall[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/calls`, undefined, undefined, signal),
+  anchoredNotes: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').AnchoredNote[]>('GET', `/repos/${encodeURIComponent(repoId)}/anchored-notes`, undefined, undefined, signal),
+  createAnchoredNote: (repoId: string, target: import('./types').AnchoredNoteTarget, body: string) =>
+    call<import('./types').AnchoredNote>('POST', `/repos/${encodeURIComponent(repoId)}/anchored-notes`, { target, body }),
+  updateAnchoredNote: (repoId: string, noteId: string, body: string) =>
+    call<import('./types').AnchoredNote>('PUT', `/repos/${encodeURIComponent(repoId)}/anchored-notes/${encodeURIComponent(noteId)}`, { body }),
+  deleteAnchoredNote: (repoId: string, noteId: string) =>
+    call<void>('DELETE', `/repos/${encodeURIComponent(repoId)}/anchored-notes/${encodeURIComponent(noteId)}`),
+  reportedWorktrees: (repoId: string, signal?: AbortSignal) =>
+    call<import('./types').ReportedWorktree[]>('GET', `/repos/${encodeURIComponent(repoId)}/worktrees`, undefined, undefined, signal),
+  remoteGit: (repoId: string, before: string, signal?: AbortSignal) =>
+    call<import('./types').RemoteGitView>('GET', `/repos/${encodeURIComponent(repoId)}/remote-git${before ? `?before=${encodeURIComponent(before)}` : ''}`, undefined, undefined, signal),
+  refreshRemoteGit: (repoId: string) =>
+    call<{ requested: boolean }>('POST', `/repos/${encodeURIComponent(repoId)}/remote-git/refresh`, {}),
+  /** The mark that is another one after anything the Sessions tab shows was stored. */
+  viewRevision: (repoId: string, signal?: AbortSignal) =>
+    call<{ revision: string }>('GET', `/repos/${encodeURIComponent(repoId)}/revision`, undefined, undefined, signal),
+  /** Where the repository's newest pushes came from: a computer where cxt runs, or not. */
+  pushOrigins: (repoId: string, signal?: AbortSignal) =>
+    call<PushOriginView>('GET', `/repos/${encodeURIComponent(repoId)}/push-origins`, undefined, undefined, signal),
+  /** Whether the server reads the repository on GitHub through the GitHub App. */
+  githubConnection: (repoId: string, signal?: AbortSignal) =>
+    call<GitHubRepositoryConnection>('GET', `/repos/${encodeURIComponent(repoId)}/github-connection`, undefined, undefined, signal),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.
   exchangeSession: (idpToken: string) => call<SessionResponse>('POST', '/auth/session', undefined, idpToken),
   logout: () => call<{ status: string }>('DELETE', '/auth/session'),
@@ -228,15 +233,6 @@ export const api = {
     call<PublicRepository>('GET', `/public/repositories/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`),
   publicUser: (username: string) =>
     call<{ user: PublicUser; repositories: PublicRepository[] }>('GET', `/public/users/${encodeURIComponent(username)}`),
-  userContributions: (username: string) =>
-    call<{ total: number; days: { date: string; count: number }[] }>(
-      'GET',
-      `/public/users/${encodeURIComponent(username)}/contributions`,
-    ),
-  userActivity: async (username: string) =>
-    normalizeActivityResponse(
-      await call<unknown>('GET', `/public/users/${encodeURIComponent(username)}/activity`),
-    ),
   listCliTokens: () =>
     call<{ suffix: string; label?: string; created_at: string; expires_at: string }[] | null>('GET', '/me/cli-tokens'),
   revokeCliToken: (suffix: string) => call<{ status: string }>('DELETE', `/me/cli-tokens/${encodeURIComponent(suffix)}`),
@@ -302,59 +298,9 @@ export const api = {
 
   // Session Browser — repo branch/commit log/context body
   listRepos: (repositoryId: string) => call<Repo[]>('GET', `/repos?repository=${encodeURIComponent(repositoryId)}`),
-  listRefs: (repoId: string) => call<Ref[]>('GET', `/repos/${encodeURIComponent(repoId)}/refs`),
-  listSnapshots: (repoId: string, branch: string) =>
-    call<Snapshot[]>('GET', `/repos/${encodeURIComponent(repoId)}/snapshots?branch=${encodeURIComponent(branch)}`),
-  getDoc: (repoId: string, hash: string) =>
-    call<SessionDoc>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}`),
-  getDocViewEvents: (repoId: string, hash: string, base: string | undefined, offset: number, view: DocViewMode, signal?: AbortSignal) =>
-    scheduleDocumentRead(async () => {
-      const params = new URLSearchParams({ view, offset: String(offset), limit: String(DOCUMENT_VISIBLE_MESSAGES) });
-      if (base) params.set('base', base);
-      const page = await call<DocViewEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?${params}`, undefined, undefined, signal, DOCUMENT_PAGE_BYTES);
-      return validateDocViewPage(page, hash, offset);
-    }, signal),
-  getDocVisibleEvents: (repoId: string, hash: string, params: URLSearchParams, signal?: AbortSignal) =>
-    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?${params}`,
-      undefined, undefined, signal, DOCUMENT_PAGE_BYTES), signal),
-  getDocFindPage: (repoId: string, hash: string, params: URLSearchParams, signal?: AbortSignal) =>
-    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/find?${params}`,
-      undefined, undefined, signal, DOCUMENT_PAGE_BYTES, { Accept: 'application/json, application/vnd.cxthub.find-source-ranges-v1+json' }), signal),
-  getDocFindFragment: (repoId: string, hash: string, params: URLSearchParams, signal?: AbortSignal) =>
-    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/find-fragments?${params}`,
-      undefined, undefined, signal, DOCUMENT_FRAGMENT_RESPONSE_BYTES), signal),
-  getDocFindLegacyEvent: (repoId: string, hash: string, index: number, signal?: AbortSignal) =>
-    scheduleDocumentRead(() => call<unknown>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?view=raw&offset=${index}&limit=1`,
-      undefined, undefined, signal, DOCUMENT_PAGE_BYTES), signal),
-  getDocEvent: (repoId: string, hash: string, index: number, signal?: AbortSignal) =>
-    scheduleDocumentRead(async () => {
-      const page = await call<DocViewEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?view=raw&offset=${index}&limit=1`, undefined, undefined, signal, DOCUMENT_DETAIL_BYTES);
-      return validateDocEventDetail(page, hash, index);
-    }, signal),
-  getDocEventFragment: (repoId: string, hash: string, index: number, offset: number, signal?: AbortSignal) =>
-    scheduleDocumentRead(async () => {
-      const params = new URLSearchParams({ index: String(index), offset: String(offset), budget: String(DOCUMENT_FRAGMENT_BYTES) });
-      const page = await call<DocFragmentPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/event-fragments?${params}`, undefined, undefined, signal, DOCUMENT_FRAGMENT_RESPONSE_BYTES);
-      return validateDocFragment(page, index, offset);
-    }, signal),
-  // Fork/Diff — Server API(sync protocol). Fork requires member (write), diff requires viewer (read).
-  fork: (repoId: string, from: string, newBranch: string, author: { name: string; email: string }) =>
-    call<{ branch: string; head: string }>('POST', `/repos/${encodeURIComponent(repoId)}/fork`, {
-      from,
-      new_branch: newBranch,
-      author: { ...author, team: '' },
-    }),
-  diff: (repoId: string, left: string, right: string) =>
-    call<{ changes: DiffEntry[] | null }>('POST', `/repos/${encodeURIComponent(repoId)}/diff`, { left, right }),
-  // Search — Commit metadata and indexed conversation text (viewer required)
-  search: (repoId: string, q: string, signal?: AbortSignal) =>
-    call<{ hits: SearchHit[] | null; truncated: boolean }>(
-      'GET',
-      `/repos/${encodeURIComponent(repoId)}/search?q=${encodeURIComponent(q)}`, undefined, undefined, signal,
-    ),
   updateAbout: (
     repoId: string,
-    about: { description?: string; website?: string; topics?: string[]; default_branch?: string; protect_default?: boolean },
+    about: { description?: string; website?: string; topics?: string[] },
   ) =>
     call<Repo>('PATCH', `/repos/${encodeURIComponent(repoId)}/about`, about),
   getSettings: (repoId: string, kind: 'claude' | 'agents' | 'codex') =>
@@ -373,44 +319,5 @@ export const api = {
     ),
   getSecrets: (repoId: string) =>
     call<import('./secretscrypto').SecretsEnvelope | null>('GET', `/repos/${encodeURIComponent(repoId)}/secrets`),
-  getMemory: (repoId: string, snapshotId: string) =>
-    call<MemoryDigest>('GET', `/repos/${encodeURIComponent(repoId)}/memories/${encodeURIComponent(snapshotId)}`),
-  getMemoryObject: (repoId: string, hash: string) =>
-    call<MemoryDigest>('GET', `/repos/${encodeURIComponent(repoId)}/memory-objects/${encodeURIComponent(hash)}`),
-  listPending: (repoId: string) => call<Pending[]>('GET', `/repos/${encodeURIComponent(repoId)}/pending`),
-  listUnsync: (repoId: string) => call<Unsync[]>('GET', `/repos/${encodeURIComponent(repoId)}/unsync`),
-  // Empty object body: Server enforces application/json for this POST (CSRF 2nd defense — form submission blocking).
-  undismissPending: (repoId: string, sessionId: string) =>
-    call<{ status: string }>(
-      'POST',
-      `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/undismiss`,
-      {},
-    ),
-  graphState: async (repoId: string, position: string, signal?: AbortSignal) => {
-    const wire = await call<GraphWire>('GET', `/repos/${encodeURIComponent(repoId)}/graph-state?${new URLSearchParams({position, graph_encoding: 'indexed-v2'})}`, undefined, undefined, signal);
-    const g = decodeGraphState(wire);
-    validateGraphState(g, g.revision);
-    return g;
-  },
-  repositoryView: async (repoId: string, signal?: AbortSignal) => {
-    const wire = await call<Omit<import('./types').RepositoryView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repoId)}/view?graph_encoding=indexed-v2`, undefined, undefined, signal);
-    const view = {...wire, graph: decodeGraphState(wire.graph)};
-    validateContextSemantics(view.history, view.semantics);
-    validateGraphState(view.graph, view.revision);
-    return view;
-  },
-  reflog: (repoId: string) => call<RefLogEntry[]>('GET', `/repos/${encodeURIComponent(repoId)}/reflog`),
-  history: (repoId: string) => call<import('./types').HistoryEvent[]>('GET', `/repos/${encodeURIComponent(repoId)}/history`),
-  enableContextProtocol: (repoId: string) => call<{ context_protocol: number }>('POST', `/repos/${encodeURIComponent(repoId)}/context-protocol`, {}),
-  // Rebase session fork of the same git branch behind its head (graft + ref move, no rewrite).
-  joinPreview: (repoId: string, snapshot: string, branch: string | undefined, signal?: AbortSignal) => {
-    const params = new URLSearchParams({snapshot});
-    if (branch) params.set("branch", branch);
-    return call<import("./types").JoinPreview>("GET", `/repos/${encodeURIComponent(repoId)}/join/preview?${params}`, undefined, undefined, signal);
-  },
-  joinSnapshot: (repoId: string, body: { branch: string; branch_id: string; snapshot: string; include_descendants: boolean; expected_head: string; plan_revision: string }) =>
-    call<{ branch: string; head: string; fork_branch?: string }>('POST', `/repos/${encodeURIComponent(repoId)}/join`, body),
-  dismissPending: (repoId: string, sessionId: string) =>
-    call<{ status: string }>('POST', `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/dismiss`, {}),
 };
 import type { Team } from './types';

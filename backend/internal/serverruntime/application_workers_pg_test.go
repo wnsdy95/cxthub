@@ -163,10 +163,6 @@ func wave48PGAssertFullRoot(test *testing.T, worker *WorkerRuntime) {
 	if err := app.ValidateProductionStore(worker.Store); err != nil {
 		test.Fatal("actual full root lost required production ports", err)
 	}
-	if worker.workers == nil || worker.workers.Finalization == nil || worker.workers.Range == nil ||
-		worker.workers.FindFields == nil || worker.workers.Display == nil || worker.maintenance == nil {
-		test.Fatal("full worker root omitted an existing document owner")
-	}
 	wave48PGAssertBindings(test, worker.additional)
 	if runtime.GOMAXPROCS(0) != int(worker.execution.role.CPU) || debug.SetMemoryLimit(-1) != worker.execution.role.MemoryBytes {
 		test.Fatal("full worker root did not apply the same manifest CPU and soft-memory envelopes")
@@ -175,8 +171,8 @@ func wave48PGAssertFullRoot(test *testing.T, worker *WorkerRuntime) {
 
 func wave48PGAssertBindings(test *testing.T, bindings []workerBinding) {
 	test.Helper()
-	if len(bindings) != 12 {
-		test.Fatal("full worker root must add twelve owners to the retained five document owners", len(bindings))
+	if len(bindings) != 5 {
+		test.Fatal("full worker root must add five owners to the retained five document owners", len(bindings))
 	}
 	seen := make(map[string]bool, len(bindings))
 	for _, binding := range bindings {
@@ -195,21 +191,6 @@ func wave48PGOpenWorker(ctx context.Context) (*WorkerRuntime, error) {
 		configuration := ApplicationWorkerConfig{
 			GitReader: gitevidence.NewGitHub(func() string { return "" }), NotificationSender: webhookdelivery.New(),
 		}
-		for _, selection := range []struct {
-			name     string
-			selected *[]domain.ContentHash
-		}{
-			{"CXT_PENDING_PROJECTION_REPOS", &configuration.PendingRepositories},
-			{"CXT_GRAPH_PROJECTION_REPOS", &configuration.GraphRepositories},
-			{"CXT_GRAPH_SHADOW_REPOS", &configuration.QualificationRepositories},
-			{"CXT_MEMORY_PREPARATION_REPOS", &configuration.MemoryRepositories},
-		} {
-			repositories, err := WorkerRepositories(selection.name, os.Getenv(selection.name))
-			if err != nil {
-				return ApplicationWorkerConfig{}, err
-			}
-			*selection.selected = repositories
-		}
 		return configuration, nil
 	})
 }
@@ -227,8 +208,6 @@ func TestWave48PGFullRootCompleteProductionPortsAndClose(test *testing.T) {
 		test.Fatal("one full worker role became ready without API and MCP peers")
 	}
 	bindings, err := newApplicationWorkers(worker.Store, ApplicationWorkerConfig{
-		PendingRepositories: []domain.ContentHash{fixture.repo}, GraphRepositories: []domain.ContentHash{fixture.repo},
-		QualificationRepositories: []domain.ContentHash{fixture.repo}, MemoryRepositories: []domain.ContentHash{fixture.repo},
 		GitReader:          gitevidence.NewGitHub(func() string { return "" }),
 		NotificationSender: webhookdelivery.New(),
 	})
@@ -236,11 +215,11 @@ func TestWave48PGFullRootCompleteProductionPortsAndClose(test *testing.T) {
 		test.Fatal("enabled Complete worker constructors rejected the current production PostgreSQL ports", err)
 	}
 	wave48PGAssertBindings(test, bindings)
-	if documentOnly, err := OpenDocumentWorker(context.Background()); documentOnly != nil || !errors.Is(err, domain.ErrValidation) {
+	if documentOnly, err := OpenWorker(context.Background()); documentOnly != nil || !errors.Is(err, domain.ErrValidation) {
 		if documentOnly != nil {
 			_ = documentOnly.Close()
 		}
-		test.Fatal("document-only selector did not reject the full profile before role registration", err)
+		test.Fatal("the full profile was opened without its sources", err)
 	}
 	current, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -304,7 +283,7 @@ func TestWave48PGFullRootOptionalGitHubUsesOneExplicitOwner(test *testing.T) {
 	}
 	test.Cleanup(func() { _ = worker.Close() })
 	bindings := worker.bindings()
-	if len(bindings) != 18 || worker.Store != worker.infrastructure.Store {
+	if len(bindings) != 7 || worker.Store != worker.infrastructure.Store {
 		test.Fatal("optional full root lost one-store ownership or the existing worker set", len(bindings))
 	}
 	github := 0
@@ -347,196 +326,6 @@ func wave48PGErrorCode(err error) string {
 		return "canceled"
 	default:
 		return "unexpected"
-	}
-}
-
-func TestWave48PGChild(test *testing.T) {
-	role := outbound.ProcessRole(os.Getenv("CXT_WAVE48_PROCESS_ROLE"))
-	if role == "" {
-		test.Skip("entered only by owned full worker PostgreSQL process proofs")
-	}
-	if role != outbound.ProcessAPI && role != outbound.ProcessMCP && role != outbound.ProcessWorker {
-		test.Fatal("invalid private full worker fixture role")
-	}
-	configuration, err := pgxpool.ParseConfig(os.Getenv("CXT_POSTGRES_DSN"))
-	if err != nil {
-		test.Fatal("invalid private full worker fixture DSN")
-	}
-	local := func(host string) bool {
-		address := net.ParseIP(host)
-		return host == "localhost" || filepath.IsAbs(host) || address != nil && address.IsLoopback()
-	}
-	database := os.Getenv("CXT_WAVE48_PROCESS_DATABASE")
-	if !strings.HasPrefix(database, "cxt_execution_root_") || database != configuration.ConnConfig.Database || !local(configuration.ConnConfig.Host) {
-		test.Fatal("child requires its parent's fresh owned local execution-root database")
-	}
-	for _, fallback := range configuration.ConnConfig.Fallbacks {
-		if !local(fallback.Host) {
-			test.Fatal("private full worker fixture has a nonlocal fallback")
-		}
-	}
-	lifetime, stopLifetime := context.WithTimeout(context.Background(), 90*time.Second)
-	defer stopLifetime()
-	current, cancel := context.WithCancel(lifetime)
-	defer cancel()
-	priorCPU, priorMemory := runtime.GOMAXPROCS(0), debug.SetMemoryLimit(-1)
-	emit := func(event wave48PGEvent) {
-		encoded, err := json.Marshal(event)
-		if err != nil {
-			test.Fatal("encode bounded private child event", err)
-		}
-		if _, err := fmt.Fprintf(os.Stdout, "CXT_W48 %s\n", encoded); err != nil {
-			test.Fatal("write bounded private child event", err)
-		}
-	}
-	var worker *WorkerRuntime
-	var root *Runtime
-	switch role {
-	case outbound.ProcessWorker:
-		worker, err = wave48PGOpenWorker(current)
-	case outbound.ProcessAPI:
-		root, err = Open(current, "127.0.0.1:0", os.Getenv("HOME"), true)
-	case outbound.ProcessMCP:
-		root, err = OpenMCP(current, "127.0.0.1:0", os.Getenv("HOME"), true)
-	}
-	if err != nil {
-		emit(wave48PGEvent{State: "refused", Code: wave48PGErrorCode(err)})
-		return
-	}
-	closeRoot := func() error {
-		if worker != nil {
-			return worker.Close()
-		}
-		root.Close()
-		return nil
-	}
-	defer func() { _ = closeRoot() }()
-	process := current
-	bindings := 0
-	if worker != nil {
-		process = worker.ProcessContext(current)
-		if os.Getenv("CXT_EXECUTION_PROFILE") == wave48PGProfile {
-			wave48PGAssertFullRoot(test, worker)
-			bindings = 5 + len(worker.additional)
-		} else if worker.workers == nil || worker.maintenance == nil || len(worker.additional) != 0 {
-			test.Fatal("document-only worker changed ownership")
-		} else {
-			bindings = 5
-		}
-	} else {
-		process = root.ProcessContext(current)
-		if !root.BoundedDocuments() || root.ExternalWorkers() != (os.Getenv("CXT_EXECUTION_PROFILE") == wave48PGProfile) ||
-			root.execution.role.Role != role || root.Store != root.infrastructure.Store || root.DocumentQueries == nil || root.Identity == nil ||
-			root.DocumentQueryProfile != documentquery.VerifiedRoots || (root.Context != nil) != (role == outbound.ProcessAPI) {
-			test.Fatal("actual API/MCP root lost its command, query or external-worker boundary")
-		}
-	}
-	emit(wave48PGEvent{State: "opened", Bindings: bindings})
-	commands := make(chan wave48PGCommand)
-	go func() {
-		defer close(commands)
-		decoder := json.NewDecoder(io.LimitReader(os.Stdin, 32<<10))
-		for decoded := 0; decoded < 512; decoded++ {
-			var command wave48PGCommand
-			if decoder.Decode(&command) != nil {
-				return
-			}
-			select {
-			case commands <- command:
-			case <-lifetime.Done():
-				return
-			}
-		}
-	}()
-	var running chan error
-	closing := false
-	for !closing {
-		select {
-		case <-process.Done():
-			closing = true
-		case command, present := <-commands:
-			if !present {
-				cancel()
-				closing = true
-				continue
-			}
-			switch command.Operation {
-			case "ready":
-				ready := worker != nil && worker.Ready()
-				if root != nil {
-					response := httptest.NewRecorder()
-					root.HealthHandler(http.NotFoundHandler()).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil).WithContext(process))
-					ready = response.Code == http.StatusOK
-				}
-				emit(wave48PGEvent{State: "ready", Ready: ready})
-			case "probe":
-				probe, stop := context.WithTimeout(process, 2*time.Second)
-				_, release, err := app.AcquireResources(probe, app.ResourceBulk)
-				if err == nil {
-					release()
-				}
-				stop()
-				emit(wave48PGEvent{State: "probe", Code: wave48PGErrorCode(err)})
-			case "read":
-				if root == nil {
-					test.Fatal("worker root cannot impersonate public document query ownership")
-				}
-				read, stop := context.WithTimeout(wave48PGSystemContext(process), 5*time.Second)
-				page, err := root.DocumentQueries.ReadDocEvents(read, domain.ContentHash(os.Getenv("CXT_WAVE48_REPOSITORY")), command.Hash, "", 0, 8)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "wave48 private read error (%s): %T %v\n", role, err, err)
-				}
-				stop()
-				text := ""
-				if err == nil {
-					if page.Hash != command.Hash || page.Total != 1 || len(page.Events) != 1 {
-						test.Fatal("actual API/MCP query returned a different durable document")
-					}
-					text = domain.SearchableEventText(page.Events[0])
-				}
-				emit(wave48PGEvent{State: "read", Code: wave48PGErrorCode(err), Text: text})
-			case "run":
-				if worker == nil || running != nil {
-					test.Fatal("only the actual worker root may receive one Run request")
-				}
-				running = make(chan error, 1)
-				go func() { running <- worker.Run(process) }()
-				emit(wave48PGEvent{State: "run-requested"})
-			case "cancel":
-				cancel()
-				closing = true
-			case "close":
-				closing = true
-			default:
-				test.Fatal("unsupported bounded private child command")
-			}
-		}
-	}
-	if err := closeRoot(); err != nil {
-		test.Fatal("actual root close failed", err)
-	}
-	if running != nil {
-		select {
-		case err := <-running:
-			if err != nil {
-				test.Fatal("actual worker Run did not cancel and join cleanly", err)
-			}
-		case <-time.After(5 * time.Second):
-			test.Fatal("actual worker Close returned without joining Run")
-		}
-	}
-	if err := closeRoot(); err != nil {
-		test.Fatal("repeated actual root close failed", err)
-	}
-	emit(wave48PGEvent{State: "closed", Canceled: process.Err() != nil, Joined: true, Closed: true,
-		Restored: runtime.GOMAXPROCS(0) == priorCPU && debug.SetMemoryLimit(-1) == priorMemory})
-	select {
-	case command, present := <-commands:
-		if !present || command.Operation != "exit" {
-			test.Fatal("parent must acknowledge pool closure while the child is still alive")
-		}
-	case <-lifetime.Done():
-		test.Fatal("bounded child close acknowledgement timed out")
 	}
 }
 
@@ -753,174 +542,6 @@ func (fixture *wave48PGFixture) assertQueued(test *testing.T, job domain.DocFina
 	}
 }
 
-func (fixture *wave48PGFixture) waitCompleted(test *testing.T, job domain.DocFinalizationJob) domain.DocFinalizationJob {
-	test.Helper()
-	ctx, cancel := context.WithTimeout(wave48PGSystemContext(context.Background()), 15*time.Second)
-	defer cancel()
-	for {
-		current, err := fixture.storage.GetDocJob(ctx, fixture.repo, job.ID)
-		if err != nil {
-			test.Fatal("read original durable receipt", err)
-		}
-		if current.State == "completed" {
-			if current.Attempts < 1 || current.Version < 1 || current.DocumentRef() != job.DocumentRef() {
-				test.Fatal("actual full worker completion lost the original identity or lease/version fence", current)
-			}
-			if present, err := fixture.storage.HasDocs(ctx, fixture.repo, []domain.ContentHash{job.DocHash}); err != nil || len(present) != 1 {
-				test.Fatal("completed full worker receipt has no useful durable publication", err)
-			}
-			return current
-		}
-		if current.State == "rejected" {
-			test.Fatal("actual full worker rejected the useful fixture document", current)
-		}
-		select {
-		case <-ctx.Done():
-			test.Fatal("actual compatible full worker Run did not process its durable job", current.State)
-		case <-time.After(25 * time.Millisecond):
-		}
-	}
-}
-
-func (fixture *wave48PGFixture) assertRead(test *testing.T, ctx context.Context, child *wave48PGChild, job domain.DocFinalizationJob, marker string) {
-	test.Helper()
-	if err := json.NewEncoder(child.input).Encode(wave48PGCommand{Operation: "read", Hash: job.DocHash}); err != nil {
-		test.Fatal(err)
-	}
-	event := child.expect(test, ctx, "read")
-	if event.Code != "" || event.Text != marker {
-		test.Fatal("actual API/MCP query did not preserve durable document contents", child.role, event)
-	}
-}
-
-func (fixture *wave48PGFixture) enqueuePendingProjection(test *testing.T, job domain.DocFinalizationJob) domain.Pending {
-	test.Helper()
-	ctx, cancel := context.WithTimeout(wave48PGSystemContext(context.Background()), 5*time.Second)
-	defer cancel()
-	pending := domain.Pending{RepoID: fixture.repo, SessionID: "wave48-durable-pending", Target: job.DocHash,
-		Provider: domain.ProviderCodex, Branch: "main", UpdatedAt: time.Now().UTC()}
-	fixture.publishSnapshot(test, job)
-	if err := fixture.storage.PutPending(ctx, fixture.repo, pending); err != nil {
-		test.Fatal("persist useful non-document work while the full worker is stopped", err)
-	}
-	if err := fixture.storage.ConfigurePendingProjection(ctx, fixture.repo, true); err != nil {
-		test.Fatal("retain the existing pending projection work queue", err)
-	}
-	return pending
-}
-
-func (fixture *wave48PGFixture) publishSnapshot(test *testing.T, job domain.DocFinalizationJob) {
-	test.Helper()
-	ctx, cancel := context.WithTimeout(wave48PGSystemContext(context.Background()), 5*time.Second)
-	defer cancel()
-	if err := fixture.storage.PutSnapshot(ctx, domain.Snapshot{ID: job.DocHash, RepoID: fixture.repo, DocHash: job.DocHash,
-		DocIdentity: job.DocIdentity, SessionID: "wave48-durable-pending", Branch: "main",
-		Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, CreatedAt: job.CreatedAt}); err != nil {
-		test.Fatal("link completed document to its original context snapshot through the production port", err)
-	}
-}
-
-func (fixture *wave48PGFixture) waitPendingProjection(test *testing.T, pending domain.Pending) {
-	test.Helper()
-	ctx, cancel := context.WithTimeout(wave48PGSystemContext(context.Background()), 15*time.Second)
-	defer cancel()
-	for {
-		projection, err := fixture.storage.ReadPendingProjection(ctx, fixture.repo)
-		if err != nil {
-			test.Fatal("read original durable pending projection", err)
-		}
-		if projection.NeedsAttention {
-			test.Fatal("actual full worker rejected the useful pending projection")
-		}
-		if projection.Ready {
-			view, err := domain.DecodePendingProjection(ctx, fixture.repo, projection.Parts)
-			if err != nil || !projection.Enabled || projection.Dataset == "" || len(view.Pending) != 1 ||
-				view.Pending[0].SessionID != pending.SessionID || view.Pending[0].Target != pending.Target {
-				test.Fatal("actual additional full worker published different durable pending contents", view, err)
-			}
-			test.Log("actual additional full worker published the original durable pending projection after restart")
-			return
-		}
-		select {
-		case <-ctx.Done():
-			test.Fatal("actual additional full worker did not process its durable pending projection")
-		case <-time.After(25 * time.Millisecond):
-		}
-	}
-}
-
-func (fixture *wave48PGFixture) assertPendingQueued(test *testing.T) {
-	test.Helper()
-	ctx, cancel := context.WithTimeout(wave48PGSystemContext(context.Background()), 5*time.Second)
-	defer cancel()
-	projection, err := fixture.storage.ReadPendingProjection(ctx, fixture.repo)
-	if err != nil || !projection.Enabled || projection.Ready || projection.NeedsAttention {
-		test.Fatal("assembly executed or rejected the pending projection before full worker Run", projection, err)
-	}
-}
-
-func TestWave48PGFullRootDurableProcessingAcrossRestart(test *testing.T) {
-	fixture := newWave48PGFixture(test)
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
-	defer cancel()
-	firstMarker := "wave48 original full worker publication \ud55c🙂"
-	first := fixture.enqueue(test, firstMarker)
-	initial := fixture.start(test, ctx, outbound.ProcessWorker, fixture.budget)
-	if event := initial.expect(test, ctx, "opened"); event.Bindings != 17 {
-		test.Fatal("public full worker root did not construct all seventeen actual default owners", event)
-	}
-	initial.send(test, "run")
-	initial.expect(test, ctx, "run-requested")
-	wave48PGWaitReady(test, ctx, initial, false)
-	fixture.assertQueued(test, first)
-	fixture.stop(test, ctx, initial, "cancel")
-	api := fixture.start(test, ctx, outbound.ProcessAPI, fixture.budget)
-	api.expect(test, ctx, "opened")
-	mcp := fixture.start(test, ctx, outbound.ProcessMCP, fixture.budget)
-	mcp.expect(test, ctx, "opened")
-	worker := fixture.start(test, ctx, outbound.ProcessWorker, fixture.budget)
-	worker.expect(test, ctx, "opened")
-	for _, child := range []*wave48PGChild{api, mcp, worker} {
-		wave48PGWaitReady(test, ctx, child, true)
-	}
-	fixture.assertQueued(test, first)
-	worker.send(test, "run")
-	worker.expect(test, ctx, "run-requested")
-	completed := fixture.waitCompleted(test, first)
-	fixture.publishSnapshot(test, first)
-	fixture.assertRead(test, ctx, api, first, firstMarker)
-	fixture.assertRead(test, ctx, mcp, first, firstMarker)
-	fixture.stop(test, ctx, worker, "close")
-	wave48PGWaitReady(test, ctx, api, false)
-	pending := fixture.enqueuePendingProjection(test, first)
-	fixture.assertPendingQueued(test)
-	secondMarker := "wave48 useful publication after clean full worker restart"
-	second := fixture.enqueue(test, secondMarker)
-	fixture.assertQueued(test, second)
-	restarted := fixture.start(test, ctx, outbound.ProcessWorker, fixture.budget)
-	restarted.expect(test, ctx, "opened")
-	for _, child := range []*wave48PGChild{api, mcp, restarted} {
-		wave48PGWaitReady(test, ctx, child, true)
-	}
-	fixture.assertQueued(test, second)
-	fixture.assertPendingQueued(test)
-	restarted.send(test, "run")
-	restarted.expect(test, ctx, "run-requested")
-	fixture.waitCompleted(test, second)
-	fixture.publishSnapshot(test, second)
-	fixture.waitPendingProjection(test, pending)
-	fixture.assertRead(test, ctx, api, first, firstMarker)
-	fixture.assertRead(test, ctx, mcp, second, secondMarker)
-	current, err := fixture.storage.GetDocJob(wave48PGSystemContext(ctx), fixture.repo, first.ID)
-	if err != nil || current.State != "completed" || current.Attempts != completed.Attempts || current.Version != completed.Version || current.DocumentRef() != completed.DocumentRef() {
-		test.Fatal("full worker restart replayed or replaced an already completed durable receipt", current, err)
-	}
-	fixture.stop(test, ctx, restarted, "cancel")
-	fixture.stop(test, ctx, mcp, "close")
-	fixture.stop(test, ctx, api, "close")
-	test.Logf("actual public full worker Run completed two original durable jobs across restart; first attempts=%d version=%d", completed.Attempts, completed.Version)
-}
-
 func (fixture *wave48PGFixture) assertAdmissionFamily(test *testing.T, fingerprints map[outbound.ProcessRole]string) {
 	test.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1011,4 +632,168 @@ func TestWave48PGMixedProfilesFingerprintsAndRoleCollisionFailClosed(test *testi
 	fixture.stop(test, ctx, worker, "cancel")
 	fixture.stop(test, ctx, mcp, "close")
 	fixture.stop(test, ctx, api, "close")
+}
+
+func TestWave48PGChild(test *testing.T) {
+	role := outbound.ProcessRole(os.Getenv("CXT_WAVE48_PROCESS_ROLE"))
+	if role == "" {
+		test.Skip("entered only by owned full worker PostgreSQL process proofs")
+	}
+	if role != outbound.ProcessAPI && role != outbound.ProcessMCP && role != outbound.ProcessWorker {
+		test.Fatal("invalid private full worker fixture role")
+	}
+	configuration, err := pgxpool.ParseConfig(os.Getenv("CXT_POSTGRES_DSN"))
+	if err != nil {
+		test.Fatal("invalid private full worker fixture DSN")
+	}
+	local := func(host string) bool {
+		address := net.ParseIP(host)
+		return host == "localhost" || filepath.IsAbs(host) || address != nil && address.IsLoopback()
+	}
+	database := os.Getenv("CXT_WAVE48_PROCESS_DATABASE")
+	if !strings.HasPrefix(database, "cxt_execution_root_") || database != configuration.ConnConfig.Database || !local(configuration.ConnConfig.Host) {
+		test.Fatal("child requires its parent's fresh owned local execution-root database")
+	}
+	for _, fallback := range configuration.ConnConfig.Fallbacks {
+		if !local(fallback.Host) {
+			test.Fatal("private full worker fixture has a nonlocal fallback")
+		}
+	}
+	lifetime, stopLifetime := context.WithTimeout(context.Background(), 90*time.Second)
+	defer stopLifetime()
+	current, cancel := context.WithCancel(lifetime)
+	defer cancel()
+	priorCPU, priorMemory := runtime.GOMAXPROCS(0), debug.SetMemoryLimit(-1)
+	emit := func(event wave48PGEvent) {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			test.Fatal("encode bounded private child event", err)
+		}
+		if _, err := fmt.Fprintf(os.Stdout, "CXT_W48 %s\n", encoded); err != nil {
+			test.Fatal("write bounded private child event", err)
+		}
+	}
+	var worker *WorkerRuntime
+	var root *Runtime
+	switch role {
+	case outbound.ProcessWorker:
+		worker, err = wave48PGOpenWorker(current)
+	case outbound.ProcessAPI:
+		root, err = Open(current, "127.0.0.1:0", os.Getenv("HOME"), true)
+	case outbound.ProcessMCP:
+		root, err = OpenMCP(current, "127.0.0.1:0", os.Getenv("HOME"), true)
+	}
+	if err != nil {
+		emit(wave48PGEvent{State: "refused", Code: wave48PGErrorCode(err)})
+		return
+	}
+	closeRoot := func() error {
+		if worker != nil {
+			return worker.Close()
+		}
+		root.Close()
+		return nil
+	}
+	defer func() { _ = closeRoot() }()
+	process := current
+	bindings := 0
+	if worker != nil {
+		process = worker.ProcessContext(current)
+	} else {
+		process = root.ProcessContext(current)
+		if !root.BoundedDocuments() || root.ExternalWorkers() != (os.Getenv("CXT_EXECUTION_PROFILE") == wave48PGProfile) ||
+			root.execution.role.Role != role || root.Store != root.infrastructure.Store || (root.DocumentQueries != nil) != (role == outbound.ProcessAPI) || (root.Anchored != nil) != (role == outbound.ProcessMCP) || root.Identity == nil ||
+			root.DocumentQueryProfile != documentquery.VerifiedRoots || (root.Context != nil) != (role == outbound.ProcessAPI) {
+			test.Fatal("actual API/MCP root lost its command, query or external-worker boundary")
+		}
+	}
+	emit(wave48PGEvent{State: "opened", Bindings: bindings})
+	commands := make(chan wave48PGCommand)
+	go func() {
+		defer close(commands)
+		decoder := json.NewDecoder(io.LimitReader(os.Stdin, 32<<10))
+		for decoded := 0; decoded < 512; decoded++ {
+			var command wave48PGCommand
+			if decoder.Decode(&command) != nil {
+				return
+			}
+			select {
+			case commands <- command:
+			case <-lifetime.Done():
+				return
+			}
+		}
+	}()
+	var running chan error
+	closing := false
+	for !closing {
+		select {
+		case <-process.Done():
+			closing = true
+		case command, present := <-commands:
+			if !present {
+				cancel()
+				closing = true
+				continue
+			}
+			switch command.Operation {
+			case "ready":
+				ready := worker != nil && worker.Ready()
+				if root != nil {
+					response := httptest.NewRecorder()
+					root.HealthHandler(http.NotFoundHandler()).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil).WithContext(process))
+					ready = response.Code == http.StatusOK
+				}
+				emit(wave48PGEvent{State: "ready", Ready: ready})
+			case "probe":
+				probe, stop := context.WithTimeout(process, 2*time.Second)
+				_, release, err := app.AcquireResources(probe, app.ResourceBulk)
+				if err == nil {
+					release()
+				}
+				stop()
+				emit(wave48PGEvent{State: "probe", Code: wave48PGErrorCode(err)})
+			case "run":
+				if worker == nil || running != nil {
+					test.Fatal("only the actual worker root may receive one Run request")
+				}
+				running = make(chan error, 1)
+				go func() { running <- worker.Run(process) }()
+				emit(wave48PGEvent{State: "run-requested"})
+			case "cancel":
+				cancel()
+				closing = true
+			case "close":
+				closing = true
+			default:
+				test.Fatal("unsupported bounded private child command")
+			}
+		}
+	}
+	if err := closeRoot(); err != nil {
+		test.Fatal("actual root close failed", err)
+	}
+	if running != nil {
+		select {
+		case err := <-running:
+			if err != nil {
+				test.Fatal("actual worker Run did not cancel and join cleanly", err)
+			}
+		case <-time.After(5 * time.Second):
+			test.Fatal("actual worker Close returned without joining Run")
+		}
+	}
+	if err := closeRoot(); err != nil {
+		test.Fatal("repeated actual root close failed", err)
+	}
+	emit(wave48PGEvent{State: "closed", Canceled: process.Err() != nil, Joined: true, Closed: true,
+		Restored: runtime.GOMAXPROCS(0) == priorCPU && debug.SetMemoryLimit(-1) == priorMemory})
+	select {
+	case command, present := <-commands:
+		if !present || command.Operation != "exit" {
+			test.Fatal("parent must acknowledge pool closure while the child is still alive")
+		}
+	case <-lifetime.Done():
+		test.Fatal("bounded child close acknowledgement timed out")
+	}
 }

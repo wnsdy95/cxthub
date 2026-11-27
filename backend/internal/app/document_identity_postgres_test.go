@@ -32,7 +32,7 @@ func TestP6PGQueuedOldWriteSeesCommittedRequirement(t *testing.T) {
 	if _, err = st.PutRepo(ctx, domain.Repo{ID: id}); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(st, st, nil, nil, nil)
+	svc := NewService(st, st, nil)
 	locked := make(chan struct{})
 	release := make(chan struct{})
 	ownerDone := make(chan error, 1)
@@ -45,7 +45,7 @@ func TestP6PGQueuedOldWriteSeesCommittedRequirement(t *testing.T) {
 	}()
 	<-locked
 	oldDone := make(chan error, 1)
-	go func() { oldDone <- svc.UpdateAbout(inbound.WithSystemActor(ctx), id, "forbidden-effect", "", nil) }()
+	go func() { oldDone <- patchAbout(inbound.WithSystemActor(ctx), svc, id, "forbidden-effect", "", nil) }()
 	select {
 	case err = <-oldDone:
 		close(release)

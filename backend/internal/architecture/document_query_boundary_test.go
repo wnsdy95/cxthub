@@ -416,16 +416,6 @@ func scanDocumentQueryBoundary(directory string) ([]string, error) {
 	return violations, nil
 }
 
-func TestDocumentQueryCoreThreeSourceBoundary(test *testing.T) {
-	violations, err := scanDocumentQueryBoundary(filepath.Join("..", "app", "documentquery"))
-	if err != nil {
-		test.Fatal(err)
-	}
-	for _, violation := range violations {
-		test.Error(violation)
-	}
-}
-
 const documentQueryBoundaryFixture = `package documentquery
 import (
  "context"

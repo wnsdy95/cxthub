@@ -30,10 +30,6 @@ type CanonicalDocVerifier struct {
 	uncached bool
 }
 
-func NewCanonicalDocVerifierWithoutCache() *CanonicalDocVerifier {
-	return &CanonicalDocVerifier{uncached: true}
-}
-
 func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []byte, pending *[]canonicalEventProof) (int, error) {
 	if ctx.Err() != nil {
 		return v.eventWithKey(ctx, canonicalEventKey{HashContent(raw), version}, raw, pending)

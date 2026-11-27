@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // Receive persists verified webhook bytes before acknowledgement. Delivery IDs
@@ -124,7 +122,7 @@ func (g *GitHubWorker) Tick(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(append(failures, g.reconcilePRHistories(ctx, 4))...)
+	return errors.Join(failures...)
 }
 func (g *GitHubWorker) reconcile(ctx context.Context, ns string) error {
 	var c domain.GitHubConnection
@@ -298,71 +296,6 @@ func (g *GitHubWorker) reconcile(ctx context.Context, ns string) error {
 	if workErr != nil {
 		return nil
 	}
-	// Repeated full pagination repairs missed webhook deliveries. Cursor progress
-	// is persisted only after every PR on that page is durably queued.
-	for _, b := range c.Bindings {
-		var remote domain.GitHubRepository
-		for _, r := range repos {
-			if r.ID == b.ExternalID {
-				remote = r
-			}
-		}
-		if remote.ID == 0 {
-			continue
-		}
-		page := c.PRPages[remote.ID]
-		if page < 1 {
-			page = 1
-		}
-		if err := g.withIdentity(ctx, func(tx context.Context) error {
-			current, err := g.store.GetGitHubConnection(tx, ns)
-			if err != nil {
-				return err
-			}
-			if !current.Enabled || current.Generation != c.Generation {
-				return domain.ErrConflict
-			}
-			return g.checkConnectionWorkerPolicy(tx, current)
-		}); err != nil {
-			return err
-		}
-		prs, more, e := g.remote.MergedPullRequests(ctx, inst.ID, remote, page)
-		if e != nil {
-			continue
-		}
-		for _, pr := range prs {
-			if e = g.enqueuePR(ctx, c, b, pr); e != nil {
-				break
-			}
-		}
-		if e != nil {
-			continue
-		}
-		next := 1
-		if more {
-			next = page + 1
-		}
-		e = g.withIdentity(ctx, func(tx context.Context) error {
-			v, e := g.store.GetGitHubConnection(tx, ns)
-			if e != nil {
-				return e
-			}
-			if v.Generation != c.Generation || !v.Enabled {
-				return domain.ErrConflict
-			}
-			if e = g.checkConnectionWorkerPolicy(tx, v); e != nil {
-				return e
-			}
-			if v.PRPages == nil {
-				v.PRPages = map[int64]int{}
-			}
-			v.PRPages[remote.ID] = next
-			return g.store.PutGitHubConnection(tx, v)
-		})
-		if e != nil {
-			return e
-		}
-	}
 	return nil
 }
 func (g *GitHubWorker) binding(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding) (domain.Repo, error) {
@@ -395,7 +328,7 @@ func (g *GitHubWorker) binding(ctx context.Context, c domain.GitHubConnection, b
 	if err != nil {
 		return domain.Repo{}, err
 	}
-	if local.OwnerNamespaceID != c.NamespaceID || local.Archived {
+	if local.Archived {
 		return domain.Repo{}, domain.ErrForbidden
 	}
 	repo, err := g.metadata.GetRepo(ctx, b.ContextRepoID)
@@ -406,16 +339,6 @@ func (g *GitHubWorker) binding(ctx context.Context, c domain.GitHubConnection, b
 		return repo, domain.ErrConflict
 	}
 	return repo, nil
-}
-func (g *GitHubWorker) enqueuePR(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding, pr domain.PullRequestMerge) error {
-	ctx = context.WithValue(ctx, revisionScopeKey{}, "none")
-	return repositoryWriteErrorWithWork(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx)), g.work, b.ContextRepoID, func(tx context.Context) error {
-		if _, e := g.binding(tx, c, b); e != nil {
-			return e
-		}
-		_, err := g.publications.submitPRPromotion(tx, b.ContextRepoID, pr)
-		return err
-	})
 }
 func (g *GitHubWorker) deliver(ctx context.Context, id string) error {
 	var job domain.GitHubDelivery
@@ -463,81 +386,43 @@ func (g *GitHubWorker) deliver(ctx context.Context, id string) error {
 		return g.store.PutGitHubDelivery(tx, current)
 	})
 }
+
+// applyDelivery acts on what GitHub told: a push shows a branch name alive or
+// gone, and after a push or a change of a pull request the remote is read
+// again soon. The worker reads nothing from GitHub here; the worker that reads
+// the remote does.
 func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDelivery) error {
 	if j.Kind != "pull_request" && j.Kind != "push" {
 		return nil
 	}
 	var p struct {
-		Action       string `json:"action"`
 		Installation struct {
 			ID int64 `json:"id"`
 		} `json:"installation"`
 		Repository struct {
 			ID int64 `json:"id"`
 		} `json:"repository"`
-		Number int `json:"number"`
-		PR     struct {
-			ID     int64  `json:"id"`
-			Number int    `json:"number"`
-			Merged bool   `json:"merged"`
-			Merge  string `json:"merge_commit_sha"`
-			Head   struct {
-				Ref  string `json:"ref"`
-				SHA  string `json:"sha"`
-				Repo struct {
-					ID int64 `json:"id"`
-				} `json:"repo"`
-			} `json:"head"`
-			Base struct {
-				Ref  string `json:"ref"`
-				Repo struct {
-					ID int64 `json:"id"`
-				} `json:"repo"`
-			} `json:"base"`
-		} `json:"pull_request"`
 		Ref    string `json:"ref"`
 		Before string `json:"before"`
 		After  string `json:"after"`
 		Forced bool   `json:"forced"`
 	}
-	if json.Unmarshal(j.Body, &p) != nil {
+	if json.Unmarshal(j.Body, &p) != nil || p.Installation.ID <= 0 || p.Repository.ID <= 0 {
 		return domain.ErrValidation
 	}
-	if j.Kind == "pull_request" {
-		switch p.Action {
-		case "opened", "reopened", "synchronize":
-			if p.PR.Merged {
-				return domain.ErrIntegrity
-			}
-		case "closed":
-			if !p.PR.Merged {
-				return nil
-			}
-		default:
-			return nil
-		}
-		if p.Installation.ID <= 0 || p.Repository.ID <= 0 || p.PR.ID <= 0 || p.Number <= 0 ||
-			domain.ValidateGitOID(p.PR.Head.SHA) != nil || domain.ValidateBranchName(p.PR.Head.Ref) != nil || domain.ValidateBranchName(p.PR.Base.Ref) != nil {
-			return domain.ErrValidation
-		}
-		if p.PR.Head.Repo.ID <= 0 || p.PR.Base.Repo.ID != p.Repository.ID || (p.PR.Number != 0 && p.PR.Number != p.Number) {
-			return domain.ErrIntegrity
-		}
-		if p.Action == "synchronize" && (domain.ValidateGitOID(p.Before) != nil || domain.ValidateGitOID(p.After) != nil || p.After != p.PR.Head.SHA) {
-			return domain.ErrValidation
-		}
-		if p.Action == "closed" && (domain.ValidateGitOID(p.PR.Merge) != nil || len(p.PR.Merge) != len(p.PR.Head.SHA)) {
-			return domain.ErrValidation
-		}
-		if p.PR.Head.Repo.ID != p.Repository.ID {
-			return nil
-		}
+	if j.Kind == "push" && !strings.HasPrefix(p.Ref, "refs/heads/") {
+		return nil
 	}
 	all, err := g.store.ListGitHubConnections(ctx)
 	if err != nil {
 		return err
 	}
-	applied := false
+	zero := func(s string) string {
+		if (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0") == "" {
+			return ""
+		}
+		return s
+	}
 	for _, c := range all {
 		if c.Installation.ID != p.Installation.ID || !c.Enabled {
 			continue
@@ -546,69 +431,25 @@ func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDeliver
 			if b.ExternalID != p.Repository.ID {
 				continue
 			}
-			if j.Kind == "pull_request" {
-				err = repositoryWriteErrorWithWork(evidenceWriteContext(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.work, b.ContextRepoID, func(tx context.Context) error {
-					repo, e := g.binding(tx, c, b)
-					if e != nil {
-						return e
-					}
-					st, ok := g.metadata.(outbound.GitScanStore)
-					if !ok {
-						return fmt.Errorf("Git scan queue unavailable")
-					}
-					metadata := &domain.GitPullRequestObservation{InstallationID: p.Installation.ID, RepositoryID: p.Repository.ID, ID: p.PR.ID, Number: p.Number, Action: p.Action, HeadRepositoryID: p.PR.Head.Repo.ID, BaseRepositoryID: p.PR.Base.Repo.ID, BaseRef: p.PR.Base.Ref}
-					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-pull-request", Ref: "refs/heads/" + p.PR.Head.Ref, After: p.PR.Head.SHA, Delivery: j.ID, PullRequest: metadata}
-					if p.Action == "synchronize" {
-						observation.Before = p.Before
-					}
-					if p.Action == "closed" {
-						metadata.MergeSHA = p.PR.Merge
-					}
-					if e := st.RecordGitRefObservation(tx, observation.WithID(), time.Now().UTC()); e != nil {
-						return e
-					}
-					if p.Action == "closed" {
-						pr := domain.PullRequestMerge{Number: p.Number, BaseBranch: p.PR.Base.Ref, HeadBranch: p.PR.Head.Ref, HeadSHA: p.PR.Head.SHA, MergeSHA: p.PR.Merge}
-						_, e = g.publications.submitPRPromotion(tx, b.ContextRepoID, pr)
-						return e
-					}
-					return nil
-				})
-				if err != nil {
-					return err
+			err = repositoryWriteErrorWithWork(evidenceWriteContext(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.work, b.ContextRepoID, func(tx context.Context) error {
+				repo, e := g.binding(tx, c, b)
+				if e != nil {
+					return e
 				}
-				applied = true
-			} else {
-				if !strings.HasPrefix(p.Ref, "refs/heads/") {
-					continue
-				}
-				zero := func(s string) string {
-					if (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0") == "" {
-						return ""
-					}
-					return s
-				}
-				err = repositoryWriteErrorWithWork(evidenceWriteContext(g.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.work, b.ContextRepoID, func(tx context.Context) error {
-					repo, e := g.binding(tx, c, b)
-					if e != nil {
-						return e
-					}
-					st, ok := g.metadata.(outbound.GitScanStore)
-					if !ok {
-						return fmt.Errorf("Git scan queue unavailable")
-					}
+				observed := time.Now().UTC()
+				if j.Kind == "push" {
 					identity := &domain.GitProviderObservation{InstallationID: c.Installation.ID, RepositoryID: b.ExternalID}
 					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-push", Ref: p.Ref, Before: zero(p.Before), After: zero(p.After), Forced: p.Forced, Delivery: j.ID, Provider: identity}.WithID()
-					return st.RecordGitRefObservation(tx, observation, time.Now().UTC())
-				})
-				if err != nil {
-					return err
+					if e := recordBranchLedgerObservation(tx, g.metadata, observation, observed); e != nil {
+						return e
+					}
 				}
+				return requestRemoteGitSync(tx, g.metadata, repo.ID, observed)
+			})
+			if err != nil {
+				return err
 			}
 		}
-	}
-	if j.Kind == "pull_request" && !applied {
-		return domain.ErrNotFound
 	}
 	return nil
 }

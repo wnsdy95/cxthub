@@ -93,7 +93,7 @@ func (doc VerifiedLegacyStream) PlanReadIndexContext(ctx context.Context) (DocRe
 	if err := ctx.Err(); err != nil {
 		return DocReadPlan{}, err
 	}
-	return DocReadPlan{index: index, source: doc.source, bodies: spans, sequencesKnown: true}, nil
+	return DocReadPlan{index: index, source: doc.source, bodies: spans}, nil
 }
 
 func (verifier *CanonicalDocVerifier) VerifyLegacyStream(ctx context.Context, want ContentHash, manifest DocChunkManifest, load func(context.Context, ContentHash) ([]byte, error), stream VerifiedDocStream) (VerifiedLegacyStream, error) {

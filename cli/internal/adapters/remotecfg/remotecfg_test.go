@@ -186,9 +186,6 @@ type fakeGitCtx struct{ repo domain.Repo }
 func (f fakeGitCtx) CurrentRepo(ctx context.Context, cwd string) (domain.Repo, error) {
 	return f.repo, nil
 }
-func (f fakeGitCtx) CurrentBranch(ctx context.Context, cwd string) (string, error) {
-	return f.repo.DefaultBranch, nil
-}
 
 func TestWrapReanchorsIdentity(t *testing.T) {
 	root := t.TempDir()

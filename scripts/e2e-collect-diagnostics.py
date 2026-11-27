@@ -7,16 +7,12 @@ import stat
 import sys
 
 
+# What scripts/e2e-sync.sh writes about its own steps. Nothing of the fixture's
+# HOME, of a session, or of the server's log is among them.
 FILES = (
-    "app-end.out", "app-drain.out", "fork-end.out", "repair-init.out", "repair-witness.out", "repair-drain.out",
-    "repair-save.out", "repair-proof.out", "repair.out", "repair-retry.out", "repair-wrong.out",
-    "doctor-before.json", "doctor-before.err", "doctor-before.status",
-    "doctor-after.json", "doctor-after.err", "doctor-after.status",
-    "wrapper-proof.tsv", "wrapper-proof.err", "wrapper-observation.out",
-    "sw.out", "wrapper.out", "holder.out",
-    "initial-init.out", "initial-commit.out", "initial-push.out", "initial-follow-push.out",
-    "brief-wrong.out", "brief-wrong.err", "brief-first.out", "brief-first.err", "brief-repeat.out", "brief-repeat.err",
-    "pub-git-evidence.out",
+    "setup.out", "setup2.out",
+    "earlier-branch.out", "without-cxt.err", "removed.out",
+    "fixture-cleanup.out",
 )
 MAX_BYTES = 1024 * 1024
 

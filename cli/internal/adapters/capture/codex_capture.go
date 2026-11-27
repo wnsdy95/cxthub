@@ -4,15 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub-cli/internal/domain"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // CodexCaptureSource implements a CaptureSource for detecting Codex rollout session files (capture path).
@@ -26,9 +22,6 @@ type CodexCaptureSource struct{}
 
 // NewCodexCapture creates a CodexCaptureSource.
 func NewCodexCapture() *CodexCaptureSource { return &CodexCaptureSource{} }
-
-// Provider returns the provider (codex) this adapter is responsible for.
-func (c *CodexCaptureSource) Provider() domain.ProviderKind { return domain.ProviderCodex }
 
 func codexSessionsDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -65,72 +58,6 @@ func rolloutCwd(path string) (string, bool) {
 	return line.Payload.Cwd, true
 }
 
-// LocateActiveSession detects the path to the active Codex session file for the current cwd. Returns domain.ErrNoActiveSession if none found.
-func (c *CodexCaptureSource) LocateActiveSession(ctx context.Context, cwd string) (string, error) {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		abs = cwd
-	}
-	stateRoot := repositoryStateRoot(cwd)
-	worktree := codexSessionWorktree(ctx, abs)
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", err
-	}
-	candidates := map[string]int64{}
-	current := map[string]string{}
-	err = filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
-		if werr != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return nil
-		}
-		name := info.Name()
-		if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
-			return nil
-		}
-		if nativeCwd, ok := rolloutCwd(path); ok && worktree != "" && codexSessionWorktree(ctx, nativeCwd) == worktree {
-			if id := providerfs.SessionIDFromPath(path); id != "" {
-				resolved, known := current[id]
-				if !known {
-					var err error
-					resolved, err = c.LocateSession(ctx, cwd, id)
-					if err != nil && !errors.Is(err, domain.ErrNoActiveSession) {
-						return err
-					}
-					current[id] = resolved
-				}
-				if path != resolved {
-					return nil
-				}
-			}
-			// Ledger correction: Materialized but unprocessed recovery sessions or isolated sessions are not active candidates.
-			if providerfs.CaptureExcluded(stateRoot, path, info.Size()) {
-				return nil
-			}
-			candidates[path] = info.ModTime().UnixNano()
-		}
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	best := pickLatest(candidates)
-	if best == "" {
-		return "", domain.ErrNoActiveSession
-	}
-	return best, nil
-}
-
-// LocateSession returns the capture-eligible rollout with the exact native ID
-// and cwd. The ID is validated before entering a glob so it cannot alter the
-// search pattern.
-func (c *CodexCaptureSource) LocateSession(ctx context.Context, cwd, sessionID string) (string, error) {
-	wanted := codexSessionWorktree(ctx, cwd)
-	return locateCodexSession(ctx, sessionID, repositoryStateRoot(cwd), true, func(nativeCwd string) (string, bool) {
-		native := codexSessionWorktree(ctx, nativeCwd)
-		return native, wanted != "" && native == wanted
-	})
-}
-
 // SessionFilesForCwd returns all rollout session files in this cwd (for branch switch isolation). Unlike LocateActiveSession, it does not apply CaptureExcluded — isolation is unrelated to activity. Files already isolated are renamed with .jsonl.superseded and thus excluded.
 func (c *CodexCaptureSource) SessionFilesForCwd(_ context.Context, cwd string) []string {
 	abs, err := filepath.Abs(cwd)
@@ -157,27 +84,3 @@ func (c *CodexCaptureSource) SessionFilesForCwd(_ context.Context, cwd string) [
 	})
 	return files
 }
-
-// ReadSession reads the raw bytes of the given rollout JSONL file.
-func (c *CodexCaptureSource) ReadSession(_ context.Context, path string) ([]byte, error) {
-	return providerfs.ReadRegularFile(path)
-}
-
-// SessionFilePath calculates the target Codex distillation file path on load.
-// ~/.codex/sessions/YYYY/MM/DD/rollout-<now ISO>-<newUuid>.jsonl.
-func (c *CodexCaptureSource) SessionFilePath(_ context.Context, _ string, _ domain.ProviderKind) (string, error) {
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", err
-	}
-	now := time.Now().UTC()
-	dateDir := filepath.Join(root, now.Format("2006"), now.Format("01"), now.Format("02"))
-	fname := "rollout-" + now.Format("2006-01-02T15-04-05") + "-" + newSessionID() + ".jsonl"
-	return filepath.Join(dateDir, fname), nil
-}
-
-// Ensure CodexCaptureSource implements outbound.CaptureSource.
-var _ outbound.CaptureSource = (*CodexCaptureSource)(nil)
-
-// IncrementalCapture enables verified native-prefix projection checkpoints.
-func (c *CodexCaptureSource) IncrementalCapture() bool { return true }

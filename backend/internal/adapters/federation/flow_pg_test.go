@@ -16,7 +16,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	delivery "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/http"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -60,7 +59,7 @@ func TestPGSignedOIDCBrowserCallbackAndReplay(t *testing.T) {
 	if _, err = ids.VerifyEnterpriseDomain(ctx, u.ID, e.ID, d.Domain, d.Revision); err != nil {
 		t.Fatal(err)
 	}
-	server := delivery.NewServer(app.NewService(st, st, nil, gitengine.NewEngine(st), st), ids).Handler()
+	server := delivery.NewServer(app.NewService(st, st, st), ids).Handler()
 	request := func(method, path string, body any) *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(body)
 		r := httptest.NewRequest(method, path, bytes.NewReader(raw))

@@ -32,7 +32,7 @@ func TestDocFinalizationClaimHasIndependentDeadline(t *testing.T) {
 		}
 		return domain.DocFinalizationJob{}, domain.ErrNotFound
 	}}
-	if err := service.ProcessDocFinalizations(ctx, 1); err != nil {
+	if err := processDocFinalizations(ctx, service, 1); err != nil {
 		t.Fatal(err)
 	}
 	if claimContext == nil || !errors.Is(claimContext.Err(), context.Canceled) {
@@ -50,7 +50,7 @@ func TestDocFinalizationBlockedClaimRespectsCallerDeadline(t *testing.T) {
 		<-bound.Done()
 		return domain.DocFinalizationJob{}, bound.Err()
 	}}
-	if err := service.ProcessDocFinalizations(ctx, 1); !errors.Is(err, context.DeadlineExceeded) {
+	if err := processDocFinalizations(ctx, service, 1); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("blocked claim: %v", err)
 	}
 	assertResourcesReleased(t, gate)

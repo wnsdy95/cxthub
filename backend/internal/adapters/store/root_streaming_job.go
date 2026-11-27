@@ -164,21 +164,6 @@ type rootPublicationHeapEstimate struct {
 	err   error
 }
 
-func (estimate *rootPublicationHeapEstimate) include(other rootPublicationHeapEstimate) {
-	if estimate.err != nil {
-		return
-	}
-	if other.err != nil {
-		estimate.err = other.err
-		return
-	}
-	if estimate.bytes < 0 || other.bytes < 0 || other.bytes > math.MaxInt64-estimate.bytes {
-		estimate.err = domain.ErrIntegrity
-		return
-	}
-	estimate.bytes += other.bytes
-}
-
 func (estimate *rootPublicationHeapEstimate) allocation(count, width int64) {
 	if estimate.err != nil {
 		return

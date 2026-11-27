@@ -84,9 +84,6 @@ func rootAdapterPresent(adapter any) bool {
 	}
 	return true
 }
-func (s *Service) DocumentIdentityWorkerContext(ctx context.Context) context.Context {
-	return inbound.WithDocumentIdentities(ctx, s.DocumentIdentitiesSupported())
-}
 func hasDocumentIdentity(ids []domain.DocumentIdentity, required domain.DocumentIdentity) bool {
 	if required == domain.DocumentIdentityLegacy {
 		return true
@@ -97,9 +94,6 @@ func hasDocumentIdentity(ids []domain.DocumentIdentity, required domain.Document
 		}
 	}
 	return false
-}
-func (s *Service) checkDocumentIdentity(ctx context.Context, repo domain.ContentHash, allowMissing bool) error {
-	return checkRepositoryDocumentIdentity(ctx, s.meta, s.DocumentIdentitiesSupported(), repo, allowMissing)
 }
 
 func checkRepositoryDocumentIdentity(ctx context.Context, metadata documentQueryRepoReader, supported []domain.DocumentIdentity, repo domain.ContentHash, allowMissing bool) error {

@@ -4,7 +4,6 @@
 //
 //   - MetadataStore: repo/branch/ref/snapshot meta/manifest metadata (PostgreSQL in production; filesystem in development).
 //   - BlobStore:     content-addressed body (CIR doc / memory; v1 Postgres BYTEA, later S3).
-//   - AuthProvider:  team token ↔ team mapping, repo visibility (sync protocol).
 //   - GitEngine:     git semantic engine (commit/branch/fork/diff/ref; CIR/hash-based, format-agnostic).
 package outbound
 
@@ -28,30 +27,6 @@ type MetadataStore interface {
 	PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) // idempotent (same id returns existing)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 
-	// Snapshot metadata (immutable). ID is CIR body hash (S-ID). Duplicate ID re-save is dedup.
-	GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error)
-	PutSnapshot(ctx context.Context, snap domain.Snapshot) error
-	// UpdateSnapshotMessage is a metadata update for hook labels → commit message promotion (unique message exception for immutable objects). The implementation enforces the one-way rule in the final CAS operation:
-	// Stored message starts with hook prefix → update, same message → no-op (idempotent), otherwise → ErrConflict. Placing check-then-act in the service breaks the rule during concurrent promotions.
-	UpdateSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error
-	// SetGraftParents replaces the entire graft (set, seq) register (LWW, seq current+1).
-	// Unlike AddGraftParents, it expresses edge removal (join supersede).
-	SetGraftParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash) error
-	// ApplyJoin applies the reordering of session branches to the storage atomic boundary.
-	// It validates and reflects all graft patches' ExpectedSeq, target ref's ExpectedHead, and optionally creates session refs in one go. The PostgreSQL implementation uses a single transaction/row lock.
-	ApplyJoin(ctx context.Context, mutation domain.JoinMutation) error
-	ListSnapshots(ctx context.Context, repoID domain.ContentHash, branch string) ([]domain.Snapshot, error)
-	HasSnapshots(ctx context.Context, repoID domain.ContentHash, ids []domain.ContentHash) (have []domain.ContentHash, err error)
-	// AddGraftParents appends a graft (UpdateRef Append) for diverged push to the current head, adding to the snapshot's GraftParents overlay and marking Grafted=true.
-	// Parents (original) are never modified — local/server maintain the same Parents for the same snapshot to prevent replica parent agreement breakage (permanent divergence prevention). Reachability is Parents ∪ GraftParents. GraftParents/Grafted are content-hash excluded, so ID/body are immutable.
-	AddGraftParents(ctx context.Context, repoID, id domain.ContentHash, add []domain.ContentHash) error
-	// AddGraftParentsCAS is for client delayed graft events. When adding a new edge, the current seq must exactly match the expected. If the edge already exists, the event is confirmed once at current==expected (seq+1) and only responds to a successful retry at current==expected+1. Other versions are conflicts. Version/cycle checks and writes are atomic boundaries of the store.
-	AddGraftParentsCAS(ctx context.Context, repoID, id domain.ContentHash, add []domain.ContentHash, expected uint64) error
-	// CompareAndSwapSnapshotMemory advances the causal memory ref only from the
-	// caller's expected parent. Repeating an already-applied next hash is
-	// idempotent; any other current value is a conflict.
-	CompareAndSwapSnapshotMemory(ctx context.Context, repoID, id, expected, next domain.ContentHash) error
-
 	// Ref / manifest (mutable). Progress is CAS (immutable REF4/C1). UpdateRepoAbout updates About(description/website/topics).
 	UpdateRepoAbout(ctx context.Context, id domain.ContentHash, description, website string, topics []string) error
 	// UpdateRepoConfig updates repo structure settings (default branch, protected branch). nil = no change.
@@ -60,44 +35,7 @@ type MetadataStore interface {
 	PutSettingsBundle(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsBundle(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
 	// Secret ciphertext envelope (E2E — server cannot decrypt, stored as opaque bytes only).
-	PutSecretsEnvelope(ctx context.Context, repoID domain.ContentHash, raw []byte) error
 	GetSecretsEnvelope(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
-	// Commit attachment settings object (content-addressed — target of snapshot's claude_settings/agents_settings).
-	PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error
-	GetSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error)
-	// Durable uncommitted context pointer (session-based upsert — CLI hook capture mirror, resolved on commit).
-	PutPending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) error
-	// ReplacePending atomically upserts and returns the exact previous target so
-	// hook-leaf GC cannot miss or cross concurrent captures.
-	ReplacePending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) (domain.ContentHash, error)
-	ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error)
-	DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
-	CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (domain.PendingDeleteResult, error)
-	SetPendingDismissed(ctx context.Context, repoID domain.ContentHash, sessionID string, dismissed bool) (bool, error)
-	// Push wait pointer ((user, branch) upsert — resolve local ahead commits, delete on git push).
-	PutUnsync(ctx context.Context, repoID domain.ContentHash, u domain.Unsync) error
-	ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([]domain.Unsync, error)
-	DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error
-	// DeleteSnapshot removes snapshot metadata (idempotent). Unique purpose: pending sliding replacement
-	// of hook capture leaves GC — called by service layer only when hook prefix·ref reference guard passes.
-	DeleteSnapshot(ctx context.Context, repoID, id domain.ContentHash) error
-
-	GetRef(ctx context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error)
-	ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error)
-	// CompareAndSwapRef: move to next only if expected matches current disk target (optimistic locking).
-	CompareAndSwapRef(ctx context.Context, repoID domain.ContentHash, next domain.Ref, expected domain.ContentHash) error
-	// ApplyBranchLifecycleRef stores one immutable reserved-tag event and
-	// atomically reconciles the active branch projection.
-	ApplyBranchLifecycleRef(ctx context.Context, repoID domain.ContentHash, event domain.Ref) error
-	// ReadReflog: return append-only log of ref movements in latest order (tip recovery safety net, git reflog equivalent).
-	ReadReflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
-	GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error)
-
-	// Legacy MemoryDigest metadata fallback for snapshots created before
-	// Snapshot.MemoryHash became authoritative. New writes attach only the blob
-	// hash; adapters keep these methods to read and safely retire old records.
-	GetMemoryMeta(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
-	PutMemoryMeta(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) error
 }
 
 // BlobStore stores content-addressed immutable bodies (data model).
@@ -113,10 +51,6 @@ type BlobStore interface {
 	// DeleteDoc: Remove doc body (idempotent). Hook capture leaf GC exclusive — commit doc is not target (service layer guard).
 	DeleteDoc(ctx context.Context, repoID, hash domain.ContentHash) error
 
-	// PutMemory: Store MemoryDigest body (content-hash deduplication).
-	PutMemory(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) (hash domain.ContentHash, err error)
-	GetMemory(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error)
-
 	// Chunk wire (push/pull delta transmission) — chunks are isolated by repo ownership.
 	// PutChunks: Store validated uncompressed chunks with repo ownership and idempotently. Chunks arriving before complete doc are content-addressed staging objects and safe to remain on failure/retry.
 	// HasChunks: List of repo owned chunks (negotiate). GetChunk: Uncompressed chunk body.
@@ -125,35 +59,6 @@ type BlobStore interface {
 	HasChunks(ctx context.Context, repoID domain.ContentHash, hashes []domain.ContentHash) (have []domain.ContentHash, err error)
 	GetChunk(ctx context.Context, repoID, hash domain.ContentHash) ([]byte, error)
 	GetDocManifest(ctx context.Context, repoID, hash domain.ContentHash) (domain.DocChunkManifest, error)
-}
-
-// AuthProvider validates team tokens and determines visibility boundaries (sync protocol).
-//
-// Visibility unit = team (v1 simple model): Team members can read-write all team repos.
-// Implementation (impl step): Token store (e.g., Postgres team_tokens table). Current stub.
-type AuthProvider interface {
-	// ResolveTeam: Opaque bearer team token → team identifier. Invalid token returns error (401 unauthenticated).
-	ResolveTeam(ctx context.Context, token string) (team string, err error)
-	// RepoVisible: Whether the team can access the repo (403 forbidden reason).
-	RepoVisible(ctx context.Context, team string, repoID domain.ContentHash) (bool, error)
-}
-
-// GitEngine is a git engine (module boundary: backend has).
-//
-// It performs commit/branch/fork/diff/ref(HEAD/tag) based on CIR/hash, independent of provider raw format.
-// Core responsibility is DAG reachability (fast-forward determination, LCA, parents transitive closure) (sync protocol, data model).
-// Meta/body access via above store port. Current stub.
-type GitEngine interface {
-	// IsAncestor: Whether ancestor is an ancestor of descendant (DAG parent reachability). FF determination based.
-	IsAncestor(ctx context.Context, repoID, ancestor, descendant domain.ContentHash) (bool, error)
-	// MergeBase: LCA (lowest common ancestor) of two snapshots. Used for diff/diverged determination.
-	MergeBase(ctx context.Context, repoID, a, b domain.ContentHash) (domain.ContentHash, error)
-	// AncestorsClosure: Parents transitive closure of ids (includes missing ancestors, sync protocol).
-	AncestorsClosure(ctx context.Context, repoID domain.ContentHash, ids []domain.ContentHash) ([]domain.ContentHash, error)
-	// ClassifyRefMove: Relationship determination between old (server target) and next (ff/up-to-date/non-ff/diverged).
-	ClassifyRefMove(ctx context.Context, repoID, old, next domain.ContentHash) (RefMoveClass, error)
-	// VerifyIntegrity checks Snapshot.ID == ContentHash(canonical_bytes(doc.CIR)).
-	VerifyIntegrity(ctx context.Context, snap domain.Snapshot, doc domain.SessionDoc) error
 }
 
 // IdentityVerifier verifies authentication token (Firebase ID token or dev token) and returns User.
@@ -246,7 +151,6 @@ type OrganizationStore interface {
 	UpdateOrganizationWithAudit(ctx context.Context, organization domain.Organization, audit domain.OrganizationAuditEvent) error
 
 	AddOrganizationMember(ctx context.Context, membership domain.OrganizationMembership) error
-	RemoveOrganizationMember(ctx context.Context, organizationID, userID string) error
 	AddOrganizationMemberWithAudit(ctx context.Context, membership domain.OrganizationMembership, audit domain.OrganizationAuditEvent) error
 	RemoveOrganizationMemberWithAudit(ctx context.Context, organizationID, userID string, audit domain.OrganizationAuditEvent) error
 	GetOrganizationMembership(ctx context.Context, organizationID, userID string) (domain.OrganizationMembership, error)
@@ -269,22 +173,4 @@ type OrganizationStore interface {
 	// returning authorization; audit failure must therefore fail closed.
 	CreateBreakGlassGrantWithAudit(ctx context.Context, grant domain.BreakGlassGrant, event domain.OrganizationAuditEvent) error
 	UseActiveBreakGlassGrant(ctx context.Context, organizationID, repositoryID, userID string, now time.Time, event domain.OrganizationAuditEvent) (domain.BreakGlassGrant, error)
-}
-
-// RefMoveClass is the classification returned by ClassifyRefMove (sync protocol).
-type RefMoveClass string
-
-const (
-	MoveFastForward    RefMoveClass = "fast_forward"     // next is descendant of old
-	MoveUpToDate       RefMoveClass = "up_to_date"       // next == old
-	MoveNonFastForward RefMoveClass = "non_fast_forward" // next is an ancestor of old (behind)
-	MoveDiverged       RefMoveClass = "diverged"         // common ancestor exists but not descendants → fork
-)
-
-// HistoryStore publishes observed context operations with durable retention.
-// An advance performs its ref CAS in the same storage transaction. Other
-// operations retain evidence without changing a collaborator's working cursor.
-type HistoryStore interface {
-	ApplyHistoryEvent(context.Context, domain.HistoryEvent) error
-	ListHistoryEvents(context.Context, domain.ContentHash) ([]domain.HistoryEvent, error)
 }

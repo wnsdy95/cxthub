@@ -160,7 +160,7 @@ postgres_smoke() (
       CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" \
       go run -tags postgres ./cmd/cxt-admin migrate --apply
     CXT_TEST_DSN="$dsn" \
-      go test -tags postgres ./internal/adapters/store/ ./internal/mcpserver/ -run 'TestPGSmoke|TestPGIndependentMCP' -count=1 -v
+      go test -tags postgres ./internal/adapters/store/ ./internal/mcpserver/ -run 'TestPGSmoke|TestPGSessionToolsReadThroughTheIndependentServer' -count=1 -v
   )
   pass "All migrations apply idempotently on a real PostgreSQL instance"
 )

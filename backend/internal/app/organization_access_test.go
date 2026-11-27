@@ -6,8 +6,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // Run against both adapters: an owner promoted after repository creation must
@@ -114,7 +112,7 @@ func runOrganizationOwnerAccess(t *testing.T, st teamTestStore) {
 		t.Fatal(err)
 	}
 	check(domain.RoleOwner)
-	if err = s.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID); err != nil {
+	if err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain"); err != nil {
 		t.Fatal(err)
 	}
 	check("")
@@ -122,73 +120,6 @@ func runOrganizationOwnerAccess(t *testing.T, st teamTestStore) {
 
 func TestOrganizationOwnerAccessContract(t *testing.T) {
 	runOrganizationOwnerAccess(t, store.NewFSStore(t.TempDir()))
-}
-
-func runOrganizationOwnerCommands(t *testing.T, st interface {
-	teamTestStore
-	outbound.MetadataStore
-	outbound.BlobStore
-}) {
-	t.Helper()
-	ctx := systemTestContext()
-	f := makeTeamFixture(t, st)
-	if err := f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationOwner); err != nil {
-		t.Fatal(err)
-	}
-	repo := domain.HashContent([]byte(f.repository.ID))
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: f.repository.ID}); err != nil {
-		t.Fatal(err)
-	}
-	svc := NewService(st, st, nil, nil, st)
-	in := inbound.SaveSecretsInput{RepoID: repo, ActorID: f.member.ID, Envelope: secretsTestEnvelope("aaaaaaaaaaaa"), Edit: domain.SecretsEdit{ExpectedRevision: "absent"}}
-	saved, err := svc.SaveSecrets(ctx, in)
-	if err != nil {
-		t.Fatalf("owner secrets: %v", err)
-	}
-	if err = svc.authorizeJoin(ctx, repo, f.member.ID, false); err != nil {
-		t.Fatalf("owner join: %v", err)
-	}
-	f.repository.Archived = true
-	if err = st.CreateRepository(ctx, f.repository); err != nil {
-		t.Fatal(err)
-	}
-	in.Edit.ExpectedRevision = saved.Revision
-	if _, err = svc.SaveSecrets(ctx, in); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("archived owner secrets: %v", err)
-	}
-	if err = svc.authorizeJoin(ctx, repo, f.member.ID, false); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("archived owner join: %v", err)
-	}
-	f.repository.Archived = false
-	if err = st.CreateRepository(ctx, f.repository); err != nil {
-		t.Fatal(err)
-	}
-	if err = f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationMember); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = svc.SaveSecrets(ctx, in); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("demoted owner secrets: %v", err)
-	}
-	if err = svc.authorizeJoin(ctx, repo, f.member.ID, false); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("demoted owner join: %v", err)
-	}
-	// These commands must also honor current team grants through the same policy.
-	if err = f.identity.UpdateTeamMember(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.member.ID, domain.TeamMember); err != nil {
-		t.Fatal(err)
-	}
-	if err = f.identity.SetTeamRepository(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.repository.ID, domain.RoleMaintainer); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = svc.SaveSecrets(ctx, in); err != nil {
-		t.Fatalf("team secrets: %v", err)
-	}
-	if err = svc.authorizeJoin(ctx, repo, f.member.ID, false); err != nil {
-		t.Fatalf("team join: %v", err)
-	}
-}
-
-func TestOrganizationOwnerCommands(t *testing.T) {
-	runOrganizationOwnerCommands(t, store.NewFSStore(t.TempDir()))
 }
 
 func TestOrganizationOwnerTransferKeepsNamespace(t *testing.T) {

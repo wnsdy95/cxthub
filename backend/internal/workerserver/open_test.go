@@ -51,7 +51,7 @@ func wave48ProviderRootEnvironment(test *testing.T) string {
 }
 
 func TestWave48ProviderRootValidatesInputsBeforeStorage(test *testing.T) {
-	for _, variable := range []string{"CXT_PENDING_PROJECTION_REPOS", "CXT_GRAPH_PROJECTION_REPOS", "CXT_GRAPH_SHADOW_REPOS", "CXT_MEMORY_PREPARATION_REPOS", "CXT_GITHUB_APP_CLIENT_SECRET"} {
+	for _, variable := range []string{"CXT_GITHUB_APP_CLIENT_SECRET"} {
 		test.Run(variable, func(test *testing.T) {
 			data := wave48ProviderRootEnvironment(test)
 			test.Setenv(variable, "wave48-secret-input")

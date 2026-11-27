@@ -1,15 +1,15 @@
 # cxt — Git for coding-agent sessions
 
-**Commits keep the code, but the AI conversation that produced it disappears.** cxt puts
-coding-agent sessions (Claude Code · Codex CLI) onto your git workflow, turning them into
-shared team context — just use `commit` · `push` · `checkout` · `pull` and the conversation
-is captured, shared, and restored alongside your commits.
+**Commits keep the code, but the AI conversation that produced it disappears.** cxt keeps
+each coding-agent session (Claude Code · Codex) with the Git commits it produced. It reads
+what the tools recorded on your computer, and Git, and uploads the result to your team's
+server — you keep using `commit` and `push` as before.
 
-- `git commit` → snapshots the agent session up to that point, linked to the commit
-- `git checkout <branch>` → restores that branch's context into your agent session
-- `git checkout -b` → starts the new branch with a seed session (distilled memory + recent context)
-- `git pull` → briefs your live agent with a summary of teammates' incoming context
-- Web UI to browse, search, and fork the conversation behind every commit
+- `git commit` → the session that made the commit is cut at it; that part is linked to the commit, with a summary of the session
+- `git push` → once the commit is on GitHub, the part of the session that explains it opens to whoever may view the repository
+- `git checkout <branch>` → a session on the branch is given the most recent summary another session wrote along it
+- `cxt fork` → make a branch at a commit, or continue a session's conversation up to that commit as a new session
+- Web UI to browse and search the conversation behind every commit
 
 ## Install
 
@@ -38,8 +38,8 @@ The repository URL is itself the repo — it registers automatically on first co
 cd <your code repo>
 cxt setup https://cxthub.com/<owner>/<repository>
 #         └── your repository URL (this URL is the repo identity)
-# ✓ store init → git hooks → remote → login (browser approval) → agent hooks → team settings
-# From here on, just use git.
+# ✓ .cxt → login (browser approval) → repository connection → git hooks → agent hooks → team settings
+# From here on, just use git. Check with: cxt doctor
 ```
 
 Codex CLI users: run `codex` once and approve the cxt entries under `/hooks` (one-time trust prompt).

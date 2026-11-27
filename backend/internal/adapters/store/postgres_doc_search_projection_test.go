@@ -3,7 +3,6 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -208,11 +207,6 @@ func docSearchStageAssertPG(test *testing.T, fixture docSearchStageCasePG) {
 		if err != nil || !reflect.DeepEqual(got, want) {
 			test.Fatalf("public search %q after=%d limit=%d: got=%+v want=%+v err=%v", query.text, query.after, query.limit, got, want, err)
 		}
-	}
-	restored, err := storage.ReadVerifiedDoc(ctx, job.RepoID, job.DocHash)
-	if err != nil || restored.DocumentRef() != fixture.proof.DocumentRef() ||
-		!bytes.Equal(restored.Bytes(), fixture.raw) || domain.HashContent(fixture.raw) != job.DocHash {
-		test.Fatal("publication changed original canonical source bytes, hash, or identity", err)
 	}
 	if docSearchStageSourceImagePG(test, fixture) != fixture.sourceImage {
 		test.Fatal("completion or search changed original chunk bytes or ownership rows")

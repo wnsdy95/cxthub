@@ -85,26 +85,6 @@ func (service *IdentityService) ResolveUserForSnapshot(ctx context.Context, toke
 	return user, err
 }
 
-func (service *IdentityService) ResolveMCPUserForSnapshot(ctx context.Context, token string, resources ...string) (domain.User, error) {
-	if err := service.requireIdentityReadSnapshot(ctx); err != nil {
-		return domain.User{}, err
-	}
-	if !strings.HasPrefix(token, "sess_") {
-		return domain.User{}, domain.ErrUnauthorized
-	}
-	session, user, err := service.snapshotSession(ctx, token)
-	if err != nil {
-		return domain.User{}, err
-	}
-	if session.Kind != "mcp_access" {
-		return domain.User{}, domain.ErrUnauthorized
-	}
-	if err := service.checkMCPGrant(ctx, session, resources...); err != nil {
-		return domain.User{}, err
-	}
-	return user, nil
-}
-
 func (service *IdentityService) repositoryReadAllowed(ctx context.Context, repositoryID, userID string) (bool, error) {
 	repository, err := service.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {

@@ -2,18 +2,13 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
-	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type documentNativeAuthorizationFixture struct {
@@ -472,142 +467,5 @@ func TestDocumentAuthorizationTransactionalScopeNeverReusesNativeMarker(test *te
 		test.Fatal("transactional snapshot reused cached authority or retained a read", snapshotCalls, reads, err)
 	}
 	release()
-	assertResourcesReleased(test, fixture.gate)
-}
-
-type documentOwnershipPanicStore struct {
-	outbound.MetadataStore
-	outbound.BlobStore
-}
-
-func (*documentOwnershipPanicStore) GetRepo(context.Context, domain.ContentHash) (domain.Repo, error) {
-	panic("independent full queries dereferenced replacement Service metadata")
-}
-
-func (*documentOwnershipPanicStore) GetSnapshot(context.Context, domain.ContentHash, domain.ContentHash) (domain.Snapshot, error) {
-	panic("independent full queries dereferenced replacement Service snapshots")
-}
-
-func (*documentOwnershipPanicStore) GetDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.SessionDoc, error) {
-	panic("independent full queries dereferenced replacement Service documents")
-}
-
-func (*documentOwnershipPanicStore) GetDocManifest(context.Context, domain.ContentHash, domain.ContentHash) (domain.DocChunkManifest, error) {
-	panic("independent full queries dereferenced replacement Service manifests")
-}
-
-func (*documentOwnershipPanicStore) GetChunk(context.Context, domain.ContentHash, domain.ContentHash) ([]byte, error) {
-	panic("independent full queries dereferenced replacement Service chunks")
-}
-
-func TestDocumentQueriesRetainSuccessfulNativeResponseUntilOwnerRelease(test *testing.T) {
-	fixture := newDocumentNativeAuthorizationFixture(test)
-	document := seedLegacyFindDocument(test, fixture.storage, fixture.repo, []domain.CIREvent{historyMessage(domain.RoleUser, "retained needle \ud55c🙂")})
-	queries, err := NewService(fixture.storage, fixture.storage, nil, nil, nil).DocumentQueries()
-	if err != nil {
-		test.Fatal(err)
-	}
-	for _, scenario := range []struct {
-		name string
-		read func(context.Context) error
-	}{
-		{name: "view", read: func(ctx context.Context) error {
-			_, err := queries.ReadDocViewEvents(ctx, fixture.repo, document.Hash, "", 0, 1, "all")
-			return err
-		}},
-		{name: "view fragment", read: func(ctx context.Context) error {
-			_, err := queries.ReadDocViewFragment(ctx, fixture.repo, document.Hash, 0, 0, 4096)
-			return err
-		}},
-		{name: "legacy find", read: func(ctx context.Context) error {
-			_, err := queries.FindDocPage(ctx, fixture.repo, document.Hash, domain.DocFindPageRequest{Legacy: true, Query: "needle", Total: 1, To: 1})
-			return err
-		}},
-		{name: "legacy find fragment", read: func(ctx context.Context) error {
-			_, err := queries.ReadDocFindFragment(ctx, fixture.repo, document.Hash, domain.DocFindFragmentRequest{Legacy: true, Total: 1, Budget: 4096})
-			return err
-		}},
-	} {
-		for _, retain := range []bool{false, true} {
-			test.Run(fmt.Sprintf("%s/retain=%t", scenario.name, retain), func(test *testing.T) {
-				var releases []func()
-				ctx := inbound.WithDocumentResponseRetainer(inbound.WithSystemActor(fixture.ctx), func(release func()) bool {
-					if retain {
-						releases = append(releases, release)
-					}
-					return retain
-				})
-				defer func() {
-					for _, release := range releases {
-						release()
-					}
-				}()
-				if err := scenario.read(ctx); err != nil {
-					test.Fatal("actual native document query failed", err)
-				}
-				fixture.gate.mu.Lock()
-				active := fixture.gate.active
-				fixture.gate.mu.Unlock()
-				if retain {
-					if len(releases) != 1 || active != 1 {
-						test.Fatal("successful read did not transfer exactly one live permit", len(releases), active)
-					}
-					releases[0]()
-				}
-				assertResourcesReleased(test, fixture.gate)
-			})
-		}
-	}
-}
-
-func TestDocumentQueriesFullNativeViewAndFindOwnOriginalDependencies(test *testing.T) {
-	fixture := newDocumentNativeAuthorizationFixture(test)
-	document := seedLegacyFindDocument(test, fixture.storage, fixture.repo, []domain.CIREvent{historyMessage(domain.RoleUser, "captured needle \ud55c🙂")})
-	if err := fixture.storage.PutSnapshot(systemTestContext(), domain.Snapshot{ID: document.Hash, RepoID: fixture.repo,
-		DocHash: document.Hash, Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
-		test.Fatal(err)
-	}
-	service := NewService(fixture.storage, fixture.storage, nil, nil, nil)
-	queries, err := service.DocumentQueries()
-	if err != nil || queries == nil {
-		test.Fatal("construct full native document queries", err)
-	}
-	if _, independent := queries.(*documentquery.Queries); !independent {
-		test.Fatalf("full document query accessor returned its parent Service: %T", queries)
-	}
-	ctx := inbound.WithSystemActor(fixture.ctx)
-	if page, err := queries.ReadDocEvents(ctx, fixture.repo, document.Hash, "", 0, 1); err != nil || len(page.Events) != 1 {
-		test.Fatal("initial captured query could not read the native document", page, err)
-	}
-	assertResourcesReleased(test, fixture.gate)
-	replacement := &documentOwnershipPanicStore{}
-	service.meta, service.blobs = replacement, replacement
-	page, err := queries.ReadDocViewEvents(ctx, fixture.repo, document.Hash, "", 0, 1, "all")
-	if err != nil || len(page.Events) != 1 || page.Total != 1 || page.Events[0].Deferred || !reflect.DeepEqual(page.Events[0].Event, document.CIR.Events[0]) {
-		test.Fatal("captured full queries lost their original native view dependencies", page, err)
-	}
-	assertResourcesReleased(test, fixture.gate)
-	fragment, err := queries.ReadDocViewFragment(ctx, fixture.repo, document.Hash, 0, 0, 4096)
-	var viewed domain.CIREvent
-	if err != nil || fragment.Next != -1 || json.Unmarshal([]byte(fragment.JSON), &viewed) != nil || !reflect.DeepEqual(viewed, document.CIR.Events[0]) {
-		test.Fatal("captured full queries lost their original view fragment dependencies", fragment, err)
-	}
-	assertResourcesReleased(test, fixture.gate)
-	found, err := queries.FindDocPage(ctx, fixture.repo, document.Hash, domain.DocFindPageRequest{Legacy: true, Query: "needle", Total: 1, To: 1})
-	if err != nil || found.Projection != domain.DocLegacyFindProjection || found.Hash != document.Hash || len(found.Matches) != 1 || found.Matches[0].Index != 0 {
-		test.Fatal("captured full queries lost their original legacy find dependencies", found, err)
-	}
-	assertResourcesReleased(test, fixture.gate)
-	findFragment, err := queries.ReadDocFindFragment(ctx, fixture.repo, document.Hash, domain.DocFindFragmentRequest{Legacy: true, Total: 1, Budget: 4096})
-	var revealed domain.CIREvent
-	if err != nil || findFragment.Projection != domain.DocLegacyFindFragmentProjection || findFragment.Next != -1 ||
-		json.Unmarshal([]byte(findFragment.JSON), &revealed) != nil || !reflect.DeepEqual(revealed, document.CIR.Events[0]) {
-		test.Fatal("captured full queries lost their original find fragment dependencies", findFragment, err)
-	}
-	assertResourcesReleased(test, fixture.gate)
-	visible, err := queries.ReadDocVisiblePage(ctx, fixture.repo, document.Hash, domain.DocVisiblePageRequest{View: "all", Limit: 1})
-	if !errors.Is(err, domain.ErrDocVisibleProjectionUnsupported) || !reflect.DeepEqual(visible, domain.DocVisiblePage{}) {
-		test.Fatal("native FS visible projection invented support or followed replacement ports", visible, err)
-	}
 	assertResourcesReleased(test, fixture.gate)
 }

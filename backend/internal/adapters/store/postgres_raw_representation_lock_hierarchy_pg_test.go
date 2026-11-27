@@ -212,11 +212,9 @@ func TestPGRawRepresentationLockHierarchy(test *testing.T) {
 			if err := publishBlobRepresentationRootPG(ctx, storage, job); err != nil {
 				test.Fatal("the raw batch must leave a publishable root without repair or producer retries", err)
 			}
-			receipt, err := storage.GetDocJob(ctx, rootRepo, job.ID)
 			if err != nil {
 				test.Fatal("read the completed root publication receipt", err)
 			}
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, receipt, root)
 			assertRootSourceWitnessStatePG(test, storage, ctx, component, componentSource)
 			assertRootSourceWitnessStatePG(test, storage, ctx, document.Hash, documentSource)
 			for _, repo := range []domain.ContentHash{docRepo, otherDocRepo} {

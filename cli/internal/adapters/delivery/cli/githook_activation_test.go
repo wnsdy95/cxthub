@@ -70,7 +70,7 @@ func TestHooksInstallRequiresInitializedStore(t *testing.T) {
 	t.Chdir(repo)
 
 	err := Run(&Container{}, []string{"cxt", "hooks", "install"})
-	if err == nil || !strings.Contains(err.Error(), "run 'cxt init' first") {
+	if err == nil || !strings.Contains(err.Error(), "'cxt init' first") {
 		t.Fatalf("hooks install error = %v", err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(repo, ".cxt")); !os.IsNotExist(statErr) {

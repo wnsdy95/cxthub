@@ -7,11 +7,6 @@ const (
 	CIRVersionV2 = "2"
 )
 
-// SupportedCIRVersions returns a fresh capability list for sync negotiation.
-func SupportedCIRVersions() []string {
-	return []string{CIRVersionV1, CIRVersionV2}
-}
-
 // SupportsCIRVersion reports whether versions explicitly advertises version.
 func SupportsCIRVersion(versions []string, version string) bool {
 	for _, candidate := range versions {

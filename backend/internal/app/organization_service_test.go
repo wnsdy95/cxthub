@@ -194,7 +194,7 @@ func TestOrganizationOwnershipTransfersWithoutPinningCreator(t *testing.T) {
 	if err := svc.UpdateOrganizationMember(ctx, founder.ID, organization.ID, admin.ID, domain.OrganizationAdmin); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RemoveOrganizationMember(ctx, successor.ID, organization.ID, founder.ID); err != nil {
+	if err := svc.OffboardOrganizationMember(ctx, successor.ID, organization.ID, founder.ID, "retain"); err != nil {
 		t.Fatalf("successor could not remove the original creator after ownership transfer: %v", err)
 	}
 	if _, err := st.GetOrganizationMembership(ctx, organization.ID, founder.ID); !errors.Is(err, domain.ErrNotFound) {
@@ -203,7 +203,7 @@ func TestOrganizationOwnershipTransfersWithoutPinningCreator(t *testing.T) {
 	if err := svc.UpdateOrganizationMember(ctx, successor.ID, organization.ID, successor.ID, domain.OrganizationMember); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("last owner demotion = %v, want conflict", err)
 	}
-	if err := svc.RemoveOrganizationMember(ctx, successor.ID, organization.ID, successor.ID); !errors.Is(err, domain.ErrConflict) {
+	if err := svc.OffboardOrganizationMember(ctx, successor.ID, organization.ID, successor.ID, "retain"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("last owner removal = %v, want conflict", err)
 	}
 	if err := svc.UpdateOrganizationMember(ctx, admin.ID, organization.ID, member.ID, domain.OrganizationAdmin); !errors.Is(err, domain.ErrForbidden) {
@@ -212,7 +212,7 @@ func TestOrganizationOwnershipTransfersWithoutPinningCreator(t *testing.T) {
 	if err := svc.UpdateOrganizationMember(ctx, admin.ID, organization.ID, member.ID, domain.OrganizationMember); err != nil {
 		t.Fatalf("admin could not add an ordinary member: %v", err)
 	}
-	if err := svc.RemoveOrganizationMember(ctx, admin.ID, organization.ID, successor.ID); !errors.Is(err, domain.ErrForbidden) {
+	if err := svc.OffboardOrganizationMember(ctx, admin.ID, organization.ID, successor.ID, "retain"); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("admin removed an owner: %v", err)
 	}
 }
@@ -285,10 +285,6 @@ func TestLegacyFSRepositoryRemainsAddressableBeforeNamespaceBackfill(t *testing.
 	}
 	if err := st.CreateRepository(ctx, repository); err != nil {
 		t.Fatal(err)
-	}
-	identity := NewIdentityService(nil, st)
-	if got, err := identity.PublicRepository(ctx, "legacy", "project"); err != nil || got.ID != repository.ID {
-		t.Fatalf("legacy public Repository = %+v err=%v", got, err)
 	}
 	contextService := &Service{repositories: st}
 	if got, err := contextService.repositoryForURL(ctx, "https://cxthub.test/legacy/project"); err != nil || got != repository.ID {

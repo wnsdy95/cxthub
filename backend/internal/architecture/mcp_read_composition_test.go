@@ -14,7 +14,7 @@ func TestMCPCompositionDoesNotRediscoverCommandService(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	for _, relative := range []string{"internal/app/read_services.go", "internal/mcpserver/server.go"} {
+	for _, relative := range []string{"internal/serverruntime/mcp_reads.go", "internal/mcpserver/server.go"} {
 		path := filepath.Join(module.directory, relative)
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {

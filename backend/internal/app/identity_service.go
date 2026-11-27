@@ -536,16 +536,6 @@ func (s *IdentityService) repositoryByNamespacePath(ctx context.Context, namespa
 	return s.repositories.GetRepositoryByPath(ctx, namespace, slug)
 }
 
-// PublicRepository interprets a public repository by URL path (username/slug) — for anonymous viewing.
-// private repositories return ErrNotFound to avoid leaking existence.
-func (s *IdentityService) PublicRepository(ctx context.Context, username, slug string) (domain.Repository, error) {
-	repositoryRecord, err := s.repositoryByNamespacePath(ctx, username, slug)
-	if err != nil || !repositoryRecord.IsPublic() {
-		return domain.Repository{}, domain.ErrNotFound
-	}
-	return repositoryRecord, nil
-}
-
 // ReadableRepository resolves a public path without leaking private Repository
 // existence. Break-glass is a narrow viewer exception and never creates a
 // durable Repository membership.
@@ -721,12 +711,6 @@ func (s *IdentityService) issueGrantedSession(ctx context.Context, userID, prefi
 	}
 	stored.Token = raw // Only the original token is passed to the caller (cookie/issue response)
 	return stored, nil
-}
-
-// IsPublicRepository returns the public status (used for bypassing membership checks in query paths).
-func (s *IdentityService) IsPublicRepository(ctx context.Context, repositoryID string) bool {
-	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
-	return err == nil && repositoryRecord.IsPublic()
 }
 
 // CreateRepository creates a repository and registers its creator as an owner member.

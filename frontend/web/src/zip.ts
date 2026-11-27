@@ -19,7 +19,7 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-export interface ZipEntry {
+interface ZipEntry {
   path: string;
   bytes: Uint8Array;
 }

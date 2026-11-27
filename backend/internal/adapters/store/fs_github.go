@@ -68,6 +68,20 @@ func (s *FSStore) PutGitHubConnection(ctx context.Context, v domain.GitHubConnec
 func (s *FSStore) ListGitHubConnections(_ context.Context) ([]domain.GitHubConnection, error) {
 	return githubFSList[domain.GitHubConnection](s, "connections")
 }
+func (s *FSStore) FindGitHubBinding(ctx context.Context, repo domain.ContentHash) (domain.GitHubConnection, error) {
+	all, err := s.ListGitHubConnections(ctx)
+	if err != nil {
+		return domain.GitHubConnection{}, err
+	}
+	for _, connection := range all {
+		for _, binding := range connection.Bindings {
+			if binding.ContextRepoID == repo {
+				return connection, nil
+			}
+		}
+	}
+	return domain.GitHubConnection{}, domain.ErrNotFound
+}
 func (s *FSStore) GetGitHubRequest(_ context.Context, id string) (v domain.GitHubConnectRequest, err error) {
 	err = readJSON(s.githubPath("requests", id), &v)
 	return

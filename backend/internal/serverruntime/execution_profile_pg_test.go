@@ -151,7 +151,7 @@ func TestExecutionProfilePostgresActualAPIMCPRootsAndControlLoss(test *testing.T
 			if !root.BoundedDocuments() || root.execution.role.Role != outbound.ProcessRole(name) || root.infrastructure.Store != root.Store || root.DocumentQueryProfile != documentquery.VerifiedRoots {
 				test.Fatal("bounded root lost role, one-store ownership or verified schema policy")
 			}
-			if _, ok := root.Store.(*store.PostgresStore); !ok || (root.Context != nil) != (name == "api") || root.DocumentQueries == nil || root.Identity == nil {
+			if _, ok := root.Store.(*store.PostgresStore); !ok || (root.Context != nil) != (name == "api") || (root.DocumentQueries != nil) != (name == "api") || (root.Anchored != nil) != (name == "mcp") || root.Identity == nil {
 				test.Fatal("bounded root changed API/MCP functional ownership")
 			}
 			response := httptest.NewRecorder()
@@ -198,14 +198,11 @@ func TestExecutionProfilePostgresActualWorkerRootRunAndClose(test *testing.T) {
 	test.Setenv("CXT_AUTH", "invalid")
 	test.Setenv("CXT_PUBLIC_URL", "invalid")
 	test.Setenv("CXT_MEMORY_READ_REPOS", "invalid")
-	worker, err := OpenDocumentWorker(context.Background())
+	worker, err := OpenWorker(context.Background())
 	if err != nil {
 		test.Fatal("worker root unnecessarily required authentication or broad queries", err)
 	}
 	test.Cleanup(func() { _ = worker.Close() })
-	if worker.workers == nil || worker.workers.Finalization == nil || worker.workers.Range == nil || worker.workers.FindFields == nil || worker.workers.Display == nil || worker.maintenance == nil || worker.Store != worker.infrastructure.Store || worker.Ready() {
-		test.Fatal("worker root did not own exactly its document workers and maintenance with one shared store")
-	}
 	current, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- worker.Run(current) }()

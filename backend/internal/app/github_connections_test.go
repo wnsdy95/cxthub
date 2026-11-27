@@ -7,9 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -137,9 +136,6 @@ func (f *githubFake) TeamMembers(context.Context, int64, string, string) ([]int6
 	}
 	return f.members, nil
 }
-func (f *githubFake) MergedPullRequests(context.Context, int64, domain.GitHubRepository, int) ([]domain.PullRequestMerge, bool, error) {
-	return nil, false, nil
-}
 
 func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, remote *githubFake) {
 	t.Helper()
@@ -154,7 +150,7 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.identity.SetTeamRepository(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.repository.ID, domain.RolePuller); err != nil {
@@ -173,7 +169,7 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if err = g.Edit(ctx, f.owner.ID, ns, c.Generation, "map-team", domain.GitHubBinding{}, domain.GitHubTeamMapping{TeamID: f.team.ID, ExternalID: 99, SyncMembers: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err = g.reconcile(ctx, ns); err != nil {
+	if err = githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	role, ok := f.identity.RoleOf(ctx, f.repository.ID, f.member.ID)
@@ -201,10 +197,10 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if err = g.Receive(ctx, "delivery-"+ns, "membership", []byte(`{"installation":{"id":789}}`)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("altered duplicate: %v", err)
 	}
-	if err = g.reconcile(ctx, ns); err != nil {
+	if err = githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
-	if err = f.identity.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID); err != nil {
+	if err = f.identity.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain"); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationMember); err != nil {
@@ -217,7 +213,7 @@ func runGitHubSyncContract(t *testing.T, g *GitHubConnections, f teamFixture, re
 	if err = g.Edit(ctx, f.owner.ID, ns, c.Generation, "refresh", domain.GitHubBinding{}, domain.GitHubTeamMapping{}); err != nil {
 		t.Fatal(err)
 	}
-	if err = g.reconcile(ctx, ns); err != nil {
+	if err = githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok = f.identity.RoleOf(ctx, f.repository.ID, f.member.ID); !ok {
@@ -253,7 +249,7 @@ func TestGitHubSyncDoesNotPublishAfterDisconnect(t *testing.T) {
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	c, _ := st.GetGitHubConnection(ctx, ns)
@@ -266,7 +262,7 @@ func TestGitHubSyncDoesNotPublishAfterDisconnect(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := g.reconcile(ctx, ns); !errors.Is(err, domain.ErrConflict) {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale sync completed: %v", err)
 	}
 	c, _ = st.GetGitHubConnection(ctx, ns)
@@ -284,7 +280,7 @@ func TestGitHubBindingUsesImmutableRepositoryAcrossRename(t *testing.T) {
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh("github-binding"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
@@ -297,7 +293,7 @@ func TestGitHubBindingUsesImmutableRepositoryAcrossRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote.repos[0].FullName = "acme/renamed"
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	scoped := outbound.WithGitRepository(ctx, repo.ID)
@@ -321,17 +317,19 @@ func TestGitHubBindingUsesImmutableRepositoryAcrossRename(t *testing.T) {
 	}
 }
 
-func TestGitHubDeliveryQueuesOnlyBoundRepositoryAndSurvivesWorkerRestart(t *testing.T) {
+// A delivery about a pull request asks for the remote of the bound repository
+// to be read again, and of no other repository that has the same origin.
+func TestGitHubDeliveryAsksOnlyTheBoundRepositoryAndSurvivesWorkerRestart(t *testing.T) {
 	g, st, f, remote := githubFixture(t)
 	ctx := context.Background()
 	ns := f.organization.NamespaceID
-	g.core = NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	g.core = NewService(st, st, st)
 	remote.repos = []domain.GitHubRepository{{ID: 91, AccountID: 456, FullName: "acme/api"}}
 	state := startGitHub(t, g, f.owner.ID, ns)
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh("github-queue"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
@@ -352,26 +350,37 @@ func TestGitHubDeliveryQueuesOnlyBoundRepositoryAndSurvivesWorkerRestart(t *test
 	if _, err := st.PutRepo(ctx, other); err != nil {
 		t.Fatal(err)
 	}
+	// A request is recorded for a remote that is being read: both were read once.
+	for _, read := range []domain.Repo{repo, other} {
+		read.GitRemoteURL = "https://github.com/acme/api"
+		state, err := st.ClaimRemoteGitSync(ctx, read.ID, read.GitRemoteURL, time.Now().UTC().Add(-time.Hour), time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.FinishRemoteGitSync(ctx, state); err != nil {
+			t.Fatal(err)
+		}
+	}
 	body := []byte(fmt.Sprintf(`{"installation":{"id":789},"repository":{"id":91},"action":"closed","number":7,"pull_request":{"id":701,"merged":true,"merge_commit_sha":%q,"head":{"ref":"feature","sha":%q,"repo":{"id":91}},"base":{"ref":"main","repo":{"id":91}}}}`, strings.Repeat("a", 40), strings.Repeat("b", 40)))
 	if err := g.Receive(ctx, "pr-delivery", "pull_request", body); err != nil {
 		t.Fatal(err)
 	}
 	// A new application instance drains durable bytes, without the original request.
 	restarted := NewGitHubConnections(f.identity, g.core, st, remote)
-	if err := restarted.deliver(ctx, githubHash("pr-delivery")); err != nil {
+	if err := githubWorkerOf(restarted).deliver(ctx, githubHash("pr-delivery")); err != nil {
 		t.Fatal(err)
 	}
-	job, err := st.GetPRJob(ctx, repo.ID, domain.PRPromotionID(repo.ID, 7))
-	if err != nil || job.PR.Number != 7 {
-		t.Fatalf("PR was not queued: %+v %v", job, err)
+	asked, err := st.GetRemoteGitState(ctx, repo.ID)
+	if err != nil || asked.RequestedAt == nil {
+		t.Fatalf("no fresh read was asked for: %+v %v", asked, err)
 	}
-	if _, err = st.GetPRJob(ctx, other.ID, domain.PRPromotionID(other.ID, 7)); !errors.Is(err, domain.ErrNotFound) {
+	if unbound, err := st.GetRemoteGitState(ctx, other.ID); err == nil && unbound.RequestedAt != nil {
 		t.Fatal("installation webhook fanned out by origin instead of binding")
 	}
 	if err = restarted.Receive(ctx, "pr-delivery", "pull_request", body); err != nil {
 		t.Fatal(err)
 	}
-	if err = restarted.deliver(ctx, githubHash("pr-delivery")); err != nil {
+	if err = githubWorkerOf(restarted).deliver(ctx, githubHash("pr-delivery")); err != nil {
 		t.Fatal(err)
 	}
 	delivered, err := st.GetGitHubDelivery(ctx, githubHash("pr-delivery"))
@@ -392,7 +401,7 @@ func TestGitHubOrganizationAdminCannotBindOrInspectPrivateContexts(t *testing.T)
 	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reconcile(ctx, ns); err != nil {
+	if err := githubWorkerOf(g).reconcile(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: hh("private-github-binding"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
@@ -465,59 +474,12 @@ func TestGitHubEnterpriseVisibilityDoesNotGrantOrganizationManagement(t *testing
 	}
 }
 
-type disconnectingGitReader struct {
-	*scanReader
-	disconnect func()
-}
-
-func (r *disconnectingGitReader) ReadCommitTree(ctx context.Context, origin, sha string) (domain.GitTreeEvidence, error) {
-	tree, err := r.scanReader.ReadCommitTree(ctx, origin, sha)
-	r.disconnect()
-	return tree, err
-}
-func TestGitHubDisconnectDuringEvidenceReadPreventsPublication(t *testing.T) {
-	g, st, f, remote := githubFixture(t)
-	ctx := systemTestContext()
-	ns := f.organization.NamespaceID
-	g.core = NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
-	remote.repos = []domain.GitHubRepository{{ID: 91, AccountID: 456, FullName: "acme/api"}}
-	state := startGitHub(t, g, f.owner.ID, ns)
-	if _, err := g.Complete(ctx, f.owner.ID, state, "code"); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.reconcile(ctx, ns); err != nil {
-		t.Fatal(err)
-	}
-	repo := domain.Repo{ID: hh("revoked-git-read"), RepositoryID: f.repository.ID, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/api.git"}
-	if _, err := st.PutRepo(ctx, repo); err != nil {
-		t.Fatal(err)
-	}
-	c, _ := st.GetGitHubConnection(ctx, ns)
-	if err := g.Edit(ctx, f.owner.ID, ns, c.Generation, "bind", domain.GitHubBinding{RepositoryID: f.repository.ID, ContextRepoID: repo.ID, ExternalID: 91}, domain.GitHubTeamMapping{}); err != nil {
-		t.Fatal(err)
-	}
-	commit := strings.Repeat("a", 40)
-	read := false
-	reader := &disconnectingGitReader{scanReader: &scanReader{deltas: map[string]domain.GitCommitDelta{commit: {Commit: commit, Parents: []string{}, Changes: []domain.GitPathChange{}, Complete: true}}}, disconnect: func() {
-		read = true
-		c, _ := st.GetGitHubConnection(ctx, ns)
-		if err := g.Edit(ctx, f.owner.ID, ns, c.Generation, "disconnect", domain.GitHubBinding{}, domain.GitHubTeamMapping{}); err != nil {
-			t.Fatal(err)
-		}
-	}}
-	scans, err := NewGitScans(g.core, reader)
+// githubWorkerOf builds the GitHub worker the way the program does on a file
+// store: from the connections' own configuration.
+func githubWorkerOf(connections *GitHubConnections) *GitHubWorker {
+	worker, err := NewGitHubWorker(connections.GitHubWorkerConfig(GitHubWorkerCompatibility))
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
-	scans.SetSourceAuthorizer(g)
-	if _, err = scans.ObservePush(ctx, repo.GitRemoteURL, "refs/heads/main", "", commit, false, "fixture-push"); err != nil {
-		t.Fatal(err)
-	}
-	if err = scans.Process(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
-	jobs, err := scans.ListScans(ctx, repo.ID, "", 100)
-	if err != nil || !read || len(jobs.Items) != 1 || jobs.Items[0].TreeIndexed || jobs.Items[0].Indexed || jobs.Items[0].State == "completed" {
-		t.Fatalf("revoked source was published: %+v %v", jobs, err)
-	}
+	return worker
 }

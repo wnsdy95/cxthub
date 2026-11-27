@@ -27,6 +27,11 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "identity-keys" {
 		return runIdentityKeys(os.Args[2:], os.Stdout, os.Stderr)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "repo-address" {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return runRepoAddress(ctx, os.Args[2:], os.Stdout, os.Stderr)
+	}
 	ns := flag.String("namespace", "", "immutable namespace ID")
 	policyFile := flag.String("policy", "", "JSON StoragePolicy file")
 	operation := flag.String("operation", "", "stable idempotency ID; reuse when retrying")

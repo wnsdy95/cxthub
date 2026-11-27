@@ -566,53 +566,6 @@ func (c *Client) TeamMembers(ctx context.Context, id int64, org, slug string) ([
 	}
 	return nil, domain.ErrValidation
 }
-func (c *Client) MergedPullRequests(ctx context.Context, id int64, repo domain.GitHubRepository, page int) ([]domain.PullRequestMerge, bool, error) {
-	var p []struct {
-		Number int        `json:"number"`
-		Merged *time.Time `json:"merged_at"`
-		Merge  string     `json:"merge_commit_sha"`
-		Head   struct {
-			Ref  string `json:"ref"`
-			SHA  string `json:"sha"`
-			Repo struct {
-				ID int64 `json:"id"`
-			} `json:"repo"`
-		} `json:"head"`
-		Base struct {
-			Ref  string `json:"ref"`
-			Repo struct {
-				ID int64 `json:"id"`
-			} `json:"repo"`
-		} `json:"base"`
-	}
-	if page < 1 {
-		return nil, false, domain.ErrValidation
-	}
-	if err := c.getInstalled(ctx, id, fmt.Sprintf("/repositories/%d/pulls?state=all&sort=created&direction=asc&per_page=100&page=%d", repo.ID, page), &p); err != nil {
-		return nil, false, err
-	}
-	if p == nil || len(p) > 100 {
-		return nil, false, domain.ErrIntegrity
-	}
-	out := []domain.PullRequestMerge{}
-	for _, v := range p {
-		if v.Merged == nil {
-			continue
-		}
-		if v.Base.Repo.ID != repo.ID {
-			return nil, false, domain.ErrIntegrity
-		}
-		if v.Head.Repo.ID != repo.ID {
-			continue
-		}
-		pr := domain.PullRequestMerge{Number: v.Number, BaseBranch: v.Base.Ref, HeadBranch: v.Head.Ref, HeadSHA: v.Head.SHA, MergeSHA: v.Merge}
-		if pr.Validate() != nil {
-			return nil, false, domain.ErrIntegrity
-		}
-		out = append(out, pr)
-	}
-	return out, len(p) == 100, nil
-}
 
 var repositorySegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 

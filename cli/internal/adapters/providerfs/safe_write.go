@@ -229,20 +229,6 @@ func WriteRepoFileDurable(repoRoot, relative string, data []byte, perm os.FileMo
 	}
 }
 
-// RemoveRepoFile removes a repository-relative regular file without following
-// repository-controlled symlinks. Missing files are treated as success.
-func RemoveRepoFile(repoRoot, relative string) error {
-	path, err := PrepareRepoFile(repoRoot, relative, 0o755)
-	if err != nil {
-		return err
-	}
-	err = os.Remove(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
-}
-
 // WriteRegularFileAtomic refuses symlink/device targets and replaces a regular
 // file through a same-directory temp file, so the final write never follows a
 // repository-controlled symlink.

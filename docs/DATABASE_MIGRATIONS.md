@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 160-file SQL bundle, from
-`0001_init.sql` through `0160_legacy_checkpoint_insert_accounting.sql`. Its catalog
+This source release requires the complete 170-file SQL bundle, from
+`0001_init.sql` through `0170_collector_reports.sql`. Its catalog
 digest is
-`ec6887aaa6fc2b75c5540d0dbceab39ff1e4b237bbded38acc3707e4bc5fecd4`, matching
+`966ebba5097862a68be384da53dee4071a26665fcceb58b15fa5d7f21305f004`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current
@@ -70,10 +70,21 @@ still applies: operator application and verification must precede verify-only
 runtime startup. A current binary rejects an incomplete or different catalog,
 even if that catalog was valid for an earlier release.
 
+**`0169_drop_capture_tables.sql` destroys data.** It drops 66 tables, one view
+and 42 functions of the earlier capture approach: the memory digests of
+captures and what was derived from captures (prepared documents, graph and
+pending projections, prepared memory, Git scans, PR promotion jobs). It cannot
+be undone from the database. Before applying it, run `cxt push` on every
+computer whose sessions should be on the server, and take the backup the
+sequence below requires. The captures themselves (`snapshots`, `refs`,
+`context_history` and the tables around them) stay: functions that stay still
+name them. Nothing is dropped with `CASCADE`, so the migration fails instead of
+removing an object that something which stays still depends on.
+
 There is no automatic destructive schema downgrade. Do not remove Codex
 settings, edit migration receipts, rewrite historical SQL, or point an old
 binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with the actual database catalog (160 after this release's upgrade),
+compatible with the actual database catalog (169 after this release's upgrade),
 or a separately verified pre-upgrade backup recovery that explicitly accounts
 for writes after the backup. Local fixture tests are not evidence that a
 production backup or recovery has been tested.
@@ -91,7 +102,7 @@ leave the previous constraint intact.
 The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
 That bundle belongs only to the corresponding historical artifacts, not the
-current 160-file release. Current verify-only startup still checks the public
+current 169-file release. Current verify-only startup still checks the public
 table and its validated, local, exact kind constraint. A receipt without the
 expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
 is not a compatible schema. Verification does not repair these conditions.
@@ -254,6 +265,51 @@ does not provision a database, database roles, a cloud service, or a deployment.
 Uncontrolled old binaries continuing to run against the migrated database remain
 unproven. A successful new startup check does not validate old-process behavior,
 rolling upgrades, or arbitrary mixed-version operation.
+
+## Moving a repository to another address
+
+A repository is stored under the hash of the address it was first connected
+with. One connected against a development server keeps that address when its
+database is served elsewhere: its clones reach the server through a
+[transport endpoint](../cli/TRANSPORT_MIGRATION.md), and a clone set up with the
+server's own address is refused. `cxt-admin repo-address` gives the stored
+repository the address its workspace is reached at now. It runs on PostgreSQL,
+against a database of exactly this release (run `migrate --apply` first), with
+the operator credential in `CXT_POSTGRES_DSN`:
+
+```sh
+cxt-admin repo-address --list
+cxt-admin repo-address --from http://localhost:5173/acme/project --to https://cxthub.io/acme/project
+cxt-admin repo-address --from http://localhost:5173/acme/project --to https://cxthub.io/acme/project --apply
+```
+
+The operator image runs `migrate` by default; name the executable instead:
+`docker run --rm --read-only --env CXT_POSTGRES_DSN --entrypoint /app/cxt-admin "$CXT_MIGRATE_IMAGE" repo-address --list`.
+
+- `--list` prints each stored repository's identifier, address and workspace.
+- Without `--apply` the move runs in a transaction that is rolled back and
+  prints what it would change (`changed`), what it leaves (`kept`) and how many
+  finished document jobs it removes. With `--apply` the same transaction
+  commits.
+- The new address must name the workspace the stored repository belongs to,
+  and nothing may be stored under it yet.
+- Every column that names the old identifier is given the new one in one
+  statement, with the tables' own triggers off, and nothing outside what is
+  left may name the old identifier at the end. Storage is counted by owner and
+  content hash, which a move does not change.
+- Left as they are: conversation content (what was said, addressed by its
+  hash), settings objects addressed by their hash, and what records what
+  happened (migration, ownership, storage ledger and audit records).
+- A document of the repository that is still being finished stops the move;
+  finished document jobs are removed, since their identifiers are computed from
+  the repository's.
+- Stop the API, MCP and worker processes and take a backup first, as for a
+  migration. The command waits at most 15 seconds for locks, and a running
+  process keeps what it read in memory.
+
+Then, on each computer with a clone, run `cxt setup <new address>`: it moves the
+clone's origin when its endpoint pins the workspace the server names under the
+new address.
 
 ## Failure and rollback
 

@@ -93,7 +93,7 @@ func runOrganizationDefaultAccess(t *testing.T, st teamTestStore) {
 	if role, _ := s.RoleOf(ctx, created.ID, f.member.ID); role != domain.RoleViewer {
 		t.Fatal("new repository did not inherit baseline")
 	}
-	if err := s.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID); err != nil {
+	if err := s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain"); err != nil {
 		t.Fatal(err)
 	}
 	check("")

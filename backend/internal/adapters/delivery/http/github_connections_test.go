@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 )
@@ -29,7 +28,7 @@ func (g *recordingGitHubConnections) Receive(context.Context, string, string, []
 }
 func TestGitHubAppWebhookRequiresSignatureAndDurability(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	svc := app.NewService(st, st, st)
 	server := NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st))
 	record := &recordingGitHubConnections{}
 	server.SetGitHubConnections(record, "fixture-secret", "https://example.test/connect/github")

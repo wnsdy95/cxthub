@@ -15,24 +15,11 @@ type docReadSource struct {
 	read  func(int, int) ([]byte, error)
 }
 
-type docReadProjection uint8
-
-const (
-	docReadMetadata docReadProjection = iota
-	docReadRanges
-	docReadSearch
-)
-
 func resourceReadForRepo[Result any](ctx context.Context, queries *Queries, repo domain.ContentHash, read func(context.Context) (Result, error)) (Result, error) {
 	return readDocument(ctx, queries, repo, read, false)
 }
 func repositoryReadForRepo[Result any](ctx context.Context, queries *Queries, repo domain.ContentHash, read func(context.Context) (Result, error)) (Result, error) {
 	return readDocument(ctx, queries, repo, read, true)
-}
-
-func (queries *Queries) docReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
-	source, err := queries.documentReadSource(ctx, repo, hash)
-	return source.index, err
 }
 
 func (queries *Queries) legacyDocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
@@ -46,95 +33,12 @@ func (queries *Queries) legacyDocReadIndex(ctx context.Context, repo, hash domai
 	return domain.BuildDocReadIndex(doc)
 }
 
-func (queries *Queries) ReadDocEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int) (domain.DocEventPage, error) {
-	ctx = queries.readContext(ctx)
-	return resourceReadForRepo(ctx, queries, repo, func(ctx context.Context) (domain.DocEventPage, error) {
-		out := domain.DocEventPage{Hash: hash, Next: -1, Events: []domain.CIREvent{}}
-		if offset < -1 || limit < 0 || limit > 100 {
-			return out, fmt.Errorf("%w: invalid event range", domain.ErrValidation)
-		}
-		if limit == 0 {
-			limit = 50
-		}
-		var previous []domain.ContentHash
-		if base != "" {
-			var err error
-			previous, err = queries.docEventBaseHashes(ctx, repo, base)
-			if err != nil {
-				return out, err
-			}
-		}
-		projection, err := queries.rootEventProjection(ctx, repo, hash, domain.RootEventSelection{Offset: offset, Limit: limit, Base: previous})
-		if err != nil {
-			return out, err
-		}
-		if projection != nil {
-			return projection.Page(ctx)
-		}
-		source, err := queries.documentReadSource(ctx, repo, hash)
-		if err != nil {
-			return out, err
-		}
-		idx := source.index
-		out.Envelope = idx.Envelope
-		out.Total = len(idx.Events)
-		if base != "" {
-			for out.Inherited < len(idx.Events) && out.Inherited < len(previous) && idx.Events[out.Inherited].Hash == previous[out.Inherited] {
-				out.Inherited++
-			}
-		}
-		if offset == -1 {
-			offset = out.Inherited
-		}
-		if offset > out.Total {
-			return out, fmt.Errorf("%w: event offset exceeds document", domain.ErrValidation)
-		}
-		out.Offset = offset
-		if offset == out.Total {
-			return out, nil
-		}
-		read := source.read
-		bytes := 0
-		for eventIndex := offset; eventIndex < out.Total && len(out.Events) < limit; eventIndex++ {
-			if err := ctx.Err(); err != nil {
-				return out, err
-			}
-			item := idx.Events[eventIndex]
-			if len(out.Events) > 0 && bytes+item.Length > 512<<10 {
-				out.Next = eventIndex
-				return out, nil
-			}
-			raw, err := read(item.Offset, item.Length)
-			if err != nil {
-				return out, err
-			}
-			ev, err := domain.DecodeIndexedEvent(raw, item)
-			if err != nil {
-				return out, err
-			}
-			out.Events = append(out.Events, ev)
-			bytes += item.Length
-		}
-		if next := offset + len(out.Events); next < out.Total {
-			out.Next = next
-		}
-		return out, nil
-	})
-}
-
 func (queries *Queries) SearchDocEvents(ctx context.Context, repo, hash domain.ContentHash, query string, after, limit int) ([]domain.DocEventIndex, error) {
 	ctx = queries.readContext(ctx)
 	return resourceReadForRepo(ctx, queries, repo, func(ctx context.Context) ([]domain.DocEventIndex, error) {
 		query = strings.ToLower(strings.TrimSpace(query))
 		if len([]rune(query)) < 2 || len([]rune(query)) > 256 || after < -1 || limit < 1 || limit > 201 {
 			return nil, fmt.Errorf("%w: invalid event search", domain.ErrValidation)
-		}
-		root, err := queries.rootReadSource(ctx, repo, hash, docReadSearch)
-		if err != nil {
-			return nil, err
-		}
-		if root != nil {
-			return searchReadIndex(ctx, root.index, query, after, limit)
 		}
 		if indexed := queries.index; indexed != nil {
 			return indexed.SearchDocEvents(ctx, repo, hash, query, after, limit)
@@ -284,100 +188,7 @@ func (queries *Queries) ReadDocFragments(ctx context.Context, repo, hash domain.
 	})
 }
 
-func (queries *Queries) rootReadSource(ctx context.Context, repo, hash domain.ContentHash, projection docReadProjection) (*docReadSource, error) {
-	return repositoryReadForRepo(ctx, queries, repo, func(bound context.Context) (*docReadSource, error) {
-		snapshot, err := queries.metadata.GetSnapshot(bound, repo, hash)
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err := matchReadSnapshot(domain.DocumentRef{Hash: hash, Identity: snapshot.DocIdentity}, snapshot); err != nil {
-			return nil, err
-		}
-		if snapshot.DocIdentity == domain.DocumentIdentityLegacy {
-			return nil, nil
-		}
-		source, err := queries.verifiedRootReadSource(bound, repo, snapshot, projection)
-		return &source, err
-	})
-}
-
-func matchReadSnapshot(expected domain.DocumentRef, snapshot domain.Snapshot) error {
-	if err := expected.Validate(); err != nil {
-		return err
-	}
-	if err := snapshot.DocumentRef().Validate(); err != nil {
-		return err
-	}
-	if expected.Identity == domain.DocumentIdentityLegacy && snapshot.DocIdentity != domain.DocumentIdentityLegacy {
-		return domain.ErrUnsupportedDocumentIdentity
-	}
-	if !expected.MatchesSnapshot(snapshot) {
-		return domain.ErrIntegrity
-	}
-	return nil
-}
-
-func (queries *Queries) verifiedRootDoc(ctx context.Context, repo domain.ContentHash, snapshot domain.Snapshot) (domain.VerifiedSessionDoc, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	if snapshot.DocIdentity != domain.DocumentIdentityRootV1 {
-		return domain.VerifiedSessionDoc{}, domain.ErrUnsupportedDocumentIdentity
-	}
-	reader := queries.verified
-	if reader == nil {
-		return domain.VerifiedSessionDoc{}, domain.ErrUnsupportedDocumentIdentity
-	}
-	doc, err := reader.ReadVerifiedDoc(ctx, repo, snapshot.DocHash)
-	if err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	if !doc.Reference().Matches(snapshot) {
-		return domain.VerifiedSessionDoc{}, domain.ErrIntegrity
-	}
-	return doc, ctx.Err()
-}
-
-func (queries *Queries) verifiedRootReadSource(ctx context.Context, repo domain.ContentHash, snapshot domain.Snapshot, projection docReadProjection) (docReadSource, error) {
-	doc, err := queries.verifiedRootDoc(ctx, repo, snapshot)
-	if err != nil {
-		return docReadSource{}, err
-	}
-	plan, err := doc.PlanReadIndexContext(ctx)
-	if err != nil {
-		return docReadSource{}, err
-	}
-	var index domain.DocReadIndex
-	switch projection {
-	case docReadRanges:
-		index, err = plan.BuildRangesContext(ctx)
-	case docReadMetadata:
-		index, err = plan.BuildMetadataContext(ctx)
-	case docReadSearch:
-		index, err = plan.BuildContext(ctx, nil)
-	default:
-		return docReadSource{}, domain.ErrIntegrity
-	}
-	if err != nil {
-		return docReadSource{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return docReadSource{}, err
-	}
-	return docReadSource{index: index, read: func(start, length int) ([]byte, error) { return doc.EventStreamRange(ctx, start, length) }}, nil
-}
-
 func (queries *Queries) documentReadSource(ctx context.Context, repo, hash domain.ContentHash) (docReadSource, error) {
-	root, err := queries.rootReadSource(ctx, repo, hash, docReadRanges)
-	if err != nil {
-		return docReadSource{}, err
-	}
-	if root != nil {
-		return *root, nil
-	}
 	index, err := queries.legacyDocReadIndex(ctx, repo, hash)
 	if err != nil {
 		return docReadSource{}, err
@@ -397,51 +208,4 @@ func (queries *Queries) indexedReadSource(ctx context.Context, repo, hash domain
 		}
 		return read(start, length)
 	}}
-}
-
-func (queries *Queries) rootEventProjection(ctx context.Context, repo, hash domain.ContentHash, selection domain.RootEventSelection) (*domain.VerifiedRootEvents, error) {
-	reader := queries.rootEvents
-	if reader == nil {
-		return nil, nil
-	}
-	snapshot, err := queries.metadata.GetSnapshot(ctx, repo, hash)
-	if errors.Is(err, domain.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := matchReadSnapshot(domain.DocumentRef{Hash: hash, Identity: snapshot.DocIdentity}, snapshot); err != nil {
-		return nil, err
-	}
-	if snapshot.DocIdentity == domain.DocumentIdentityLegacy {
-		return nil, nil
-	}
-	projection, err := reader.ReadVerifiedRootEvents(ctx, repo, hash, selection)
-	if err != nil {
-		return nil, err
-	}
-	if !projection.Reference().Matches(snapshot) {
-		return nil, domain.ErrIntegrity
-	}
-	return &projection, ctx.Err()
-}
-
-func (queries *Queries) docEventBaseHashes(ctx context.Context, repo, hash domain.ContentHash) ([]domain.ContentHash, error) {
-	projection, err := queries.rootEventProjection(ctx, repo, hash, domain.RootEventSelection{HashesOnly: true})
-	if err != nil {
-		return nil, err
-	}
-	if projection != nil {
-		return projection.EventHashes()
-	}
-	index, err := queries.docReadIndex(ctx, repo, hash)
-	if err != nil {
-		return nil, err
-	}
-	hashes := make([]domain.ContentHash, len(index.Events))
-	for position, event := range index.Events {
-		hashes[position] = event.Hash
-	}
-	return hashes, ctx.Err()
 }

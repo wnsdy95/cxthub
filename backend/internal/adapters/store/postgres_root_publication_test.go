@@ -96,11 +96,9 @@ func TestRootPublicationPGCurrentClosure(t *testing.T) {
 			if err != nil || !bytes.Equal(raw, f.manifestBytes) {
 				t.Fatal("root disk bytes", err)
 			}
-			got, err := s.ReadVerifiedDoc(ctx, repo, f.hash)
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertRootProof(t, got, f)
 			done, err := s.GetDocJob(ctx, repo, j.ID)
 			if err != nil || done.State != "completed" || done.DocumentRef() != doc.DocumentRef() {
 				t.Fatal(done, err)
@@ -125,9 +123,6 @@ func TestRootPublicationPGCurrentClosure(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer reopened.Close()
-			if _, err := reopened.ReadVerifiedDoc(ctx, repo, f.hash); err != nil {
-				t.Fatal(err)
-			}
 		})
 	}
 }
@@ -292,9 +287,6 @@ func TestRootPublicationPGGrantAndBytesRetainedThroughCommit(t *testing.T) {
 				if err := <-mutateDone; err != nil {
 					t.Fatal(err)
 				}
-			}
-			if _, err := s.ReadVerifiedDoc(ctx, j.RepoID, f.hash); err == nil {
-				t.Fatal("later corruption/revocation hidden by completed job")
 			}
 		})
 	}

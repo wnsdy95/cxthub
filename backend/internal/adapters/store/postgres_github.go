@@ -61,6 +61,16 @@ func (s *PostgresStore) PutGitHubConnection(ctx context.Context, v domain.GitHub
 func (s *PostgresStore) ListGitHubConnections(ctx context.Context) ([]domain.GitHubConnection, error) {
 	return githubPGList[domain.GitHubConnection](ctx, s, "github_connections")
 }
+func (s *PostgresStore) FindGitHubBinding(ctx context.Context, repo domain.ContentHash) (v domain.GitHubConnection, err error) {
+	var raw []byte
+	err = s.db(ctx).QueryRow(ctx, `SELECT body FROM github_connections
+WHERE body->'bindings' @> jsonb_build_array(jsonb_build_object('context_repo_id', $1::text)) ORDER BY id LIMIT 1`, string(repo)).Scan(&raw)
+	if err != nil {
+		return v, mapNoRows(err)
+	}
+	err = json.Unmarshal(raw, &v)
+	return
+}
 func (s *PostgresStore) GetGitHubRequest(ctx context.Context, id string) (domain.GitHubConnectRequest, error) {
 	return githubPGGet[domain.GitHubConnectRequest](ctx, s, "github_requests", id)
 }

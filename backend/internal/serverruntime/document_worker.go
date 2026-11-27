@@ -9,7 +9,6 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/app/displaymaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -17,7 +16,6 @@ import (
 type WorkerRuntime struct {
 	Store          store.Store
 	workers        *app.DocumentWorkers
-	maintenance    *displaymaintenance.Worker
 	additional     []workerBinding
 	infrastructure *Infrastructure
 	execution      *executionProfile
@@ -42,23 +40,14 @@ func ValidateWorkerExecutionProfile() error {
 	return err
 }
 
-func OpenDocumentWorker(ctx context.Context) (_ *WorkerRuntime, err error) {
-	return openWorker(ctx, true)
-}
-
-func OpenWorker(ctx context.Context, sources ...WorkerSourceFactory) (*WorkerRuntime, error) {
-	return openWorker(ctx, false, sources...)
-}
-
-func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSourceFactory) (_ *WorkerRuntime, err error) {
+// OpenWorker opens the worker process's runtime. Without sources it runs the
+// document worker alone; the complete worker profile needs exactly one source.
+func OpenWorker(ctx context.Context, sources ...WorkerSourceFactory) (_ *WorkerRuntime, err error) {
 	execution, err := executionProfileFromEnvironment(outbound.ProcessWorker, true)
 	if err != nil {
 		return nil, err
 	}
 	complete := execution.budget.Profile == outbound.BoundedWorkersProfile
-	if documentsOnly && complete {
-		return nil, fmt.Errorf("%w: OpenDocumentWorker requires %s; use OpenWorker for %s", domain.ErrValidation, outbound.BoundedDocumentsProfile, outbound.BoundedWorkersProfile)
-	}
 	if complete {
 		if _, err := executionDataDSN(os.Getenv("CXT_POSTGRES_DSN"), execution.role); err != nil {
 			return nil, err
@@ -70,13 +59,11 @@ func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSource
 		return nil, fmt.Errorf("%w: document-only worker cannot consume application sources", domain.ErrValidation)
 	}
 	infrastructure, err := OpenInfrastructure(ctx, InfrastructureConfig{
-		DSN:                          os.Getenv("CXT_POSTGRES_DSN"),
-		DataDir:                      os.Getenv("CXT_DATA"),
-		RequirePostgres:              true,
-		MigrationsDirectory:          os.Getenv("CXT_MIGRATIONS_DIR"),
-		LegacyByteRangePublication:   EnvBool(os.Getenv("CXT_LEGACY_BYTE_RANGE_PUBLICATION")),
-		LegacyDerivedBytePublication: EnvBool(os.Getenv("CXT_LEGACY_DERIVED_BYTE_PUBLICATION")),
-		execution:                    execution,
+		DSN:                 os.Getenv("CXT_POSTGRES_DSN"),
+		DataDir:             os.Getenv("CXT_DATA"),
+		RequirePostgres:     true,
+		MigrationsDirectory: os.Getenv("CXT_MIGRATIONS_DIR"),
+		execution:           execution,
 	})
 	if err != nil {
 		return nil, err
@@ -87,21 +74,10 @@ func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSource
 			_ = worker.Close()
 		}
 	}()
-	fields, supportsFields := worker.Store.(outbound.DocFindFieldsStore)
-	display, supportsDisplay := worker.Store.(outbound.DocDisplayStore)
-	maintenance, supportsMaintenance := worker.Store.(outbound.DocDisplayMaintenanceStore)
-	if !supportsFields || !supportsDisplay || !supportsMaintenance {
-		return nil, fmt.Errorf("%w: document worker storage capabilities are required", domain.ErrCatalogUnsupported)
-	}
 	verifier := &domain.CanonicalDocVerifier{}
 	worker.workers, err = app.NewDocumentWorkers(app.DocumentWorkersConfig{
-		Metadata: worker.Store, Blobs: worker.Store, FindFields: fields, Display: display,
-		Verifier: verifier, Profile: infrastructure.DocumentProfile,
+		Metadata: worker.Store, Blobs: worker.Store, Verifier: verifier, Profile: infrastructure.DocumentProfile,
 	})
-	if err != nil {
-		return nil, err
-	}
-	worker.maintenance, err = app.NewDisplayMaintenanceWorker(maintenance)
 	if err != nil {
 		return nil, err
 	}
@@ -121,10 +97,6 @@ func openWorker(ctx context.Context, documentsOnly bool, sources ...WorkerSource
 func (worker *WorkerRuntime) bindings() []workerBinding {
 	bindings := []workerBinding{
 		{name: "document-finalization", run: worker.workers.Finalization.Run},
-		{name: "document-range", run: worker.workers.Range.Run},
-		{name: "document-find-fields", run: worker.workers.FindFields.Run},
-		{name: "document-display", run: worker.workers.Display.Run},
-		{name: "display-maintenance", run: worker.maintenance.Run},
 	}
 	return append(bindings, worker.additional...)
 }
@@ -138,7 +110,7 @@ func (worker *WorkerRuntime) Ready() bool {
 }
 
 func (worker *WorkerRuntime) Run(ctx context.Context) error {
-	if worker == nil || ctx == nil || worker.workers == nil || worker.maintenance == nil {
+	if worker == nil || ctx == nil || worker.workers == nil {
 		return domain.ErrValidation
 	}
 	worker.mu.Lock()

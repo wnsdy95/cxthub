@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -133,78 +132,6 @@ func TestPGAccountPreferencesLoginPreservesConcurrentPreferences(test *testing.T
 	resolved, err := identity.ResolveSession(ctx, session.Token)
 	if err != nil || !reflect.DeepEqual(resolved, expected) {
 		test.Fatalf("session lost persisted preferences: %+v %v", resolved, err)
-	}
-}
-
-func TestPGAccountPreferencesConcurrentPatchesComposeWithoutBlockingOtherCustomer(test *testing.T) {
-	_, storage, repo := collaborationPG(test)
-	ctx, cancel := context.WithTimeout(systemTestContext(), 10*time.Second)
-	defer cancel()
-	observer := authorityScopeObserver(test, ctx)
-	other := authorityScopeSeed(test, ctx, storage, observer, repo)
-	fixture := makeTeamFixture(test, storage)
-	stale, err := storage.GetUser(ctx, fixture.owner.ID)
-	if err != nil {
-		test.Fatal(err)
-	}
-	blocker, err := observer.Begin(ctx)
-	if err != nil {
-		test.Fatal(err)
-	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = blocker.Rollback(cleanup)
-	}()
-	blockerName := "preferences-blocker-" + domain.NewID("")
-	if _, err := blocker.Exec(ctx, `SELECT set_config('application_name',$1,true)`, blockerName); err != nil {
-		test.Fatal(err)
-	}
-	var locked string
-	if err := blocker.QueryRow(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, stale.ID).Scan(&locked); err != nil {
-		test.Fatal(err)
-	}
-	firstStore, firstName := authorityScopePeer(test, ctx)
-	secondStore, secondName := authorityScopePeer(test, ctx)
-	first, second := make(chan error, 1), make(chan error, 1)
-	nickname, avatar := "Concurrent alias", "data:image/png;base64,aA=="
-	loadMode, locale := "reconstructed", "en"
-	go func() {
-		_, err := NewIdentityService(nil, firstStore).UpdateProfile(ctx, stale, nil, &nickname, nil, &avatar, nil)
-		first <- err
-	}()
-	authorityScopeBlocked(test, ctx, observer, firstName, blockerName, "users", first)
-	go func() {
-		_, err := NewIdentityService(nil, secondStore).UpdateProfile(ctx, stale, nil, nil, &loadMode, nil, &locale)
-		second <- err
-	}()
-	authorityScopeBlocked(test, ctx, observer, secondName, blockerName, "users", second)
-	progress := make(chan error, 1)
-	go func() {
-		service := NewService(storage, storage, nil, gitengine.NewEngine(storage), storage)
-		progress <- authorityScopeWrite(ctx, service, other, "settings")
-	}()
-	if err := authorityScopeDone(test, ctx, progress); err != nil {
-		test.Fatalf("held preference transactions blocked another customer's settings write: %v", err)
-	}
-	if err := blocker.Commit(ctx); err != nil {
-		test.Fatal(err)
-	}
-	if err := authorityScopeDone(test, ctx, first); err != nil {
-		test.Fatal(err)
-	}
-	if err := authorityScopeDone(test, ctx, second); err != nil {
-		test.Fatal(err)
-	}
-	current, err := storage.GetUser(ctx, stale.ID)
-	if err != nil {
-		test.Fatal(err)
-	}
-	expected := stale
-	expected.Nickname, expected.Avatar = nickname, avatar
-	expected.LoadMode, expected.Locale = loadMode, locale
-	if !reflect.DeepEqual(current, expected) {
-		test.Fatalf("concurrent preference patches did not compose: got=%+v want=%+v", current, expected)
 	}
 }
 

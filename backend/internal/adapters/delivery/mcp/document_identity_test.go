@@ -26,25 +26,9 @@ func (b *identityContextBackend) ListRepos(ctx context.Context, _ string) ([]dom
 	b.actor, b.system = inbound.RepositoryActor(ctx)
 	return nil, nil
 }
-func TestMCPUsesBinaryDocumentCompatibilityWithoutElevatingActor(t *testing.T) {
-	for _, ids := range [][]domain.DocumentIdentity{{domain.DocumentIdentityLegacy}, {domain.DocumentIdentityLegacy, domain.DocumentIdentityRootV1}} {
-		backend := &identityContextBackend{supported: ids}
-		server := &Server{context: backend}
-		ctx := inbound.WithRepositoryActor(context.Background(), "reader")
-		// A caller-supplied declaration is replaced, not merged with support.
-		ctx = inbound.WithDocumentIdentities(ctx, []domain.DocumentIdentity{"unknown"})
-		if _, err := server.runTool(ctx, domain.User{ID: "reader"}, "repository_list", nil); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(backend.observed, ids) || backend.actor != "reader" || backend.system {
-			t.Fatalf("compatibility or authority changed: %+v", backend)
-		}
-	}
-}
-
 func TestMCPExplicitDocumentIdentitiesDoNotRediscoverArchiveCapabilities(test *testing.T) {
 	backend := &identityContextBackend{supported: []domain.DocumentIdentity{"unsupported-backend-declaration"}}
-	server := &Server{context: backend}
+	server := &Server{repositories: backend}
 	identities := []domain.DocumentIdentity{domain.DocumentIdentityLegacy, domain.DocumentIdentityRootV1}
 	if err := server.SetDocumentIdentities(identities); err != nil {
 		test.Fatal(err)

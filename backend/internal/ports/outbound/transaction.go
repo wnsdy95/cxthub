@@ -28,12 +28,6 @@ type RepositoryTransactionPresence interface {
 	InTransaction(context.Context) bool
 }
 
-// PRJobFence holds the current job row until the repository transaction ends.
-// A stale/expired worker must fail before changing any context state.
-type PRJobFence interface {
-	FencePRJob(context.Context, domain.PRPromotionJob) error
-}
-
 // SecretsCASStore keeps the validated encrypted envelope from being replaced
 // between the application consistency check and its write. nil means absent.
 type SecretsCASStore interface {

@@ -7,13 +7,3 @@ type RepositoryRevision struct {
 	Graph    uint64 `json:"graph,string"`
 	Pending  uint64 `json:"pending,string"`
 }
-type PendingView struct {
-	ReadGeneration   *GraphReadGeneration `json:"read_generation,omitempty"`
-	ArchivedSessions []SessionArchiveView `json:"archived_sessions"`
-	Graph            *GraphState          `json:"graph"`
-	Revision         RepositoryRevision   `json:"revision"`
-	Pending          []Pending            `json:"pending"`
-	// Snapshots carry raw capture metadata only. Branches is intentionally absent;
-	// consumers preserve memberships from their matching graph generation.
-	Snapshots []Snapshot `json:"snapshots"`
-}

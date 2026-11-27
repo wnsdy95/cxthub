@@ -2,11 +2,10 @@ import { AppLink } from './AppLink';
 import { MCPApplications } from './MCPApplications';
 import { GitHubAccount } from './GitHubAccount';
 import { TransferNamespace } from './NamespaceAdministration';
-import { GitHubSyncCheck } from './GitHubSyncCheck';
 import { NotificationHistory } from './NotificationHistory';
 import { PersonalStorageUsage } from './StorageUsage';
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { Repo, User, Repository, RepositoryPatch } from '../types';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import type { User, Repository, RepositoryPatch } from '../types';
 import { LocaleSwitcher } from './LocaleSwitcher';
 import {
   useUpdateMe,
@@ -20,10 +19,7 @@ import {
   useTransferRepository,
   useSyncVisibility,
   useRepos,
-  useRefs,
   useSecretsEnvelope,
-  useUpdateAbout,
-  useEnableContextProtocol,
 } from '../hooks';
 import { useT, Rich } from '../i18n';
 import { safeAvatarUrl } from '../urls';
@@ -477,71 +473,6 @@ function TeamPassphraseStatus({ repoId, label }: { repoId: string; label: string
   );
 }
 
-// RepoBranchSettings — One-line form for repo structure settings (default branch, protected branch). Moved from About modal:
-// Not for description/topic info like intro — it's a management setting to change push rules, so it stays in the repository settings tab.
-// Independent storage from the repository main form (partial PATCH — about body unchanged).
-function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null }) {
-  const t = useT();
-  const [branch, setBranch] = useState(repo.default_branch);
-  const [protect, setProtect] = useState(repo.protect_default ?? false);
-  const save = useUpdateAbout();
-  const enableHistory = useEnableContextProtocol();
-  // Candidate = list of actual branch refs on the server — not free input; must be chosen from actual remote branches (prevents creating non-existent default branches by typo). Current setting is always included.
-  const refs = useRefs(repo.id).data ?? [];
-  const branches = useMemo(() => {
-    const names = new Set<string>();
-    for (const r of refs) if (r.kind === 'branch' && r.name) names.add(r.name);
-    if (repo.default_branch) names.add(repo.default_branch);
-    return [...names].sort();
-  }, [refs, repo.default_branch]);
-  useEffect(() => {
-    setBranch(repo.default_branch);
-    setProtect(repo.protect_default ?? false);
-    save.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo.id, repo.default_branch, repo.protect_default]);
-  const dirty = branch !== repo.default_branch || protect !== (repo.protect_default ?? false);
-  return (
-    <div className="repo-branch-row">
-      {label && <code>{label}</code>}
-      <label>
-        {t('about.defaultBranch')}
-        <select value={branch} onChange={(e) => setBranch(e.target.value)}>
-          {branches.map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="vis-sync">
-        <input type="checkbox" checked={protect} onChange={(e) => setProtect(e.target.checked)} />
-        <Rich>{t('about.protectBranch')}</Rich>
-      </label>
-      <button
-        type="button"
-        className="ghost mini"
-        disabled={!dirty || save.isPending}
-        onClick={() => save.mutate({ repoId: repo.id, default_branch: branch || undefined, protect_default: protect })}
-      >
-        {save.isPending ? t('common.saving') : t('common.save')}
-      </button>
-      {save.isSuccess && !dirty && <span className="ok-msg">{t('settings.saved')}</span>}
-      {save.error && <span className="err">{save.error.message}</span>}
-      <div className="repo-history-protection">
-        <strong>{t('settings.historyProtection')}</strong>
-        {repo.context_protocol === 1 || enableHistory.isSuccess ? <p className="ok-msg">{t('settings.historyProtected')}</p> : <>
-          <p>{t('settings.historyProtectionHint')}</p>
-          <button type="button" className="ghost mini" disabled={enableHistory.isPending} onClick={() => enableHistory.mutate(repo.id)}>
-            {enableHistory.isPending ? t('common.saving') : t('settings.enableHistoryProtection')}
-          </button>
-        </>}
-        {enableHistory.error && <p className="err">{enableHistory.error.message}</p>}
-      </div>
-    </div>
-  );
-}
-
 export function RepositorySettings({ repositoryMetadata }: { repositoryMetadata: Repository }) {
   const t = useT();
   const [pub, setPub] = useState(repositoryMetadata.visibility === 'public');
@@ -653,24 +584,11 @@ export function RepositorySettings({ repositoryMetadata }: { repositoryMetadata:
                 </div>
               )}
 
-              {repos.map(repo => <GitHubSyncCheck key={repo.id} repo={repo.id} />)}
               <div className="settings-upload permission-controls">
                 <span className="label">{t('settings.permissions')}</span>
                 <p className="hint">{t('settings.permissionsHint')}</p>
                 <PolicyControl label={t('about.secretsSettings')} policy={secretsPolicy} setPolicy={setSecretsPolicy} />
                 <PolicyControl label={t('settings.settingsPolicy')} policy={settingsPolicy} setPolicy={setSettingsPolicy} />
-              </div>
-
-              <div className="settings-upload">
-                <span className="label">{t('settings.branchSection')}</span>
-                <p className="hint">{t('settings.branchHint')}</p>
-                {repos.length === 0 ? (
-                  <em className="hint">{t('secrets.tpNoRepo')}</em>
-                ) : (
-                  repos.map((r) => (
-                    <RepoBranchSettings key={r.id} repo={r} label={repos.length > 1 ? r.id.slice(0, 10) : null} />
-                  ))
-                )}
               </div>
 
               <div className="settings-upload">

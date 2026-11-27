@@ -2,10 +2,8 @@ package app
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
-	"log"
 	"time"
 )
 
@@ -65,16 +63,4 @@ func (s *IdentityService) ReconcileStorageUsage(ctx context.Context, actor, ns s
 		return domain.ErrUsageUnavailable
 	}
 	return st.ReconcileStorageUsage(ctx, n.ID)
-}
-
-func (service *IdentityService) RunStorageMaintenance(ctx context.Context) {
-	storage, _ := service.repositories.(systemmaintenance.StorageStore)
-	worker, err := systemmaintenance.NewStorage(systemmaintenance.StorageConfig{
-		Profile: systemmaintenance.Compatibility, Store: storage,
-	})
-	if err != nil {
-		log.Printf("storage maintenance: %v", err)
-		return
-	}
-	worker.Run(ctx)
 }

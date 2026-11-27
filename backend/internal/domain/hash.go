@@ -182,12 +182,3 @@ func validatedSessionDocBytes(doc SessionDoc, eventJSON func(CIREvent) ([]byte, 
 	}
 	return canonical, nil
 }
-
-// MemoryDigestHash calculates the wire JSON content hash of a memory object.
-func MemoryDigestHash(digest MemoryDigest) (ContentHash, error) {
-	data, err := json.Marshal(digest)
-	if err != nil {
-		return "", err
-	}
-	return HashContent(data), nil
-}

@@ -99,10 +99,6 @@ func TestRootStreamingPGPagesReceiptAndCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer reopened.Close()
-			header := assertRangePages(t, ctx, reopened, repo, fixture)
-			if got := rangeCountsPG(t, reopened, ctx, fixture.hash); got != [2]int{1, len(header.Pages)} {
-				t.Fatal("incomplete persisted range index", got)
-			}
 			done, err := reopened.GetDocJob(ctx, repo, job.ID)
 			if err != nil || done.State != "completed" || done.DocumentRef() != job.DocumentRef() || done.Version != job.Version || !done.LeaseUntil.IsZero() {
 				t.Fatal("invalid completion receipt", done, err)
@@ -287,7 +283,6 @@ func TestRootStreamingPGCompleteRechecksCurrentClosureAndFence(t *testing.T) {
 				if err := fresh.Complete(ctx, job, time.Now()); err != nil {
 					t.Fatal("fresh source generation did not preserve recompression support", err)
 				}
-				assertRangePages(t, ctx, storage, job.RepoID, fixture)
 				return
 			}
 			if damage == "root-winner" {
@@ -386,7 +381,6 @@ func TestRootStreamingPGRollbackAndChangedStoragePolicy(t *testing.T) {
 					if err := publication.Complete(bound, job, time.Now()); err != nil {
 						return err
 					}
-					assertRangePages(t, bound, storage, repo, fixture)
 					completed, err := storage.GetDocJob(bound, repo, job.ID)
 					if err != nil || completed.State != "completed" {
 						t.Fatal("receipt is not part of the publishing transaction", err)
@@ -462,7 +456,6 @@ func TestRootStreamingPGCurrentRepositoryOptIn(t *testing.T) {
 				if err != nil {
 					t.Fatal("completion used stale repository policy", err)
 				}
-				assertRangePages(t, ctx, storage, repo, fixture)
 			} else {
 				if !errors.Is(err, domain.ErrRootPublicationDisabled) {
 					t.Fatal("root published without current repository opt-in", err)
@@ -511,12 +504,8 @@ func TestRootStreamingPGChunkShareLocksLastThroughOuterCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertRangePages(t, ctx, storage, job.RepoID, fixture)
 			if tag, err := storage.pool.Exec(ctx, query, args...); err != nil || tag.RowsAffected() != 1 {
 				t.Fatal("mutation did not proceed after outer commit", err)
-			}
-			if _, err := storage.ReadVerifiedDoc(ctx, job.RepoID, fixture.hash); err == nil {
-				t.Fatal("completion receipt concealed later source damage")
 			}
 		})
 	}

@@ -66,7 +66,6 @@ func docReadProjectionModes(plan DocReadPlan) []docReadProjectionMode {
 	return []docReadProjectionMode{
 		{name: "search", build: func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, nil) }},
 		{name: "reused", build: func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, known) }, cache: known},
-		{name: "metadata", build: plan.BuildMetadataContext, only: true},
 	}
 }
 

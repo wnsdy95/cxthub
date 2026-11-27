@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nProvider } from '../src/i18n/index.tsx';
 import { RoleCapabilities } from '../src/components/RoleCapabilities.tsx';
 import { ROLE_CAPABILITIES, ROLES, atLeast } from '../src/roles.ts';
-import { parseRoute, repoPath, repositorySlug, repositoryPath } from '../src/route.ts';
+import { parseRoute, repositoryPath } from '../src/route.ts';
 
 assert.deepEqual(ROLE_CAPABILITIES, [
   { id: 'viewContext', minimumRole: 'viewer' },
@@ -51,14 +51,4 @@ assert.deepEqual(parseRoute('/acme/platform/settings'), {
 });
 const repository = { id: 'ws_1', owner_username: 'acme', slug: 'platform' };
 assert.equal(repositoryPath(repository, 'members'), '/acme/platform?tab=members');
-assert.equal(repositorySlug({ remote_url: 'https://cxthub.com/acme/platform/backend' }), 'backend');
-assert.equal(repoPath(repository, { remote_url: 'https://cxthub.com/acme/platform/backend' }), '/acme/platform');
-assert.equal(
-  repoPath(repository, { remote_url: 'https://cxthub.com/acme/platform/backend' }, 'onhold'),
-  '/acme/platform?tab=onhold',
-);
-assert.equal(
-  repoPath(repository, { remote_url: 'https://cxthub.com/acme/platform' }),
-  '/acme/platform',
-  'legacy two-segment repository keeps its stable repository URL',
-);
+assert.equal(repositoryPath(repository), '/acme/platform');

@@ -14,14 +14,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-func putReadIndexPG(ctx context.Context, tx pgx.Tx, doc domain.VerifiedSessionDoc) error {
-	plan, err := prepareReadIndexPG(ctx, doc)
-	if err != nil {
-		return err
-	}
-	return putPreparedReadIndexPG(ctx, tx, plan)
-}
-
 func putPreparedReadIndexPG(ctx context.Context, tx pgx.Tx, plan preparedReadIndexPG) error {
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM doc_read_indexes_v3 WHERE hash=$1)`, plan.hash).Scan(&exists); err != nil {

@@ -118,7 +118,7 @@ func runTeamContract(t *testing.T, st teamTestStore) {
 	if err = s.UpdateTeamMember(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.member.ID, domain.TeamMember); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RemoveOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID); err != nil {
+	if err = s.OffboardOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, "retain"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok = s.RoleOf(ctx, f.repository.ID, f.member.ID); ok {

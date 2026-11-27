@@ -1,5 +1,5 @@
 {
   "name": "cxthub",
   "version": "0.1.0",
-  "description": "CXTHub session capture for Claude Code and Codex. Hooks capture automatically, MCP provides read-only context queries, and explicit cxt CLI commands handle mutations."
+  "description": "CXTHub for Claude Code and Codex. Hooks wake the reading of sessions, MCP provides read-only session queries, and explicit cxt CLI commands do the rest."
 }

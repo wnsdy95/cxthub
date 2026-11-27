@@ -113,11 +113,7 @@ func TestBoundedExecutionProcessPGChild(test *testing.T) {
 	case outbound.ProcessMCP:
 		runtime, err = serverruntime.OpenMCP(signaled, "127.0.0.1:0", os.Getenv("HOME"), true)
 	case outbound.ProcessWorker:
-		if os.Getenv("CXT_EXECUTION_PROFILE") == outbound.BoundedWorkersProfile {
-			worker, err = workerserver.OpenWorker(signaled)
-		} else {
-			worker, err = serverruntime.OpenDocumentWorker(signaled)
-		}
+		worker, err = workerserver.OpenWorker(signaled)
 	}
 	if err != nil {
 		emit(executionProcessEvent{State: "refused", Code: executionProcessErrorCode(err)})
@@ -285,90 +281,6 @@ func TestBoundedExecutionProcessPGChild(test *testing.T) {
 		}
 	case <-lifetime.Done():
 		test.Fatal("close acknowledgement exceeded the child lifetime")
-	}
-}
-
-func TestBoundedExecutionProcessesPGAdmissionAndWorker(test *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	fixture := newExecutionProcessFixture(test, ctx)
-	api := fixture.start(test, ctx, outbound.ProcessAPI)
-	api.expect(test, ctx, "opened", "")
-	api.assertReady(test, ctx, false)
-	api.reject(test, ctx, "incomplete-roster", false)
-	mcp := fixture.start(test, ctx, outbound.ProcessMCP)
-	mcp.expect(test, ctx, "opened", "")
-	mcp.assertReady(test, ctx, false)
-	worker := fixture.start(test, ctx, outbound.ProcessWorker)
-	worker.expect(test, ctx, "opened", "")
-	for _, child := range []*executionProcessChild{api, mcp, worker} {
-		child.waitReady(test, ctx, true)
-	}
-	fixture.assertSessions(test, ctx, 3, 0)
-	for _, role := range []outbound.ProcessRole{outbound.ProcessAPI, outbound.ProcessMCP, outbound.ProcessWorker} {
-		duplicate := fixture.start(test, ctx, role)
-		if event := duplicate.expect(test, ctx, "refused", ""); event.Code != "conflict" {
-			test.Fatal("duplicate real root was not refused as a role conflict", role, event.Code)
-		}
-		duplicate.join(test, ctx, false)
-	}
-	api.hold(test, ctx, "api-bulk", true)
-	mcp.reject(test, ctx, "mcp-shared-busy", true)
-	worker.hold(test, ctx, "worker-reserved-bulk", true)
-	api.hold(test, ctx, "api-interactive", false)
-	mcp.hold(test, ctx, "mcp-interactive", false)
-	fixture.assertSessions(test, ctx, 3, 2)
-	for _, child := range []*executionProcessChild{api, mcp, worker} {
-		child.reject(test, ctx, "active-limit", false)
-	}
-	test.Log("four held admissions observed in three real runtime processes: API2 + MCP1 + worker1; two granted session bulk locks")
-	api.release(test, ctx, "api-bulk")
-	mcp.release(test, ctx, "mcp-interactive")
-	mcp.hold(test, ctx, "mcp-bulk", true)
-	api.reject(test, ctx, "api-shared-busy", true)
-	fixture.waitRejectedBulkConnectionClosed(test, ctx, outbound.ProcessAPI)
-	fixture.assertSessions(test, ctx, 3, 2)
-	mcp.release(test, ctx, "mcp-bulk")
-	worker.release(test, ctx, "worker-reserved-bulk")
-	api.release(test, ctx, "api-interactive")
-	fixture.assertSessions(test, ctx, 3, 0)
-	worker.send(test, executionProcessCommand{Operation: "run"})
-	worker.expect(test, ctx, "running", "")
-	fixture.waitDocumentJob(test, ctx)
-	fixture.publishSnapshot(test, ctx)
-	fixture.assertDocumentReads(test, ctx, api, mcp)
-	worker.terminateAndAcknowledge(test, ctx, fixture)
-	api.waitReady(test, ctx, false)
-	mcp.waitReady(test, ctx, false)
-	api.reject(test, ctx, "worker-role-lost", false)
-	mcp.reject(test, ctx, "worker-role-lost", true)
-	fixture.assertSessions(test, ctx, 2, 0)
-	api.terminateAndAcknowledge(test, ctx, fixture)
-	mcp.terminateAndAcknowledge(test, ctx, fixture)
-	fixture.assertSessions(test, ctx, 0, 0)
-}
-
-func (fixture *executionProcessFixture) waitRejectedBulkConnectionClosed(test *testing.T, ctx context.Context, role outbound.ProcessRole) {
-	test.Helper()
-	deadline, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		var remaining int
-		err := fixture.observer.QueryRow(deadline, `SELECT count(*) FROM pg_stat_activity
- WHERE datname=current_database() AND application_name=$1`, "cxthub/bounded-documents-v1/"+string(role)+"/bulk").Scan(&remaining)
-		if err != nil {
-			test.Fatal("observe rejected request's discarded bulk connection", role, err)
-		}
-		if remaining == 0 {
-			return
-		}
-		select {
-		case <-deadline.Done():
-			test.Fatal("rejected request's bulk connection survived the original one-second discard bound", role, remaining)
-		case <-ticker.C:
-		}
 	}
 }
 

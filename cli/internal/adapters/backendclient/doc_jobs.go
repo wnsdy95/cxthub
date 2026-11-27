@@ -11,6 +11,15 @@ import (
 
 type docJobStatus = domain.DocFinalizationStatus
 
+// The server takes a document in a job of its own and is asked whether the
+// job has ended. A part of a conversation is taken within tens of
+// milliseconds, so the first question comes soon; each wait after it is
+// twice the one before, up to the longest.
+const (
+	docJobFirstWait   = 50 * time.Millisecond
+	docJobLongestWait = 5 * time.Second
+)
+
 func (c *BackendClient) finalizeDocument(ctx context.Context, repo string, doc chunkedDocWire) error {
 	if err := doc.DocumentRef().Validate(); err != nil {
 		return err
@@ -26,7 +35,7 @@ func (c *BackendClient) finalizeDocument(ctx context.Context, repo string, doc c
 		return fmt.Errorf("accept document %s for finalization (no ref updates sent): %w", doc.Hash, err)
 	}
 	id := job.ID
-	delay := time.Second
+	delay := docJobFirstWait
 	for {
 		if err := job.ValidateFor(domain.ContentHash(repo), doc); err != nil || job.ID != id {
 			return fmt.Errorf("%w: document finalization receipt identity", domain.ErrHashMismatch)
@@ -52,6 +61,6 @@ func (c *BackendClient) finalizeDocument(ctx context.Context, repo string, doc c
 		if err := c.do(ctx, http.MethodGet, path+"/"+id, nil, &job); err != nil {
 			return fmt.Errorf("document finalization remains durably queued as %s (no ref updates sent): %w", id, err)
 		}
-		delay = min(delay*2, 5*time.Second)
+		delay = min(delay*2, docJobLongestWait)
 	}
 }

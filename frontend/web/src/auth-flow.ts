@@ -1,11 +1,11 @@
 // Provider-independent sign-in transitions. Credentials are intentionally held
 // only in this page's memory, and linking requires a fresh matching sign-in.
-export type AuthStep = 'link-required' | 'link-expired' | 'account-mismatch' | 'missing-email' | 'verify-email';
+type AuthStep = 'link-required' | 'link-expired' | 'account-mismatch' | 'missing-email' | 'verify-email';
 export class AuthStepError extends Error {
   constructor(readonly step: AuthStep, readonly email = '', readonly sent = false) { super(step); }
 }
 export interface AuthUser { uid: string; email: string | null; emailVerified: boolean }
-export interface AuthFlowPort<U extends AuthUser, C> {
+interface AuthFlowPort<U extends AuthUser, C> {
   link(user: U, credential: C): Promise<U>;
   refresh(user: U): Promise<U>;
   verify(user: U): Promise<void>;

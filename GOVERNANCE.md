@@ -28,7 +28,7 @@ administers repository rules, and has final release authority.
 Routine decisions happen in issues and pull requests. Maintainers seek
 technical consensus for changes involving:
 
-- snapshot identity and graph semantics;
+- how sessions are cut at commits, linked to them, and opened to readers;
 - wire formats, persistence, and migrations;
 - synchronization and provider compatibility;
 - security, privacy, authentication, and authorization;

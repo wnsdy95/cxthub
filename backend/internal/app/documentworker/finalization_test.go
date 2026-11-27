@@ -617,3 +617,124 @@ func TestFinalizationOwnerClaimCancellationAndWorkerCadence(test *testing.T) {
 		<-done
 	})
 }
+
+// The worker looks for a job at once when it is woken, which is what the
+// process that stored a job does. After a job it looks for the next at once;
+// with none waiting, and after a job that failed, it waits for a wake or for
+// its look a second later.
+func TestFinalizationOwnerIsWokenAndTakesWaitingJobsOneAfterAnother(test *testing.T) {
+	run := func(owner *documentworker.Finalizer) (stop func()) {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); owner.Run(ctx) }()
+		return func() { cancel(); <-done }
+	}
+	synctest.Test(test, func(test *testing.T) {
+		var claims atomic.Int64
+		storage := &finalizationStore{claim: func(context.Context, domain.ContentHash, time.Time, time.Duration) (domain.DocFinalizationJob, error) {
+			claims.Add(1)
+			return domain.DocFinalizationJob{}, domain.ErrNotFound
+		}}
+		owner := newFinalizationOwner(test, storage, nil, &finalizationScope{})
+		defer run(owner)()
+		synctest.Wait()
+		began := time.Now()
+		time.Sleep(400 * time.Millisecond)
+		owner.Wake()
+		synctest.Wait()
+		if count := claims.Load(); count != 2 || time.Since(began) != 400*time.Millisecond {
+			test.Fatal("a woken worker did not look at once", count, time.Since(began))
+		}
+		// The look after it is a second after the wake, not after the look before.
+		time.Sleep(time.Second - time.Nanosecond)
+		synctest.Wait()
+		if count := claims.Load(); count != 2 {
+			test.Fatal("the worker looked before a second had passed since it was woken", count)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if count := claims.Load(); count != 3 {
+			test.Fatal("the worker did not look a second after it was woken", count)
+		}
+	})
+	// A wake that arrives while the worker is busy is not lost.
+	synctest.Test(test, func(test *testing.T) {
+		var claims atomic.Int64
+		busy := make(chan struct{})
+		storage := &finalizationStore{claim: func(context.Context, domain.ContentHash, time.Time, time.Duration) (domain.DocFinalizationJob, error) {
+			if claims.Add(1) == 1 {
+				<-busy
+			}
+			return domain.DocFinalizationJob{}, domain.ErrNotFound
+		}}
+		owner := newFinalizationOwner(test, storage, nil, &finalizationScope{})
+		defer run(owner)()
+		synctest.Wait()
+		owner.Wake()
+		owner.Wake()
+		close(busy)
+		synctest.Wait()
+		if count := claims.Load(); count != 2 {
+			test.Fatal("wakes during a look did not give exactly one more look", count)
+		}
+	})
+	// Two jobs wait: both are taken without a pause, and the look that finds
+	// no third one is the last until a second has passed.
+	synctest.Test(test, func(test *testing.T) {
+		job, bodies := finalizationFixture(test, domain.DocumentIdentityLegacy)
+		var claims, completes atomic.Int64
+		chunks := finalizationChunks{get: func(_ context.Context, _, hash domain.ContentHash) ([]byte, error) { return bodies[hash], nil }}
+		publication := &finalizationPublication{complete: func(context.Context, domain.DocFinalizationJob, time.Time) error {
+			completes.Add(1)
+			return nil
+		}}
+		storage := &finalizationStore{
+			claim: func(context.Context, domain.ContentHash, time.Time, time.Duration) (domain.DocFinalizationJob, error) {
+				if claims.Add(1) > 2 {
+					return domain.DocFinalizationJob{}, domain.ErrNotFound
+				}
+				return job, nil
+			},
+			prepare: func(context.Context, domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
+				return publication, nil
+			},
+		}
+		owner := newFinalizationOwner(test, storage, chunks, &finalizationScope{})
+		defer run(owner)()
+		began := time.Now()
+		synctest.Wait()
+		if claims.Load() != 3 || completes.Load() != 2 || !time.Now().Equal(began) {
+			test.Fatal("waiting jobs were not taken one after another at once", claims.Load(), completes.Load(), time.Since(began))
+		}
+	})
+	// A job that failed is not followed by a look at once.
+	synctest.Test(test, func(test *testing.T) {
+		job, _ := finalizationFixture(test, domain.DocumentIdentityRootV1)
+		var claims atomic.Int64
+		storage := finalizationStreamingStore{
+			finalizationStore: &finalizationStore{
+				claim: func(context.Context, domain.ContentHash, time.Time, time.Duration) (domain.DocFinalizationJob, error) {
+					claims.Add(1)
+					return job, nil
+				},
+				finish: func(context.Context, domain.DocFinalizationJob, time.Time) error { return nil },
+			},
+			root: func(context.Context, domain.DocFinalizationJob) (outbound.PreparedRootDocPublication, error) {
+				return nil, domain.ErrNotFound
+			},
+		}
+		owner := newFinalizationOwner(test, storage, nil, &finalizationScope{})
+		defer run(owner)()
+		synctest.Wait()
+		time.Sleep(time.Second - time.Nanosecond)
+		synctest.Wait()
+		if count := claims.Load(); count != 1 {
+			test.Fatal("a failed job was followed by a look before a second had passed", count)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if count := claims.Load(); count != 2 {
+			test.Fatal("the worker did not look a second after a failed job", count)
+		}
+	})
+}

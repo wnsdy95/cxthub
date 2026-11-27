@@ -86,7 +86,7 @@ func TestDocJobLegacyStreamingLifecycle(t *testing.T) {
 						return publication, nil
 					},
 				}
-				err := service.runDocJob(ctx, storage, job)
+				err := runDocJob(ctx, service, storage, job)
 				if outcome == "success" && err != nil || outcome != "success" && !errors.Is(err, failure) {
 					t.Fatal("unexpected job outcome", err)
 				}

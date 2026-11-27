@@ -7,13 +7,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-type Profile string
-
-const (
-	Compatibility Profile = "compatibility"
-	Complete      Profile = "complete"
-)
-
 type Scope interface {
 	WorkerContext(context.Context) context.Context
 }
@@ -23,7 +16,6 @@ type RepositoryReader interface {
 }
 
 type Config struct {
-	Profile      Profile
 	Scope        Scope
 	Jobs         outbound.NotificationStore
 	Repositories RepositoryReader

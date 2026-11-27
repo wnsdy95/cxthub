@@ -180,7 +180,7 @@ func TestDocumentWorkerRootRequiresProfileWithoutAuthenticationOrFilesystemFallb
 	test.Setenv("CXT_POSTGRES_DSN", "")
 	data := filepath.Join(test.TempDir(), "untouched")
 	test.Setenv("CXT_DATA", data)
-	worker, err := OpenDocumentWorker(context.Background())
+	worker, err := OpenWorker(context.Background())
 	if worker != nil || !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "CXT_POSTGRES_DSN") {
 		test.Fatal("worker constructed authentication/query dependencies or allowed local storage", err)
 	}
@@ -188,7 +188,7 @@ func TestDocumentWorkerRootRequiresProfileWithoutAuthenticationOrFilesystemFallb
 		test.Fatal("worker touched local storage", err)
 	}
 	test.Setenv("CXT_EXECUTION_PROFILE", "")
-	if worker, err := OpenDocumentWorker(context.Background()); worker != nil || !errors.Is(err, domain.ErrValidation) {
+	if worker, err := OpenWorker(context.Background()); worker != nil || !errors.Is(err, domain.ErrValidation) {
 		test.Fatal("worker accepted an implicit embedded profile", err)
 	}
 }

@@ -22,9 +22,16 @@ func (worker *GitHubWorker) EvidenceInstallation(ctx context.Context, path strin
 	if err != nil {
 		return 0, "", err
 	}
-	connection, err := worker.store.GetGitHubConnection(ctx, local.OwnerNamespaceID)
+	connection, err := worker.store.FindGitHubBinding(ctx, repoID)
 	if errors.Is(err, domain.ErrNotFound) {
-		return 0, path, nil
+		// No installation was told to read this repository. Its owner's
+		// installation, where there is one, reads only what it was told to.
+		if _, err = worker.store.GetGitHubConnection(ctx, local.OwnerNamespaceID); errors.Is(err, domain.ErrNotFound) {
+			return 0, path, nil
+		} else if err != nil {
+			return 0, "", err
+		}
+		return 0, "", domain.ErrForbidden
 	}
 	if err != nil {
 		return 0, "", err

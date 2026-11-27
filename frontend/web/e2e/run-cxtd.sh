@@ -28,7 +28,6 @@ go build -tags postgres -o "$build_root/cxt-admin" ./cmd/cxt-admin
 export CXT_POSTGRES_DSN="$CXT_E2E_DSN" CXT_REQUIRE_POSTGRES=1
 export RESEND_API_KEY= CXT_ENV_FILE=/dev/null CXT_AUTH=dev
 export CXT_CONVERSATION_ROOT_PUBLICATION=true
-export CXT_LEGACY_BYTE_RANGE_PUBLICATION=true
 export CXT_PUBLIC_URL=http://127.0.0.1:4174
 export CXT_MIGRATIONS_DIR="$repo_root/schemas/db/migrations"
 "$build_root/cxt-admin" migrate --apply

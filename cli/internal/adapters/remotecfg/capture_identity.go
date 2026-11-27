@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // This is a local preference bound to the destination confirmed by an explicit
@@ -110,19 +109,3 @@ func CaptureIdentity(ctx context.Context, root string) (domain.DocumentIdentity,
 	}
 	return identity, ctx.Err()
 }
-func captureIdentity(ctx context.Context, root string, repo domain.Repo) (domain.DocumentIdentity, error) {
-	observation, err := Observe(ctx, root)
-	if err != nil {
-		return "", err
-	}
-	identity, err := captureIdentityFromObservation(observation, &repo)
-	if err != nil {
-		return "", err
-	}
-	return identity, ctx.Err()
-}
-func (g *GitContextWithRemote) CaptureDocumentIdentity(ctx context.Context, repo domain.Repo) (domain.DocumentIdentity, error) {
-	return captureIdentity(ctx, g.repoRoot, repo)
-}
-
-var _ outbound.CaptureDocumentPolicy = (*GitContextWithRemote)(nil)

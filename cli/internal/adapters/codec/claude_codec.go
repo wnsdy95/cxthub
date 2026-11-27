@@ -32,9 +32,6 @@ type ClaudeCodec struct{}
 // NewClaudeCodec creates a new ClaudeCodec.
 func NewClaudeCodec() *ClaudeCodec { return &ClaudeCodec{} }
 
-// Provider returns the provider (claude) this codec is responsible for.
-func (c *ClaudeCodec) Provider() domain.ProviderKind { return domain.ProviderClaude }
-
 // claudeRecord is the structure of a Claude session JSONL line (as we use it).
 type claudeRecord struct {
 	Type      string         `json:"type"`
@@ -77,14 +74,17 @@ type claudeBlock struct {
 	Content   json.RawMessage        `json:"content,omitempty"`
 }
 
-// Decode converts Claude JSONL bytes to a CIRDocument.
-func (c *ClaudeCodec) Decode(ctx context.Context, raw []byte) (domain.CIRDocument, error) {
-	return c.DecodeAppend(ctx, raw, domain.Envelope{}, 0)
-}
-
 // DecodeAppend consumes complete native records, carrying only envelope state.
 // Previously normalized events are immutable and need not be decoded again.
-func (c *ClaudeCodec) DecodeAppend(_ context.Context, raw []byte, previous domain.Envelope, start int) (domain.CIRDocument, error) {
+func (c *ClaudeCodec) DecodeAppend(ctx context.Context, raw []byte, previous domain.Envelope, start int) (domain.CIRDocument, error) {
+	doc, _, err := c.DecodeAppendCounted(ctx, raw, previous, start)
+	return doc, err
+}
+
+// DecodeAppendCounted is DecodeAppend that also says how many events each
+// record gave, in order: one count for every line that is not empty. A record
+// is converted on its own, so the counts place every record in the events.
+func (c *ClaudeCodec) DecodeAppendCounted(_ context.Context, raw []byte, previous domain.Envelope, start int) (domain.CIRDocument, []int, error) {
 	doc := domain.CIRDocument{Envelope: previous}
 	doc.Envelope.SourceModels = append([]string(nil), previous.SourceModels...)
 	doc.Envelope.CIRVersion = domain.CIRVersionV1
@@ -92,6 +92,9 @@ func (c *ClaudeCodec) DecodeAppend(_ context.Context, raw []byte, previous domai
 	doc.Envelope.Fidelity = domain.FidelityFull
 
 	var events []domain.Event
+	// counts[i] is how many events record i gave; counted is how many events
+	// there were when the record being read began.
+	counts, counted := []int{}, 0
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)
 	for sc.Scan() {
@@ -99,9 +102,13 @@ func (c *ClaudeCodec) DecodeAppend(_ context.Context, raw []byte, previous domai
 		if len(line) == 0 {
 			continue
 		}
+		if held := len(counts); held > 0 {
+			counts[held-1] = len(events) - counted
+		}
+		counts, counted = append(counts, 0), len(events)
 		var rec claudeRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
-			return domain.CIRDocument{}, fmt.Errorf("claude decode: %w", err)
+			return domain.CIRDocument{}, nil, fmt.Errorf("claude decode: %w", err)
 		}
 		setIfEmpty(&doc.Envelope.Cwd, rec.Cwd)
 		setIfEmpty(&doc.Envelope.GitBranch, rec.GitBranch)
@@ -140,7 +147,7 @@ func (c *ClaudeCodec) DecodeAppend(_ context.Context, raw []byte, previous domai
 		}
 		blocks, err := parseClaudeContent(rec.Message.Content)
 		if err != nil {
-			return domain.CIRDocument{}, fmt.Errorf("claude decode content: %w", err)
+			return domain.CIRDocument{}, nil, fmt.Errorf("claude decode content: %w", err)
 		}
 		for _, b := range blocks {
 			ev := domain.Event{Ts: rec.Timestamp}
@@ -175,7 +182,10 @@ func (c *ClaudeCodec) DecodeAppend(_ context.Context, raw []byte, previous domai
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return domain.CIRDocument{}, fmt.Errorf("claude decode scan: %w", err)
+		return domain.CIRDocument{}, nil, fmt.Errorf("claude decode scan: %w", err)
+	}
+	if held := len(counts); held > 0 {
+		counts[held-1] = len(events) - counted
 	}
 	doc.Events = assignSeq(events)
 	for i := range doc.Events {
@@ -185,7 +195,7 @@ func (c *ClaudeCodec) DecodeAppend(_ context.Context, raw []byte, previous domai
 	if previous.CIRVersion == domain.CIRVersionV2 {
 		doc.Envelope.CIRVersion = domain.CIRVersionV2
 	}
-	return doc, nil
+	return doc, counts, nil
 }
 
 // Encode converts CIRDocument to target provider JSONL bytes.
