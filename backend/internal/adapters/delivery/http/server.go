@@ -161,7 +161,7 @@ func (s *Server) Handler() http.Handler {
 	// Deployment/LoadBalancer health check. A process-level probe that does not expose authentication/storage content.
 	mux.HandleFunc("GET /api/v1/health", s.health)
 
-	// 5-tier role gate (guard): viewer=Read / puller=Team asset pull / member=Context write
+	// 5-tier role gate (guard): viewer=Read / puller=Team asset pull / member=Session upload and notes
 	// / maintainer=Team asset write (+policy by action) / owner=Operations.
 	// GET at viewer level is allowed for public repositories. Detailed rules are in requireRepoRole.
 	mux.HandleFunc("GET /api/v1/repos", s.listRepos)
@@ -204,19 +204,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings/{kind}", s.requireUser(s.putSettings))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/secrets", s.requireUser(s.putSecrets))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/secrets", s.guard(domain.RolePuller, s.getSecrets))
-	// Commit attachment settings object: Write = context push part (member), Read = pull layer (puller).
-	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
-	// Push pending (unsync) pointer: Key = (authenticated user, branch) — write/delete only by owner.
-	// {name...}: Branch names can include slashes like in git (feature/login, etc.) — full matching of the rest.
 
+	// Conversation document upload (member): negotiation, chunks, durable document jobs and objects.
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/negotiate", s.guard(domain.RoleMember, s.pushNegotiate))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/chunks", s.guard(domain.RoleMember, s.pushChunks))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/doc-jobs", s.guard(domain.RoleMember, s.submitDocFinalization))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/push/doc-jobs/{jobID}", s.guard(domain.RoleMember, s.getDocFinalization))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
-
-	// Actions exposed by the server. Provider-session restoration remains a local
-	// CLI operation and is deliberately absent from the HTTP surface.
 
 	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)

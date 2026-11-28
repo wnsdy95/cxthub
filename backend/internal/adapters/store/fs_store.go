@@ -1,7 +1,7 @@
 // Package store provides server-side metadata/blob storage adapters.
 //
 // The default adapter is FSStore (file-based, content-addressed), operating end-to-end without external dependencies (stdlib).
-// It enables REST server push/pull operations (demonstrable without a Postgres server).
+// It serves the whole REST server, uploads included, without a Postgres server.
 // The production target PostgreSQL adapter is gated under //go:build postgres in a separate file (pgx), and store.Open(factory) selects the appropriate implementation based on the build tag.
 package store
 
@@ -39,12 +39,11 @@ type Store interface {
 //	dataDir/repos/<repoHex>/repo.json
 //	dataDir/repos/<repoHex>/objects/docs/<docHex>          (SessionDoc.CIR JSON; key = client-provided doc.Hash)
 //	dataDir/repos/<repoHex>/objects/chunks/<chunkHex>      (compressed transcript component)
-//	dataDir/repos/<repoHex>/objects/memories/<hex>         (MemoryDigest JSON)
-//	dataDir/repos/<repoHex>/objects/memory_chunks/<hex>    (compressed memory component)
-//	dataDir/repos/<repoHex>/snapshots/<idHex>              (Snapshot metadata JSON; key = client-provided snap.ID)
-//	dataDir/repos/<repoHex>/refs/heads/<name> · refs/sessions/<name> · refs/tags/<name> · HEAD
-//	dataDir/repos/<repoHex>/memmeta/<snapHex>.json         (MemoryDigest metadata)
-//	dataDir/repos/<repoHex>/pending/<sessionID>.json       (uncommitted capture pointer)
+//	dataDir/repos/<repoHex>/settings/<kind>.json           (team default settings bundle)
+//	dataDir/repos/<repoHex>/secrets.enc.json               (secret ciphertext envelope)
+//
+// Session reports, notes, the branch ledger, the remote Git state and the
+// document read indexes keep their own files beside these.
 //
 // Content-addressing uses client-provided hash as key (server is consumer of body integrity, data model Q3).
 type FSStore struct {
@@ -469,8 +468,8 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			existing.RepositoryID = repo.RepositoryID
 			changed = true
 		}
-		// Registration may fill an unknown origin, but cannot replace established
-		// identity or reset an owner-configured default branch.
+		// Registration may fill an unknown origin or default branch, but cannot
+		// replace established identity or a default branch already set.
 		if repo.DefaultBranch != "" && existing.DefaultBranch == "" {
 			existing.DefaultBranch = repo.DefaultBranch
 			changed = true

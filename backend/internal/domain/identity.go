@@ -143,7 +143,7 @@ type Repository struct {
 	// Archived makes the repository read-only. Because P1 never deletes history, archival is the terminal state.
 	// Every operation above viewer returns 403; the owner can unarchive the repository in settings.
 	Archived bool `json:"archived,omitempty"`
-	// WebhookURL is an alert webhook (Slack incoming webhook compatible — {"text": ...} POST). Ref updates, secrets changes and member joins enqueue durable delivery jobs; credentials are excluded from job status.
+	// WebhookURL is an alert webhook (Slack incoming webhook compatible — {"text": ...} POST). Secrets changes and member joins enqueue durable delivery jobs; credentials are excluded from job status.
 	WebhookURL string    `json:"webhook_url,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }

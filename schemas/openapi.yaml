@@ -8,7 +8,7 @@ info:
     This file is the common wire contract for the CLI, backend, and frontend.
     The CLI and backend do not share a Go module, so this schema defines their
     interoperable HTTP surface.
-    CIR object schema: schemas/cir.schema.json. Manifest schema: schemas/manifest.schema.json.
+    CIR object schema: schemas/cir.schema.json.
   contact:
     name: cxthub maintainers
     url: https://github.com/wnsdy95/cxthub
@@ -30,11 +30,11 @@ security:
 
 # Permission model (5-step role ladder — serial AND gates):
 #   Authentication → repository membership → role (viewer→puller→member→maintainer→owner) → action-specific policies.
-#   viewer     read-only (web context·graph)          — GET repos/snapshots/docs/memories/diff
-#   puller     +local synchronization of team assets  — GET settings/secrets/settings-objects, pull/objects
-#   member     +Context write (default)               — push/*, PUT refs/memories/settings-objects, fork
-#   maintainer +Team asset write·invite creation          — PUT settings/secrets, PATCH about, POST invites
-#   owner      +Operations                              — PATCH repository, member management, transfer(creator)
+#   viewer     read-only (web sessions·graph)         — GET repos, anchored-sessions, anchored-notes, worktrees, remote-git
+#   puller     +team assets                           — GET settings/secrets
+#   member     +session upload and notes (default)    — push/*, PUT anchored-sessions/summaries/branch-ids/worktrees, anchored-notes writes
+#   maintainer +Team asset write·invite creation      — PUT settings/secrets, PATCH about, POST invites
+#   owner      +Operations                            — PATCH repository, member management, transfer(creator)
 # viewer level GET is allowed for anonymous if public repository. Policy(secrets/settings_policy) is
 # maintainer gate can narrow down to 'owner only'.
 components:
@@ -2028,7 +2028,7 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   # =========================================================================
-  # Manifest
+  # Sessions · Branch ledger · Notes · Worktrees · Remote Git · Upload
   # =========================================================================
   /repos/{repoID}/anchored-sessions:
     parameters:
@@ -2123,8 +2123,8 @@ paths:
         Member required, rechecked inside the repository transaction. The account the session belongs to may
         remove it, and so may a maintainer of the repository; any other member is refused, in the same way for a
         session that exists and for one that does not. The session's report goes with its commit links, its
-        summaries and its open ranges, and its conversation document is deleted when no other report and no
-        snapshot of the repository uses it. The sessions it spawned, as far as they belong to the same account,
+        summaries and its open ranges, and its conversation document is deleted when no other report of the
+        repository uses it. The sessions it spawned, as far as they belong to the same account,
         are removed with it. A removal is remembered for every removed session: no report is taken for it again
         until the removal is taken back. Removing a session that is already removed changes nothing and answers
         the removal that stands. Manual notes are not touched.
@@ -2671,7 +2671,7 @@ paths:
       summary: List the manual notes the caller may read
       description: >-
         Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. A manual note is what a person wrote about a commit, a branch or a worktree; it is
-        kept apart from captured sessions. Returns the notes the signed-in account wrote, and other accounts'
+        kept apart from the sessions read from the agents' records. Returns the notes the signed-in account wrote, and other accounts'
         notes about something that is open to the team: a commit the remote holds, or a lifetime of a branch
         name in the ledger. A note about a worktree, or about a branch named without a lifetime, is its
         author's alone. Oldest first.
@@ -2691,7 +2691,7 @@ paths:
     post:
       operationId: createAnchoredNote
       summary: Write a manual note about a commit, a branch or a worktree
-      description: Member required, rechecked inside the repository transaction. The author is the signed-in account. Known secret formats in the text are masked before it is stored, with the patterns the CLI applies to a captured session; the literal values of a repository's own secrets file never reach the server and cannot be applied. A note names a lifetime of a branch name only when the ledger holds that lifetime under that name. Writing a note does not advance the repository revision.
+      description: Member required, rechecked inside the repository transaction. The author is the signed-in account. Known secret formats in the text are masked before it is stored, with the patterns the CLI applies to an uploaded session; the literal values of a repository's own secrets file never reach the server and cannot be applied. A note names a lifetime of a branch name only when the ledger holds that lifetime under that name. Writing a note does not advance the repository revision.
       tags: [anchored-notes]
       requestBody:
         required: true
@@ -3340,7 +3340,7 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
   # =========================================================================
-  # Pull Negotiation
+  # Team assets
   # =========================================================================
   /repos/{repoID}/about:
     parameters:
@@ -5594,14 +5594,8 @@ paths:
 tags:
   - name: repos
     description: Repo registration and retrieval.
-  - name: manifest
-    description: "Manifest for push/pull negotiation (have/want 1st step)."
-  - name: branches
-    description: Convenience branch retrieval.
-  - name: snapshots
-    description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
   - name: anchored-sessions
-    description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. Readable only by the uploading account until a published-by-push rule exists."
+    description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. The uploading account reads its own reports; whoever may view the repository reads the parts that opened when what they explain was pushed."
   - name: branch-ledger
     description: One permanent record for each lifetime of a branch name on the remote, and the IDs joined to it.
   - name: anchored-notes
@@ -5610,20 +5604,10 @@ tags:
     description: The working folders of the repository on a member's machines, by name. Readable only by the member who reported them.
   - name: remote-git
     description: The commits, branch heads and pull requests of a repository as the server itself read them from its Git hosting provider.
-  - name: docs
-    description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
-  - name: refs
-    description: "HEAD/branch/session pointers and immutable tags. Ref movement uses CAS; cxt/branch-state/v1 tags carry branch lifecycle events."
-  - name: memories
-    description: "snapshot attachment MemoryDigest."
   - name: push
-    description: "Push negotiation in three stages (negotiate → objects → bounded ref batch, with single-ref fallback for older servers)."
-  - name: pull
-    description: "Pull negotiation (manifest GET → pull/objects → local ref merge)."
-  - name: actions
-    description: "common use-case actions for web UI / CLI (diff / fork / load)."
+    description: "Conversation document upload: negotiate, then send chunks and a durable document job, or objects on the older path."
   - name: assets
-    description: "repo team assets — About / team settings bundle / E2E secret envelope / commit attachment settings object."
+    description: "repo team assets — About / team settings bundle / E2E secret envelope."
   - name: identity
     description: "authentication (session exchange) · account (username/nickname) · CLI token."
   - name: repositories

@@ -21,7 +21,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-// PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
+// PostgresStore stores metadata and content in PostgreSQL (repositories, session reports, documents and their chunks).
 type PostgresStore struct {
 	docProofs   docProofCache
 	legacyBases legacyBaseHints
@@ -456,7 +456,7 @@ func (s *PostgresStore) HasChunks(ctx context.Context, repoID domain.ContentHash
 	return hashes(have), rows.Err()
 }
 
-// GetChunk returns the body of the owned chunk (uncompressed) from the repo (pull chunk wire).
+// GetChunk returns the body of the owned chunk (uncompressed) from the repo (document reads).
 func (s *PostgresStore) GetChunk(ctx context.Context, repoID, hash domain.ContentHash) ([]byte, error) {
 	if err := validateHashes(repoID, hash); err != nil {
 		return nil, err
@@ -471,14 +471,14 @@ func (s *PostgresStore) GetChunk(ctx context.Context, repoID, hash domain.Conten
 	return docDecompress(raw)
 }
 
-// GetDocManifest returns the chunk manifest of the doc (pull delta). If the storage is monolithic (legacy),
+// GetDocManifest returns the chunk manifest of the doc. If the storage is monolithic (legacy),
 // it calculates the plan from canonical and stores it along with chunk ownership (lazy repack — symmetrical to FS).
 func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.ContentHash) (domain.DocChunkManifest, error) {
 	if err := validateHashes(repoID, hash); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
-	// Normal pulls are read-only snapshots. Existing manifests need neither a
-	// write lock nor a savepoint, and must remain readable during publication.
+	// Document reads run in read-only transactions. Existing manifests need
+	// neither a write lock nor a savepoint, and must remain readable during publication.
 	var current []byte
 	if err := s.db(ctx).QueryRow(ctx, `SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
 	 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`, string(repoID), string(hash)).Scan(&current); err != nil {

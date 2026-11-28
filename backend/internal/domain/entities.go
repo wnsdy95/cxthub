@@ -4,11 +4,11 @@ import "time"
 
 // Repo is the root of the session storage space (data model, sync protocol).
 //
-// One per detected code repository. Namespace root for all branch/snapshot/ref names.
+// One per detected code repository. The sessions, notes and branch ledger of the repository belong to it.
 //
 // Invariants:
 //   - R1: ID remains stable throughout the repo's lifetime (remote promotion is only via migration).
-//   - R2: DefaultBranch is the Name of an existing branch ref (created or designated at first save if none exists).
+//   - R2: DefaultBranch is a valid branch name, set when the repository is registered and kept afterwards.
 //
 // ID Derivation (R-ID): Hash of normalized remote URL (if present) or cwd absolute path (fallback).
 // The server trusts the ID as a multi-tenant isolation key (output is CLI responsibility).

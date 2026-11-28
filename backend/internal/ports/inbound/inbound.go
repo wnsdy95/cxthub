@@ -1,6 +1,6 @@
 // Package inbound defines server use-case (driving) ports.
 //
-// These ports are server-side business entry points called by the REST delivery layer (adapters/delivery/http). Derived from sync protocol port mapping and compatibility rules use-case from the server's perspective (validator). Unlike the client's inbound (SaveSession/LoadSession etc. client workflows), the server focuses on object storage, validation, ref CAS, and negotiation (sync protocol).
+// These ports are server-side business entry points called by the REST delivery layer (adapters/delivery/http). Derived from sync protocol port mapping and compatibility rules use-case from the server's perspective (validator). The server focuses on object storage, validation and negotiation (sync protocol).
 package inbound
 
 import (

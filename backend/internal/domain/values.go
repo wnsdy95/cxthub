@@ -1,8 +1,8 @@
 // Package domain contains the cxt server's domain types.
 //
 // Under the complete-separation rule (the module boundary), the backend shares no Go code
-// with the CLI. Wire/JSON shapes derive from schemas/cir.schema.json, schemas/manifest.schema.json,
-// the data model, and the OpenAPI contract.
+// with the CLI. Wire/JSON shapes derive from schemas/cir.schema.json, the data model, and the
+// OpenAPI contract (schemas/openapi.yaml).
 //
 // The backend does not understand provider-native Claude/Codex formats. It accepts only provider-neutral CIR.
 //
@@ -17,7 +17,7 @@ import (
 // ContentHash is a value object representing a content address hash.
 //
 // Format: "sha256:<hex>" (lowercase hex 64 characters). Pattern ^sha256:[0-9a-f]{64}$
-// (the data model, schemas/manifest.schema.json $defs/contentHash).
+// (the data model, schemas/openapi.yaml components/schemas/ContentHash).
 //
 // Determinism requires identical logical content to produce identical hex. Canonical serialization
 // (canonical_bytes) before hashing provides that property (data model, RFC 8785 JCS-oriented).
@@ -50,7 +50,7 @@ func ValidateOptionalContentHash(h ContentHash) error {
 
 // ProviderKind is the type of the original/target provider (schemas/cir.schema.json $defs/providerKind).
 //
-// The backend does not interpret provider raw formats but stores and projects the provider type as is in the CIR envelope and Snapshot metadata.
+// The backend does not interpret provider raw formats but keeps the provider type as is in the CIR envelope.
 type ProviderKind string
 
 const (
