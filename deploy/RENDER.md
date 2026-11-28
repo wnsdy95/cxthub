@@ -43,7 +43,11 @@ Before starting API, MCP, or worker processes, follow the
 release, review the backup and compatible image/schema pair, apply with the
 operator image using `--apply`, give the runtime accounts their rights on the
 tables of this release (`schemas/db/runtime_rights/0161_0170.sql`), verify,
-then start runtime services with their separate DML credentials. An unprepared or mismatched schema refuses startup.
+then start runtime services with their separate DML credentials. On Render,
+[`render-runtime-rights.yaml`](render-runtime-rights.yaml) gives those rights
+from inside the database's private network, with the IP allow list closed:
+create a Blueprint from it, run its one cron job once, read the job's `NOTICE`
+lines, then delete the job. An unprepared or mismatched schema refuses startup.
 This is a release requirement, not an automatically provisioned Render service
 or pre-deploy hook. No new resources or credential grants are activated here.
 
