@@ -6,8 +6,8 @@ module github.com/wnsdy95/cxthub-cli
 go 1.26.11
 
 require (
-	github.com/klauspost/compress v1.20.4
+	github.com/klauspost/compress v1.20.5
 	github.com/tiktoken-go/tokenizer v0.10.0
 )
 
-require github.com/dlclark/regexp2/v2 v2.13.0
+require github.com/dlclark/regexp2/v2 v2.13.2
