@@ -33,16 +33,18 @@ type GitHub struct {
 	resumeAt         time.Time
 	client           *http.Client
 	base             string
-	token            func() string
 }
 
-func NewGitHub(token func() string) *GitHub {
-	return &GitHub{client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, base: "https://api.github.com", token: token}
+// NewGitHub reads public GitHub repositories without a credential. A server
+// reads a private repository only through the installation it is bound to,
+// with NewAuthenticated; no credential of the server stands in for one.
+func NewGitHub() *GitHub {
+	return &GitHub{client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, base: "https://api.github.com"}
 }
 
 // NewAuthenticated obtains repository-scoped credentials on every request.
 func NewAuthenticated(resolve func(context.Context, string) (string, string, string, error)) *GitHub {
-	g := NewGitHub(nil)
+	g := NewGitHub()
 	g.credential = resolve
 	g.scopedLimits = map[string]time.Time{}
 	return g
@@ -147,10 +149,7 @@ func (g *GitHub) authorize(ctx context.Context, path string) (token, bucket, res
 	if g.credential != nil {
 		return g.credential(ctx, path)
 	}
-	if g.token != nil {
-		token = g.token()
-	}
-	return token, "", path, nil
+	return "", "", path, nil
 }
 
 func (g *GitHub) fetch(ctx context.Context, token, bucket, path string, out any) error {

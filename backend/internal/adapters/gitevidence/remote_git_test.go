@@ -48,7 +48,7 @@ func remoteGitTestProvider(t *testing.T, handler func(w http.ResponseWriter, r *
 		handler(w, r)
 	}))
 	t.Cleanup(server.Close)
-	provider := NewGitHub(func() string { return "test" })
+	provider := NewAuthenticated(func(_ context.Context, path string) (string, string, string, error) { return "test", "", path, nil })
 	provider.base = server.URL
 	return provider
 }

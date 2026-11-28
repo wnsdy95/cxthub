@@ -26,7 +26,9 @@ func TestGitHubDoesNotFollowARedirect(t *testing.T) {
 		http.Redirect(w, r, elsewhere.URL+r.URL.RequestURI(), http.StatusFound)
 	}))
 	defer server.Close()
-	provider := NewGitHub(func() string { return "synthetic-token" })
+	provider := NewAuthenticated(func(_ context.Context, path string) (string, string, string, error) {
+		return "synthetic-token", "", path, nil
+	})
 	provider.base = server.URL
 	heads, more, err := provider.ListGitHeads(context.Background(), "https://github.com/org/project", 1)
 	if err == nil || len(heads) != 0 || more {
