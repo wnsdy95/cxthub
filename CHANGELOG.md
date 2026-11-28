@@ -18,6 +18,18 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is removed: GitHub tells the server through the App's webhook. Delete such a
   webhook from the GitHub repository's settings.
 
+### Upgrade notes
+
+- Terraform no longer has the input `github_webhook_secret_id` or the outputs
+  `github_webhook_secret` and `github_webhook_url`: remove the input from a
+  tfvars file that sets it. Terraform never managed the secret
+  `cxt-github-webhook-secret`; delete it from Secret Manager after the apply.
+- `scripts/dogfood-daemon.sh restart` drops a `CXT_GITHUB_TOKEN` that an
+  earlier version stored in the LaunchAgent; revoke that token at GitHub.
+- On a server with a GitHub App, a repository that no installation was told
+  to read is not read until a maintainer connects it; connecting it starts
+  its first read.
+
 ## [0.2.0] - 2026-11-28
 
 Sessions are no longer captured by hooks at the moment something happens.

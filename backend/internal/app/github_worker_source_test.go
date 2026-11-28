@@ -99,7 +99,7 @@ func wave48GitHubSourceFixture(test *testing.T) (*GitHubWorker, *wave48GitHubSou
 	return worker, storage, repo, local, connection
 }
 
-func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameScopeAndFallback(test *testing.T) {
+func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameAndScopeAndReadsNothingUnbound(test *testing.T) {
 	worker, storage, repo, _, connection := wave48GitHubSourceFixture(test)
 	ctx := context.Background()
 	connection.Repositories[0].FullName = "acme/Renamed"
@@ -136,6 +136,6 @@ func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameScopeAndFallback(t
 	connection.Enabled = false
 	storage.connection = &connection
 	if _, _, err := worker.EvidenceInstallation(scoped, "/repos/acme/api/git/commits/AbC"); !errors.Is(err, domain.ErrForbidden) {
-		test.Fatal("disabled binding fell back to operator credentials", err)
+		test.Fatal("a disabled binding was read", err)
 	}
 }

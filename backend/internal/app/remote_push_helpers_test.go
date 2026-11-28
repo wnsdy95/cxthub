@@ -3,8 +3,12 @@ package app
 // The repository webhook that told the service of a push or of a change of a
 // pull request is gone: GitHub tells through the GitHub App, whose worker
 // records a push and asks for a read itself (GitHubWorker.applyDelivery).
-// Tests still tell the service of one the same way, with the same two steps
-// (recordBranchLedgerObservation and requestRemoteGitSync), through these.
+// Tests still tell the service of one through these, with the same two steps
+// (recordBranchLedgerObservation and requestRemoteGitSync). They are not the
+// App's path: they choose repositories by origin, where the worker goes by
+// binding, and they do not move the view revision, where the worker's write
+// does. A test of what a delivery does goes through GitHubConnections.Receive
+// and the worker, as TestBranchLedgerFollowsQualifiedPushDeliveries does.
 
 import (
 	"context"
