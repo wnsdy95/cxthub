@@ -129,8 +129,8 @@ func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameScopeAndFallback(t
 	// its owner has no connection: no credential of the server stands in.
 	storage.connectionError = domain.ErrNotFound
 	path := "/repos/operator/private/git/commits/AbC"
-	if installation, rewritten, err := worker.EvidenceInstallation(scoped, path); !errors.Is(err, domain.ErrForbidden) || installation != 0 || rewritten != "" {
-		test.Fatal("a repository nobody was told to read is read", installation, rewritten, err)
+	if installation, rewritten, err := worker.EvidenceInstallation(scoped, path); !errors.Is(err, domain.ErrForbidden) || !errors.Is(err, outbound.ErrGitRepositoryNotConnected) || installation != 0 || rewritten != "" {
+		test.Fatal("a repository nobody was told to read is read, or is not said to be unconnected", installation, rewritten, err)
 	}
 	storage.connectionError = nil
 	connection.Enabled = false

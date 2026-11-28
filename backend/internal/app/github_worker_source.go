@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -26,7 +27,7 @@ func (worker *GitHubWorker) EvidenceInstallation(ctx context.Context, path strin
 		// No installation was told to read this repository: the server does
 		// not read it. An owner's installation reads only what it was told
 		// to, and no credential of the server stands in for a missing one.
-		return 0, "", domain.ErrForbidden
+		return 0, "", fmt.Errorf("%w: %w", outbound.ErrGitRepositoryNotConnected, domain.ErrForbidden)
 	}
 	if err != nil {
 		return 0, "", err

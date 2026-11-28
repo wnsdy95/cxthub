@@ -239,7 +239,7 @@ func DiagnoseSegments(in SegmentDiagnosisInput) SegmentDiagnosis {
 		out.Checked = append(out.Checked, "github-connection")
 		if state == GitHubRepositoryNotConnected {
 			add(SegmentFinding{Code: "github-not-connected", Problem: true, What: "this repository is not connected to GitHub on the server",
-				Why: "without the connection the server reads GitHub only with a credential its operator set, if any; a session is shown with its commits only for pushes the server reads",
+				Why: "without the connection the server does not read this repository on GitHub, so no session is shown with its commits and none opens to the team",
 				Fix: "a maintainer of the repository connects it at " + in.Server.GitHub.ConnectURL})
 		}
 	}
