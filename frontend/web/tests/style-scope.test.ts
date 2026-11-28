@@ -4,7 +4,6 @@ import { resolve } from 'node:path';
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 const styles = source('src/styles.css');
-const contextView = source('src/components/ContextView.tsx');
 const dashboard = source('src/components/Dashboard.tsx');
 
 assert.doesNotMatch(
@@ -15,7 +14,3 @@ assert.doesNotMatch(
 assert.match(styles, /\.app-side\s*\{[^}]*height:\s*calc\(100vh - 52px\)/s);
 assert.doesNotMatch(dashboard, /<aside/);
 assert.match(source('src/components/RepositorySidebar.tsx'), /className="app-side app-side-right"/);
-
-assert.match(contextView, /' off-mainline'/);
-assert.match(styles, /\.commit-row\.off-mainline\s*\{/);
-assert.doesNotMatch(contextView, /' side'/, 'off-mainline rows must not inherit the app sidebar layout');

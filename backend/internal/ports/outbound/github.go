@@ -11,6 +11,10 @@ import (
 type GitHubStore interface {
 	GetGitHubConnection(context.Context, string) (domain.GitHubConnection, error)
 	ListGitHubConnections(context.Context) ([]domain.GitHubConnection, error)
+	// FindGitHubBinding returns the connection one of whose bindings names
+	// the stored repository, and ErrNotFound when none does. A repository is
+	// bound in at most one connection.
+	FindGitHubBinding(context.Context, domain.ContentHash) (domain.GitHubConnection, error)
 	PutGitHubConnection(context.Context, domain.GitHubConnection) error
 	PutGitHubIdentity(context.Context, domain.GitHubIdentity) error
 	ListGitHubIdentities(context.Context) ([]domain.GitHubIdentity, error)
@@ -37,7 +41,6 @@ type GitHubApp interface {
 	Repositories(context.Context, int64) ([]domain.GitHubRepository, error)
 	Teams(context.Context, int64, string) ([]domain.GitHubTeam, error)
 	TeamMembers(context.Context, int64, string, string) ([]int64, error)
-	MergedPullRequests(context.Context, int64, domain.GitHubRepository, int) ([]domain.PullRequestMerge, bool, error)
 	Invalidate(int64)
 }
 

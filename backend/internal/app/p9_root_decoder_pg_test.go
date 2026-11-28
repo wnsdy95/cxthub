@@ -56,7 +56,7 @@ func TestP9PGRootWorkerStoredDecoderBoundary(t *testing.T) {
 			if _, err = st.EnqueueDocJob(ctx, job); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = svc.verifyDocJob(ctx, job); err != nil {
+			if _, err = verifyDocJob(ctx, svc, job); err != nil {
 				t.Fatal(err)
 			}
 			chunk := m.Chunks[0]
@@ -90,7 +90,7 @@ func TestP9PGRootWorkerStoredDecoderBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = svc.runDocJob(ctx, st, claimed); !errors.Is(err, domain.ErrIntegrity) {
+			if err = runDocJob(ctx, svc, st, claimed); !errors.Is(err, domain.ErrIntegrity) {
 				t.Fatal(err)
 			}
 			got, err := st.GetDocJob(ctx, repo, job.ID)

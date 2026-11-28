@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"unsafe"
 )
 
 type docRangeDirectoryWork struct {
@@ -98,19 +97,6 @@ func (work *docRangeDirectoryWork) step(ctx context.Context, emit func(DocRangeO
 	return work.done, nil
 }
 
-func (work *docRangeDirectoryWork) retained(estimate *docRangeHeaderHeapEstimate) {
-	if work == nil {
-		return
-	}
-	estimate.allocation(1, int64(unsafe.Sizeof(*work)))
-	for _, values := range [][]ContentHash{work.hashes, work.parents} {
-		estimate.allocation(int64(cap(values)), int64(unsafe.Sizeof(ContentHash(""))))
-	}
-	estimate.include(work.hashHeap)
-	estimate.include(work.parentHeap)
-	estimate.allocation(int64(len(work.root.Hash)), 1)
-}
-
 type docRangeChunkDirectoryWork struct {
 	chunks    []ConversationManifestChunk
 	position  int
@@ -193,17 +179,4 @@ func (work *docRangeChunkDirectoryWork) step(ctx context.Context, emit func(DocR
 		work.chunkHeap, work.pageHeap = docRangeHeaderHeapEstimate{}, docRangeHeaderHeapEstimate{}
 	}
 	return complete, failure
-}
-
-func (work *docRangeChunkDirectoryWork) retained(estimate *docRangeHeaderHeapEstimate) {
-	if work == nil {
-		return
-	}
-	estimate.allocation(1, int64(unsafe.Sizeof(*work)))
-	estimate.allocation(int64(cap(work.chunks)), int64(unsafe.Sizeof(ConversationManifestChunk{})))
-	estimate.include(work.chunkHeap)
-	estimate.allocation(int64(cap(work.pages)), int64(unsafe.Sizeof(ContentHash(""))))
-	estimate.include(work.pageHeap)
-	estimate.allocation(int64(len(work.root.Hash)), 1)
-	work.directory.retained(estimate)
 }

@@ -7,6 +7,8 @@
 !deploy/Dockerfile
 !deploy/Dockerfile.mcp
 !deploy/Dockerfile.migrate
+!deploy/runtime-rights.Dockerfile
+!deploy/runtime-rights.sh
 
 !backend/
 !backend/go.mod
@@ -24,3 +26,5 @@
 !schemas/db/
 !schemas/db/migrations/
 !schemas/db/migrations/*.sql
+!schemas/db/runtime_rights/
+!schemas/db/runtime_rights/*.sql

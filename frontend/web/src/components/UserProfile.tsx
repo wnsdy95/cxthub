@@ -9,8 +9,6 @@ import { useT } from '../i18n';
 import { LockIcon } from './Breadcrumb';
 import { HeaderActions } from './HeaderActions';
 import { AppLink } from './AppLink';
-import { ContributionGraph } from './ContributionGraph';
-import { ActivityFeed } from './ActivityFeed';
 import { safeAvatarUrl } from '../urls';
 import { OrganizationProfile } from './OrganizationProfile';
 
@@ -161,9 +159,6 @@ function ProfileBody({
         )}
 
         {isSelf && <InvitationInbox />}
-
-        <ContributionGraph username={u.username} />
-        <ActivityFeed username={u.username} />
       </main>
       </div>
     </div>

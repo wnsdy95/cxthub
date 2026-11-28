@@ -38,18 +38,6 @@ func assignSeq(events []domain.Event) []domain.Event {
 	return events
 }
 
-// parseToolInput converts the provider's tool input string (function_call.arguments / custom_tool_call.input) to a CIR tool_call.Input (map). If parsed as a JSON object, it returns as is; otherwise, it wraps in {"_raw": s}. (To preserve non-JSON input without loss for apply_patch patch text.)
-func parseToolInput(s string) map[string]interface{} {
-	if s == "" {
-		return map[string]interface{}{}
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(s), &m); err == nil && m != nil {
-		return m
-	}
-	return map[string]interface{}{"_raw": s}
-}
-
 // marshalToolInput serializes a CIR tool_call.Input to a provider argument string. For {"_raw": s}, it restores the original string; otherwise, it serializes as a JSON object string.
 func marshalToolInput(input map[string]interface{}) string {
 	if input == nil {

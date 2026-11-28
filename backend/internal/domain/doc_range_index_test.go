@@ -196,6 +196,24 @@ func TestDocViewEventMetadataDoesNotAlterArchive(t *testing.T) {
 	}
 }
 
+// A deferred event carries what the range index knows of its content, so a
+// reader draws it without reading it; an event that is not deferred carries
+// none of it, since its content says so itself.
+func TestDocViewDeferredEventSaysWhetherItDrawsAnything(t *testing.T) {
+	raw, err := json.Marshal(DocViewEvent{Event: CIREvent{Kind: EventReasoning, Seq: 4}, Index: 9, Deferred: true, Bytes: 120, EmptyReasoning: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if json.Unmarshal(raw, &wire) != nil || wire["empty_reasoning"] != true || wire["seed_summary"] != nil || wire["deferred"] != true {
+		t.Fatal(string(raw))
+	}
+	raw, err = json.Marshal(DocViewEvent{Event: CIREvent{Kind: EventMessage, Role: RoleUser, Seq: 1}, Index: 0, Deferred: true, Bytes: 900000, SeedSummary: true})
+	if err != nil || !bytes.Contains(raw, []byte(`"seed_summary":true`)) || bytes.Contains(raw, []byte("empty_reasoning")) {
+		t.Fatal(string(raw), err)
+	}
+}
+
 type docRangeReusingBuffer struct {
 	docRangeMemoryBuffer
 	raw []byte

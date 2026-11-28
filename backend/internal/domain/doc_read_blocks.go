@@ -37,7 +37,7 @@ func (p DocReadPlan) Blocks() []DocReadBlock {
 			index.Events[i].Offset -= events[0].Offset
 		}
 		blocks = append(blocks, DocReadBlock{Hash: HashContent([]byte(key.String())), FirstEvent: start, Offset: events[0].Offset, Count: end - start,
-			plan: DocReadPlan{index: index, stream: p.stream, source: p.source, bodies: p.bodies[start:end], sequencesKnown: p.sequencesKnown}})
+			plan: DocReadPlan{index: index, stream: p.stream, source: p.source, bodies: p.bodies[start:end]}})
 	}
 	return blocks
 }

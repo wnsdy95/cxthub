@@ -23,7 +23,7 @@ func TestScopedCooldownBoundsKeepActiveEntries(test *testing.T) {
 	until := now.Add(time.Hour)
 	for _, scenario := range []string{"entries", "key-bytes", "oversized-key"} {
 		test.Run(scenario, func(test *testing.T) {
-			provider := NewGitHub(nil)
+			provider := NewGitHub()
 			keyBytes := 0
 			entries := 0
 			rejectedBucket := "overflow"
@@ -69,7 +69,7 @@ func TestScopedCooldownBoundsKeepActiveEntries(test *testing.T) {
 
 func TestScopedCooldownSweepReclaimsExpiredKeys(test *testing.T) {
 	now := time.Unix(1000, 0)
-	provider := NewGitHub(nil)
+	provider := NewGitHub()
 	provider.retainRateLimit(strings.Repeat("x", scopedLimitMaxKeyBytes), now.Add(time.Minute), now)
 	provider.retainRateLimit("overflow", now.Add(2*time.Minute), now)
 	provider.retainRateLimit("fresh", now.Add(time.Hour), now.Add(time.Minute))
@@ -92,7 +92,7 @@ func TestScopedCooldownSweepReclaimsExpiredKeys(test *testing.T) {
 
 func TestScopedCooldownExtensionsAndIsolation(test *testing.T) {
 	now := time.Unix(1000, 0)
-	provider := NewGitHub(nil)
+	provider := NewGitHub()
 	provider.retainRateLimit("scope", now.Add(time.Hour), now)
 	provider.retainRateLimit("scope", now.Add(time.Minute), now)
 	provider.retainRateLimit("scope", now.Add(2*time.Hour), now)
@@ -144,7 +144,7 @@ func TestScopedCooldownOverflowBlocksHTTPAfterCredentialLookup(test *testing.T) 
 
 func TestScopedCooldownConcurrentOverflowKeepsLongestDeadline(test *testing.T) {
 	now := time.Unix(1000, 0)
-	provider := NewGitHub(nil)
+	provider := NewGitHub()
 	provider.retainRateLimit(strings.Repeat("x", scopedLimitMaxKeyBytes), now.Add(time.Hour), now)
 	var workers sync.WaitGroup
 	for index := 1; index <= 32; index++ {

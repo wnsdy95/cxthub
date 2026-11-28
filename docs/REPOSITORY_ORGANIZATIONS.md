@@ -5,14 +5,14 @@ Namespace -> Workspace -> Repository product model. [Issue #251](https://github.
 
 ## Product contract
 
-- A Repository corresponds to one code repository and owns context, memories,
-  branches, visibility, collaborators, settings, and secrets.
+- A Repository corresponds to one code repository and owns its sessions,
+  visibility, collaborators, settings, and secrets.
 - A User or Organization directly owns a Repository at `/{owner}/{repository}`.
 - An Organization owns repositories, members, Teams, policies, and its audit log.
 - A Team groups members of exactly one Organization and receives explicit roles
   on that Organization's repositories. Outside collaborators cannot join teams.
 - An Enterprise groups Organizations and applies parent policy. It does not own
-  repositories or implicitly grant access to private context.
+  repositories or implicitly grant access to private sessions.
 - Pricing remains documentation-only; the migration must not activate billing.
 
 The terminology follows the official GitHub documentation for
@@ -27,8 +27,8 @@ a migration that copies direct memberships.
 ## Migration invariants
 
 1. Preserve every content repository ID. Do not hash the new display URL to
-   replace a pre-existing repository ID. Snapshot, object, ref, job, and memory
-   keys remain untouched.
+   replace a pre-existing repository ID. The keys of stored objects and jobs
+   remain untouched.
 2. Flatten each existing Workspace into one independent Repository per contained
    code repository. An empty Workspace becomes an unconnected Repository.
 3. Copy visibility, policies, archive state, owner, and direct collaborator roles
@@ -62,14 +62,14 @@ Organization, and the target repository must belong to that Organization.
 An Organization Owner receives the repository owner role even with no direct or
 team grant. Use the highest valid role, then apply archive state and
 repository/organization/enterprise restrictions. Organization Admin, Member, and
-Enterprise Owner roles alone do not grant private context access. Public baseline
+Enterprise Owner roles alone do not grant private repository access. Public baseline
 access remains explicit. Removing or demoting an Organization Owner immediately
 removes inherited authority; independent direct/team grants still apply.
 Organization Owners can change the human ownership anchor without changing the
 Organization namespace. Personal ownership transfer remains creator-only.
 
 Organization Owner demotion, membership removal, team deletion, and grant revocation must take effect on REST,
-MCP, lists, and context writes through the same application policy. Writers lock
+MCP, lists, and repository writes through the same application policy. Writers lock
 the governing records in a consistent order and recheck access inside the write
 transaction; a revoked grant cannot authorize a later write. The final owner
 cannot be removed, including concurrent demotions. Team roles cannot be used to
@@ -86,7 +86,7 @@ modify their own grant or acquire organization administration privileges.
   organization-owned repository creation stays with the Organization's controls.
 - Repository details (About, team defaults, and secrets) live in a separate
   collapsible right panel. Its visibility is a local UI preference; hiding it
-  does not change context selection or graph state. Asset access still follows
+  changes nothing on the server. Asset access still follows
   repository roles and policies, including public read-only restrictions.
 - The profile menu links to the personal profile, My organizations at
   `/settings/organizations`, My enterprises at `/settings/enterprises`, and
@@ -107,7 +107,7 @@ modify their own grant or acquire organization administration privileges.
 - `/enterprises/{id}` manages the upper Enterprise. Linking or unlinking an
   Organization requires ownership of both sides, and an Organization can belong
   to only one Enterprise. Enterprise administration does not grant repository
-  context access.
+  access.
 - Web addresses are `/{user-or-organization}/{repository}` and
   `/enterprises/{enterprise}`. Exact legacy three-segment repository aliases
   redirect to the canonical page. Retired `/-/` routes remain unavailable.
@@ -123,9 +123,9 @@ Organization does not silently restore old team memberships. The UI asks for
 this choice and the audit records it.
 
 The production identity transaction takes an exclusive PostgreSQL advisory
-lock. Context writes take its shared counterpart before repository locks and
+lock. Repository writes take its shared counterpart before repository locks and
 revalidate access. This deliberately favors correctness: unrelated identity
-mutations serialize, and slow context transactions can delay revocation. Network
+mutations serialize, and slow repository transactions can delay revocation. Network
 calls are outside the identity transaction. Narrower lock domains require a
 separate, measured design; the filesystem development adapter does not promise
 cross-process transactional rollback.
@@ -152,9 +152,9 @@ This is a coordinated schema cutover, not a mixed-version rolling deployment.
    On restart it accepts only the recorded before/after contents and refuses
    conflicting edits, path traversal or symlinks. The completed journal is
    retained as `ownership-migration-v1.complete.json`; original legacy directories
-   are retained. Objects, snapshots, refs and memories are not rewritten.
+   are retained. Stored objects are not rewritten.
 5. Verify exact content IDs, original remote URLs, content integrity, member roles,
-   both canonical and legacy access, CLI push/pull, and public/private behavior.
+   both canonical and legacy access, CLI upload, and public/private behavior.
    Release the matching frontend and CLI. Existing CLI remotes remain valid;
    older management clients must use the new `/repositories` and
    `/organizations` API contracts.
@@ -213,7 +213,7 @@ and repository grants are unchanged.
 
 Only a space Owner can rename its namespace. Only an Owner of both source and
 destination namespaces can move a repository. A personal destination must belong
-to the actor. Repository IDs, bound context IDs, snapshots and memory are retained;
+to the actor. Repository IDs and stored sessions are retained;
 old URLs remain reserved aliases. Direct collaborators remain. Organization-wide
 access follows the destination, and old Team grants are removed so moving back
 cannot silently revive them. The destination's visibility policy applies. Slug

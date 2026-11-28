@@ -50,7 +50,7 @@ u = u.rstrip("/").lower()
 print("sha256:" + hashlib.sha256(u.encode()).hexdigest())
 PY
 }
-fixture_objects() { # fixture_objects <repoID> — emit a batch whose DocHash matches canonical CIR.
+fixture_objects() { # fixture_objects <repoID> — the hash of a canonical document, a batch that holds it, and that batch with a capture.
   python3 - "$1" <<'PY'
 import hashlib, json, sys
 repo_id = sys.argv[1]
@@ -74,22 +74,21 @@ cir = {
 }
 canonical = json.dumps(cir, sort_keys=True, separators=(",", ":")).encode()
 content_hash = "sha256:" + hashlib.sha256(canonical).hexdigest()
-body = {
-    "docs": [{"hash": content_hash, "cir": cir}],
-    "snapshots": [{
-        "id": content_hash,
-        "repo_id": repo_id,
-        "branch": "main",
-        "parents": [],
-        "doc_hash": content_hash,
-        "provider": "claude",
-        "fidelity": "full",
-        "message": "test: verify webhook delivery",
-        "author": {},
-    }],
-}
+document = {"docs": [{"hash": content_hash, "cir": cir}]}
+capture = dict(document, snapshots=[{
+    "id": content_hash,
+    "repo_id": repo_id,
+    "branch": "main",
+    "parents": [],
+    "doc_hash": content_hash,
+    "provider": "claude",
+    "fidelity": "full",
+    "message": "test: a capture",
+    "author": {},
+}])
 print(content_hash)
-print(json.dumps(body, separators=(",", ":")))
+print(json.dumps(document, separators=(",", ":")))
+print(json.dumps(capture, separators=(",", ":")))
 PY
 }
 
@@ -159,7 +158,7 @@ RID="$(repo_id "$REMOTE")"
 ccurl -sb "$JA" -X POST "$B/repos" -H 'Content-Type: application/json' \
   -d "{\"id\":\"$RID\",\"remote_url\":\"$REMOTE\",\"default_branch\":\"main\"}" >/dev/null
 RB="$B/repos/$RID"
-NEG='{"snapshot_haves":[],"doc_haves":[]}'
+NEG='{"doc_haves":[]}'
 # Envelopes require a fingerprint for server-side consistency. Repeated role-specific PUTs use the same dummy fingerprint.
 SECPASS='team secret pass phrase'
 SECFP="$(python3 - "$SECPASS" "$RID" <<'PY'
@@ -173,9 +172,9 @@ mrow() { # mrow <jar|-> → "read pull push secretsPUT"
   local revision
   revision=$(curl -sb "$JA" "$RB/secrets" | python3 -c 'import json,sys;s=sys.stdin.read();print(json.loads(s)["revision"] if s else "absent")')
   if [ "$1" = "-" ]; then
-    echo "$(code "$RB/snapshots?branch=main") $(code "$RB/secrets") $(code -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(code -X PUT "$RB/secrets?expected_revision=$revision" -H 'Content-Type: application/json' -d "$ENVL")"
+    echo "$(code "$RB/anchored-sessions") $(code "$RB/secrets") $(code -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(code -X PUT "$RB/secrets?expected_revision=$revision" -H 'Content-Type: application/json' -d "$ENVL")"
   else
-    echo "$(ccode -b "$1" "$RB/snapshots?branch=main") $(ccode -b "$1" "$RB/secrets") $(ccode -b "$1" -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(ccode -b "$1" -X PUT "$RB/secrets?expected_revision=$revision" -H 'Content-Type: application/json' -d "$ENVL")"
+    echo "$(ccode -b "$1" "$RB/anchored-sessions") $(ccode -b "$1" "$RB/secrets") $(ccode -b "$1" -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(ccode -b "$1" -X PUT "$RB/secrets?expected_revision=$revision" -H 'Content-Type: application/json' -d "$ENVL")"
   fi
 }
 expect "anonymous 401/401/401/401" "$(mrow -)" "401 401 401 401"
@@ -186,15 +185,15 @@ expect "maint. 200/204/200/200" "$(mrow "$JT")" "200 204 200 200"
 expect "policy owner narrowed → maintainer 403" "$(ccurl -sb "$JA" -o /dev/null -w '' -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"secrets_policy":"owner"}')$(ccode -b "$JT" -X PUT "$RB/secrets" -H 'Content-Type: application/json' -d "$ENVL")" 403
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"secrets_policy":"members"}' >/dev/null
 
-echo "── E. Public access, archival, and protected branches"
+echo "── E. Public access and archival"
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"visibility":"public"}' >/dev/null
-expect "public → anonymous read 200" "$(code "$RB/snapshots?branch=main")" 200
+expect "public → anonymous read 200" "$(code "$RB/anchored-sessions")" 200
 expect "public repository resolution 200" "$(code "$B/public/repositories/$OWN/$SLUG")" 200
 # Public default role (non-member): Basic viewer is denied puller action (secrets pull), allowed when promoted to puller.
 expect "public default viewer → anonymous secrets 401" "$(code "$RB/secrets")" 401
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"public_role":"puller"}' >/dev/null
 expect "public puller → anonymous secrets pull allowed (200, envelope exists)" "$(code "$RB/secrets")" 200
-expect "public puller → anonymous read still 200" "$(code "$RB/snapshots?branch=main")" 200
+expect "public puller → anonymous read still 200" "$(code "$RB/anchored-sessions")" 200
 expect "public puller even anonymous push requires login 401" "$(code -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG")" 401
 expect "public_role invalid value 422" "$(ccode -b "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"public_role":"owner"}')" 422
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"public_role":"viewer"}' >/dev/null
@@ -203,20 +202,14 @@ ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: appl
 expect "private → anonymous public resolution 404" "$(code "$B/public/repositories/$OWN/$SLUG")" 404
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"archived":true}' >/dev/null
 expect "archived write 403" "$(ccode -b "$JA" -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG")" 403
-expect "archived read 200" "$(ccode -b "$JA" "$RB/snapshots?branch=main")" 200
+expect "archived read 200" "$(ccode -b "$JA" "$RB/anchored-sessions")" 200
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"archived":false}' >/dev/null
 FIXTURE="$(fixture_objects "$RID")"
-H1="$(printf '%s\n' "$FIXTURE" | sed -n '1p')"
 OBJECTS="$(printf '%s\n' "$FIXTURE" | sed -n '2p')"
-expect "canonical object pre-save" "$(ccode -b "$JA" -X POST "$RB/push/objects" -H 'Content-Type: application/json' -d "$OBJECTS")" 200
-expect "ref creation (ff)" "$(ccode -b "$JA" -X PUT "$RB/refs/branch/main" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\"}")" 200
-# Search surface: normal query 200 (content is covered by TestSearch), fewer than two characters 422, unauthenticated 401.
-expect "search endpoint 200" "$(code -b "$JA" "$RB/search?q=ssrf")" 200
-expect "search less than 2 characters 422" "$(code -b "$JA" "$RB/search?q=a")" 422
-expect "search unauthenticated 401" "$(code "$RB/search?q=ssrf")" 401
-ccurl -sb "$JA" -X PATCH "$RB/about" -H 'Content-Type: application/json' -d '{"description":"","website":"","topics":[],"protect_default":true}' >/dev/null
-FORCE_REF_PAYLOAD="{\"target\":\"$H1\",\"force\":true}"
-expect "protected branch force 403" "$(ccode -b "$JA" -X PUT "$RB/refs/branch/main" -H 'Content-Type: application/json' -d "$FORCE_REF_PAYLOAD")" 403
+CAPTURE="$(printf '%s\n' "$FIXTURE" | sed -n '3p')"
+expect "a conversation document is accepted on its own" "$(ccode -b "$JA" -X POST "$RB/push/objects" -H 'Content-Type: application/json' -d "$OBJECTS")" 200
+expect "a capture is no longer accepted" "$(ccode -b "$JA" -X POST "$RB/push/objects" -H 'Content-Type: application/json' -d "$CAPTURE")" 422
+expect "the routes of captures are gone" "$(ccode -b "$JA" "$RB/snapshots") $(ccode -b "$JA" "$RB/refs") $(ccode -b "$JA" "$RB/view") $(ccode -b "$JA" "$RB/search?q=ssrf")" "404 404 404 404"
 
 echo "── F. CLI: init output, device-flow login, and secret round trip"
 REPO="$TMP/repo"; mkdir -p "$REPO"; cd "$REPO"
@@ -257,6 +250,339 @@ rm .cxtsecrets
 cxt secrets pull >/dev/null 2>&1
 expect "--remember after -p omission" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
 expect "secrets round trip does not upgrade an existing repository" "$(curl -fsSb "$JA" "$B/repos/$CLIRID" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["id"], r.get("context_protocol", 0))')" "$CLIRID 0"
+
+# segevents <provider> <session> — the events of a session's conversation, read through the session.
+segevents() {
+  curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/$1/$2/content" | python3 -c 'import json,sys;p=json.load(sys.stdin);print(json.dumps([json.loads(f["json_fragment"]) for f in p["fragments"] if f["event_complete"]]))'
+}
+# dochave <hash> — whether the repository holds a conversation document, as an upload is told.
+dochave() {
+  ccurl -sb "$JA" -X POST "$B/repos/$CLIRID/push/negotiate" -H 'Content-Type: application/json' -d "{\"doc_haves\":[\"$1\"]}" | python3 -c 'import json,sys;print("absent" if json.load(sys.stdin).get("doc_wants") else "held")'
+}
+echo "── F2. Session reports: the server accepts what the CLI computes, and only the uploader reads it"
+# A synthetic Claude Code session whose command printed the number of a real
+# commit while that commit was created. No hook runs: only records are read.
+GIT_AUTHOR_DATE=2031-01-02T03:00:05Z GIT_COMMITTER_DATE=2031-01-02T03:00:05Z git commit -q --allow-empty -m "e2e segment commit"
+SEGSHA="$(git rev-parse HEAD)"
+SEGBRANCH="$(git symbolic-ref --short HEAD)"
+mkdir -p "$HOME/.claude/projects/-e2e-segments"
+python3 - "$PWD" "$SEGSHA" "$SEGBRANCH" >"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl" <<'PYSEG'
+import json, sys
+cwd, sha, branch = sys.argv[1:4]
+def line(kind, uuid, at, content, prompt=None):
+    entry = {"type": kind, "uuid": uuid, "sessionId": "e2e-segments", "timestamp": "2031-01-02T03:00:%sZ" % at,
+             "cwd": cwd, "gitBranch": branch, "message": {"content": content}}
+    if prompt:
+        entry["promptId"] = prompt
+    print(json.dumps(entry))
+line("user", "m1", "00.000", "commit it", "p1")
+line("assistant", "m2", "01.000", [{"type": "tool_use", "id": "call-1", "name": "Bash"}])
+line("user", "m3", "06.000", [{"type": "tool_result", "tool_use_id": "call-1", "content": "[%s %s] e2e segment commit" % (branch, sha[:7])}], "p1")
+line("assistant", "m4", "07.000", [{"type": "text", "text": "committed"}])
+line("user", "m5", "40.000", "one more thing", "p2")
+PYSEG
+cxt segments push --json >"$TMP/segments-push.json" 2>"$TMP/segments-push.err"
+expect "segments push succeeds" "$?" 0
+expect "one session report stored" "$(python3 -c "import json;r=json.load(open('$TMP/segments-push.json'));print(r['stored'],r['unchanged'],r['refused'],len(r['sessions']))")" "1 0 0 1"
+# The session is written down at the commit it made, after its report.
+expect "one summary stored at the session's commit" "$(python3 -c "import json;r=json.load(open('$TMP/segments-push.json'));print(r.get('summaries'),r['sessions'][0].get('summaries'),r['sessions'][0].get('summary_reason'))")" "1 1 None"
+expect "the server holds the summary cxt wrote" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;r=json.load(sys.stdin);b=r[0]["body"];print(len(r),r[0]["session_id"],r[0]["segment_no"],bool(b["summary"].strip() or b["key_facts"] or b["open_tasks"]))')" "1 e2e-segments 1 True"
+expect "uploader lists its report" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["provider"],r[0]["session_id"],r[0]["segments"],r[0]["records"],r[0]["revision"])')" "1 claude e2e-segments 1 5 1"
+expect "commit leads to the session's segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r[0]["segment"];print(len(r),r[0]["session_id"],r[0]["segment_no"],r[0]["rule"],s["first"],s["last"],s["closes_turn"],s["commits"][0]["subject"])')" "1 e2e-segments 1 printed-number m1 m4 True e2e segment commit"
+expect "stored report names the worktree and never its path" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c "import json,sys;r=json.load(sys.stdin);u=r['body']['uncommitted'];print(u['first'],u['places'][0]['worktree'],u['places'][0]['rule'],'$TMP' in json.dumps(r))")" "m5 repo recorded-by-tool False"
+# The conversation of the session's own records is one repository document, sent
+# through the path that verifies documents; every range says where it sits in it.
+SEGDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['parts'][-1]['doc']")"
+expect "report places its ranges in the content document" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];s=b["segments"][0];u=b["uncommitted"];print(b["content"]["events"],len(b["content"]["parts"]),b["content"]["parts"][0]["events"],s.get("first_event",0),s["events"],u["first_event"],u["events"])')" "5 1 5 0 4 4 1"
+expect "content document holds the conversation in order" "$(segevents claude e2e-segments | python3 -c 'import json,sys;e=json.load(sys.stdin);print(len(e),e[0]["kind"],e[1]["kind"],e[2]["kind"],e[4]["blocks"][0]["text"])')" "5 message tool_call tool_result one more thing"
+expect "the repository holds the content document" "$(dochave "$SEGDOC")" held
+expect "an account outside the repository cannot read the conversation" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/content")" 403
+expect "the same report again changes nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"],r["unchanged"],r["refused"],r["content_not_uploaded"],r["sessions"][0]["content"])')" "0 1 0 0 stored"
+# A copy of what was sent is kept under .cxt/sessions and read back without the server.
+SEGKEPT=".cxt/sessions/claude/e2e-segments"
+expect "the upload keeps the report, the conversation and a log for the session" "$(ls "$SEGKEPT" | sort | tr '\n' ' ') $(ls "$SEGKEPT/conversation" | grep -c '^[0-9a-f]\{64\}\.json\.gz$')" "conversation log.jsonl report.json  1"
+SEGCOPY="$SEGKEPT/conversation/$(ls "$SEGKEPT/conversation" | head -1)"
+expect "the conversation copy is the document that was sent" "$(python3 -c "import gzip,json;d=json.load(gzip.open('$SEGCOPY'));print(len(d['events']),d['events'][4]['blocks'][0]['text'],d['envelope']['session_origin_id'])")" "5 one more thing e2e-segments"
+expect "the copy is named by the hash the report names the document by" "$(basename "$SEGCOPY" .json.gz)" "${SEGDOC#sha256:}"
+expect "the copies name no folder of this computer" "$(python3 -c "import gzip;print('$TMP' in open('$SEGKEPT/report.json').read() or '$TMP' in gzip.open('$SEGCOPY','rt').read())")" "False"
+expect "the log has a line for the stored report and one for the run that only wrote the summary again" "$(cxt segments log claude e2e-segments --json | python3 -c 'import json,sys;s=json.load(sys.stdin)["sessions"][0];l=s["log"];print(s["lines"],l[0]["report"],l[0]["revision"],l[0]["content"],l[0]["events"],l[1]["report"],l[1]["summaries"],l[1]["report_hash"]==s["report_hash"],l[1]["doc"]==s["doc"])')" "2 stored 1 stored 5 unchanged 1 True True"
+# Appended records extend the same document: the earlier events keep their place.
+printf '%s\n' '{"type":"assistant","uuid":"m6","sessionId":"e2e-segments","timestamp":"2031-01-02T03:00:41.000Z","cwd":"'"$PWD"'","gitBranch":"'"$SEGBRANCH"'","message":{"content":[{"type":"text","text":"done"}]}}' >>"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"
+expect "an appended record replaces the report" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"],r["unchanged"],r["sessions"][0]["revision"])')" "1 0 2"
+SEGDOC2="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['parts'][-1]['doc']")"
+expect "the grown document keeps the earlier events and adds the new one" "$(segevents claude e2e-segments | python3 -c 'import json,sys;e=json.load(sys.stdin);print(len(e),e[4]["blocks"][0]["text"],e[5]["blocks"][0]["text"])') $(dochave "$SEGDOC2")" "6 one more thing done held"
+expect "revision after the appended record" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']")" 2
+expect "the uncommitted part says where each of its turns begins" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | python3 -c 'import json,sys;u=json.load(sys.stdin)["body"]["uncommitted"];t=u["turns"];print(len(t),t[0]["first_ordinal"]==u["first_ordinal"],t[0].get("first_event",0)==u.get("first_event",0),[m["first_ordinal"] for m in t]==sorted(m["first_ordinal"] for m in t))')" "1 True True True"
+# Branch IDs live in Git's own branch configuration. The one of a branch Git
+# shows on origin is registered, and a teammate's ID for the same name joins it.
+SEGORIGIN="$TMP/segments-origin.git"; git init -q --bare "$SEGORIGIN"
+git remote add origin "$SEGORIGIN"; git push -q -u origin "$SEGBRANCH"; git branch e2e-never-pushed
+# The earlier uploads already gave the first branch its ID; the new branch gets one now.
+expect "every branch has an ID and the pushed one is registered" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;b=json.load(sys.stdin)["branches"];print(b["with_id"],b["assigned"],b["on_origin"],b["registered"])')" "2 1 1 1"
+SEGBRANCHID="$(git config --local --get "branch.$SEGBRANCH.cxtBranchId")"
+expect "the ID is kept by Git with the branch" "$(git config --local --get "branch.$SEGBRANCH.cxtBranchIdIssuedFor") ${#SEGBRANCHID}" "$SEGBRANCH 32"
+expect "the name on the remote has one lifetime, opened with that ID" "$(curl -sb "$JA" "$B/repos/$CLIRID/branch-lifetimes?name=$SEGBRANCH" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["ledger_id"],r[0]["opened_by"]["kind"],"closed_at" in r[0])')" "1 $SEGBRANCHID registered False"
+expect "a branch that was never pushed is not reported" "$(curl -sb "$JA" "$B/repos/$CLIRID/branch-lifetimes" | python3 -c 'import json,sys;print(sorted(l["name"] for l in json.load(sys.stdin)))')" "['$SEGBRANCH']"
+expect "the same branches again change nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;b=json.load(sys.stdin)["branches"];print(b["with_id"],b["assigned"],b["registered"])') $(git config --local --get "branch.$SEGBRANCH.cxtBranchId")" "2 0 1 $SEGBRANCHID"
+SEGOTHERID="$(python3 -c 'print("e"*32)')"
+expect "another ID for the same name joins the lifetime" "$(ccurl -sb "$JA" -X PUT "$B/repos/$CLIRID/branch-ids" -H 'Content-Type: application/json' -d "{\"branches\":[{\"name\":\"$SEGBRANCH\",\"local_id\":\"$SEGOTHERID\"}]}" | python3 -c 'import json,sys;r=json.load(sys.stdin)["branches"][0];print(r["outcome"],r["ledger_id"])')" "joined $SEGBRANCHID"
+expect "an account outside the repository cannot read the ledger" "$(code -b "$JM" "$B/repos/$CLIRID/branch-lifetimes")" 403
+# The worktree list: names and branches, never a path, and only for the member who sent it.
+SEGWORKTREE="$TMP/segments-extra"; git worktree add -q -b e2e-extra "$SEGWORKTREE"
+expect "the run lists both worktrees" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;w=json.load(sys.stdin)["worktrees"];print(w["listed"],w["reported"])')" "2 True"
+expect "the server holds their names and branches" "$(curl -sb "$JA" "$B/repos/$CLIRID/worktrees" | python3 -c 'import json,sys;print(sorted((w["name"],w.get("branch",""),w["removed"]) for w in json.load(sys.stdin)))')" "[('$(basename "$PWD")', '$SEGBRANCH', False), ('segments-extra', 'e2e-extra', False)]"
+expect "no path was sent" "$(curl -sb "$JA" "$B/repos/$CLIRID/worktrees" | grep -c "$TMP")" 0
+git worktree remove --force "$SEGWORKTREE"; git branch -q -D e2e-extra
+expect "a removed worktree keeps its name, marked removed" "$(cxt segments push --json >/dev/null 2>&1; curl -sb "$JA" "$B/repos/$CLIRID/worktrees" | python3 -c 'import json,sys;print(sorted((w["name"],w["removed"]) for w in json.load(sys.stdin)))')" "[('$(basename "$PWD")', False), ('segments-extra', True)]"
+expect "an account outside the repository cannot read the list" "$(code -b "$JM" "$B/repos/$CLIRID/worktrees")" 403
+# A manual note is masked like a captured session and readable only by its author.
+SEGNOTE="$(ccurl -sb "$JA" -X POST "$B/repos/$CLIRID/anchored-notes" -H 'Content-Type: application/json' -d "{\"target\":{\"kind\":\"commit\",\"commit\":\"$SEGSHA\"},\"body\":\"hand-applied; clone https://user:synthetic-pass@example.test/x.git\"}")"
+expect "the note is stored masked, with its author" "$(echo "$SEGNOTE" | python3 -c 'import json,sys;n=json.load(sys.stdin);print(n["target"]["kind"],"synthetic-pass" in n["body"],"redacted:password" in n["body"],bool(n["author"]))')" "commit False True True"
+expect "the author lists the note" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-notes" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 1
+expect "an account outside the repository cannot read notes" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-notes")" 403
+# A push is what opens a session to the team. This server reads no hosting
+# provider, so nothing is known to be pushed: a teammate reads nothing yet.
+JS="$TMP/s.jar"; login teammate@t.io Teammate "$JS"
+CLIWS="$(curl -sb "$JA" "$B/repositories" | python3 -c "import json,sys;print([r['id'] for r in json.load(sys.stdin) if r['slug']=='$CLISLUG'][0])")"
+ccurl -sb "$JS" -X POST "$B/invites/$(ccurl -sb "$JA" -X POST "$B/repositories/$CLIWS/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")/accept" >/dev/null
+expect "a teammate lists no session before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+expect "a teammate cannot read a session before a push" "$(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 404
+expect "a teammate cannot read its conversation before a push" "$(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=5")" 404
+expect "a teammate does not see a note about a commit not known to be pushed" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-notes" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+# Whoever may view the repository reads what is open of it; only a member stores or writes.
+JW="$TMP/w.jar"; login onlooker@t.io Onlooker "$JW"
+ccurl -sb "$JW" -X POST "$B/invites/$(ccurl -sb "$JA" -X POST "$B/repositories/$CLIWS/invites" -H 'Content-Type: application/json' -d '{"role":"viewer"}' | jget "['token']")/accept" >/dev/null
+expect "a viewer lists no session before a push" "$(curl -sb "$JW" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+expect "a viewer reads the commit list the server holds" "$(code -b "$JW" "$B/repos/$CLIRID/remote-git")" 200
+expect "a viewer cannot read a session before a push" "$(code -b "$JW" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 404
+expect "a viewer cannot store a report" "$(ccurl -sb "$JW" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-viewer" -H 'Content-Type: application/json' -d '{"rule_version":1,"scope":"working-folder","records":0}')" 403
+expect "a viewer cannot write a note" "$(ccurl -sb "$JW" -o /dev/null -w '%{http_code}' -X POST "$B/repos/$CLIRID/anchored-notes" -H 'Content-Type: application/json' -d '{"target":{"kind":"branch","branch":"main"},"body":"x"}')" 403
+expect "a visitor who is not signed in reads nothing of a private repository" "$(code "$B/repos/$CLIRID/anchored-sessions")" 401
+# One search looks in commits, conversations and notes, and answers a reader only from what that reader may read.
+seghits() { curl -sb "$1" "$B/repos/$CLIRID/anchored-search?q=$2" | python3 -c 'import json,sys;print(sorted({h["kind"] for h in json.load(sys.stdin)["hits"]}))'; }
+expect "the uploader finds its conversation by a word said in it" "$(seghits "$JA" committed)" "['segment']"
+expect "a teammate finds nothing of a session before a push" "$(seghits "$JS" committed)" "[]"
+expect "a viewer finds nothing of a session before a push" "$(seghits "$JW" committed)" "[]"
+expect "a search needs two characters" "$(code -b "$JA" "$B/repos/$CLIRID/anchored-search?q=a")" 422
+expect "a visitor who is not signed in searches nothing of a private repository" "$(code "$B/repos/$CLIRID/anchored-search?q=segment")" 401
+# A summary is written by the uploader at a commit of the session, and read under the rule of the segment that ends there.
+sumput() { ccurl -sb "$1" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/summaries/$2" -H 'Content-Type: application/json' -d '{"summary":"Committed the segment work.","key_facts":["e2e fact"],"open_tasks":[]}'; }
+expect "the uploader stores a summary at its commit" "$(sumput "$JA" "$SEGSHA")" 200
+expect "a summary at a commit the session did not make is refused" "$(sumput "$JA" "$(printf 'f%.0s' $(seq 40))")" 422
+expect "a teammate cannot write a summary of another member's session" "$(sumput "$JS" "$SEGSHA")" 404
+expect "the uploader reads the summary with its segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["segment_no"],r[0]["body"]["summary"])')" "1 1 Committed the segment work."
+expect "a teammate reads no summary before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-commits/$SEGSHA/summaries" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 0
+expect "no summary is found along a branch of a remote that was never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-memory?branch=main" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r.get("branch"),r["walked"],len(r["summaries"]))')" "None 0 0"
+expect "the uploader finds the summary at a commit of its folder by naming it" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-memory?branch=main&local=$SEGSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r["summaries"]),r["summaries"][0]["segment_no"],r["summaries"][0]["body"]["summary"])')" "1 1 Committed the segment work."
+expect "a teammate naming that commit finds nothing before a push" "$(curl -sb "$JS" "$B/repos/$CLIRID/anchored-memory?branch=main&local=$SEGSHA" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["summaries"]))')" 0
+expect "more than 20 summaries along a branch are refused" "$(curl -sb "$JA" -o /dev/null -w '%{http_code}' "$B/repos/$CLIRID/anchored-memory?branch=main&limit=21")" 422
+expect "the uploader reads the conversation through the session, without the document hash" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c "import json,sys;raw=sys.stdin.read();p=json.loads(raw);print(len(p['events']),p['offset'],p['next'],'$SEGDOC2' in raw)")" "6 0 -1 False"
+expect "a session's summary says nothing about the remote it never read" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;c=json.load(sys.stdin)[0]["commits"][0];print("on_remote" in c, c.get("copies"))')" "False None"
+# The collector a hook wakes reads the same records and sends only what changed.
+# Runs are spaced; the test moves the last run back instead of waiting.
+SEGSTATE="$(git rev-parse --absolute-git-dir)/cxt/collector-v1.json"
+segrewind() {
+  [ -f "$SEGSTATE" ] && python3 - "$SEGSTATE" <<'PYWIND'
+import json, sys
+state = json.load(open(sys.argv[1]))
+if state.get("last_run"):
+    state["last_run"]["at"] = "2026-01-01T00:00:00Z"
+    state["last_run"].pop("millis", None)
+    json.dump(state, open(sys.argv[1], "w"))
+PYWIND
+  return 0
+}
+# segquiet — wait until no collector holds the repository's collector lock. An
+# agent hook wakes a detached collector, which holds that lock while it waits
+# for its pause and while it runs. A collector started here in the meantime
+# would only leave it a request and return without reading. The lock itself is
+# asked, not the process list: a process that merely names the collector in its
+# command line is not one.
+segquiet() {
+  python3 - "$(dirname "$SEGSTATE")/collector.lock" <<'PYQUIET'
+import fcntl, os, sys, time
+path, end = sys.argv[1], time.time() + 60
+while os.path.exists(path):
+    with open(path, "r+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            break
+        except BlockingIOError:
+            pass
+    if time.time() > end:
+        sys.exit(1)
+    time.sleep(0.05)
+PYQUIET
+}
+# segwoken — wait until the collector a hook just woke has run and is gone. The
+# hook was called with the last run moved back, so that collector runs at once
+# and its run shows as a new last run.
+segwoken() {
+  local end=$((SECONDS + 60))
+  until [ "$(segran)" = ran ]; do
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep 0.05
+  done
+  segquiet
+}
+# segran — says whether the collector really ran since its last run was moved
+# back: a check of what a run left must not pass because no run happened.
+segran() { python3 -c 'import json,sys;print("ran" if json.load(open(sys.argv[1]))["last_run"]["at"]!="2026-01-01T00:00:00Z" else "did not run")' "$SEGSTATE" 2>/dev/null; }
+segcollect() {
+  segquiet; segrewind
+  cxt git-hook segment-collect >/dev/null 2>&1
+}
+segappend() { printf '%s\n' '{"type":"user","uuid":"'"$1"'","sessionId":"e2e-segments","timestamp":"2031-01-02T03:01:'"$2"'.000Z","cwd":"'"$PWD"'","gitBranch":"'"$SEGBRANCH"'","promptId":"'"$1"'","message":{"content":"more"}}' >>"$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"; }
+segrevision() { curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['revision']"; }
+segcollect
+expect "the collector remembers what the server holds and how its run ended" "$(python3 -c "import json;s=json.load(open('$SEGSTATE'));r=s['last_run'];print(s['version'],len(s['sessions']),r['stored'],r['unchanged'],r.get('error','-'),bool(s['enabled_at']))")" "1 1 0 1 - True"
+expect "a run with nothing new leaves the report as it is" "$(segcollect; segrevision)" 2
+segappend m7 10
+expect "the collector sends a session that went on" "$(segcollect; segrevision)" 3
+cxt config segments.auto off >/dev/null 2>&1
+segappend m8 20
+expect "turned off, the collector sends nothing" "$(segcollect; segrevision)" 3
+cxt config segments.auto on >/dev/null 2>&1
+expect "turned on again, it makes up for what it missed" "$(segcollect; segrevision)" 4
+expect "an account outside the repository cannot list reports" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions")" 403
+expect "an account outside the repository cannot read a report" "$(code -b "$JM" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 403
+expect "an anonymous caller cannot read a report" "$(code "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" 401
+# A prompt hook gives a session the most recent summary along the branch its folder is on, once. Here that is the
+# summary at a commit of this folder that the server never read from a remote, which another session of the same
+# member wrote.
+hooksummary() {
+  # A prompt hook wakes no collector: the last run is moved back so that a run would show.
+  segquiet; segrewind
+  printf '{"session_id":"%s","cwd":"%s","prompt":"go on"}' "$1" "$PWD" | cxt hook --provider claude --event UserPromptSubmit 2>"$TMP/hook-summary.err" | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+text = json.loads(raw)["hookSpecificOutput"]["additionalContext"] if raw else ""
+print("cxthub branch summary" in text, sys.argv[1][:12] in text)' "$SEGSHA"
+}
+expect "a prompt hook gives another session the summary along its branch" "$(hooksummary e2e-reader)" "True True"
+expect "the same session is not given it a second time" "$(hooksummary e2e-reader)" "False False"
+# A collector a hook started holds the collector lock within a moment and until it has run: wait for the lock to be
+# free before asking whether a run happened, so that a run still going is not taken for none.
+sleep 1
+expect "a prompt hook woke no collector" "$(segquiet && echo quiet) $(segran)" "quiet did not run"
+# The end of a turn wakes it: a commit and a push happen in the middle of a turn, and the rest is recorded afterwards.
+segquiet; segrewind
+printf '{"session_id":"e2e-reader","cwd":"%s"}' "$PWD" | cxt hook --provider claude --event Stop 2>"$TMP/hook-stop.err"
+expect "the hook at the end of a turn wakes the collector, which runs and is gone" "$(segwoken && echo "$(segran) quiet")" "ran quiet"
+# A session is archived by its uploader: it leaves its commit's segments and summaries, stays in the list as archived,
+# is still opened by its key, and comes back when it is restored.
+segarchive() { ccurl -sb "$1" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/archive" -H 'Content-Type: application/json' -d "{\"archived\":$2}"; }
+segcount() { curl -sb "$JA" "$B/repos/$CLIRID/$1" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))'; }
+expect "a teammate who does not manage the repository cannot archive another member's session" "$(segarchive "$JS" true)" 403
+expect "the session is at its commit with a summary before it is archived" "$(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "1 1"
+expect "the uploader archives its session" "$(segarchive "$JA" true)" 200
+expect "an archived session leaves its commit's segments and summaries" "$(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "0 0"
+expect "it stays in the list as archived and is still opened" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),bool(r[0].get("archived_at")))') $(code -b "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments")" "1 True 200"
+expect "a report uploaded again leaves it archived" "$(segappend m9 30; segcollect; segcount "anchored-commits/$SEGSHA") $(segran)" "0 ran"
+expect "the uploader restores it" "$(segarchive "$JA" false) $(segcount "anchored-commits/$SEGSHA")" "200 1"
+# A Codex thread is read from the databases Codex keeps, in the layout of its
+# release 0.171, and its conversation is uploaded like a Claude Code session's.
+# The databases are written with synthetic rows by the sqlite3 program, which is
+# also what cxt reads them with.
+if command -v sqlite3 >/dev/null 2>&1; then
+  GIT_AUTHOR_DATE=2031-01-03T03:00:05Z GIT_COMMITTER_DATE=2031-01-03T03:00:05Z git commit -q --allow-empty -m "e2e codex commit"
+  CDXSHA="$(git rev-parse HEAD)"
+  mkdir -p "$HOME/.codex"
+  python3 - "$PWD" "$CDXSHA" "$SEGBRANCH" "$HOME/.codex" <<'PYCDX'
+import json, sqlite3, sys
+cwd, sha, branch, home = sys.argv[1:5]
+at = 1925175600000  # 2031-01-03T03:00:00Z
+state = sqlite3.connect(home + "/state_5.sqlite")
+state.executescript("""CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, git_origin_url TEXT, created_at_ms INTEGER, history_mode TEXT, title TEXT);
+CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL);""")
+state.execute("INSERT INTO threads VALUES ('e2e-codex', ?, NULL, ?, 'paginated', 'synthetic')", (cwd, at))
+state.commit(); state.close()
+history = sqlite3.connect(home + "/thread_history_1.sqlite")
+history.execute("""CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL,
+ created_at_ms INTEGER NOT NULL, item_json TEXT NOT NULL, item_type TEXT NOT NULL DEFAULT '', updated_at_ordinal INTEGER NOT NULL DEFAULT 0,
+ started_at_ms INTEGER, completed_at_ms INTEGER, PRIMARY KEY (thread_id, turn_id, item_id))""")
+def item(turn, name, ordinal, offset, body, started=None, completed=None):
+    body["id"] = name
+    history.execute("INSERT INTO thread_items VALUES ('e2e-codex', ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    (turn, name, ordinal, at + offset, json.dumps(body), body["type"], started, completed))
+item("t1", "u1", 1, 1000, {"type": "userMessage", "content": [{"type": "text", "text": "commit the codex change"}]})
+item("t1", "c1", 2, 4000, {"type": "commandExecution", "command": "git commit --allow-empty -m 'e2e codex commit'", "cwd": cwd, "status": "completed",
+                           "exitCode": 0, "aggregatedOutput": "[%s %s] e2e codex commit" % (branch, sha[:7])}, at + 4000, at + 6000)
+item("t1", "a1", 3, 7000, {"type": "agentMessage", "text": "committed the codex change"})
+item("t2", "u2", 4, 40000, {"type": "userMessage", "content": [{"type": "text", "text": "and one more"}]})
+item("t2", "x1", 5, 41000, {"type": "holoDeck", "scene": "bridge"})
+history.commit(); history.close()
+PYCDX
+  cxt segments push --json >"$TMP/segments-codex.json" 2>"$TMP/segments-codex.err"
+  expect "a Codex thread is uploaded with its conversation and a summary" "$(python3 -c "import json;r=json.load(open('$TMP/segments-codex.json'));s=[x for x in r['sessions'] if x['provider']=='codex'];print(len(s),s[0]['id'],s[0]['content'],s[0].get('summaries'),s[0].get('content_reason'))")" "1 e2e-codex stored 1 None"
+  expect "its commit leads to its segment" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-commits/$CDXSHA" | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r[0]["segment"];print(len(r),r[0]["provider"],r[0]["session_id"],r[0]["rule"],s["first"],s["last"])')" "1 codex e2e-codex printed-number t1/u1 t1/a1"
+  CDXDOC="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | jget "['body']['content']['parts'][-1]['doc']")"
+  expect "its report places its ranges in the content document" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/codex/e2e-codex" | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];s=b["segments"][0];u=b["uncommitted"];print(b["content"]["events"],s.get("first_event",0),s["events"],u["first_event"],u["events"])')" "6 0 4 4 2"
+  # An item kind cxt has no rule for is carried whole under its own name, and the folder a command ran in stays on this computer.
+  expect "its content document holds the items as events" "$(segevents codex e2e-codex | python3 -c 'import json,sys;e=json.load(sys.stdin);print(len(e),e[0]["blocks"][0]["text"],e[1]["tool_name"],e[2]["kind"],e[3]["blocks"][0]["text"],e[5]["tool_name"],e[5]["input"]["scene"],"cwd" in e[1]["input"])') $(dochave "$CDXDOC")" "6 commit the codex change shell tool_result committed the codex change unknown:holoDeck bridge False held"
+  expect "the same Codex thread again changes nothing" "$(cxt segments push --json 2>/dev/null | python3 -c 'import json,sys;r=json.load(sys.stdin);s=[x for x in r["sessions"] if x["provider"]=="codex"];print(r["stored"],s[0]["content"])')" "0 stored"
+else
+  echo "  (sqlite3 is not installed: the Codex thread checks did not run)"
+fi
+# A session is removed from the server for every reader, is not sent again by
+# an upload or by the collector, and comes back when it is allowed again.
+segheld() { curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions" | python3 -c 'import json,sys;print(sum(1 for s in json.load(sys.stdin) if s["session_id"]=="e2e-segments"))'; }
+SEGDOCLAST="$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" | jget "['body']['content']['parts'][-1]['doc']")"
+expect "removing without confirmation removes nothing and fails" "$(cxt segments remove claude e2e-segments >/dev/null 2>&1; echo "$? $(segheld)")" "1 1"
+expect "a teammate who does not manage the repository cannot remove another member's session" "$(ccurl -sb "$JS" -o /dev/null -w '%{http_code}' -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(segheld)" "403 1"
+expect "the uploader removes its session" "$(cxt segments remove claude e2e-segments --yes --json | python3 -c 'import json,sys;r=json.load(sys.stdin)["removed"];print(len(r),r[0]["session_id"],r[0]["by_you"])')" "1 e2e-segments True"
+expect "the removed session is gone for its uploader and for a teammate" "$(code -b "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(code -b "$JS" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments") $(segheld) $(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "404 404 0 0 0"
+expect "its conversation document is deleted" "$(dochave "$SEGDOCLAST")" absent
+expect "the uploader lists the removal" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-removals" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["session_id"],r[0]["by_you"])')" "1 e2e-segments True"
+expect "an upload sends nothing of the removed session and does not fail" "$(cxt segments push --json >"$TMP/segments-removed.json" 2>/dev/null; echo "$? $(python3 -c 'import json,sys;r=json.load(open(sys.argv[1]));s=[x for x in r["sessions"] if x["id"]=="e2e-segments"][0];print(r["removed"],r["refused"],s["state"],"content" in s)' "$TMP/segments-removed.json") $(segheld)")" "0 1 0 removed False 0"
+expect "the collector does not bring it back" "$(segappend m10 31; segcollect; segheld) $(segran)" "0 ran"
+expect "the server refuses its report from anyone" "$(ccurl -sb "$JA" -o /dev/null -w '%{http_code}' -X PUT "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments" -H 'Content-Type: application/json' -d '{"rule_version":1,"sub":false,"scope":"working-folder","records":0,"commands":0,"copied_records":0,"segments":[]}')" 409
+expect "allowing it again uploads it from the tool's records" "$(cxt segments allow claude e2e-segments --json | python3 -c 'import json,sys;r=json.load(sys.stdin);s=r["upload"]["sessions"];print(len(s),s[0]["state"],s[0]["revision"],s[0]["content"],r["upload"].get("not_found"))') $(segheld) $(segcount "anchored-commits/$SEGSHA")" "1 stored 1 stored None 1 1"
+expect "the session's log on this computer says what was done to it" "$(cxt segments log claude e2e-segments --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["sessions"][0]["log"];a=[e["action"] for e in l if e.get("action")];print(a[0],"|",a[1],"|",a[-1])')" "removed from the server | not sent | allowed again on the server"
+expect "one session is uploaded by name" "$(cxt segments push claude e2e-segments --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r["sessions"]),r["sessions"][0]["id"])')" "1 e2e-segments"
+expect "a name the tools did not record fails" "$(cxt segments push claude never-recorded >/dev/null 2>&1; echo "$?")" 1
+# The diagnosis reads this computer and the server, changes nothing, and gives
+# each thing that does not fit with the command that puts it right.
+segdoctor() { cxt segments doctor --json 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+f=[x for x in d["findings"] if x["code"]==sys.argv[1] and (len(sys.argv)<3 or (x.get("session") or {}).get("session_id")==sys.argv[2])]
+print(len(f), f[0].get("fix","") if f else "")' "$@"; }
+expect "the diagnosis looks at this computer and at the server" "$(cxt segments doctor --json | python3 -c 'import json,sys;d=json.load(sys.stdin);c=d["checked"];print(d["version"],"collector" in c,"copies" in c,"server-sessions" in c,"summaries" in c)')" "1 True True True True"
+expect "a session that is on the server as it was sent raises nothing" "$(segdoctor server-behind e2e-segments) $(segdoctor not-on-server e2e-segments) $(segdoctor server-differs e2e-segments) $(segdoctor removed e2e-segments)" "0  0  0  0 "
+# The session goes on and nothing uploads it: the server is behind.
+segappend m11 40
+expect "records the collector has not sent are found, with the command that sends them" "$(segdoctor server-behind e2e-segments)" "1 cxt segments push claude e2e-segments"
+expect "that command puts it right" "$(cxt segments push claude e2e-segments >/dev/null 2>&1; echo "$? $(segdoctor server-behind e2e-segments)")" "0 0 "
+# Archived and removed sessions are found with what brings them back.
+expect "an archived session is found" "$(cxt segments archive claude e2e-segments >/dev/null; segdoctor archived e2e-segments)" "1 cxt segments unarchive claude e2e-segments"
+expect "restoring it clears the finding" "$(cxt segments unarchive claude e2e-segments >/dev/null; segdoctor archived e2e-segments)" "0 "
+expect "a removed session is found" "$(cxt segments remove claude e2e-segments --yes >/dev/null; segdoctor removed e2e-segments)" "1 cxt segments allow claude e2e-segments"
+expect "allowing it again clears the finding" "$(cxt segments allow claude e2e-segments >/dev/null; segdoctor removed e2e-segments) $(segheld)" "0  1"
+# The server lost a session whose records the tool no longer holds: only the
+# copy under .cxt is left, and it is sent again from there.
+segquiet
+mv "$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl" "$TMP/e2e-segments.jsonl.away"
+ccurl -sb "$JA" -o /dev/null -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments"
+ccurl -sb "$JA" -o /dev/null -X DELETE "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/removal"
+expect "a session left only in its copy is found" "$(segdoctor only-in-copy e2e-segments) $(segheld)" "1 cxt segments resend claude e2e-segments 0"
+expect "the copy is sent again: the report, the conversation and the summary" "$(cxt segments resend claude e2e-segments --json | python3 -c 'import json,sys;s=json.load(sys.stdin)["sessions"][0];print(s["state"],s["revision"],s["content"],s.get("summaries"))') $(segheld) $(segcount "anchored-commits/$SEGSHA") $(segcount "anchored-commits/$SEGSHA/summaries")" "stored 1 stored 1 1 1 1"
+expect "the conversation sent again is read through the session" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/events?offset=0&limit=20" | python3 -c 'import json,sys;p=json.load(sys.stdin);print(len(p["events"])>=5,p["offset"])')" "True 0"
+mv "$TMP/e2e-segments.jsonl.away" "$HOME/.claude/projects/-e2e-segments/e2e-segments.jsonl"
+# This repository has no Git origin on the server, so there is nothing to read again, and the command says so.
+expect "asking for a fresh read of GitHub says why it cannot be done here" "$(cxt segments refresh 2>&1 >/dev/null | grep -c 'no Git origin to read')" 1
+# Fork, both ways: a Git branch at a commit, and a new session of a tool that
+# continues the conversation up to that commit, read from the server.
+SEGHEADBEFORE="$(git symbolic-ref --short HEAD) $(git rev-parse HEAD)"
+expect "a Git branch is made at a commit" "$(cxt segments fork --at "${SEGSHA:0:10}" --branch e2e-fork --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["branch"],r["commit"],"resume_command" in r)') $(git rev-parse refs/heads/e2e-fork)" "e2e-fork $SEGSHA False $SEGSHA"
+expect "no folder was switched to it" "$(git symbolic-ref --short HEAD) $(git rev-parse HEAD)" "$SEGHEADBEFORE"
+expect "a branch that exists is not made again" "$(cxt segments fork --at "$SEGSHA" --branch e2e-fork >/dev/null 2>&1; echo "$?")" 1
+expect "the conversation is read from the server as its events, by its uploader" "$(curl -sb "$JA" "$B/repos/$CLIRID/anchored-sessions/claude/e2e-segments/content?index=0&limit=2" | python3 -c 'import json,sys;p=json.load(sys.stdin);f=p["fragments"];print(len(f),f[0]["event_index"],f[0]["event_complete"],json.loads(f[0]["json_fragment"])["blocks"][0]["text"],p["next_index"])')" "2 0 True commit it 2"
+cxt segments fork claude e2e-segments --at "$SEGSHA" --json >"$TMP/segments-fork.json" 2>"$TMP/segments-fork.err"
+expect "a conversation is continued up to a commit as a new session of the same tool" "$(python3 -c "import json;r=json.load(open('$TMP/segments-fork.json'));print(r['tool'],r['events'],r.get('omitted_events',0),r['same_tool'],r['resume_command'].split()[0],r['commit']=='$SEGSHA')")" "claude 4 0 True claude True"
+expect "the new session's file holds the conversation up to the commit and nothing after it" "$(python3 -c "import json;p=json.load(open('$TMP/segments-fork.json'))['session_path'];raw=open(p).read();print('commit it' in raw,'committed' in raw,'one more thing' in raw)")" "True True False"
+expect "another tool gets the conversation rebuilt for it" "$(cxt segments fork claude e2e-segments --at "$SEGSHA" --to codex --json | python3 -c "import json,sys;r=json.load(sys.stdin);raw=open(r['session_path']).read();print(r['tool'],r.get('same_tool',False),r['resume_command'].split()[0],'commit it' in raw,'one more thing' in raw)")" "codex False codex True False"
+expect "a commit no part of the session ends at is refused" "$(cxt segments fork claude e2e-segments --at "$(git rev-parse "$SEGSHA~1" 2>/dev/null || echo "$SEGSHA")" >/dev/null 2>&1; echo "$?")" 1
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"
@@ -277,7 +603,8 @@ STUB_PID=$!
 for i in $(seq 1 20); do code "http://127.0.0.1:$STUB_PORT/" >/dev/null 2>&1 && break; sleep 0.2; done
 hits() { cat "$HITFILE" 2>/dev/null | wc -l | tr -d ' '; }
 ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
-ccurl -sb "$JA" -X PUT "$RB/refs/branch/wh-test" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\"}" >/dev/null
+WHREV=$(curl -sb "$JA" "$RB/secrets" | python3 -c 'import json,sys;s=sys.stdin.read();print(json.loads(s)["revision"] if s else "absent")')
+ccurl -sb "$JA" -X PUT "$RB/secrets?expected_revision=$WHREV" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
 # Wait until the durable worker has actually attempted delivery before asserting absence.
 for i in $(seq 1 30); do
   reason=$(curl -sb "$JA" "$B/repositories/$REPOSITORY_ID/notifications" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j[0].get("reason", "") if j else "")')
@@ -300,25 +627,21 @@ SLUG2=$(curl -sb "$J2" "$B2/repositories" | jget "[0]['slug']")
 REMOTE2="$ORIGIN2/$OWN2/$SLUG2"
 RID2="$(repo_id "$REMOTE2")"
 ccurl2 -sb "$J2" -X POST "$B2/repos" -H 'Content-Type: application/json' -d "{\"id\":\"$RID2\",\"remote_url\":\"$REMOTE2\",\"default_branch\":\"main\"}" >/dev/null
-ccurl2 -sb "$J2" -X POST "$B2/repos/$RID2/push/objects" -H 'Content-Type: application/json' -d "$OBJECTS" >/dev/null
 ccurl2 -sb "$J2" -X PATCH "$B2/repositories/$REPOSITORY_ID2" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
-ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/refs/branch/main" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\"}" >/dev/null
+# A change of the team secrets and a member joining each send one.
+ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets?expected_revision=absent" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
 # Transmission is asynchronous — uses polling instead of fixed sleep (stabilizes in load-heavy CI).
 for i in $(seq 1 25); do [ "$(hits)" -ge 1 ] && break; sleep 0.2; done
 expect "webhook delivered when private targets are explicitly allowed" "$(hits)" 1
-# Webhook event extension: triggers on secret update and member join in addition to ref update.
-ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets?expected_revision=absent" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
-for i in $(seq 1 25); do [ "$(hits)" -ge 2 ] && break; sleep 0.2; done
-expect "Secret update webhook delivery" "$(hits)" 2
 INV2=$(ccurl2 -sb "$J2" -X POST "$B2/repositories/$REPOSITORY_ID2/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")
 J3="$TMP/w3.jar"; ccurl2 -s -c "$J3" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:joiner@t.io:Joiner" >/dev/null
 ccurl2 -sb "$J3" -X POST "$B2/invites/$INV2/accept" >/dev/null
-for i in $(seq 1 25); do [ "$(hits)" -ge 3 ] && break; sleep 0.2; done
-expect "Member join webhook delivery" "$(hits)" 3
+for i in $(seq 1 25); do [ "$(hits)" -ge 2 ] && break; sleep 0.2; done
+expect "Member join webhook delivery" "$(hits)" 2
 # Invite links are reusable (idempotent accept) — re-clicking by existing members does not create duplicate notifications.
 ccurl2 -sb "$J3" -X POST "$B2/invites/$INV2/accept" >/dev/null
 sleep 1
-expect "idempotent reaccept emits no duplicate webhook" "$(hits)" 3
+expect "idempotent reaccept emits no duplicate webhook" "$(hits)" 2
 
 echo "── G2. Durable notification retry survives a real server restart"
 touch "$HITFILE.fail"
@@ -342,7 +665,7 @@ for i in $(seq 1 150); do
   sleep 0.3
 done
 expect "restart automatically resumes queued delivery" "$state" delivered
-expect "receiver sees one failed and one successful attempt" "$(hits)" 5
+expect "receiver sees one failed and one successful attempt" "$(hits)" 4
 expect "retry preserves stable event ID" "$(tail -2 "$HITFILE" | uniq | wc -l | tr -d ' ')" 1
 
 echo "── H. Security surface"

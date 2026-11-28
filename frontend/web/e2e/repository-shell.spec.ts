@@ -9,7 +9,6 @@ async function repositoryFixture(page: Page, anonymous = false) {
     { id: 'repo-other', owner_username: 'alice', name: 'design-system', slug: 'design-system', visibility: 'private', owner_id: user.id, effective_role: 'owner' },
   ];
   const reads: string[] = [];
-  const snapshot = `sha256:${'1'.repeat(64)}`;
   const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
     if (method !== 'GET') return undefined;
     reads.push(pathname);
@@ -17,8 +16,6 @@ async function repositoryFixture(page: Page, anonymous = false) {
     if (pathname === '/api/v1/repositories') return { body: repositories };
     if (pathname === '/api/v1/public/users/alice') return { body: { user, repositories: repositories.filter(entry => entry.owner_username === 'alice') } };
     if (pathname === '/api/v1/public/organizations/alice') return { status: 404, body: {} };
-    if (pathname.endsWith('/contributions')) return { body: { total: 0, days: [] } };
-    if (pathname.endsWith('/activity')) return { body: [] };
     if (pathname === '/api/v1/public/repositories/alice/cxthub') return { body: repositories[0] };
     if (pathname === '/api/v1/repos') return { body: [{
       id: searchParams.get('repository'), default_branch: 'main',
@@ -28,15 +25,8 @@ async function repositoryFixture(page: Page, anonymous = false) {
     if (/\/repositories\/[^/]+\/members$/.test(pathname)) return { body: [{ user_id: user.id, role: 'owner', user }] };
     const match = pathname.match(/^\/api\/v1\/repos\/([^/]+)\/(.+)$/);
     if (!match) return undefined;
-    const [, repo, resource] = match;
-    if (resource === 'refs') return { body: [{ kind: 'branch', name: 'main', target: snapshot, repo_id: repo }] };
-    if (resource === 'snapshots') return { body: [{ id: snapshot, doc_hash: snapshot, repo_id: repo, branch: 'main', parents: [], provider: 'codex', message: 'Improve repository navigation', created_at: '2026-10-09T09:00:00Z', author: { name: 'Alice' } }] };
-    if (['pending', 'history', 'reflog', 'unsync'].includes(resource)) return { body: [] };
+    const resource = match[2];
     if (resource.startsWith('settings/') || resource === 'secrets') return { body: null };
-    if (resource.startsWith('docs/') && resource.endsWith('/events')) return { body: { hash: snapshot, envelope: { cir_version: '2', source_provider: 'codex' }, events: [
-      { seq: 0, kind: 'message', role: 'user', blocks: [{ type: 'text', text: 'Move repository switching into the header.' }] },
-      { seq: 1, kind: 'message', role: 'assistant', blocks: [{ type: 'text', text: 'Search repositories without leaving your context.' }] },
-    ], total: 2, offset: 0, next: -1, inherited: 0 } };
     return undefined;
   });
   return { repositories, reads, unexpected };
@@ -46,7 +36,7 @@ test('repository name opens searchable switching with keyboard, history and outs
   const errors = capturePageErrors(page);
   const fixture = await repositoryFixture(page);
   await page.goto('/alice/cxthub');
-  await expect(page.locator('.commit-row').first()).toContainText('Improve repository navigation');
+  await expect(page.locator('.tab.on')).toHaveText('Sessions');
   await expect(page.locator('.app-side-left, .repository-list')).toHaveCount(0);
   const trigger = page.getByRole('button', { name: 'Switch repository', exact: true });
   await expect(trigger).toContainText('cxthub');
@@ -133,31 +123,31 @@ test('profile plus menu opens a dedicated repository page and preserves creation
   expect(fixture.unexpected).toEqual([]);
 });
 
-test('right details are collapsible without resetting context and persist on reload', async ({ page }, testInfo) => {
+test('right details are collapsible without reading the sessions again and persist on reload', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const errors = capturePageErrors(page);
   const fixture = await repositoryFixture(page);
-  await page.goto('/alice/cxthub');
+  await page.goto('/alice/cxthub?tab=sessions&show=all');
   const panel = page.getByRole('complementary', { name: 'Repository details' });
   await expect(panel).toContainText('Team defaults');
   await expect(panel).toContainText('.cxtsecrets');
   await expect(panel).toContainText('Save locally');
-  await expect(page.locator('.ctx-side .about, .ctx-side .settings-row')).toHaveCount(0);
-  await page.locator('.commit-row').first().click();
-  await expect(page.locator('.viewer')).toContainText('Move repository switching');
+  await expect(page.locator('.tab.on')).toHaveText('Sessions');
   const main = page.locator('main');
   const before = await main.boundingBox();
   const side = await panel.boundingBox();
   expect(before!.x).toBe(0);
   expect(side!.x).toBeGreaterThanOrEqual(before!.x + before!.width - 1);
   await page.screenshot({ path: testInfo.outputPath('repository-details.png'), fullPage: true });
-  const reads = fixture.reads.filter(path => path.endsWith('/refs')).length;
+  const sessionReads = () => fixture.reads.filter(path => path.endsWith('/anchored-sessions')).length;
+  const reads = sessionReads();
+  expect(reads).toBeGreaterThan(0);
   await panel.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Show repository details' })).toBeFocused();
   expect((await main.boundingBox())!.width).toBeGreaterThan(before!.width + 200);
-  await expect(page.locator('.viewer')).toContainText('Move repository switching');
-  expect(fixture.reads.filter(path => path.endsWith('/refs')).length).toBe(reads);
+  await expect(page).toHaveURL(/\?tab=sessions&show=all$/);
+  expect(sessionReads()).toBe(reads);
   await page.reload();
   await expect(page.getByRole('button', { name: 'Show repository details' })).toBeVisible();
   await expect(panel).toHaveCount(0);
@@ -166,9 +156,9 @@ test('right details are collapsible without resetting context and persist on rel
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
   await page.getByRole('button', { name: 'Show repository details' }).click();
-  await page.getByRole('button', { name: 'On Hold', exact: true }).click();
+  await page.locator('.tabs').getByRole('button', { name: /^Connected/ }).click();
   await expect(panel).toBeVisible();
-  await expect(page.locator('.tab.on')).toHaveText('On Hold');
+  await expect(page.locator('.tab.on')).toContainText('Connected');
   expect(errors).toEqual([]);
   expect(fixture.unexpected).toEqual([]);
 });
@@ -216,45 +206,6 @@ test('public guests see only About and cannot list private repositories or team 
   expect(fixture.reads.some(path => /\/(settings\/|secrets$)/.test(path))).toBe(false);
   expect(fixture.unexpected).toEqual([]);
 });
-
-for (const view of ['context', 'onhold']) {
-  test(`${view} centers a bounded reading column through viewport and details changes`, async ({ page }, testInfo) => {
-    const errors = capturePageErrors(page);
-    const fixture = await repositoryFixture(page);
-    await page.setViewportSize({ width: 2560, height: 1000 });
-    await page.goto(`/alice/cxthub${view === 'onhold' ? '?tab=onhold' : ''}`);
-    const center = page.locator('.ctx-main');
-    const columns = page.locator('.ctx-cols');
-    const graph = page.locator('.ctx-side');
-    await expect(center).toBeVisible();
-    for (const width of [2560, 1920, 1440, 1280, 1024, 900, 390]) {
-      await page.setViewportSize({ width, height: 1000 });
-      for (const detailsOpen of [true, false]) {
-        await expect(page.locator('#repository-details-toggle')).toHaveAttribute('aria-expanded', String(detailsOpen));
-        const parentBounds = (await columns.boundingBox())!;
-        const centerBounds = (await center.boundingBox())!;
-        const graphBounds = (await graph.boundingBox())!;
-        const sideBySide = width > 1000 && parentBounds.width > 600;
-        const expectedWidth = Math.min(1024, parentBounds.width - (sideBySide ? 304 : 0));
-        expect(centerBounds.width).toBeCloseTo(expectedWidth, 0);
-        expect(centerBounds.x).toBeCloseTo(parentBounds.x + (parentBounds.width - expectedWidth - (sideBySide ? 304 : 0)) / 2, 0);
-        if (sideBySide) {
-          expect(graphBounds.width).toBeCloseTo(280, 0);
-          expect(graphBounds.x - centerBounds.x - centerBounds.width).toBeCloseTo(24, 0);
-        } else {
-          expect(graphBounds.y).toBeGreaterThanOrEqual(centerBounds.y + centerBounds.height);
-        }
-        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-        if (view === 'context' && detailsOpen && [2560, 1440, 390].includes(width)) {
-          await page.screenshot({ path: testInfo.outputPath(`context-width-${width}.png`), fullPage: true });
-        }
-        await page.locator('#repository-details-toggle').click();
-      }
-    }
-    expect(errors).toEqual([]);
-    expect(fixture.unexpected).toEqual([]);
-  });
-}
 
 for (const width of [390, 900]) {
   test(`repository switcher and details fit ${width}px without page overflow`, async ({ page }, testInfo) => {

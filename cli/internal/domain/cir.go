@@ -41,26 +41,6 @@ func (d CIRDocument) EffectiveContext() CIRDocument {
 	return out
 }
 
-// HasCompleteCompactionBoundary reports whether the latest archival boundary
-// has an authoritative provider replacement. Consumers that reconstruct the
-// provider's native wire format use this to preserve the replacement operation
-// after applying replay budgets.
-func (d CIRDocument) HasCompleteCompactionBoundary() bool {
-	_, complete := d.LatestCompactionReplacementCount()
-	return complete
-}
-
-// LatestCompactionReplacementCount returns the size of the authoritative
-// replacement prefix in EffectiveContext. A zero-length complete replacement
-// is distinct from no/incomplete boundary through the boolean result.
-func (d CIRDocument) LatestCompactionReplacementCount() (int, bool) {
-	latest, complete := d.latestCompactionBoundary()
-	if latest < 0 || !complete {
-		return 0, false
-	}
-	return len(d.Events[latest].Replacement), true
-}
-
 func (d CIRDocument) latestCompactionBoundary() (int, bool) {
 	latest := -1
 	for i := range d.Events {
@@ -102,28 +82,6 @@ type Envelope struct {
 	SourceModels []string `json:"source_models,omitempty"`
 	// CompactionCount is the number of context compressions (compact_boundary) observed in this session transcript. Claude counts type=="system"&&subtype=="compact_boundary" markers. Compression does not change the sessionId, so a separate signal is needed to mark session boundaries — the graph draws a compression marker (◈) in snapshots with a larger count than the parent. 0 means omitempty has no effect on canonical bytes/hash (legacy capture with no compression results in byte equality → dedup unchanged).
 	CompactionCount int `json:"compaction_count,omitempty"`
-}
-
-// OrderedModels is a list of models (list/graph display metadata) —
-// the representative (last used, SourceModel) model is first, others in reverse order of recent appearance.
-// Data source for the "leftmost (top) = this commit's direct tool" rule of web overlays (AIDots).
-func (e Envelope) OrderedModels() []string {
-	if len(e.SourceModels) == 0 {
-		if e.SourceModel == "" {
-			return nil
-		}
-		return []string{e.SourceModel}
-	}
-	var out []string
-	if e.SourceModel != "" {
-		out = append(out, e.SourceModel)
-	}
-	for i := len(e.SourceModels) - 1; i >= 0; i-- {
-		if m := e.SourceModels[i]; m != e.SourceModel {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 // Event is a single element of the CIR event stream (domain model).

@@ -21,9 +21,6 @@ type CodexMemorySource struct{}
 // NewCodexMemorySource creates a CodexMemorySource.
 func NewCodexMemorySource() *CodexMemorySource { return &CodexMemorySource{} }
 
-// Provider returns codex.
-func (s *CodexMemorySource) Provider() domain.ProviderKind { return domain.ProviderCodex }
-
 // ReadNative reads Codex native memory.
 //
 // Storage structure (empirically verified, ~/.codex/memories_1.sqlite): stage1_outputs stores raw_memory and rollout_summary by thread_id (the rollout UUID). Because the table has no cwd column, the adapter derives candidate thread IDs from rollout files associated with this working directory.
@@ -128,27 +125,7 @@ func isSafeThreadID(id string) bool {
 	return true
 }
 
-// CodexMemorySink writes a MemoryDigest to Codex AGENTS.md (compatibility rules).
-type CodexMemorySink struct{}
-
-// NewCodexMemorySink creates a CodexMemorySink.
-func NewCodexMemorySink() *CodexMemorySink { return &CodexMemorySink{} }
-
-// Provider returns codex.
-func (s *CodexMemorySink) Provider() domain.ProviderKind { return domain.ProviderCodex }
-
-// Inject refreshes the bounded cxt-managed region in cwd/AGENTS.md while
-// preserving user-authored content outside the markers.
-func (s *CodexMemorySink) Inject(_ context.Context, digest domain.MemoryDigest, cwd string) (string, error) {
-	path := filepath.Join(cwd, "AGENTS.md")
-	if err := writeManagedMemory(path, digest); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
 // Ensure Codex adapters implement the memory ports.
 var (
 	_ outbound.MemorySource = (*CodexMemorySource)(nil)
-	_ outbound.MemorySink   = (*CodexMemorySink)(nil)
 )

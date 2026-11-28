@@ -12,8 +12,7 @@
 #   SHARD=I/N   optional; split the ordered selection across jobs (fast store and app, heavy app).
 #   COUNT=N     repetitions for the race-checked heavy lanes (default 1).
 #
-# --first-test order matters: the slowest tests are listed first so they start first, and the
-# projection worker tests stay at the front so each runs against an almost empty database.
+# --first-test order matters: the slowest tests are listed first so they start first.
 set -euo pipefail
 # ${array[@]+"${array[@]}"} keeps empty arrays safe under set -u on bash 3.2 as well.
 
@@ -88,55 +87,9 @@ case "$LANE" in
     [ "$TIER" = heavy ] && selection=(--heavy-list "$HEAVY" --tier heavy)
     python3 "$RUNNER" ./internal/adapters/store/ --tags postgres --batch-size 1 \
       "${selection[@]}" ${worker_args[@]+"${worker_args[@]}"} ${shard_args[@]+"${shard_args[@]}"} \
-      --first-test TestDocRangeEnqueueBudgetPGTotalTimeoutRollback \
-      --first-test TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFences \
-      --first-test TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
-      --first-test TestDocToolValuesPGColdPreparationCounts \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesOwnership \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeOwnershipFailure \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeArgumentFence \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSnapshotIdentity \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceVersion \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceIncarnation \
-      --first-test TestDocToolOrdersPGColdPreparationCost \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeSourceConflict \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellation \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesArgumentFence \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesJobFence \
-      --first-test TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesLeaseExpiry \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFences \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceVersion \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSourceIncarnation \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesOwnership \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesLeaseExpiry \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesJobFence \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesSnapshotIdentity \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesArgumentFence \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellation \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeSourceConflict \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeOwnershipFailure \
-      --no-batch-timeout TestDocCanonicalPagesPGActiveNativePreparationRetainsFencesCancellationBeforeArgumentFence \
-      --no-batch-timeout TestDocNativeBlockPGActivePagesRetainFencesAndPublish \
-      --no-batch-timeout TestDocNativeEventsPGRawDecodeRetainsFencesAndPublishes \
-      --no-batch-timeout TestDocToolValuesPGColdPreparationCounts \
-      --no-batch-timeout TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
-      --no-batch-timeout TestNormalizationCheckpointPGPreparingColdRestart \
-      --no-batch-timeout TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed \
-      --require-test TestLegacyByteRecoveryPGColdChild \
-      --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
-      --require-test TestNormalizationCheckpointPGColdChild \
-      --require-test TestNormalizationCheckpointPGColdRestartPublishes \
-      --require-test TestPGRootWriterCost \
-      --require-test TestPGRootWriterCostPreparationReferenceRead \
-      --require-test TestPGRootWriterWait \
       --allow-skip TestLegacyProofStreamAllocationQualification \
       --allow-skip TestLegacyStreamingPGMemoryQualification \
-      --allow-skip TestPGCycleValidationComparison \
       --allow-skip TestPGDocSearchStageQualification \
-      --allow-skip TestPGMemoryCapturePersistenceCostD3ac \
-      --allow-skip TestPGRootPublicationCost \
-      --allow-skip TestPGRootPublicationCostWriterBarrier \
       --allow-skip TestRootReaderLegacyClassificationCost \
       --allow-skip TestStoredConversationReferencePerformance
     ;;
@@ -144,79 +97,29 @@ case "$LANE" in
   app)
     python3 "$RUNNER" ./internal/app/ --tags postgres ${race[@]+"${race[@]}"} --run '^TestPG' --count "$COUNT" --batch-size 1 \
       "${selection[@]}" ${worker_args[@]+"${worker_args[@]}"} ${shard_args[@]+"${shard_args[@]}"} \
-      --first-test TestPGGraphProjectionWorkerResumesAndMatchesLiveGitPRGraph \
       --first-test TestPGInvitationEmailWorkerDirectClaimAndCompletionRollback \
-      --first-test TestPGPRPromotionWorkerDirectSharedAdmissionLeaseReplacementAndRecovery \
-      --first-test TestPGPendingProjectionWorkerMatchesDirectClassificationAcrossMutations \
-      --first-test TestPGWave40ProjectionWorkersCaptureRestartPublishAndQualifyWithoutService \
       --first-test TestPGWave41NotificationFactoryDurableRetryRestartAndStableEventID \
-      --first-test TestPGWave41NotificationFactoryFencesStaleLeaseAndCurrentPolicy \
-      --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
-      --first-test TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
-      --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
-      --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementSourceVersion \
-      --first-test TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementLeaseExpiry \
-      --no-batch-timeout TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences \
-      --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement \
-      --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement \
-      --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementLeaseExpiry \
-      --no-batch-timeout TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementSourceVersion \
-      --allow-skip TestPGMemoryPreparationCostD3ab \
-      --allow-skip TestPGReadModelMixedProgress
+      --first-test TestPGWave41NotificationFactoryFencesStaleLeaseAndCurrentPolicy
     # Single-run app contracts outside the TestPG selection (on the last shard when sharded).
     if [ "$last_shard" = true ]; then
       go test -tags postgres ./internal/app/ ${race[@]+"${race[@]}"} -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v
-      python3 "$RUNNER" ./internal/app/ --tags postgres ${race[@]+"${race[@]}"} --run '^TestActivityCommitHistoryPG$'
-      python3 "$RUNNER" ./internal/app/ --tags postgres ${race[@]+"${race[@]}"} \
-        --run '^TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads$' \
-        --require-test TestDisplayMaintenanceProcessPGCollectorRestartCancellationAndPublishedReads
     fi
     ;;
 
   transports)
     python3 "$RUNNER" ./internal/adapters/delivery/http/ --tags postgres ${race[@]+"${race[@]}"} --run '^TestPG' --count "$COUNT" --batch-size 1 \
-      "${selection[@]}" ${worker_args[@]+"${worker_args[@]}"} \
-      --require-test TestPGDocFindPreparedHTTPQueuesThenContinuesRoot \
-      --require-test TestPGDocFindPreparedHTTPQueuesThenContinuesLegacy
+      "${selection[@]}" ${worker_args[@]+"${worker_args[@]}"}
     go test -tags postgres ./internal/adapters/federation/ ${race[@]+"${race[@]}"} -run '^TestPG' -count="$COUNT" -timeout=120s -v
     go test -tags postgres ./internal/mcpserver/ ${race[@]+"${race[@]}"} -run '^TestPG' -timeout=120s -v
     python3 "$RUNNER" ./internal/serverruntime/ --tags postgres ${race[@]+"${race[@]}"} "${selection[@]}" \
       --run '^Test(ExecutionProfilePostgres|BoundedExecutionProcessesPG|InfrastructurePostgres|RuntimePostgresCallersReuseInfrastructurePool)'
     python3 "$RUNNER" ./cmd/cxtd/ --tags postgres ${race[@]+"${race[@]}"} "${selection[@]}" --run '^TestServerLifecyclePGProcess(SIGTERM|BindFailure)'
-    python3 "$RUNNER" ./internal/adapters/delivery/mcp/ --tags postgres ${race[@]+"${race[@]}"} --count "$COUNT" --batch-size 1 \
-      "${selection[@]}" ${worker_args[@]+"${worker_args[@]}"} \
-      --run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip.*)$' \
-      --require-test TestRootProjectionPGConsumersWithoutPersistentIndex \
-      --require-test TestPRContributionTransportParity \
-      --require-test TestPGConversationFindMCPPreparationRoundTrip \
-      --require-test TestPGConversationFindMCPPreparationRoundTripReasoning \
-      --require-test TestPGConversationFindMCPPreparationRoundTripMessage \
-      --require-test TestPGConversationFindMCPPreparationRoundTripSummary \
-      --require-test TestPGConversationFindMCPPreparationRoundTripSeed \
-      --require-test TestPGConversationFindMCPPreparationRoundTripToolEdit \
-      --require-test TestPGConversationFindMCPPreparationRoundTripToolWrite \
-      --require-test TestPGConversationFindMCPPreparationRoundTripToolBash \
-      --require-test TestPGConversationFindMCPPreparationRoundTripToolGeneric
     python3 "$RUNNER" ./internal/adapters/delivery/mcp/ --tags postgres ${race[@]+"${race[@]}"} "${selection[@]}" --run '^TestPGMCPResourceCutover$'
     python3 "$RUNNER" ./cmd/cxt-admin/ --tags postgres ${race[@]+"${race[@]}"} "${selection[@]}" --run '^TestIdentityKeyCommandRejectsSecretsWithoutEchoingConfiguration$'
 
     if [ "$TIER" = heavy ]; then
-      # Race-only checks. Without -race these run in the store lane and backend-checks.
-      # Bounded normalization restart (formerly the "Normalization restart" workflow):
-      # registration of every name is enforced by --no-batch-timeout.
-      GOMAXPROCS=2 go test -json -p 1 -parallel=1 -race -count=1 -timeout=0 ./internal/domain \
-        -run '^(TestLegacyNormalizationPreparingRestart|TestLegacyNormalizationStageCheckpoint|TestLegacyNormalizationStageCapture|TestLegacyNativeEventLifecycle|TestLegacyNativeCanonicalOwnerReadyLifecycle)'
-      GOMAXPROCS=2 python3 "$RUNNER" ./internal/adapters/store/ --tags postgres --race --batch-size 1 \
-        --run '^(TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress|TestNormalizationCheckpointPGPreparingColdRestart|TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed|TestNormalizationCheckpointPGAutomaticOutputGenerationReset|TestNormalizationCheckpointPGRootCommitFailureAndLostResponse|TestDocNormalizationWorkPGFencesEachPhase|TestNormalizationCheckpointPGPreservesLocalDamageAndRejectsDerivedProof)$' \
-        --no-batch-timeout TestNormalizationCheckpointPGPreparationSavesOnlyNewRecoveryProgress \
-        --no-batch-timeout TestNormalizationCheckpointPGPreparingColdRestart \
-        --no-batch-timeout TestNormalizationCheckpointPGStageOutputColdRestartBeforeInputConsumed \
-        --no-batch-timeout TestNormalizationCheckpointPGAutomaticOutputGenerationReset \
-        --no-batch-timeout TestNormalizationCheckpointPGRootCommitFailureAndLostResponse \
-        --no-batch-timeout TestDocNormalizationWorkPGFencesEachPhase \
-        --no-batch-timeout TestNormalizationCheckpointPGPreservesLocalDamageAndRejectsDerivedProof
-      # Admission progress on one CPU under the race detector (backend-checks runs it without).
-      GOMAXPROCS=1 go test -race ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
+      # Race-only check: admission progress on one CPU (backend-checks runs it without the race detector).
+      GOMAXPROCS=1 go test -race ./internal/app -run '^TestResourceAdmissionDispatchReservesBothClasses$' -count=3 -timeout=120s
     fi
     ;;
 esac

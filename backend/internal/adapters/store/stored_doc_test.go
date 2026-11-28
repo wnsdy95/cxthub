@@ -23,7 +23,7 @@ func TestStoredDocProofRechecksCurrentBytesOwnershipAndExistence(t *testing.T) {
 	cold := NewFSStore(s.dataDir)
 	for i := 0; i < 2; i++ {
 		p, err := cold.VerifyStoredDoc(ctx, repo, doc.Hash)
-		if err != nil || !p.Matches(domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash}) {
+		if err != nil || !p.Valid() || p.DocumentRef() != (domain.DocumentRef{Hash: doc.Hash}) {
 			t.Fatalf("proof %d: %v %v", i, p, err)
 		}
 	}

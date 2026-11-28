@@ -23,9 +23,6 @@ func appendRepositoryAudit(ctx context.Context, repositories outbound.Repository
 	}
 	return appendRepositoryAuditFromSources(ctx, repositories, audit, actor, id, action)
 }
-func (service *Service) auditRepositoryWrite(ctx context.Context, repo domain.ContentHash) error {
-	return service.repositoryWork().auditRepositoryWrite(ctx, repo)
-}
 func (s *IdentityService) OrganizationAuditPage(ctx context.Context, actor, org, cursor string, limit int) (domain.OrganizationAuditPage, error) {
 	if role, _ := s.OrganizationRoleOf(ctx, org, actor); !role.AtLeast(domain.OrganizationAdmin) {
 		return domain.OrganizationAuditPage{}, domain.ErrForbidden

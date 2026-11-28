@@ -18,21 +18,13 @@ and launch-agent configuration in a private rollback directory before replacing
 anything. `scripts/dogfood-daemon.sh` manages the legacy FS daemon only; do not
 use it to restart the new independent services.
 
-## Transfer and acceptance
+## An existing FS dataset is not transferred
 
-Follow [FS transfer](FS_TRANSFER.md) against a **fresh** frozen source. Stop the
-legacy `com.cxthub.cxtd` launch agent and wait for its process to exit before
-cloning its data directory. Do not stop provider sessions or remove local CLI
-queues. Network sync may fail during maintenance; locally retained work is
-retried after the API returns.
-
-Preserve permissions/mtime and independently compare a size/SHA-256 inventory of
-every original and copied file. Run the fail-closed offline importer against a
-new empty local database. Keep its source hash/count report, dump the accepted
-database and restore into another empty database. Compare authority, context,
-refs, history, memory and job records before accepting the result. Never remove
-unsupported source categories to make an import pass. Ordinary server startup
-can run copied jobs; perform the offline validation before starting API workers.
+There is no tool that moves the data of a local FS store into PostgreSQL. The
+offline transfer command carried captures, their refs and their history, and was
+removed together with captures. Sessions are uploaded again by the CLI: after
+the new services run, `cxt segments push` on each computer sends what that
+computer holds. Keep the old data directory until that is done.
 
 ## Configure launchd
 
@@ -88,11 +80,9 @@ backups and live provider sessions. Stop before reconfiguring binaries/settings.
 
 Before the new services accept writes, rollback can unload the independent
 services and restart the preserved old FS binary/config against the original
-frozen source. Never start the old FS service and PostgreSQL API on the same
-port. Keep the original source and its independent backup through acceptance.
+data directory. Never start the old FS service and the PostgreSQL API on the
+same port.
 
-After PostgreSQL accepts new writes, simply restarting the old FS copy would
-omit those records. Freeze and preserve PostgreSQL and the local sync queues,
-then plan a verified reconciliation or reverse transfer. No automatic fallback
-to an older FS dataset is provided. A healthy HTTP endpoint alone is not proof
-of a complete transfer, and a local rehearsal is not cloud load certification.
+After PostgreSQL accepts new writes, restarting the old FS copy would omit those
+records. No automatic fallback to an older FS dataset is provided. A healthy HTTP
+endpoint alone is not proof that every session was uploaded again.

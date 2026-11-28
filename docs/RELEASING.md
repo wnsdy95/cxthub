@@ -45,10 +45,21 @@ tag does not deploy a hosted CXTHub service.
    until a new-repository release is verified. See
    [repository distribution](REPOSITORY_DISTRIBUTION.md).
 
-Conditional automatic-merge append requires PostgreSQL transactions. An FS-only
-sync E2E run cannot certify this feature; it intentionally rejects conditional
-append and can leave delivery pending. Use only a disposable database for the
-release gate, never production data.
+`make e2e-sync` runs the chain a Git hook starts with the real binaries. With
+`CXT_E2E_DSN` it runs against PostgreSQL; without it, against the file store.
+Use only a disposable database for the release gate, never production data.
+
+The Codex reader depends on databases Codex lays out as it likes. When a new
+Codex release is out, and before a release that touches the reader, run the
+check against the real program. It starts Codex with a home directory of its
+own, needs no login, and compares the tables, the columns and the kinds of item
+that Codex writes and publishes with what cxt reads:
+
+```bash
+CXT_CODEX_BIN="$(command -v codex)" go test ./internal/adapters/sessionrecords/ -run CodexProgram -v
+```
+
+Run it from `cli/`. Without `CXT_CODEX_BIN` the test does not run.
 
 Use a release candidate for changes that need broader installation or
 compatibility testing:

@@ -14,7 +14,7 @@ func TestCapacityRetryHeaderExposedOnlyToConfiguredOrigins(t *testing.T) {
 	}))
 	for _, origin := range []string{"https://cxthub.io", "https://untrusted.example", ""} {
 		t.Run(origin, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "https://api.cxthub.io/api/v1/repos/repo/view", nil)
+			request := httptest.NewRequest(http.MethodGet, "https://api.cxthub.io/api/v1/repos/repo/anchored-sessions", nil)
 			request.Header.Set("Origin", origin)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)

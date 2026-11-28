@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -90,106 +89,6 @@ func rootFSImage(t *testing.T, dir string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
-}
-
-func assertRootProof(t *testing.T, doc domain.VerifiedSessionDoc, f rootReaderFixture) {
-	t.Helper()
-	want := domain.DocumentRef{Hash: f.hash, Identity: domain.DocumentIdentityRootV1}
-	if !doc.Valid() || doc.DocumentRef() != want || !bytes.Equal(doc.Bytes(), f.canonical) {
-		t.Fatal("root proof lost scheme, identity or current bytes")
-	}
-	if !doc.Reference().Matches(domain.Snapshot{ID: f.hash, DocHash: f.hash, DocIdentity: domain.DocumentIdentityRootV1}) || doc.Reference().Matches(domain.Snapshot{ID: f.hash, DocHash: f.hash}) {
-		t.Fatal("root proof matched wrong-scheme snapshot")
-	}
-	m, ok := doc.ConversationManifest()
-	if !ok || !reflect.DeepEqual(m, f.manifest) {
-		t.Fatal("root manifest was not retained")
-	}
-	if _, ok := doc.ChunkPlan(); ok {
-		t.Fatal("root exported a legacy chunk manifest")
-	}
-}
-
-func TestRootFSReaderCurrentBytesAndScope(t *testing.T) {
-	for _, tc := range []struct{ name, text string }{{"empty", ""}, {"unicode", "Unicode \ud55c\uad6d\uc5b4 <&> identity root_manifest"}, {"giant_repeated_chunks", strings.Repeat("x", 3*domain.ConversationManifestChunkBytes)}} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			st := NewFSStore(t.TempDir())
-			repo := domain.HashContent([]byte(t.Name()))
-			f := rootFixture(t, tc.text)
-			seedRootFS(t, st, repo, f)
-			before := rootFSImage(t, st.dataDir)
-			for _, reader := range []*FSStore{st, st, NewFSStore(st.dataDir)} {
-				doc, err := reader.ReadVerifiedDoc(ctx, repo, f.hash)
-				if err != nil {
-					t.Fatal(err)
-				}
-				assertRootProof(t, doc, f)
-				ref, err := reader.VerifyStoredDoc(ctx, repo, f.hash)
-				if err != nil || ref.DocumentRef() != doc.DocumentRef() {
-					t.Fatal(ref, err)
-				}
-				if len(reader.docProofs.proofs) != 0 {
-					t.Fatal("root admitted a legacy physical proof")
-				}
-			}
-			if _, err := st.GetDoc(ctx, repo, f.hash); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
-				t.Fatal("hash-only materialization", err)
-			}
-			if _, err := st.GetDocManifest(ctx, repo, f.hash); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
-				t.Fatal("legacy manifest fallback", err)
-			}
-			if supersedes, err := st.CaptureSupersedes(ctx, repo, f.hash, f.hash, domain.ProviderCodex, ""); err != nil || supersedes {
-				t.Fatal("root capture must be retained", supersedes, err)
-			}
-			if got := rootFSImage(t, st.dataDir); !reflect.DeepEqual(before, got) {
-				t.Fatal("read wrote source/index/receipt")
-			}
-			if _, err := st.ReadVerifiedDoc(ctx, domain.HashContent([]byte("foreign")), f.hash); !errors.Is(err, domain.ErrNotFound) {
-				t.Fatal("foreign repository", err)
-			}
-			cancelled, cancel := context.WithCancel(ctx)
-			cancel()
-			if doc, err := st.ReadVerifiedDoc(cancelled, repo, f.hash); !errors.Is(err, context.Canceled) || doc.Valid() {
-				t.Fatal("canceled reader", err)
-			}
-			for _, chunk := range f.manifest.Chunks {
-				body := bytes.Clone(f.bodies[chunk.Hash])
-				body[len(body)-1] ^= 1
-				if err := writeAtomic(st.chunkPath(repo, chunk.Hash), docCompress(body)); err != nil {
-					t.Fatal(err)
-				}
-				if doc, err := st.ReadVerifiedDoc(ctx, repo, f.hash); err == nil || doc.Valid() {
-					t.Fatal("warm reader hid current chunk corruption")
-				}
-				if _, err := st.VerifyStoredDoc(ctx, repo, f.hash); err == nil {
-					t.Fatal("warm reference hid current chunk corruption")
-				}
-				// The same logical body is valid in a different physical encoding.
-				if err := writeAtomic(st.chunkPath(repo, chunk.Hash), f.bodies[chunk.Hash]); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := st.ReadVerifiedDoc(ctx, repo, f.hash); err != nil {
-					t.Fatal("valid recompression", err)
-				}
-				if err := os.Remove(st.chunkPath(repo, chunk.Hash)); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := st.ReadVerifiedDoc(ctx, repo, f.hash); !errors.Is(err, domain.ErrNotFound) {
-					t.Fatal("missing chunk", err)
-				}
-				if err := writeAtomic(st.chunkPath(repo, chunk.Hash), docCompress(f.bodies[chunk.Hash])); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := writeAtomic(st.docPath(repo, f.hash), bytes.ReplaceAll(f.manifestBytes, []byte(`"identity"`), []byte(`"Identity"`))); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := st.ReadVerifiedDoc(ctx, repo, f.hash); err == nil {
-				t.Fatal("corrupt manifest fell back")
-			}
-		})
-	}
 }
 
 func TestRootReaderStrictDispatchAndBounds(t *testing.T) {
@@ -283,9 +182,6 @@ func TestRootReaderRejectsHostileZstdWindow(t *testing.T) {
 	if err := writeAtomic(st.docPath(repo, f.hash), hostile); err != nil {
 		t.Fatal(err)
 	}
-	if doc, err := st.ReadVerifiedDoc(context.Background(), repo, f.hash); !errors.Is(err, domain.ErrIntegrity) || doc.Valid() {
-		t.Fatal("hostile frame entered reader fallback", err)
-	}
 }
 
 func TestRootFSProofCannotPublishLegacy(t *testing.T) {
@@ -316,61 +212,6 @@ func TestRootFSProofCannotPublishLegacy(t *testing.T) {
 		if len(st.docProofs.proofs) != 0 {
 			t.Fatal("rejected root cached")
 		}
-	}
-}
-
-func TestRootReaderLegacyCompatibility(t *testing.T) {
-	ctx := context.Background()
-	f := rootFixture(t, "legacy body with root_manifest and identity as ordinary text")
-	hash := domain.HashContent(f.canonical)
-	for _, representation := range []string{"raw", "noncanonical_version_extension", "v1", "v2"} {
-		t.Run(representation, func(t *testing.T) {
-			st := NewFSStore(t.TempDir())
-			repo := domain.HashContent([]byte(t.Name()))
-			stored := f.canonical
-			if representation == "noncanonical_version_extension" {
-				raw, err := json.MarshalIndent(f.cir, "", "  ")
-				if err != nil {
-					t.Fatal(err)
-				}
-				stored = append([]byte(`{"version":"old extension",`), raw[1:]...)
-			}
-			if representation == "v1" || representation == "v2" {
-				var plan domain.DocChunkPlan
-				var ok bool
-				if representation == "v1" {
-					plan, ok = domain.PlanDocChunksV1(f.canonical)
-				} else {
-					plan, ok = domain.PlanDocChunks(f.canonical)
-				}
-				if !ok {
-					t.Fatal("legacy plan")
-				}
-				for h, body := range plan.Bodies {
-					if err := writeAtomic(st.chunkPath(repo, h), docCompress(body)); err != nil {
-						t.Fatal(err)
-					}
-				}
-				var err error
-				stored, err = json.Marshal(plan.Manifest)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := writeAtomic(st.docPath(repo, hash), docCompress(stored)); err != nil {
-				t.Fatal(err)
-			}
-			doc, err := st.ReadVerifiedDoc(ctx, repo, hash)
-			if err != nil || doc.DocumentRef() != (domain.DocumentRef{Hash: hash}) || !bytes.Equal(doc.Bytes(), f.canonical) {
-				t.Fatal("legacy identity changed", err)
-			}
-			if _, ok := doc.ConversationManifest(); ok {
-				t.Fatal("legacy acquired root metadata")
-			}
-			if ref, err := st.VerifyStoredDoc(ctx, repo, hash); err != nil || ref.DocumentRef() != doc.DocumentRef() {
-				t.Fatal(ref, err)
-			}
-		})
 	}
 }
 
@@ -430,9 +271,6 @@ func TestRootFSDependencyRetention(t *testing.T) {
 	after, err := os.ReadFile(st.docPath(repo, other.hash))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("manifest changed", err)
-	}
-	if _, err := st.ReadVerifiedDoc(context.Background(), repo, other.hash); err != nil {
-		t.Fatal("shared dependencies collected", err)
 	}
 	if _, err := os.Stat(st.chunkPath(repo, orphan)); !os.IsNotExist(err) {
 		t.Fatal("orphan not collected", err)

@@ -47,26 +47,11 @@ func (service *Service) repositoryAssets(profile RepositoryAssetProfile) (*Repos
 	})
 }
 
-func (scope *repositoryAssetScope) WithinAssetWrite(ctx context.Context, repo domain.ContentHash, operation RepositoryAssetOperation, write func(context.Context) error) error {
+func (scope *repositoryAssetScope) WithinAssetSettingsWrite(ctx context.Context, repo domain.ContentHash, write func(context.Context) error) error {
 	if scope == nil || scope.work == nil || write == nil {
 		return domain.ErrValidation
 	}
-	switch operation {
-	case AssetUpdateAbout:
-		ctx = writeAction(auditOperation(ctx, "repository.about.updated"), "manage")
-	case AssetUpdateConfig:
-		ctx = writeAction(auditOperation(ctx, "repository.config.updated"), "manage")
-	case AssetPutSettings:
-		ctx = writeAction(auditOperation(ctx, "repository.settings.updated"), "settings")
-	case AssetPutSettingsObject:
-		ctx = context.WithValue(auditOperation(ctx, "repository.settings.object.stored"), revisionScopeKey{}, "none")
-	case AssetSaveSecrets:
-		ctx = auditOperation(ctx, "repository.secrets.updated")
-	case AssetPatchProfile:
-		ctx = writeAction(auditOperation(ctx, "repository.profile.updated"), "manage")
-	default:
-		return domain.ErrValidation
-	}
+	ctx = writeAction(auditOperation(ctx, "repository.settings.updated"), "settings")
 	return repositoryWriteErrorWithWork(ctx, scope.work, repo, write)
 }
 

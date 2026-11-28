@@ -2,7 +2,6 @@ package http
 
 import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"net/http"
@@ -15,7 +14,7 @@ func TestDeviceFlowCrossesInstancesAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	server := func() *httptest.Server {
 		st := store.NewFSStore(dir)
-		svc := app.NewService(st, st, nil, gitengine.NewEngine(st), st)
+		svc := app.NewService(st, st, st)
 		return httptest.NewServer(NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st)).Handler())
 	}
 	a := server()

@@ -76,18 +76,6 @@ func TestConversationManifestDocIdentityReadPlanAndLegacyFences(t *testing.T) {
 				if got.DocumentRef() != ref || got.Reference().DocumentRef() != ref {
 					t.Fatal("identity lost from proof")
 				}
-				for _, snap := range []Snapshot{
-					{ID: root, DocHash: root, DocIdentity: DocumentIdentityRootV1},
-					{ID: root, DocHash: root},
-					{ID: HashContent(raw), DocHash: root, DocIdentity: DocumentIdentityRootV1},
-					{ID: root, DocHash: HashContent(raw), DocIdentity: DocumentIdentityRootV1},
-					{ID: root, DocHash: root, DocIdentity: "future"},
-				} {
-					want := snap.ID == root && snap.DocHash == root && snap.DocIdentity == DocumentIdentityRootV1
-					if got.Reference().Matches(snap) != want {
-						t.Fatal("scheme/hash/S-ID proof mismatch")
-					}
-				}
 				owned, ok := got.ConversationManifest()
 				if !ok || !reflect.DeepEqual(owned, m) {
 					t.Fatal("root manifest changed")
@@ -138,9 +126,6 @@ func TestConversationManifestDocIdentityReadPlanAndLegacyFences(t *testing.T) {
 			}
 			if _, ok := legacy.ConversationManifest(); ok || legacy.DocumentRef().Identity != DocumentIdentityLegacy {
 				t.Fatal("legacy proof relabeled")
-			}
-			if legacy.Reference().Matches(Snapshot{ID: legacy.Hash(), DocHash: legacy.Hash(), DocIdentity: DocumentIdentityRootV1}) {
-				t.Fatal("legacy reference matched root scheme")
 			}
 		})
 	}

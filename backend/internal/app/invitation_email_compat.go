@@ -19,7 +19,3 @@ func (service *IdentityService) InvitationEmailWorkerConfig(profile InvitationEm
 	}
 	return config
 }
-
-func (service *IdentityService) invitationEmailWorker() *InvitationEmailWorker {
-	return assembleInvitationEmailWorker(service.InvitationEmailWorkerConfig(InvitationEmailCompatibility))
-}

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# cxthub sync E2E — verifies append grafts, memory inheritance, session boundaries,
-# and fetch-only behavior with real cxtd/cxt binaries and Git hooks.
+# cxthub hook-to-server E2E — real cxtd and cxt binaries, real Git hooks.
 #
-# Scenarios along the context-divergence policy path:
-#   A. legacy repo1 pushes session A, memorize      (base chain + memory)
-#   B. repo2 (new clone, no pull) pushes independent session B → hook append (root graft)
-#   C. repo2 pulls, adopts the graft, and memorizes             → B inherits memory from A
-#   D. repo2 commits new session C                              → session boundary metadata
-#   E. repo1 runs post-merge                                    → fetch-only, preserving local refs
-#   F. repo1 pushes after both sides moved                      → automatic rebase-graft
-#   J2. global app hooks in unconnected repositories            → no store creation + residue quarantine
-#   K. oversized single event                                  → v2 bounded push/pull + v1 fallback
-#   T. modern main birth → fresh clone + setup → same-identity ordinary push
-#   U. first-owner setup → same-code capture → initial legacy observation (PG)
+# What a hook does is wake a detached collector, which reads the session
+# records of the agent tools and Git and uploads what changed. This suite runs
+# that whole chain, and nothing in it calls the collector directly:
+#
+#   A. cxt setup            → the mark, five Git hooks, agent hooks, a registered repository, automatic upload said on
+#   B. git commit           → post-commit hook → collector → the session is on the server
+#   C. a session goes on    → an agent hook wakes the collector → the report grows
+#   D. a linked worktree    → its commit is collected through the shared hooks
+#   E. hooks of an earlier version → replaced the first time one runs; Git is never stopped
+#   F. segments.auto off    → nothing is sent, cxt doctor says why, and setup says it is off
+#   G. a folder not set up  → hooks leave it alone
+#   H. removed commands     → unknown commands, not silent successes
+#   I. a server with a GitHub App → setup and cxt doctor say that the repository is not connected
+#   J. a repository stored under another address than the server's → an operator moves it there, and setup follows
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
-# CXT_E2E_PUBLICATION_ONLY=1 runs just the promotion/next-commit regression.
-# CXT_E2E_CXT_BIN=/absolute/path tests a saved baseline CLI against that scenario.
 # CXT_E2E_DSN=<disposable PostgreSQL DSN> exercises production storage instead of FS.
 set -u
 
@@ -30,8 +30,8 @@ B="http://127.0.0.1:$PORT/api/v1"
 ORIGIN="http://127.0.0.1:$PORT"
 FAIL=0
 SRV_PID=""
-WPID=""
-TPID=""
+SRV2_PID=""
+LPID=""
 
 # BEGIN fixture job cleanup (also exercised without launching cxt).
 fixture_job_active() {
@@ -51,7 +51,7 @@ finish_fixture_job() {
   done
   while fixture_job_active "$owned_pid"; do
     if [ "$SECONDS" -ge "$end" ]; then
-      echo "fixture cleanup incomplete: owned pid=$owned_pid did not exit" >>"$TMP/wrapper-observation.out"
+      echo "fixture cleanup incomplete: owned pid=$owned_pid did not exit" >>"$TMP/fixture-cleanup.out"
       CLEANUP_UNFINISHED="${CLEANUP_UNFINISHED:-} $owned_pid"
       FAIL=1; CXT_E2E_KEEP_TMP=1; return 1
     fi
@@ -61,22 +61,20 @@ finish_fixture_job() {
 }
 # END fixture job cleanup.
 # Reap the server immediately after killing it to avoid shell "Terminated" noise.
-# Preserve the isolated fixture on demand so fail-open Git hook diagnostics are
-# still inspectable after the script exits.
+# Preserve the isolated fixture on demand so hook diagnostics are still
+# inspectable after the script exits.
 cleanup() {
   local test_status=$?
-  local cleanup_pid
-  for cleanup_pid in "$TPID" "$WPID"; do
-    if ! finish_fixture_job "$cleanup_pid"; then
-      [ "$test_status" -ne 0 ] || test_status=1
-    fi
-  done
+  if ! finish_fixture_job "$LPID"; then
+    [ "$test_status" -ne 0 ] || test_status=1
+  fi
   if [ "$FAIL" -ne 0 ] && [ "$test_status" -eq 0 ]; then test_status=1; fi
   if [ "$test_status" -ne 0 ] || [ "$FAIL" -ne 0 ]; then CXT_E2E_KEEP_TMP=1; fi
   if { [ "$test_status" -ne 0 ] || [ "$FAIL" -ne 0 ]; } && [ -n "${CXT_E2E_DIAGNOSTICS_DIR:-}" ]; then
     python3 "$ROOT/scripts/e2e-collect-diagnostics.py" "$TMP" "$CXT_E2E_DIAGNOSTICS_DIR" || echo "Could not collect E2E failure diagnostics" >&2
   fi
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null && wait "$SRV_PID" 2>/dev/null
+  [ -n "${SRV2_PID:-}" ] && kill "$SRV2_PID" 2>/dev/null && wait "$SRV2_PID" 2>/dev/null
   if [ "${CXT_E2E_KEEP_TMP:-0}" = 1 ]; then
     echo "SYNC E2E fixture preserved: $TMP"
   else
@@ -89,41 +87,16 @@ trap cleanup EXIT
 expect() { if [ "$2" = "$3" ]; then echo "  ✓ $1"; else echo "  ✗ $1  (got=$2 want=$3)"; FAIL=1; fi; }
 jget() { python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
 ccurl() { command curl -H "Origin: $ORIGIN" -H 'X-Cxt-CSRF: 1' "$@"; }
-main_head() { curl -sb "$J" "$B/repos/$RID/refs" | python3 -c "import json,sys;print(next((r['target'] for r in json.load(sys.stdin) if r['kind']=='branch' and r['name']=='main'),''))"; }
 
-# Explicit compatibility setup for legacy-store/migration fixtures only.
-# PostgreSQL fresh-use cases never call this helper.
-fixture_register_legacy_repo() {
-  python3 - "$1" "$2" >"$TMP/legacy-registration.json" <<'PYLEGACYREPO'
-import hashlib,json,sys,urllib.parse
-remote,git_remote=sys.argv[1:]
-u=urllib.parse.urlsplit(remote)
-identity=(u.netloc+u.path).removesuffix('.git').rstrip('/').lower()
-print(json.dumps({'id':'sha256:'+hashlib.sha256(identity.encode()).hexdigest(),'remote_url':remote,'git_remote_url':git_remote,'default_branch':'main'}))
-PYLEGACYREPO
-  [ "$?" = 0 ] || return 1
-  ccurl -fsSb "$J" -X POST "$B/repos" -H 'Content-Type: application/json' \
-    --data-binary @"$TMP/legacy-registration.json" >"$TMP/legacy-registration-response.json" || return 1
-  python3 - "$TMP/legacy-registration-response.json" <<'PYLEGACYSTATE'
-import json,sys
-r=json.load(open(sys.argv[1])); assert r.get('context_protocol',0)==0
-PYLEGACYSTATE
-}
-
-ref_target() { python3 - "$1" <<'PYREF'
-import json,pathlib,sys
-raw=pathlib.Path(sys.argv[1]).read_text().strip()
-print(json.loads(raw)['target'] if raw.startswith('{') else raw)
-PYREF
-}
-
-birth_field() { python3 - "$1" "$2" <<'PYBIRTH'
-import glob,json,sys
-rows=[json.load(open(path)) for path in glob.glob('.cxt/history/*.json')]
-rows=[r for r in rows if r['branch']==sys.argv[1] and r['kind'] in ('birth','attach','orphan')]
-rows.sort(key=lambda r:(r['created_at'],r['id']))
-print(rows[-1].get(sys.argv[2],'') if rows else '')
-PYBIRTH
+# until_true <seconds> <command...> — poll instead of sleeping a fixed time: the
+# collector is detached from the hook that woke it.
+until_true() {
+  local end=$((SECONDS + $1)); shift
+  while [ "$SECONDS" -lt "$end" ]; do
+    if "$@" >/dev/null 2>&1; then return 0; fi
+    sleep 0.2
+  done
+  return 1
 }
 
 echo "── build(isolated bin) · server start :$PORT"
@@ -133,24 +106,11 @@ if [ -n "${CXT_E2E_DSN:-}" ]; then server_build+=(-tags postgres); fi
 if [ -n "${CXT_E2E_DSN:-}" ]; then
   ( cd "$ROOT/backend" && go build -tags postgres -o "$TMP/bin/cxt-admin" ./cmd/cxt-admin ) || { echo "cxt-admin build failed"; exit 1; }
 fi
-evidence_build=(go test -c -o "$TMP/bin/publication-git-evidence")
-if [ -n "${CXT_E2E_DSN:-}" ]; then evidence_build+=(-tags postgres); fi
-( cd "$ROOT/backend" && "${evidence_build[@]}" ./internal/app ) || { echo "Git evidence fixture build failed"; exit 1; }
-if [ -n "${CXT_E2E_CXT_BIN:-}" ]; then
-  cp "$CXT_E2E_CXT_BIN" "$TMP/bin/cxt" || exit 1
-else
-  ( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
-fi
-if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" != 1 ]; then
-  ( cd "$ROOT/cli" && go test -c -o "$TMP/bin/memory-reuse-test" ./internal/adapters/backendclient ) || exit 1
-fi
+( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
 export PATH="$TMP/bin:$PATH"
 export HOME="$TMP/home"; mkdir -p "$HOME"
-# The fixture must prove wrapper ownership through a real process ancestry.
-# Never inherit a developer shell's cxt wrapper markers: that made this test
-# pass locally while taking the unmanaged desktop-app path in clean CI.
-unset CXT_WRAPPED CXT_WRAPPER_PID CXT_WRAPPED_AGENT CXT_WRAPPED_SESSION_ID
-unset CXT_KEEP_SESSION CXT_CARRY CXT_CLAUDE_MEMORY_PROFILE CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY
+export XDG_CACHE_HOME="$HOME/.cache"
+unset CXT_REMOTE CXT_TOKEN
 git config --global user.email e2e@test.local
 git config --global user.name E2E
 git config --global init.defaultBranch main
@@ -164,7 +124,7 @@ fi
 fixture_server=(env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
   CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN" \
   CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN" \
-  RESEND_API_KEY= CXT_GITHUB_TOKEN= \
+  RESEND_API_KEY= \
   "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data")
 "${fixture_server[@]}" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
@@ -181,43 +141,71 @@ if [ "$SERVER_READY" != 1 ]; then
 fi
 
 J="$TMP/a.jar"
-ccurl -s -c "$J" -X POST "$B/auth/session" -H "Authorization: Bearer dev:o@t.io:O" >/dev/null
-ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"SyncE2E"}' >/dev/null
+SUFFIX="$(date +%s)$RANDOM"
+ccurl -s -c "$J" -X POST "$B/auth/session" -H "Authorization: Bearer dev:sync$SUFFIX@t.io:Sync" >/dev/null
+SLUG=$(ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d "{\"name\":\"Sync$SUFFIX\"}" | jget "['slug']")
 OWN=$(curl -sb "$J" "$B/me" | jget "['username']")
-SLUG=$(curl -sb "$J" "$B/repositories" | jget "[0]['slug']")
-REMOTE="http://127.0.0.1:$PORT/$OWN/$SLUG"  # The two-segment repository URL is the repository identity.
+REMOTE="$ORIGIN/$OWN/$SLUG"
 git init -q --bare "$TMP/bare.git"
 
-session() { # session <cwd> <label> — write a synthetic Claude JSONL session with model and usage.
-  D="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$1")"
-  mkdir -p "$D"
-  cat > "$D/sess-$2.jsonl" <<EOF
-{"type":"user","cwd":"$1","sessionId":"sess-$2","gitBranch":"main","timestamp":"2026-07-05T00:00:00Z","message":{"role":"user","content":"task $2"}}
-{"type":"assistant","cwd":"$1","sessionId":"sess-$2","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done $2"}],"usage":{"input_tokens":100,"output_tokens":10}}}
-EOF
+project_dir() { echo "$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$1")"; }
+# at <minutes> [seconds] — a moment that many minutes and seconds from now.
+at() { python3 -c 'import datetime,sys;print((datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)+datetime.timedelta(minutes=int(sys.argv[1]),seconds=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1" "${2:-0}"; }
+# commit_at <moment> <message> — a commit made at that moment, through the real hooks.
+commit_at() { GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" git commit -q --allow-empty -m "$2"; }
+# claude_session <cwd> <session> <branch> <commit> <moment of the commit> — a
+# synthetic Claude Code session whose command ran while that commit was made
+# and printed its number.
+claude_session() {
+  mkdir -p "$(project_dir "$1")"
+  python3 - "$1" "$2" "$3" "$4" "$5" >"$(project_dir "$1")/$2.jsonl" <<'PYSESSION'
+import datetime, json, sys
+cwd, session, branch, sha, committed = sys.argv[1:6]
+start = datetime.datetime.strptime(committed, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc) - datetime.timedelta(seconds=5)
+def line(kind, uuid, second, content, prompt=None):
+    at = (start + datetime.timedelta(seconds=second)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    entry = {"type": kind, "uuid": uuid, "sessionId": session, "timestamp": at, "cwd": cwd, "gitBranch": branch, "message": {"content": content}}
+    if prompt:
+        entry["promptId"] = prompt
+    print(json.dumps(entry))
+# Records are told apart by their identifiers: a record with an identifier
+# another session already holds is a copy, and counts for that session only.
+line("user", session + "-m1", 0, "commit it", session + "-p1")
+line("assistant", session + "-m2", 1, [{"type": "tool_use", "id": session + "-call-1", "name": "Bash"}])
+line("user", session + "-m3", 6, [{"type": "tool_result", "tool_use_id": session + "-call-1", "content": "[%s %s] synthetic commit" % (branch, sha[:7])}], session + "-p1")
+line("assistant", session + "-m4", 7, [{"type": "text", "text": "committed"}])
+PYSESSION
 }
-
-large_session() { # large_session <cwd> <label> — one event exceeds the v1 2MiB bound.
-  session "$1" "$2"
-  D="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$1")"
-  python3 - "$D/sess-$2.jsonl" <<'PY'
-import json,sys
-path=sys.argv[1]
-rows=[json.loads(line) for line in open(path)]
-rows[0]['message']['content']='x' * ((2 << 20) + (32 << 10))
-with open(path,'w') as f:
-    for row in rows:
-        f.write(json.dumps(row,separators=(',',':'))+'\n')
-PY
+# session_goes_on <cwd> <session> <branch> <uuid> <moment> — one more prompt in a session.
+session_goes_on() {
+  printf '%s\n' '{"type":"user","uuid":"'"$4"'","sessionId":"'"$2"'","timestamp":"'"$5"'","cwd":"'"$1"'","gitBranch":"'"$3"'","promptId":"'"$4"'","message":{"content":"one more thing"}}' >>"$(project_dir "$1")/$2.jsonl"
 }
+on_server() { curl -fsSb "$J" "$B/repos/$RID/anchored-sessions/claude/$1"; }
+revision() { on_server "$1" | jget "['revision']"; }
+revision_is() { [ "$(revision "$1" 2>/dev/null)" = "$2" ]; }
+# The collector spaces its runs at least ten seconds apart. The suite moves the last run
+# back instead of waiting.
+STATE=""
+rewind() {
+  [ -f "$STATE" ] && python3 - "$STATE" <<'PYREWIND'
+import json, sys
+state = json.load(open(sys.argv[1]))
+if state.get("last_run"):
+    state["last_run"]["at"] = "2026-01-01T00:00:00Z"
+    json.dump(state, open(sys.argv[1], "w"))
+PYREWIND
+  return 0
+}
+collector_idle() { ! pgrep -f "git-hook segment-collect" >/dev/null 2>&1; }
+# quiet — wait until no collector runs or waits, then let the next wake run at
+# once. A wake that arrives while a collector runs is answered by one more run
+# after the pause between runs, so the suite wakes one collector at a time.
+quiet() { until_true 150 collector_idle; rewind; }
 
-echo "── A. legacy repo1: Session A push + memorize (B root-append compatibility)"
-mkdir -p "$TMP/repo1"; cd "$TMP/repo1"
+echo "── A. cxt setup: the mark, the hooks and a registered repository"
+mkdir -p "$TMP/repo"; cd "$TMP/repo" || exit 1
 git init -q; git remote add origin "$TMP/bare.git"
-# A/B intentionally exercise same legacy identity with independent context roots.
-# T separately requires a modern main birth and automatic fresh-clone adoption.
-git commit -q --allow-empty -m legacy-code-baseline || exit 1
-cxt init >/dev/null 2>&1
+git commit -q --allow-empty -m "before cxt"
 CXT_NO_BROWSER=1 cxt login --server "$ORIGIN" >"$TMP/login.out" 2>&1 &
 LPID=$!
 DCODE=""
@@ -227,841 +215,368 @@ for i in $(seq 1 40); do
 done
 expect "device flow code output" "$([ -n "$DCODE" ] && echo yes)" yes
 ccurl -sb "$J" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE\"}" >/dev/null
-wait "$LPID"
-if [ -z "${CXT_E2E_DSN:-}" ]; then
-  fixture_register_legacy_repo "$REMOTE" "$TMP/bare.git" || exit 1
-fi
-cxt remote add origin "$REMOTE" >/dev/null 2>&1
-if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" = 1 ]; then
-  source "$ROOT/scripts/e2e-publication.inc.sh"
-  if [ "$FAIL" = 0 ]; then echo "PUBLICATION E2E: All passed ✓"; else echo "PUBLICATION E2E: Failures exist ✗"; fi
-  exit "$FAIL"
-fi
-session "$TMP/repo1" A
-echo a > f.txt; git add f.txt; git commit -qm codeA >/dev/null 2>&1
-if ! python3 - <<'PYALEGACY'
-import hashlib,json,pathlib
-ref=json.loads(pathlib.Path('.cxt/refs/heads/main').read_text())
-assert ref['branch_id']=='legacy-'+hashlib.sha256((ref['repo_id']+'\x00main').encode()).hexdigest()[:32], 'A/B fixture requires real pre-existing main'
-events=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/history').glob('*.json')]
-assert not any(e['branch']=='main' and e['kind'] in ('birth','orphan') for e in events), 'legacy fixture fabricated a main birth'
-PYALEGACY
-then exit 1; fi
-if [ -z "${CXT_E2E_DSN:-}" ]; then
-  # FS compatibility is explicit existing-repo migration, not new initialization.
-  cxt push origin >"$TMP/legacy-bootstrap.out" 2>&1 || { cat "$TMP/legacy-bootstrap.out"; exit 1; }
-  RID=$(ccurl -fsSb "$J" "$B/repos" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])') || exit 1
-  ccurl -fsSb "$J" -X POST "$B/repos/$RID/context-protocol" -H 'Content-Type: application/json' -d '{}' >"$TMP/legacy-protection.json" || exit 1
-fi
-git push -q -u origin main >"$TMP/p1.out" 2>&1
-RID=$(curl -sb "$J" "$B/repos" | python3 -c "import json,sys; rs=json.load(sys.stdin); print(rs[0]['id'] if rs else '')")
-ccurl -fsSb "$J" "$B/repos/$RID" >"$TMP/first-publication-state.json" || exit 1
-expect "first publication uses protected repository" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context_protocol"])' "$TMP/first-publication-state.json")" 1
-HEAD_A=""
-[ -n "$RID" ] && HEAD_A=$(main_head)
-if [ -z "$HEAD_A" ]; then
-  echo "  first push diagnostics:"
-  sed 's/^/    /' "$TMP/p1.out"
-  tail -20 "$TMP/srv.log" | sed 's/^/    server: /'
-fi
-expect "repo1 push after server main exists" "$([ -n "$HEAD_A" ] && echo yes)" yes
-[ -z "$HEAD_A" ] && exit 1
-cat > "$TMP/authored-claims.json" <<'JSONCLAIMS'
-[{"kind":"rationale","text":"Retain accepted history across branch joins."}]
-JSONCLAIMS
-cxt memorize --claims "$TMP/authored-claims.json" >/dev/null 2>&1
-expect "explicit claims authoring succeeds" "$?" 0
-cxt push >/dev/null 2>&1
-NOOP_PUSH=$(cxt push 2>&1)
-expect "no-op push offers zero snapshots after preflight" "$(echo "$NOOP_PUSH" | grep -c 'pushed 0 snapshot(s)')" 1
-
-echo "── B. repo2 (without pull): independent session B push → hook auto-append"
-git clone -q "$TMP/bare.git" "$TMP/repo2"
-cd "$TMP/repo2"; cxt init >/dev/null 2>&1; cxt remote add origin "$REMOTE" >/dev/null 2>&1
-session "$TMP/repo2" B
-echo b > g.txt; git add g.txt; git commit -qm codeB >/dev/null 2>&1
-git push -q origin main >"$TMP/p2.out" 2>&1
-expect "hook appended output" "$(grep -c 'appended' "$TMP/p2.out")" 1
-HEAD_B=$(main_head)
-expect "server main advances to B head" "$([ "$HEAD_B" != "$HEAD_A" ] && [ -n "$HEAD_B" ] && echo yes)" yes
-GRAFT=$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
-import json,sys
-snaps={s['id']:s for s in json.load(sys.stdin)}
-seen=set(); q=['$HEAD_B']; result='root-unlinked'
-while q:
-    cur=q.pop(0)
-    if not cur or cur in seen or cur not in snaps: continue
-    seen.add(cur); snap=snaps[cur]
-    grafts=snap.get('graft_parents') or []
-    if '$HEAD_A' in grafts:
-        result='linked+grafted' if snap.get('grafted') else 'linked-nomark'; break
-    q.extend((snap.get('parents') or []) + grafts)
-print(result)
-")
-expect "B lineage root grafts to A head + marker" "$GRAFT" linked+grafted
-
-echo "── C. repo2: pull (adopt lineage) → memorize (inherit memory)"
-cxt pull >/dev/null 2>&1
-LOCAL=$(python3 -c "
-import json,glob
-print('linked' if any('$HEAD_A' in (json.load(open(p)).get('graft_parents') or []) for p in glob.glob('$TMP/repo2/.cxt/objects/snapshots/*')) else 'unlinked')
-")
-expect "Local root adopts graft parents" "$LOCAL" linked
-cxt memorize >/dev/null 2>&1
-cxt push >/dev/null 2>&1
-MEM=$(curl -sb "$J" "$B/repos/$RID/memories/$(main_head)" | python3 -c "
-import json,sys; s=json.load(sys.stdin).get('summary','')
-print('inherited' if 'task A' in s and 'task B' in s else 'missing')
-")
-expect "B head inherits A session summary" "$MEM" inherited
-TYPED_MEMORY=$(curl -sb "$J" "$B/repos/$RID/memories/$(main_head)" | python3 -c '
-import json,sys
-d=json.load(sys.stdin)
-claims=[c for f in (d.get("fragments") or []) for c in (f.get("claims") or [])]
-print("retained" if d.get("claims_version")==1 and sum(c.get("text")=="Retain accepted history across branch joins." for c in claims)==1 else "missing")
-')
-expect "typed claims survive remote pull, join and re-memorize" "$TYPED_MEMORY" retained
-
-
-echo "── D. repo2: New session C commit → Session boundary meta"
-session "$TMP/repo2" C
-echo c > h.txt; git add h.txt; git commit -qm codeC >"$TMP/codeC.out" 2>&1
-git push -q origin main >"$TMP/codeC-push.out" 2>&1
-BOUND=$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
-import json,sys
-snaps={s['id']:s for s in json.load(sys.stdin)}
-h=snaps['$(main_head)']; p=snaps.get((h.get('parents') or [''])[0],{})
-hs,ps=h.get('session_id',''),p.get('session_id','')
-print('boundary' if hs and ps and hs!=ps else 'no-boundary')
-")
-expect "session C↔B boundary detected from session_id" "$BOUND" boundary
-
-echo "── E. repo1: post-merge hook = fetch-only(keep local refs + upstream hint) + pull briefing"
-cd "$TMP/repo1"
-LOCAL_BEFORE=$(ref_target .cxt/refs/heads/main)
-PULL_TERM=cxt-e2e-pull-terminal
-PULL_SESSION=cxt-e2e-pull-session
-OTHER_SESSION=cxt-e2e-other-session
-HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
-expect "fetch-only: keep local main ref" "$(ref_target .cxt/refs/heads/main)" "$LOCAL_BEFORE"
-expect "upstream hint output" "$(echo "$HOOKOUT" | grep -ci 'new context')" 1
-# Pull briefing: store only validated identifiers for the incoming codeB/codeC
-# range, then consume the notice once from the next prompt hook in the
-# initiating terminal as additionalContext. Collaborator-authored labels stay
-# in the DAG/web view and never enter the model prompt.
-expect "briefing creation notice output" "$(echo "$HOOKOUT" | grep -c 'briefed to the agent')" 1
-BRIEF_FILE=$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)
-expect "briefing uses one scoped queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
-expect "briefing contains identifiers but no collaborator labels" "$(python3 -c "import json;d=json.load(open('$BRIEF_FILE'));t='\n'.join(d.get('texts') or [d.get('text','')]);print('identifiers only' in t and 'sha256:' in t and 'codeC' not in t and 'codeB' not in t)" 2>/dev/null)" True
-echo "{\"cwd\":\"$TMP/repo1\",\"session_id\":\"$OTHER_SESSION\",\"prompt\":\"go on elsewhere\"}" | TERM_SESSION_ID=cxt-e2e-other-terminal cxt hook --provider claude --event UserPromptSubmit >"$TMP/brief-wrong.out" 2>"$TMP/brief-wrong.err"
-expect "wrong-terminal hook exits successfully" "$?" 0
-expect "wrong-terminal hook stderr is empty" "$(wc -c < "$TMP/brief-wrong.err" | tr -d ' ')" 0
-expect "another terminal receives its selection notice but not the pull briefing" "$(python3 - "$TMP/brief-wrong.out" <<'PYWRONGBRIEF'
-import json,sys
-text=json.load(open(sys.argv[1]))['hookSpecificOutput']['additionalContext']
-print('[CXTHub context selection]' in text and 'Incoming snapshot IDs:' not in text)
-PYWRONGBRIEF
-)" True
-expect "wrong terminal leaves scoped briefing intact" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
-echo "{\"cwd\":\"$TMP/repo1\",\"session_id\":\"$PULL_SESSION\",\"prompt\":\"go on\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit >"$TMP/brief-first.out" 2>"$TMP/brief-first.err"
-expect "initiating-terminal hook exits successfully" "$?" 0
-expect "initiating-terminal hook stderr is empty" "$(wc -c < "$TMP/brief-first.err" | tr -d ' ')" 0
-expect "hook emits both pull briefing and session-selection notice" "$(python3 - "$TMP/brief-first.out" <<'PYFIRSTBRIEF'
-import json,sys
-text=json.load(open(sys.argv[1]))['hookSpecificOutput']['additionalContext']
-print('Incoming snapshot IDs:' in text and 'identifiers only' in text
-      and '[CXTHub context selection]' in text and 'sha256:' in text
-      and 'codeC' not in text and 'codeB' not in text)
-PYFIRSTBRIEF
-)" True
-expect "briefing is consumed once and deleted" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
-echo "{\"cwd\":\"$TMP/repo1\",\"session_id\":\"$PULL_SESSION\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit >"$TMP/brief-repeat.out" 2>"$TMP/brief-repeat.err"
-expect "repeated hook exits successfully" "$?" 0
-expect "repeated hook stderr is empty" "$(wc -c < "$TMP/brief-repeat.err" | tr -d ' ')" 0
-expect "same session emits neither briefing nor selection twice" "$([ ! -s "$TMP/brief-repeat.out" ] && echo yes)" yes
-REPEAT_HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
-expect "same remote tip is not briefed again" "$(echo "$REPEAT_HOOKOUT" | grep -c 'briefed to the agent')" 0
-expect "repeat pull leaves no briefing queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
-expect "repeat fetch negotiates zero snapshot metadata" "$(echo "$REPEAT_HOOKOUT" | grep -c 'fetched .*snapshot')" 0
-MANIFEST_STATE=$(curl -sb "$J" "$B/repos/$RID/manifest" | python3 -c "
-import json,sys
-m=json.load(sys.stdin); print('complete' if len(m.get('snapshot_states') or {})==len(m.get('snapshot_index') or []) else 'partial')
-")
-expect "manifest advertises complete snapshot state catalog" "$MANIFEST_STATE" complete
-
-echo "── F. repo1: code pull selects remote context; next commit preserves both histories"
-HEAD_PREV=$(main_head)
-git pull -q origin main >/dev/null 2>&1 # code sync (context ref is fetch-only)
-session "$TMP/repo1" D
-echo d > i.txt; git add i.txt; git commit -qm codeD >/dev/null 2>&1
-git push -q origin main >"$TMP/p4.out" 2>&1
-expect "selected continuation push succeeds" "$([ "$(grep -c 'remains pending\|ref_conflict' "$TMP/p4.out")" = 0 ] && echo yes)" yes
-REBASE=$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
-import json,sys
-snaps={s['id']:s for s in json.load(sys.stdin)}
-d=snaps.get('$(main_head)',{})
-ps=(d.get('parents') or []) + (d.get('graft_parents') or [])
-ok = '$HEAD_PREV' in ps
-seen=set(); q=[d.get('id','')]; reach=False
-while q:
-    c=q.pop()
-    if c=='$HEAD_A': reach=True; break
-    if c in seen or c not in snaps: continue
-    seen.add(c); q.extend((snaps[c].get('parents') or []) + (snaps[c].get('graft_parents') or []))
-print('rebased' if ok and reach else f'bad(parents={ps[:1]},grafted={d.get(\"grafted\")},reach={reach})')
-")
-expect "D continues selected context and retains earlier local work" "$REBASE" rebased
-
-echo "── G. Context switch: desktop app retention + real wrapper ancestry/restart"
-cd "$TMP/repo2"
-PROJ="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$TMP/repo2")"
-APP_SESSION_ID=11111111-1111-4111-8111-111111111111
-APP_SESSION="$PROJ/$APP_SESSION_ID.jsonl"
-mkdir -p "$PROJ"
-cat > "$APP_SESSION" <<EOF
-{"type":"user","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:00Z","message":{"role":"user","content":"task E"}}
-{"type":"assistant","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done E"}],"usage":{"input_tokens":100,"output_tokens":10}}}
-EOF
-# Birth capture requires an observed live owner. An archived newer transcript
-# must not become the source just because it was modified most recently.
-printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s","prompt":"task E"}\n' "$TMP/repo2" "$APP_SESSION_ID" "$APP_SESSION" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
-session "$TMP/repo2" UNOWNED
-
-# A plain desktop-app shell has no cxt supervisor. It must checkpoint and record
-# the branch birth independently of the conversation, but keep the vendor-owned native session file open and inject
-# only one bounded memory handoff on the next official lifecycle hook.
-APP_JSONL_BEFORE=$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')
-git checkout -qb app-feature-x >"$TMP/app-sw.out" 2>&1
-expect "app switch checkpoints previous branch" "$([ "$(grep -c 'cxt: checkpoint' "$TMP/app-sw.out")" -ge 1 ] && echo yes)" yes
-expect "app switch records a durable branch birth" "$(birth_field app-feature-x kind)" birth
-APP_BIRTH_TARGET=$(birth_field app-feature-x target)
-expect "app birth captures its registered session" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("session_id",""))' ".cxt/objects/snapshots/${APP_BIRTH_TARGET#sha256:}")" "$APP_SESSION_ID"
-expect "app switch retains native session" "$(grep -c 'app session retained' "$TMP/app-sw.out")" 1
-expect "app switch does not create wrapper boundary" "$([ ! -e .cxt/boundary.json ] && echo yes)" yes
-expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 1 -type f -name '*.superseded' | wc -l | tr -d ' ')" 0
-expect "app switch does not materialize orphan native seed" "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')" "$APP_JSONL_BEFORE"
-expect "app session file remains at original path" "$([ -f "$APP_SESSION" ] && echo yes)" yes
-# End the synthetic observation through its supported lifecycle hook. Its
-# watcher can otherwise retry publication even when the transcript is idle.
-# The next prompt re-registers the same file after this completion boundary.
-if ! printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s"}\n' "$TMP/repo2" "$APP_SESSION_ID" "$APP_SESSION" | cxt hook --provider claude --event SessionEnd >"$TMP/app-end.out" 2>&1; then
-  cat "$TMP/app-end.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-# Earlier Git hooks can still be publishing retained memory attachments. This
-# assertion tests one immediate handoff after that known work has completed;
-# deterministic application tests separately exercise drift and retained retry.
-# Join the real workers, then check their queue under the same publication locks.
-# An empty queue alone does not prove an already-running worker has finished.
-if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$TMP/repo1" "$TMP/repo2" >"$TMP/app-drain.out" 2>&1; then
-  cat "$TMP/app-drain.out"
-  echo "  ✗ prior publication did not finish; handoff assertions not evaluated"
-  FAIL=1
-  CXT_E2E_KEEP_TMP=1
-  exit 1
-fi
-expect "prior historical publication finished before immediate handoff" yes yes
-APP_HANDOFF=$(echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"continue\"}" | cxt hook --provider claude --event UserPromptSubmit)
-printf '%s\n' "$APP_HANDOFF" > "$TMP/app-handoff.json"
-expect "app handoff is one bounded project-memory injection" "$(echo "$APP_HANDOFF" | python3 -c "
-import json,sys
-try:
-    text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
-    prefix='[cxt context package v1]'
-    package,end=json.JSONDecoder().raw_decode(text.split(prefix,1)[1].lstrip())
-    selected=package['selection']
-    proofs=[selected.get('context_delivery_hash',''), selected.get('memory_delivery_hash','')]
-    proofs_valid=all(len(p)==71 and p.startswith('sha256:') and all(c in '0123456789abcdef' for c in p[7:]) for p in proofs)
-    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and selected['branch']=='main' and selected['source_policy']=='latest_server_main' and selected['working_position']['branch']=='app-feature-x' and selected['repository_id']=='$RID' and proofs_valid and not package.get('historical_evidence') else 'no')
-except Exception: print('no')")" yes
-expect "app handoff is consumed once" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
-git checkout -q main >/dev/null 2>&1
-echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"back on main\"}" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
-
-# Resume the same file under an actual cxt wrapper and grow it once. The fake
-# Claude child performs git checkout itself, so the hook's process ancestry is
-# wrapper → provider child → git → cxt hook on every OS/CI runner.
-echo '{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","gitBranch":"main","message":{"role":"user","content":"wrapper continued"}}' >> "$APP_SESSION"
-export CLAUDELOG="$TMP/agent.log"
-export CXT_E2E_REPO="$TMP/repo2"
-export CXT_E2E_SWITCH_OUT="$TMP/sw.out"
-export CXT_E2E_SWITCH_MARK="$TMP/agent-switched"
-cat > "$TMP/bin/claude" <<'SH'
-#!/bin/bash
-echo "MEMORY_PROFILE ${CXT_CLAUDE_MEMORY_PROFILE:-missing} ${#CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT} ${CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY:-default}" >> "$CLAUDELOG"
-python3 - "$@" <<'PYARGV' >> "$CLAUDELOG"
-import json, sys
-print('AGENT ' + json.dumps(sys.argv[1:]))
-PYARGV
-if [ ! -e "$CXT_E2E_SWITCH_MARK" ]; then
-  : > "$CXT_E2E_SWITCH_MARK"
-  cd "$CXT_E2E_REPO" || exit 1
-  git checkout -qb feature-x >"$CXT_E2E_SWITCH_OUT" 2>&1
-  exit $?
-fi
-trap 'kill $SP 2>/dev/null; exit 0' TERM
-sleep 30 & SP=$!
-wait $SP
-SH
-chmod +x "$TMP/bin/claude"
-CLAUDE_MEMORY_OVERRIDE="$TMP/initial-claude-memory"
-WRAPPER_STARTED=$SECONDS
-cxt claude --resume "$APP_SESSION_ID" --settings "{\"autoMemoryDirectory\":\"$CLAUDE_MEMORY_OVERRIDE\"}" >"$TMP/wrapper.out" 2>&1 &
-WPID=$!
-for i in $(seq 1 40); do
-  [ -f .cxt/boundary.json ] && [ "$(grep -c '^AGENT ' "$CLAUDELOG" 2>/dev/null)" -ge 2 ] && break
-  sleep 0.25
-done
-printf 'elapsed_seconds=%s\nwrapper_pid_alive=%s\nboundary_present=%s\n' "$((SECONDS - WRAPPER_STARTED))" "$(kill -0 "$WPID" 2>/dev/null && echo yes || echo no)" "$([ -f .cxt/boundary.json ] && echo yes || echo no)" >"$TMP/wrapper-observation.out"
-expect "Checkpoint execution" "$(grep -c 'cxt: checkpoint' "$TMP/sw.out")" 1
-expect "wrapper switch records a durable branch birth" "$(birth_field feature-x kind)" birth
-# BEGIN wrapper prerequisite gate (negative cases exercise this exact block).
-if python3 "$ROOT/scripts/e2e-wrapper-proof.py" "$TMP" "$APP_SESSION_ID" >"$TMP/wrapper-proof.tsv" 2>"$TMP/wrapper-proof.err" &&
-  IFS=$'\t' read -r SEED SEEDID RESUMEID PROOF_EXTRA <"$TMP/wrapper-proof.tsv" &&
-  [ -n "$SEED" ] && [ -n "$SEEDID" ] && [ -n "$RESUMEID" ] && [ -z "$PROOF_EXTRA" ] &&
-  [ "$(cat "$TMP/wrapper-proof.tsv")" = "$(printf '%s\t%s\t%s' "$SEED" "$SEEDID" "$RESUMEID")" ]; then
-echo 'wrapper_proof=ready' >>"$TMP/wrapper-observation.out"
-expect "boundary signal output" "$(grep -c 'previous session is isolated' "$TMP/sw.out")" 1
-expect "seed inherits main compact memory" "$(grep -q 'task A' "$SEED" && grep -q 'task B' "$SEED" && grep -q 'task C' "$SEED" && echo yes)" yes
-expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
-expect "seed excludes the unregistered sibling conversation" "$(grep -q 'task UNOWNED' "$SEED" && echo yes || echo no)" no
-SEEDMEM=$(python3 -c "
-import json,glob
-raw=open('.cxt/refs/heads/feature-x').read().strip()
-tgt=json.loads(raw)['target'] if raw.startswith('{') else raw
-for p in glob.glob('.cxt/objects/snapshots/*'):
-    s=json.load(open(p))
-    if s['id']==tgt: print(s.get('memory_hash','')); break
-")
-expect "seed snapshot retains full inherited memory object" "$([ -n "$SEEDMEM" ] && [ -f ".cxt/objects/memories/${SEEDMEM#sha256:}" ] && echo yes)" yes
-expect "new branch keeps the recorded source snapshot" "$(ref_target .cxt/refs/heads/feature-x)" "$(birth_field feature-x target)"
-expect "branch birth pins the inherited memory object" "$(birth_field feature-x memory_hash)" "$SEEDMEM"
-
-# Capture exclusion: a commit before the seed session grows must not capture another session.
-# Check the exact commit's durable result even when a background worker wins
-# the foreground lock. Finish nocap before growing its previously idle seed.
-seed_capture_proof() {
-  local mode="$1" sha="$2"
-  python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/g-$mode-drain.out" 2>&1 || {
-    cat "$TMP/g-$mode-drain.out"; return 1
-  }
-  python3 - "$PWD" "$sha" "$SEED" "$SEEDID" "$mode" <<'PYGSEED'
-import hashlib,json,pathlib,re,sys
-root,sha,seed,session,mode=sys.argv[1:]
-cxt=pathlib.Path(root)/'.cxt'
-receipts=[json.loads(p.read_text()) for p in cxt.glob('worktrees/*/capture-passes/*.json')]
-matches=[p for p in receipts if p['proof']['git_after']==sha and p['proof']['branch']=='feature-x']
-assert len(matches)==1, 'expected one receipt for the exact feature-x commit'
-p=matches[0]
-assert p['version']==2 and all(p.get(k) is True for k in ('complete','inputs_ready','memory_finalized')), 'capture not complete'
-proof,obs=p['proof'],p['observation']
-assert all(obs.get(k)==proof.get(k) for k in ('repo_id','worktree_id','branch_id','branch','git_after','target')), 'observation position mismatch'
-assert re.fullmatch('[0-9a-f]{32}',obs['id']), 'invalid observation ID'
-assert json.loads((cxt/'history'/(obs['id']+'.json')).read_text())==obs, 'capture observation not durable'
-outcomes=p['outcomes']
-assert len(outcomes)==2 and {o['provider'] for o in outcomes}=={'claude','codex'}, 'missing provider outcome'
-if mode=='nocap':
-    assert all(o['state']=='absent' and not o.get('input') and not o.get('target') for o in outcomes), 'unresumed seed or another session was captured'
-    assert proof['target']==p['initial'], 'uncaptured commit changed context'
-else:
-    saved=[o for o in outcomes if o['state']=='saved']
-    assert len(saved)==1 and all(o['state'] in ('saved','absent') for o in outcomes), 'resumed seed was not the sole saved session'
-    o=saved[0]; inp=o['input']
-    assert pathlib.Path(inp['source_path']).resolve()==pathlib.Path(seed).resolve(), 'captured another session file'
-    assert inp['session_id']==o['session_id']==session and inp['provider']==o['provider'], 'captured another session identity'
-    assert re.fullmatch('sha256:[0-9a-f]{64}',o['target']) and o['target']==proof['target']!=p['initial'], 'missing new saved target'
-    snap=json.loads((cxt/'objects/snapshots'/o['target'][7:]).read_text())
-    assert snap['id']==snap['doc_hash']==o['target'] and snap['session_id']==session and snap['provider']==o['provider'], 'saved snapshot identity mismatch'
-    assert snap['branch']=='feature-x' and snap['message']==p['message']=='cap [git '+sha[:7]+']', 'saved snapshot lost commit metadata'
-    # Read only the fixture's retained native chunks, never a later provider file.
-    assert 0<inp['size']<=16<<20 and len(inp['chunks'])==(inp['size']+(1<<20)-1)//(1<<20), 'unexpected synthetic input size'
-    raw=bytearray()
-    for chunk in inp['chunks']:
-        assert re.fullmatch('sha256:[0-9a-f]{64}',chunk['hash']), 'invalid chunk hash'
-        assert chunk['size']==min(1<<20,inp['size']-len(raw)), 'invalid chunk size'
-        with (cxt/'capture/inputs'/chunk['hash'][7:]).open('rb') as f:
-            data=f.read(chunk['size']+1)
-        assert len(data)==chunk['size'] and 'sha256:'+hashlib.sha256(data).hexdigest()==chunk['hash'], 'frozen chunk mismatch'
-        raw.extend(data)
-    assert len(raw)==inp['size'] and 'sha256:'+hashlib.sha256(raw).hexdigest()==inp['hash'], 'frozen input mismatch'
-    last=[json.loads(line) for line in raw.splitlines() if line.strip()][-1]
-    if o['provider']=='claude':
-        assert last['type']=='user' and last['message']=={'role':'user','content':'resumed work'}, 'resumed message missing from frozen input'
-    else:
-        assert last['type']=='event_msg' and last['payload']=={'type':'user_message','message':'resumed work'}, 'resumed message missing from frozen input'
-print('exact commit capture proof verified: '+mode)
-PYGSEED
-}
-echo x > x.txt; git add x.txt; git commit -qm nocap >"$TMP/nc.out" 2>&1
-G_NOCAP_SHA=$(git rev-parse HEAD)
-if ! seed_capture_proof nocap "$G_NOCAP_SHA" >"$TMP/g-nocap-proof.out" 2>&1; then
-  cat "$TMP/g-nocap-proof.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-expect "unresumed seed is not captured" yes yes
-# After resuming (file growth), it captures as a formal active session.
-case "$SEED" in
-  "$HOME"/.codex/sessions/*)
-    echo '{"timestamp":"2026-07-05T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"resumed work"}}' >> "$SEED"
-    ;;
-  *)
-    echo '{"type":"user","sessionId":"resumed","gitBranch":"feature-x","message":{"role":"user","content":"resumed work"}}' >> "$SEED"
-    ;;
-esac
-echo y > y.txt; git add y.txt; git commit -qm cap >"$TMP/cap.out" 2>&1
-G_CAP_SHA=$(git rev-parse HEAD)
-if ! seed_capture_proof cap "$G_CAP_SHA" >"$TMP/g-cap-proof.out" 2>&1; then
-  cat "$TMP/g-cap-proof.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-expect "resumed seed captures" yes yes
-
-# Enforcement: boundary-enforce terminates processes that still hold isolated session files.
-# BEGIN wrapper holder readiness.
-SUP="$APP_SESSION.superseded"
-python3 - "$SUP" "$TMP/holder-ready" <<'PYHOLDER' >"$TMP/holder.out" 2>&1 &
-import os, sys, time
-with open(sys.argv[1], 'rb') as held:
-    with open(sys.argv[2], 'x') as ready:
-        ready.write(str(os.getpid()))
-    time.sleep(30)
-PYHOLDER
-TPID=$!
-holder_ready() {
-  [ -f "$TMP/holder-ready" ] && [ "$(cat "$TMP/holder-ready")" = "$TPID" ] && fixture_job_active "$TPID"
-}
-for i in $(seq 1 40); do
-  holder_ready && break
-  fixture_job_active "$TPID" || break
-  sleep 0.025
-done
-if holder_ready; then
-  cxt git-hook boundary-enforce >/dev/null 2>&1
-  sleep 0.3
-  HOLDER_EXIT=running
-  if ! fixture_job_active "$TPID"; then
-    wait "$TPID" 2>/dev/null
-    HOLDER_EXIT=$?
-  fi
-  expect "isolated session holder terminated by SIGTERM" "$HOLDER_EXIT" 143
-else
-  echo "  ✗ superseded-file holder did not become ready; enforcement not evaluated"
-  FAIL=1
-fi
-if ! finish_fixture_job "$TPID"; then exit 1; fi
-TPID=""
-# END wrapper holder readiness.
-
-# The first fake child already caused the transition. The wrapper must observe
-# that boundary and restart a second child with the newly materialized seed.
-expect "wrapper restarts with the exact seed selector" "$RESUMEID" "$SEEDID"
-expect "wrapper carries proven Claude memory profile" "$(grep -c '^MEMORY_PROFILE v1 64 ' "$CLAUDELOG")" 2
-expect "both children retain the invocation's custom Claude memory directory" "$(grep -Fxc "MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE" "$CLAUDELOG")" 2
-expect "restart does not silently revert the invocation to default settings" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 0
-else
-  FAIL=1
-  echo 'wrapper_proof=failed' >>"$TMP/wrapper-observation.out"
-  echo "  ✗ wrapper prerequisites missing or invalid; dependent assertions not evaluated"
-fi
-# END wrapper prerequisite gate.
-if [ "$FAIL" -ne 0 ]; then
-  CXT_E2E_KEEP_TMP=1
-  for diagnostic in "$TMP/wrapper-proof.err" "$TMP/sw.out" "$TMP/wrapper.out" "$CLAUDELOG"; do
-    echo "  $(basename "$diagnostic"):"
-    if [ -f "$diagnostic" ]; then tail -c 8192 "$diagnostic"; else echo "  unavailable"; fi
-  done
-fi
-if ! finish_fixture_job "$WPID"; then exit 1; fi
-WPID=""
-
-echo "── H. Saved load mode cannot override managed latest-main input"
-expect "load_mode saved(memory)" "$(ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"memory"}' | jget "['load_mode']")" memory
-expect "GET /me reflects" "$(curl -sb "$J" "$B/me" | jget "['load_mode']")" memory
-expect "Invalid value 422" "$(ccurl -sb "$J" -o /dev/null -w '%{http_code}' -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"bogus"}')" 422
-# Saved preferences remain readable for compatibility. Managed load ignores
-# them, injects latest main, and leaves instruction files untouched. Explicit
-# --mode memory separately exercises historical archive restoration.
-cd "$TMP/repo1"
-cat > CLAUDE.md <<'EOF'
-# User-owned instructions
-Preserve this text and its file mode.
-EOF
-chmod 600 CLAUDE.md
-cxt load main --provider claude >"$TMP/pref.out" 2>&1
-expect "managed load prepares bounded memory" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
-expect "saved mode cannot replace managed main input" "$(python3 - "$TMP/pref.out" "$(main_head)" "$(git branch --show-current)" <<'PYPREF'
-import json,pathlib,sys
-output=pathlib.Path(sys.argv[1]).read_text()
-path=next(line.split('written: ',1)[1] for line in output.splitlines() if 'written: ' in line)
-found=False
-for line in pathlib.Path(path).read_text().splitlines():
-    row=json.loads(line)
-    message=row.get('message',{})
-    if message.get('role')!='user': continue
-    content=message.get('content',[])
-    texts=[content] if isinstance(content,str) else [part.get('text','') for part in content if isinstance(part,dict)]
-    for text in texts:
-        if not text.startswith('[cxt context package v1]\n'): continue
-        selection=json.loads(text.split('\n',1)[1])['selection']
-        found=(selection['source_policy']=='latest_server_main' and selection['branch']=='main'
-            and selection['snapshot_id']==sys.argv[2] and selection['working_position']['branch']==sys.argv[3])
-print('yes' if found else 'no')
-PYPREF
-)" yes
-expect "managed load leaves instruction bytes unchanged" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text() == '# User-owned instructions\nPreserve this text and its file mode.\n' else 'no')")" yes
-cxt load main --provider claude --mode memory >"$TMP/legacy-memory.out" 2>&1
-expect "explicit archive memory restoration stays available" "$(grep -c 'fidelity: memory' "$TMP/legacy-memory.out")" 1
-cxt load main --provider claude --mode memory >/dev/null 2>&1
-expect "memory load preserves user instructions" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text().startswith('# User-owned instructions\nPreserve this text and its file mode.\n') else 'no')")" yes
-expect "CLI memory uses server-assessed claims" "$(grep -c 'Assessment: server_assessed' CLAUDE.md)" 1
-expect "CLI keeps retained rationale from shared query" "$(grep -c '\[retained; rationale;' CLAUDE.md)" 1
-expect "CLI assessment names target worktree code" "$(grep -c "Selected committed code: $(git rev-parse HEAD)" CLAUDE.md)" 1
-expect "CLI repeated load replaces assessment" "$(grep -c '^<!-- cxt:code-assessment:v1 -->' CLAUDE.md)" 1
-expect "memory load refreshes one managed block" "$(grep -c '^<!-- cxt:begin managed memory' CLAUDE.md)" 1
-expect "memory managed block stays within 64 KiB" "$(python3 -c "from pathlib import Path; b=Path('CLAUDE.md').read_bytes(); s=b.index(b'<!-- cxt:begin managed memory'); e=b.index(b'<!-- cxt:end managed memory -->', s)+len(b'<!-- cxt:end managed memory -->')+1; print('yes' if e-s <= 64*1024 else 'no')")" yes
-expect "memory load preserves instruction file mode" "$(python3 -c "from pathlib import Path; print(oct(Path('CLAUDE.md').stat().st_mode & 0o777))")" 0o600
-ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":""}' >/dev/null
-
-echo "── I. Explicit Git start points and branch births preserve code authority"
-cd "$TMP/repo1"
-# Save each foreign owner before creating an independent same-name local birth.
-capture_i_server_fork() {
-  curl -fsSb "$J" "$B/repos/$RID/refs" -o "$TMP/i-fork-refs.json" || return 1
-  python3 - "$TMP/i-fork-refs.json" "$RID" "$1" "$TMP/i-server-$1.json" <<'PYIFORK'
-import json,pathlib,re,sys
-rows=json.loads(pathlib.Path(sys.argv[1]).read_text())
-matches=[r for r in rows if r['kind']=='branch' and r['name']==sys.argv[3]]
-assert len(matches)==1, 'missing or duplicate server fork'
-r=matches[0]
-assert r['repo_id']==sys.argv[2] and re.fullmatch(r'[0-9a-f]{32}',r.get('branch_id','')), 'invalid server fork identity'
-assert re.fullmatch(r'sha256:[0-9a-f]{64}',r['target']), 'invalid server fork target'
-pathlib.Path(sys.argv[4]).write_text(json.dumps({k:r[k] for k in ('name','branch_id','target')})+'\n')
-PYIFORK
-}
-git checkout -q main >/dev/null 2>&1
-# Choose the newest snapshot whose [git sha] exists in repo1. The head may be a checkpoint
-# without a Git link, and commits originating in repo2 may not exist in repo1.
-FORK_FROM=""; FORK_SHA=""
-while read -r cid csha; do
-  if git cat-file -t "$csha" >/dev/null 2>&1; then FORK_FROM="$cid"; FORK_SHA="$csha"; break; fi
-done <<<"$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
-import json,sys,re
-for s in sorted(json.load(sys.stdin), key=lambda x: x['created_at'], reverse=True):
-    m=re.search(r'\[git ([0-9a-f]+)\]', s['message'])
-    if m: print(s['id'], m.group(1))
-")"
-expect "Fork point snapshot([git sha] link) confirmed" "$([ -n "$FORK_SHA" ] && echo yes)" yes
-ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' \
-  -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-x\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
-if ! capture_i_server_fork web-fork-x; then
-  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-# Create an unpushed commit so HEAD(Y) advances beyond fork point(X).
-echo z > z.txt; git add z.txt; git commit -qm ahead >/dev/null 2>&1
-git branch web-fork-x "$FORK_SHA"
-cxt git-hook branch-replay
-FORK_LOCAL=$(birth_field web-fork-x target)
-WFX_ID=$(birth_field web-fork-x branch_id)
-expect "helper preserves the explicit Git start point [git X]" "$(git rev-parse --short=7 web-fork-x)" "$(git rev-parse --short=7 "$FORK_SHA")"
-expect "context ref is connected to fork snapshot" "$(ref_target .cxt/refs/heads/web-fork-x 2>/dev/null)" "$FORK_LOCAL"
-# Switching should materialize the fork context; a fork-only ref represents an existing branch.
-session "$TMP/repo1" WFX
-git checkout -q web-fork-x >"$TMP/wfx.out" 2>&1
-expect "switch does not create seed" "$(grep -c 'seed created' "$TMP/wfx.out")" 0
-expect "fork context is selected without replacing app session" "$(grep -c 'app context selected' "$TMP/wfx.out")" 1
-expect "ref is still fork snapshot after switch" "$(ref_target .cxt/refs/heads/web-fork-x)" "$FORK_LOCAL"
-git checkout -q main >/dev/null 2>&1
-# A same-named web fork is not an upstream binding. Local creation records
-# its actual current source; the helper must never move Git to a guessed tip.
-ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' \
-  -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-y\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
-if ! capture_i_server_fork web-fork-y; then
-  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-session "$TMP/repo1" WFY
-# A real app reports the new conversation through its official prompt hook.
-printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/sess-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
-git checkout -qb web-fork-y >"$TMP/wfy.out" 2>&1
-expect "switch -c records its own observed birth" "$(birth_field web-fork-y kind)" birth
-WFY_BIRTH_TARGET=$(birth_field web-fork-y target)
-WFY_ID=$(birth_field web-fork-y branch_id)
-expect "branch birth captures the exact official hook session" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("session_id",""))' ".cxt/objects/snapshots/${WFY_BIRTH_TARGET#sha256:}")" sess-WFY
-expect "new branch uses its live source context" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
-cxt git-hook branch-replay
-expect "replaying birth never overwrites the selected source" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
-git checkout -q main >/dev/null 2>&1
-if ! printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s"}\n' "$TMP/repo1" "$D/sess-WFY.jsonl" | cxt hook --provider claude --event SessionEnd >"$TMP/fork-end.out" 2>&1; then
-  cat "$TMP/fork-end.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-
-echo "── I. Branch lifecycle: rename transfers context; deletion archives without deleting history"
-RENAME_OUT=$(git branch -m web-fork-x web-fork-renamed 2>&1)
-expect "Git branch rename transfers context projection" "$(echo "$RENAME_OUT" | grep -c 'context moved')" 1
-expect "renamed context keeps its exact target" "$(ref_target .cxt/refs/heads/web-fork-renamed 2>/dev/null)" "$FORK_LOCAL"
-expect "renamed source context projection is gone" "$([ ! -e .cxt/refs/heads/web-fork-x ] && echo yes)" yes
-expect "rename keeps all context objects readable" "$(cxt fsck | grep -c 'Missing 0')" 1
-
-DELETE_OUT=$(git branch -D web-fork-renamed 2>&1)
-expect "normal branch deletion invokes context archive" "$(echo "$DELETE_OUT" | grep -c 'context archived')" 1
-expect "deleted Git branch has no active context projection" "$([ ! -e .cxt/refs/heads/web-fork-renamed ] && echo yes)" yes
-expect "archive keeps the target snapshot readable" "$(cxt fsck | grep -c 'Missing 0')" 1
-expect "archive records an immutable lifecycle event" "$(find .cxt/refs/tags/cxt/branch-state/v1 -type f -path '*/archived/*/web-fork-renamed' 2>/dev/null | wc -l | tr -d ' ')" 1
-
-# A separate identity must be accepted before its lifecycle can remove server refs.
-# Creation, rename and deletion still pass through the real installed Git hooks.
-if ! git branch lifecycle-owned >"$TMP/i-owned.out" 2>&1 ||
-   ! cxt branch replay >>"$TMP/i-owned.out" 2>&1 ||
-   ! cxt push origin lifecycle-owned >>"$TMP/i-owned.out" 2>&1 ||
-   ! curl -fsSb "$J" "$B/repos/$RID/refs" -o "$TMP/i-owned-refs.json"; then
-  cat "$TMP/i-owned.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-OWNED_ID=$(birth_field lifecycle-owned branch_id)
-OWNED_TARGET=$(ref_target .cxt/refs/heads/lifecycle-owned)
-if ! python3 - "$TMP/i-owned-refs.json" "$RID" "$OWNED_ID" "$OWNED_TARGET" <<'PYIOWNED'
-import json,pathlib,re,sys
-rows=json.loads(pathlib.Path(sys.argv[1]).read_text())
-matches=[r for r in rows if r['kind']=='branch' and r['name']=='lifecycle-owned']
-assert len(matches)==1 and re.fullmatch(r'[0-9a-f]{32}',sys.argv[3]), 'owned birth missing'
-assert re.fullmatch(r'sha256:[0-9a-f]{64}',sys.argv[4]), 'invalid owned target'
-r=matches[0]
-assert (r['repo_id'],r.get('branch_id'),r['target'])==tuple(sys.argv[2:5]), 'owned birth not accepted exactly'
-PYIOWNED
-then
-  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-# Like the existing I controls, capture the inherited output pipe so the
-# asynchronous local finalizer completes before the next Git mutation/assertion.
-if ! OWNED_RENAME_OUT=$(git branch -m lifecycle-owned lifecycle-owned-renamed 2>&1); then
-  printf '%s\n' "$OWNED_RENAME_OUT" >>"$TMP/i-owned.out"
-  cat "$TMP/i-owned.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-printf '%s\n' "$OWNED_RENAME_OUT" >>"$TMP/i-owned.out"
-if ! OWNED_DELETE_OUT=$(git branch -D lifecycle-owned-renamed 2>&1); then
-  printf '%s\n' "$OWNED_DELETE_OUT" >>"$TMP/i-owned.out"
-  cat "$TMP/i-owned.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-printf '%s\n' "$OWNED_DELETE_OUT" >>"$TMP/i-owned.out"
-expect "owned archive removes both local name projections" "$([ ! -e .cxt/refs/heads/lifecycle-owned ] && [ ! -e .cxt/refs/heads/lifecycle-owned-renamed ] && echo yes)" yes
-
-# Detached HEAD used to return before reading deletion transactions. Delete a
-# second branch while detached to exercise the real hook and zeros→zeros Git
-# transaction form, not only the parser unit test.
-git checkout -q --detach HEAD >/dev/null 2>&1
-DETACHED_DELETE_OUT=$(git branch -D web-fork-y 2>&1)
-expect "detached branch deletion still invokes context archive" "$(echo "$DETACHED_DELETE_OUT" | grep -c 'context archived')" 1
-expect "detached deletion removes only the active projection" "$([ ! -e .cxt/refs/heads/web-fork-y ] && echo yes)" yes
-expect "detached archive preserves immutable history" "$(cxt fsck | grep -c 'Missing 0')" 1
-
-# Freeze exact local lifecycle evidence; never infer identity from a shared name.
-if ! python3 - "$TMP" "$RID" "$WFX_ID" "$WFY_ID" "$OWNED_ID" <<'PYILOCAL'
-import json,pathlib,re,sys
-tmp=pathlib.Path(sys.argv[1]); repo=sys.argv[2]
-rows=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/history').glob('*.json')]
-def event(identity,kind,name):
-    found=[e for e in rows if e['branch_id']==identity and e['kind']==kind and e['branch']==name]
-    assert len(found)==1, 'missing or duplicate local lifecycle event'
-    e=found[0]
-    assert e['repo_id']==repo and re.fullmatch(r'[0-9a-f]{32}',e['id']), 'invalid local event identity'
-    return e
-forks=[]; conflicted=[]; owned=[]
-for identity,name,renamed in ((sys.argv[3],'web-fork-x','web-fork-renamed'),
-                              (sys.argv[4],'web-fork-y',''),
-                              (sys.argv[5],'lifecycle-owned','lifecycle-owned-renamed')):
-    birth=event(identity,'birth',name)
-    assert birth['id']==identity, 'birth must establish the exact modern identity'
-    chain=[birth]
-    if renamed:
-        rename=event(identity,'rename',renamed)
-        assert rename['previous_branch']==name and rename['binding_parent']==birth['id'], 'broken rename chain'
-        chain.append(rename)
-    archive=event(identity,'archive',renamed or name)
-    assert archive['binding_parent']==chain[-1]['id'], 'broken archive chain'
-    chain.append(archive)
-    assert all(e.get('source')==birth['target'] and e.get('target')==birth['target'] for e in chain[1:]), 'lifecycle target changed'
-    if name=='lifecycle-owned':
-        owned=chain
-    else:
-        foreign=json.loads((tmp/('i-server-'+name+'.json')).read_text())
-        assert foreign['branch_id']!=identity, 'fixture did not create independent identities'
-        forks.append(foreign)
-        conflicted.extend(e['id'] for e in chain)
-assert len({e['id'] for e in owned}|set(conflicted))==8, 'lifecycle IDs overlap'
-(tmp/'i-lifecycle-proof.json').write_text(json.dumps({'forks':forks,'conflicted':conflicted,'conflicted_branch_ids':sys.argv[3:5],'owned':owned})+'\n')
-PYILOCAL
-then
-  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
-fi
-
-# The archive helpers publish asynchronously. Same budget, exact identities;
-# protocol 1 applies immutable history, not legacy lifecycle-tag counts.
-for i in $(seq 1 40); do
-  if ! curl -fsSb "$J" "$B/repos/$RID/refs" -o "$TMP/i-server-refs.json" ||
-     ! curl -fsSb "$J" "$B/repos/$RID/history" -o "$TMP/i-server-history.json"; then
-    SERVER_ARCHIVE_STATE=unreadable; break
-  fi
-  if ! SERVER_ARCHIVE_STATE=$(python3 - "$TMP" <<'PYIREMOTE'
-import json,pathlib,sys
-tmp=pathlib.Path(sys.argv[1])
-proof=json.loads((tmp/'i-lifecycle-proof.json').read_text())
-refs=json.loads((tmp/'i-server-refs.json').read_text())
-events=json.loads((tmp/'i-server-history.json').read_text())
-assert isinstance(refs,list) and isinstance(events,list), 'invalid server metadata'
-branches=[r for r in refs if r['kind']=='branch']
-history={e['id']:e for e in events}
-assert len(history)==len(events), 'duplicate server history IDs'
-for old in proof['forks']:
-    matches=[r for r in branches if r['name']==old['name']]
-    assert len(matches)==1 and all(matches[0].get(k)==v for k,v in old.items()), 'foreign server owner or target changed'
-assert not set(proof['conflicted']).intersection(history), 'conflicting local lifecycle was accepted'
-local_ids=set(proof['conflicted_branch_ids'])
-assert not any(r['name']=='web-fork-renamed' or r.get('branch_id') in local_ids for r in branches), 'conflicting local identity was projected'
-for expected in proof['owned']:
-    if expected['id'] in history:
-        assert history[expected['id']]==expected, 'accepted lifecycle payload changed'
-owned_id=proof['owned'][0]['branch_id']
-pending_ref=any(r['name'] in ('lifecycle-owned','lifecycle-owned-renamed') or r.get('branch_id')==owned_id for r in branches)
-print('ready' if all(e['id'] in history for e in proof['owned']) and not pending_ref else 'waiting')
-PYIREMOTE
-); then
-    SERVER_ARCHIVE_STATE=invalid-evidence; break
-  fi
-  [ "$SERVER_ARCHIVE_STATE" = ready ] && break
-  sleep 0.25
-done
-expect "server preserves foreign owners and accepts only the owned lifecycle chain" "$SERVER_ARCHIVE_STATE" ready
-if [ "$SERVER_ARCHIVE_STATE" != ready ]; then CXT_E2E_KEEP_TMP=1; fi
-
-echo "── J. cxt setup: onboarding single command (idempotent, merge preservation)"
+wait "$LPID"; LPID=""
 mkdir -p "$HOME/.codex"
-cat > "$HOME/.codex/hooks.json" <<'EOF'
-{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-custom-hook","timeout":5}]}]}}
-EOF
-mkdir -p "$TMP/repo3"; cd "$TMP/repo3"
-git init -q; git remote add origin "$TMP/bare.git"; git commit -q --allow-empty -m init
+printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-custom-hook","timeout":5}]}]}}' > "$HOME/.codex/hooks.json"
+printf '#!/bin/sh\necho user-hook-ran >> "%s"\n' "$TMP/user-hook.log" > .git/hooks/post-commit; chmod +x .git/hooks/post-commit
 cxt setup "$REMOTE" --no-login >"$TMP/setup.out" 2>&1
-expect "setup: .cxt created" "$([ -d .cxt ] && echo yes)" yes
-expect "setup: git hook installation" "$(grep -c 'git-hook post-commit' .git/hooks/post-commit 2>/dev/null)" 1
-expect "setup: remote registration" "$(grep -c 'origin' .cxt/config)" 1
-expect "setup: claude hook creation(.claude/settings.json)" "$(grep -c 'cxt hook --provider claude --event UserPromptSubmit' .claude/settings.json 2>/dev/null)" 1
-expect "setup: codex hook merge" "$(grep -c 'cxt hook --provider codex --event Stop' "$HOME/.codex/hooks.json")" 1
-expect "setup: preserve existing codex user hooks" "$(grep -c 'my-custom-hook' "$HOME/.codex/hooks.json")" 1
-expect "setup: codex /hooks approval notice" "$(grep -c 'requires one-time approval' "$TMP/setup.out")" 1
-# Idempotence: a rerun leaves files unchanged and reports "already registered."
-H1=$(shasum "$HOME/.codex/hooks.json" .claude/settings.json | shasum)
+expect "setup succeeds" "$?" 0
+expect "setup writes the mark" "$([ -f .cxt/HEAD ] && echo yes)" yes
+expect "setup registers the remote" "$(grep -c 'origin' .cxt/config)" 1
+expect "setup installs five Git hooks, each of which only wakes" "$(cat .git/hooks/post-commit .git/hooks/post-checkout .git/hooks/post-merge .git/hooks/post-rewrite .git/hooks/pre-push 2>/dev/null | grep -cF 'git-hook wake "${0##*/}" "$PPID" </dev/null')" 5
+expect "setup installs no reference-transaction hook" "$([ ! -e .git/hooks/reference-transaction ] && echo yes)" yes
+expect "setup keeps the user's own hook for chaining" "$(grep -c user-hook-ran .git/hooks/post-commit.pre-cxt)" 1
+expect "setup merges the Claude hooks" "$(grep -c 'cxt hook --provider claude --event UserPromptSubmit' .claude/settings.json 2>/dev/null)" 1
+expect "setup merges the Codex hooks and keeps the user's" "$(grep -c 'cxt hook --provider codex --event Stop' "$HOME/.codex/hooks.json") $(grep -c 'my-custom-hook' "$HOME/.codex/hooks.json")" "1 1"
+expect "setup says that automatic upload is on, and how to stop it" "$(grep -cF '✓ automatic upload on: ' "$TMP/setup.out") $(grep -cF '(to stop it: cxt config segments.auto off)' "$TMP/setup.out")" "1 1"
+RID="$(curl -fsSb "$J" "$B/repos?repository=$(curl -fsSb "$J" "$B/repositories" | jget "[0]['id']")" | jget "[0]['id']")"
+expect "the repository is registered on the server" "$([ -n "$RID" ] && echo yes)" yes
+expect "setup uploads nothing by itself" "$(curl -fsSb "$J" "$B/repos/$RID/anchored-sessions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
+H1=$(cat "$HOME/.codex/hooks.json" .claude/settings.json .git/hooks/post-commit | shasum)
 cxt setup --no-login >"$TMP/setup2.out" 2>&1
-H2=$(shasum "$HOME/.codex/hooks.json" .claude/settings.json | shasum)
-expect "setup idempotence: hook file unchanged" "$H2" "$H1"
-expect "setup idempotence: already registered reported" "$(grep -c 'already registered' "$TMP/setup2.out")" 2
+expect "setup again changes nothing and says so" "$(cat "$HOME/.codex/hooks.json" .claude/settings.json .git/hooks/post-commit | shasum) $(grep -c 'already registered' "$TMP/setup2.out")" "$H1 2"
+STATE="$(git rev-parse --absolute-git-dir)/cxt/collector-v1.json"
 
-echo "── J2. Global app hook: unconnected no-op + legacy residue quarantine"
-mkdir -p "$TMP/unconnected"; cd "$TMP/unconnected"; git init -q
-printf '%s' "{\"session_id\":\"unconnected\",\"cwd\":\"$TMP/unconnected\",\"prompt\":\"continue\"}" |
-  cxt hook --provider codex --event UserPromptSubmit
-expect "global app hook does not create .cxt before init" "$([ ! -e .cxt ] && echo yes)" yes
+echo "── B. git commit: the hook wakes the collector, and the session is on the server"
+# The session below is recorded after automatic reading begins, which is now.
+T1="$(at 2)"
+commit_at "$T1" "first with cxt"
+until_true 20 test -f "$STATE"
+expect "the commit ran the user's hook and then woke the collector" "$(grep -c user-hook-ran "$TMP/user-hook.log") $([ -f "$STATE" ] && echo woke)" "1 woke"
+SHA1="$(git rev-parse HEAD)"
+claude_session "$PWD" sync-one main "$SHA1" "$T1"
+quiet
+git commit -q --allow-empty -m "second with cxt"
+expect "a session recorded after setup is uploaded without being asked" "$(until_true 30 on_server sync-one && on_server sync-one | python3 -c 'import json,sys;r=json.load(sys.stdin);b=r["body"];print(r["revision"],len(b["segments"]),b["segments"][0]["commits"][0]["rule"],bool(b.get("content")))')" "1 1 printed-number True"
+expect "the commit leads to the session" "$(curl -fsSb "$J" "$B/repos/$RID/anchored-commits/$SHA1" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len(r),r[0]["session_id"])')" "1 sync-one"
+# The conversation that was uploaded is read back and searched through the
+# server, with nothing but the worker that finishes an upload running.
+expect "the uploaded conversation is read back through the session" "$(curl -fsSb "$J" "$B/repos/$RID/anchored-sessions/claude/sync-one/events?offset=0" | python3 -c 'import json,sys;r=json.load(sys.stdin);t=json.dumps(r["events"]);print(len(r["events"])>0, "commit it" in t, "committed" in t)')" "True True True"
+expect "a word of the conversation is found by the search" "$(until_true 20 sh -c 'curl -fsSb "$0" "$1/repos/$2/anchored-search?q=committed" | grep -q "\"segment\"" ' "$J" "$B" "$RID"; curl -fsSb "$J" "$B/repos/$RID/anchored-search?q=committed" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(len([h for h in r["hits"] if h["kind"]=="segment"])>0)')" "True"
+quiet
+expect "a copy of what was sent is kept under .cxt/sessions, marked automatic" "$(cxt log claude sync-one --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["sessions"][0]["log"];print(len(l)>0, all(e.get("automatic") for e in l))')" "True True"
+expect "the diagnosis finds nothing that does not fit" "$(cxt doctor --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin).get("findings") or []))')" 0
 
-mkdir -p "$TMP/residue"; cd "$TMP/residue"; git init -q; mkdir -p .cxt/capture
-printf '%s' "{\"session_id\":\"legacy-residue\",\"cwd\":\"$TMP/residue\",\"prompt\":\"continue\"}" |
-  cxt hook --provider codex --event UserPromptSubmit
-expect "directory-only residue is not promoted to an initialized store" "$([ ! -e .cxt/HEAD ] && echo yes)" yes
-expect "directory-only residue receives tracked ignore protection" "$(grep -c '^\.cxt/$' .gitignore 2>/dev/null)" 1
-expect "directory-only residue receives local ignore protection" "$(git check-ignore .cxt/probe 2>/dev/null | grep -c '^\.cxt/probe$')" 1
-expect "directory-only residue does not grow capture state" "$(find .cxt -type f | wc -l | tr -d ' ')" 0
+echo "── C. an agent hook wakes the collector too"
+session_goes_on "$PWD" sync-one main m5 "$(at 3)"
+quiet
+printf '%s' "{\"session_id\":\"sync-one\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+expect "the agent hook succeeds" "$?" 0
+expect "the session that went on is uploaded again" "$(until_true 30 revision_is sync-one 2 && revision sync-one)" 2
 
-echo "── K. Chunk CAS v2: oversized event push/pull + old-client fallback"
-# Reuse the fixture's existing main identity and exact local code selection.
-# A fresh clone can legitimately have a different code from the shared context tip.
-cd "$TMP/repo1"
-if ! CXT_KEEP_SESSION=1 git checkout -q main >"$TMP/big-select.out" 2>&1; then
-  cat "$TMP/big-select.out"; exit 1
+echo "── C2. a push wakes the collector when it has ended, and that run asks the server about the Git host"
+# Git runs pre-push before the push and has no hook after it. The hook names the Git process that runs it, the one
+# that pushes, and the collector is woken when that process has ended: its run then finds origin's branches changed
+# in this clone, and asks the server to read the Git host. Without being asked the server reads it only every few
+# hours. The origin here takes three seconds to receive a push, and no collector runs in that time. This server
+# knows no Git host for the repository and says so; the collector remembers the branches it asked about either way.
+# The commit pushed is no session's, so nothing else changes.
+asked_remote_read() { python3 -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1])).get("origin_branches") else 1)' "$STATE" 2>/dev/null; }
+last_run_at() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["last_run"]["at"])' "$STATE" 2>/dev/null; }
+printf '#!/bin/sh\nsleep 3\n' > "$TMP/bare.git/hooks/pre-receive"; chmod +x "$TMP/bare.git/hooks/pre-receive"
+PROBE="$(git commit-tree "$(git rev-parse 'HEAD^{tree}')" -m "no session made this" </dev/null)"
+quiet
+REWOUND="$(last_run_at)"
+expect "before any push the server was not asked" "$(asked_remote_read && echo asked || echo not asked)" "not asked"
+git push -q origin "$PROBE:refs/heads/probe" 2>"$TMP/push.err" &
+PUSHPID=$!
+sleep 1.5
+expect "while the push goes on no collector runs" "$([ -n "$REWOUND" ] && [ "$(last_run_at)" = "$REWOUND" ] && echo did not run) $(asked_remote_read && echo asked || echo not asked)" "did not run not asked"
+wait "$PUSHPID"
+expect "the push goes through the hook" "$?" 0
+expect "when the push has ended the collector runs and asks the server about the Git host" "$(until_true 40 asked_remote_read && echo asked) $([ "$(last_run_at)" != "$REWOUND" ] && echo ran)" "asked ran"
+rm -f "$TMP/bare.git/hooks/pre-receive"
+
+echo "── C3. the collector tells the server which pushes this clone made, and the server says where a push came from"
+# Git records in the clone each push the clone made. The run after the push reads that record and tells the server,
+# with the collector's own state: the server can then say of a push that came without a session that it was made on
+# a computer where cxt runs, and that the cxt there ended its run well. The commit pushed above is no session's.
+origin_of() { curl -fsSb "$J" "$B/repos/$RID/push-origins" | python3 -c '
+import json, sys
+view = json.load(sys.stdin)
+push = next((p for p in view["pushes"] if p["sha"] == sys.argv[1] and p["branch"] == sys.argv[2]), None)
+if push is None:
+    sys.exit(1)
+collector = view["collectors"][push["collector"]] if "collector" in push else {}
+print(push["state"], "claimed" if "claimed_at" in push else "unclaimed", "own" if collector.get("own") else "other", "failing" if collector.get("failing") else "well")' "$1" "$2" 2>/dev/null; }
+expect "the push is said to come from a computer where cxt runs and ended its run well" "$(until_true 40 origin_of "$PROBE" probe >/dev/null && origin_of "$PROBE" probe)" "cxt claimed own well"
+heard_at() { curl -fsSb "$J" "$B/repos/$RID/push-origins" | python3 -c 'import json,sys;print(next(c["heard_at"] for c in json.load(sys.stdin)["collectors"] if c["own"]))' 2>/dev/null; }
+HEARD="$(heard_at)"
+quiet
+REWOUND="$(last_run_at)"
+ran_again() { [ "$(last_run_at)" != "$REWOUND" ]; }
+cxt git-hook wake post-commit </dev/null >/dev/null 2>&1
+expect "a run with nothing new tells the server nothing more" "$(until_true 40 ran_again && echo ran) $([ -n "$HEARD" ] && [ "$(heard_at)" = "$HEARD" ] && echo not told)" "ran not told"
+
+echo "── C5. a push is read at once, however long the collector's pause is"
+# The collector pauses six times as long as its last run took, up to ten minutes: a long session costs a long run.
+# A push of this clone ends that pause, because what was pushed is what the team is shown. The last run is
+# recorded here as one that began just now and took a minute and a half, which makes the pause nine minutes.
+quiet
+python3 -c 'import json, sys, datetime
+state = json.load(open(sys.argv[1]))
+state["last_run"]["at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+state["last_run"]["millis"] = 90000
+json.dump(state, open(sys.argv[1], "w"))' "$STATE"
+LONG="$(last_run_at)"
+ran_after_long() { [ "$(last_run_at)" != "$LONG" ]; }
+PROBE2="$(git commit-tree "$(git rev-parse 'HEAD^{tree}')" -m "no session made this either" </dev/null)"
+git push -q origin "$PROBE2:refs/heads/probe2" 2>"$TMP/push2.err"
+expect "the collector runs within seconds of the push although its pause is nine minutes" "$(until_true 30 ran_after_long && echo ran)" "ran"
+expect "that run tells the server of the push" "$(until_true 30 origin_of "$PROBE2" probe2 >/dev/null && origin_of "$PROBE2" probe2)" "cxt claimed own well"
+
+echo "── C6. a long session is kept in several documents, and going on leaves the earlier ones as they are"
+# A conversation is uploaded in parts: a part is sealed where the records of it reach four megabytes. This session
+# is a prompt and four answers of two and a half megabytes each, which is two sealed parts. When it goes on, the two
+# documents stay the documents they were and a third holds what follows them.
+python3 - "$(project_dir "$PWD")/sync-long.jsonl" "$PWD" "$(at 6)" <<'PYLONG'
+import json, sys
+path, cwd, moment = sys.argv[1:4]
+def record(kind, uuid, content, **more):
+    return json.dumps(dict({"type": kind, "uuid": uuid, "sessionId": "sync-long", "timestamp": moment, "cwd": cwd, "gitBranch": "main", "message": {"role": kind, "content": content}}, **more)) + "\n"
+with open(path, "w") as out:
+    out.write(record("user", "l0", "write four long answers", promptId="lp0"))
+    for index in range(1, 5):
+        out.write(record("assistant", "l%d" % index, [{"type": "text", "text": ("long answer %d " % index) * 180000}]))
+PYLONG
+parts_of() { on_server "$1" | python3 -c 'import json,sys;print(" ".join(p["doc"][7:19]+":"+str(p["events"]) for p in json.load(sys.stdin)["body"]["content"]["parts"]))'; }
+quiet
+printf '%s' "{\"session_id\":\"sync-long\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+until_true 90 on_server sync-long
+LONG1="$(parts_of sync-long)"
+expect "the long session is uploaded in two documents, of three and of two events" "$(echo "$LONG1" | wc -w | tr -d ' ') $(echo "$LONG1" | sed 's/[0-9a-f]*://g')" "2 3 2"
+session_goes_on "$PWD" sync-long main l5 "$(at 7)"
+quiet
+printf '%s' "{\"session_id\":\"sync-long\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+until_true 90 revision_is sync-long 2
+LONG2="$(parts_of sync-long)"
+expect "after it went on the two documents are the same and a third holds what was added" "$(echo "$LONG2" | wc -w | tr -d ' ') $([ "${LONG2#"$LONG1" }" != "$LONG2" ] && echo same) ${LONG2##*:}" "3 same 1"
+expect "a page of the conversation ends where its document ends and goes on in the next" "$(for offset in 0 3 5; do curl -fsSb "$J" "$B/repos/$RID/anchored-sessions/claude/sync-long/events?offset=$offset&limit=20" | python3 -c 'import json,sys;p=json.load(sys.stdin);print(len(p["events"]),p["events"][0]["event_index"],p["next"],end=" / ")'; done)" "3 0 3 / 2 3 5 / 1 5 -1 / "
+expect "the copy on this computer is the three documents" "$(ls .cxt/sessions/claude/sync-long/conversation | wc -l | tr -d ' ') $(cxt segments log claude sync-long --json | python3 -c 'import json,sys;s=json.load(sys.stdin)["sessions"][0];print(s["conversation_kept"],s["parts"],s["events"])')" "3 True 3 6"
+
+echo "── C4. the Git remote cxt follows need not be named origin"
+# What cxt reads of a Git remote is read of one remote: origin, unless setup is told another name or the repository
+# has no origin and exactly one remote. Nothing here talks to the server, and nothing here is committed: these are
+# other repositories than the suite's, and no collector is woken in them.
+( mkdir -p "$TMP/named" && cd "$TMP/named" && git init -q && git remote add upstream "$TMP/bare.git"
+  cxt setup --no-login >"$TMP/named.out" 2>&1 )
+expect "setup follows the repository's only remote" "$(grep -c 'Git remote upstream' "$TMP/named.out") $(git -C "$TMP/named" config --get cxt.gitremote)" "1 upstream"
+( cd "$TMP/named" && git remote add mirror "$TMP/bare.git" && cxt setup --git-remote mirror --no-login >"$TMP/named2.out" 2>&1 )
+expect "setup follows the remote it is told" "$(grep -c 'Git remote mirror' "$TMP/named2.out") $(git -C "$TMP/named" config --get cxt.gitremote)" "1 mirror"
+( cd "$TMP/named" && cxt setup --git-remote nowhere --no-login >"$TMP/named3.out" 2>&1 ); NAMED=$?
+expect "a name that is no remote of the repository stops setup and names the remotes" "$([ "$NAMED" -ne 0 ] && echo stopped) $(grep -c 'upstream' "$TMP/named3.out") $(git -C "$TMP/named" config --get cxt.gitremote)" "stopped 1 mirror"
+( mkdir -p "$TMP/two" && cd "$TMP/two" && git init -q && git remote add alpha "$TMP/bare.git" && git remote add beta "$TMP/bare.git"
+  cxt setup --no-login >"$TMP/two.out" 2>&1 )
+expect "with two remotes and no origin setup chooses none and says how to choose" "$(grep -c 'no Git remote named origin' "$TMP/two.out") $(grep -c -- '--git-remote' "$TMP/two.out") $(git -C "$TMP/two" config --get cxt.gitremote || echo unset)" "1 1 unset"
+
+echo "── D. a linked worktree shares the hooks"
+quiet
+git worktree add -q "$TMP/linked" -b topic
+T2="$(at 4)"
+quiet
+( cd "$TMP/linked" && commit_at "$T2" "in the worktree" )
+SHA2="$(git -C "$TMP/linked" rev-parse HEAD)"
+claude_session "$TMP/linked" sync-two topic "$SHA2" "$T2"
+quiet
+( cd "$TMP/linked" && git commit -q --allow-empty -m "again in the worktree" )
+expect "a session of the linked worktree is uploaded" "$(until_true 30 on_server sync-two && on_server sync-two | python3 -c 'import json,sys;b=json.load(sys.stdin)["body"];print(len(b["segments"]),b["segments"][0]["commits"][0]["sha"]=="'"$SHA2"'")')" "1 True"
+expect "nothing of cxt is written into the linked worktree" "$([ ! -e "$TMP/linked/.cxt" ] && echo yes)" yes
+
+echo "── E. hooks of an earlier version are replaced, and Git is never stopped"
+# What an earlier version installed: a reference-transaction hook that refused
+# to create a branch when its cxt call failed, calling a command that is gone.
+{
+  printf '%s\n' '#!/bin/sh' "# cxt-hook v1 (managed by cxt — remove with 'cxt hooks uninstall')" 'input=$(cat)' 'case "$input" in' '*refs/heads/*)'
+  printf '  printf '"'"'%%s\\n'"'"' "$input" | "%s" git-hook branch-transaction "$1" "$PPID"\n' "$TMP/bin/cxt"
+  printf '%s\n' '  cxt_status=$?' '  if [ "$1" = "prepared" ] && [ "$cxt_status" -ne 0 ]; then exit "$cxt_status"; fi ;;' 'esac' 'exit 0'
+} > .git/hooks/reference-transaction
+chmod +x .git/hooks/reference-transaction
+printf '#!/bin/sh\n# cxt-hook v1 (managed by cxt)\n"%s" git-hook post-checkout "$@" || true\n' "$TMP/bin/cxt" > .git/hooks/post-checkout
+expect "the earlier hook is valid shell" "$(sh -n .git/hooks/reference-transaction 2>&1; echo $?)" 0
+quiet
+git branch from-earlier-hooks >"$TMP/earlier-branch.out" 2>&1
+expect "a branch is created through the earlier hook" "$? $(git show-ref --verify --quiet refs/heads/from-earlier-hooks && echo exists)" "0 exists"
+expect "the earlier reference-transaction hook is gone after its first run" "$([ ! -e .git/hooks/reference-transaction ] && echo yes)" yes
+expect "the earlier post-checkout hook became this version's" "$(grep -cF 'git-hook wake "${0##*/}" "$PPID" </dev/null' .git/hooks/post-checkout)" 1
+# The earlier hook woke cxt more than once for one branch, so one more run follows after the pause between runs.
+quiet
+git checkout -q from-earlier-hooks
+quiet
+git checkout -q main
+expect "switching branches works with the replaced hooks" "$(git symbolic-ref --short HEAD)" main
+quiet
+# Without any cxt to run, Git still goes on and the user's hook still runs.
+USER_HOOK_RUNS="$(grep -c user-hook-ran "$TMP/user-hook.log")"
+mv "$TMP/bin/cxt" "$TMP/bin/cxt.away"
+sed -i.bak "s#^CXT=.*#CXT='$TMP/bin/missing'#" .git/hooks/post-commit && rm -f .git/hooks/post-commit.bak
+git commit -q --allow-empty -m "without cxt" 2>"$TMP/without-cxt.err"
+expect "a commit succeeds when cxt cannot be run, and the user's hook still runs" "$? $(($(grep -c user-hook-ran "$TMP/user-hook.log") - USER_HOOK_RUNS))" "0 1"
+mv "$TMP/bin/cxt.away" "$TMP/bin/cxt"
+cxt hooks install >/dev/null 2>&1
+expect "installing again puts this version's hook back" "$(grep -c "^CXT='$TMP/bin/cxt'" .git/hooks/post-commit)" 1
+
+echo "── F. turned off: nothing is sent, and the diagnosis says why"
+quiet
+cxt config segments.auto off >/dev/null 2>&1
+session_goes_on "$PWD" sync-one main m6 "$(at 5)"
+git commit -q --allow-empty -m "while turned off"
+sleep 2
+expect "turned off, a commit starts no collector and uploads nothing" "$(collector_idle && revision sync-one)" 2
+expect "the diagnosis names the collector that is off and the session the server is behind on" "$(cxt doctor --json | python3 -c 'import json,sys;c=sorted({f["code"] for f in json.load(sys.stdin)["findings"]});print(" ".join(c))')" "collector-off server-behind"
+expect "asked for, the upload still works" "$(cxt push claude sync-one --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"])') $(revision sync-one)" "1 3"
+cxt setup --no-login >"$TMP/setup-off.out" 2>&1
+expect "setup again says that automatic upload is off here, and leaves it off" "$(grep -cF '⚠ automatic upload off in this repository: ' "$TMP/setup-off.out") $(cxt config segments.auto)" "1 segments.auto = off"
+cxt config segments.auto on >/dev/null 2>&1
+
+echo "── G. a folder that was not set up is left alone"
+mkdir -p "$TMP/unconnected"; cd "$TMP/unconnected" || exit 1; git init -q
+printf '%s' "{\"session_id\":\"unconnected\",\"cwd\":\"$TMP/unconnected\",\"prompt\":\"continue\"}" | cxt hook --provider codex --event UserPromptSubmit
+expect "an agent hook does not create .cxt where cxt was not set up" "$([ ! -e .cxt ] && echo yes)" yes
+cxt git-hook post-commit; cxt git-hook segment-collect
+expect "a Git hook does not create .cxt either, and nothing is collected" "$([ ! -e .cxt ] && [ ! -e .git/cxt ] && echo yes)" yes
+mkdir -p "$TMP/residue"; cd "$TMP/residue" || exit 1; git init -q; mkdir -p .cxt/capture
+printf '%s' "{\"session_id\":\"residue\",\"cwd\":\"$TMP/residue\",\"prompt\":\"continue\"}" | cxt hook --provider codex --event UserPromptSubmit
+expect "a leftover .cxt directory is not a mark" "$([ ! -e .cxt/HEAD ] && echo yes)" yes
+expect "a leftover .cxt directory is kept out of Git" "$(grep -c '^\.cxt/$' .gitignore 2>/dev/null) $(git check-ignore .cxt/probe 2>/dev/null | grep -c '^\.cxt/probe$')" "1 1"
+expect "nothing is written into a leftover .cxt directory" "$(find .cxt -type f | wc -l | tr -d ' ')" 0
+expect "hooks cannot be installed where cxt was not set up" "$(cxt hooks install >/dev/null 2>&1; echo $?)" 1
+
+echo "── H. commands of the capture approach are gone"
+cd "$TMP/repo" || exit 1
+for removed in save status checkout pull commit stash load claude codex mcp capture sync branch tag fsck repair; do
+  cxt "$removed" >"$TMP/removed.out" 2>&1
+  expect "cxt $removed is an unknown command" "$? $(grep -c 'unknown command' "$TMP/removed.out")" "2 1"
+done
+expect "this computer keeps the mark, the connection, its lock and the copies of what was sent" "$(ls .cxt | sort | tr '\n' ' ')" "HEAD config locks sessions "
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  expect "the server has no routes that take or list captures" "$(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$RID/snapshots") $(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$RID/refs")" "404 404"
 fi
-python3 - "$(git rev-parse HEAD)" "$(git rev-parse --absolute-git-dir)" >"$TMP/big-binding.out" 2>&1 <<'PYBIGBINDING'
-import hashlib,json,pathlib,sys
-root=pathlib.Path('.')
-code,admin=sys.argv[1:]
-wt=hashlib.sha256(admin.encode()).hexdigest()[:32]
-ref=json.loads((root/'.cxt/refs/heads/main').read_text())
-p=json.loads((root/'.cxt/worktrees'/wt/'position.json').read_text())
-assert ref.get('branch_id') and ref.get('kind')=='branch' and ref.get('name')=='main', 'missing canonical main identity'
-assert p.get('repo_id')==ref.get('repo_id') and p.get('branch')=='main' and p.get('branch_id')==ref['branch_id'], 'main selection identity mismatch'
-assert p.get('git_commit')==code and p.get('snapshot')==ref.get('target') and ref.get('target'), 'main code/context selection mismatch'
-events=[json.loads(f.read_text()) for f in (root/'.cxt/history').glob('*.json')]
-assert any(e.get('kind') in ('position','advance','birth','orphan','attach') and e.get('repo_id')==ref['repo_id']
-           and e.get('branch_id')==ref['branch_id'] and e.get('target')==ref['target'] and e.get('git_after')==code
-           for e in events), 'main has no exact stored code binding'
-print('verified main code/context binding')
-PYBIGBINDING
-if [ "$?" != 0 ]; then cat "$TMP/big-binding.out"; exit 1; fi
-large_session "$TMP/repo1" BIG
-echo big > big.txt; git add big.txt; git commit -qm big-event >/dev/null 2>&1
-# The user can push immediately, before background normalization finishes.
-git push -q origin main >"$TMP/big-push.out" 2>&1 || { cat "$TMP/big-push.out"; exit 1; }
-# Large sealed input is normalized outside the Git hook deadline. Wait for its
-# actual worker/publication chain; never substitute a second live capture.
-if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$TMP/repo1" >"$TMP/big-drain.out" 2>&1; then
-  cat "$TMP/big-drain.out"; exit 1
+
+echo "── I. a server with a GitHub App: setup and the diagnosis say that the repository is not connected"
+# The suite's server has no GitHub App, and says nothing of GitHub. This is a second server that has one, with a key
+# made here and thrown away. Nothing of it talks to GitHub: no owner installed the App, so every repository is not
+# connected. Nothing is committed in the folder set up here, and no collector is woken in it.
+expect "a server without a GitHub App says nothing of GitHub in setup" "$(grep -c 'GitHub' "$TMP/setup.out")" 0
+PORT2=$((PORT + 900))
+ORIGIN2="http://127.0.0.1:$PORT2"
+B2="$ORIGIN2/api/v1"
+openssl genrsa -out "$TMP/app.pem" 2048 2>/dev/null
+env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
+  CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN2" \
+  CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN2" \
+  RESEND_API_KEY= \
+  CXT_GITHUB_APP_ID=1 CXT_GITHUB_APP_CLIENT_ID=fixture CXT_GITHUB_APP_CLIENT_SECRET=fixture \
+  CXT_GITHUB_APP_SLUG=fixture CXT_GITHUB_APP_WEBHOOK_SECRET=fixture CXT_GITHUB_APP_PRIVATE_KEY="$(cat "$TMP/app.pem")" \
+  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT2 --data "$TMP/data2" >"$TMP/srv2.log" 2>&1 &
+SRV2_PID=$!
+until_true 15 curl -sf -o /dev/null "$B2/repos"
+curl2() { command curl -H "Origin: $ORIGIN2" -H 'X-Cxt-CSRF: 1' "$@"; }
+J2="$TMP/b.jar"
+curl2 -s -c "$J2" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:hub$SUFFIX@t.io:Hub" >/dev/null
+SLUG2=$(curl2 -sb "$J2" -X POST "$B2/repositories" -H 'Content-Type: application/json' -d "{\"name\":\"Hub$SUFFIX\"}" | jget "['slug']")
+OWN2=$(curl -sb "$J2" "$B2/me" | jget "['username']")
+expect "the second server answers and holds a repository" "$([ -n "$SLUG2" ] && [ -n "$OWN2" ] && echo yes)" yes
+git init -q --bare "$TMP/hub.git"
+mkdir -p "$TMP/hub"; cd "$TMP/hub" || exit 1
+git init -q; git remote add origin "$TMP/hub.git"
+CXT_NO_BROWSER=1 cxt login --server "$ORIGIN2" >"$TMP/login2.out" 2>&1 &
+LPID=$!
+DCODE2=""
+for i in $(seq 1 40); do
+  DCODE2=$(grep -o '[B-Z2-9]\{3\}-[B-Z2-9]\{3\}' "$TMP/login2.out" 2>/dev/null | head -1)
+  [ -n "$DCODE2" ] && break; sleep 0.25
+done
+curl2 -sb "$J2" -X POST "$B2/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE2\"}" >/dev/null
+wait "$LPID"; LPID=""
+cxt setup "$ORIGIN2/$OWN2/$SLUG2" --no-login >"$TMP/hub-setup.out" 2>&1; HUB=$?
+expect "setup ends as not complete and says where a maintainer connects the repository" \
+  "$([ "$HUB" -ne 0 ] && echo stopped) $(grep -c "✗ GitHub is not connected — a maintainer of the repository connects it at $ORIGIN2/connect/github$" "$TMP/hub-setup.out") $(grep -c '^Complete' "$TMP/hub-setup.out") $(grep -c "not complete: this repository is not connected to GitHub — a maintainer of the repository connects it at $ORIGIN2/connect/github;" "$TMP/hub-setup.out")" "stopped 1 0 1"
+expect "everything on this computer is set up all the same" "$([ -f .cxt/HEAD ] && echo mark) $(grep -cF 'git-hook wake' .git/hooks/pre-push 2>/dev/null)" "mark 1"
+RID2="$(curl -fsSb "$J2" "$B2/repos?repository=$(curl -fsSb "$J2" "$B2/repositories" | jget "[0]['id']")" | jget "[0]['id']")"
+expect "the server says the same to whoever may view the repository" "$(curl -sb "$J2" "$B2/repos/$RID2/github-connection" | python3 -c 'import json,sys;v=json.load(sys.stdin);print(v["state"], v["connect_url"] == sys.argv[1])' "$ORIGIN2/connect/github")" "not_connected True"
+expect "the diagnosis names the connection that is missing, with where to connect" "$(cxt doctor --json | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+found = [f for f in d["findings"] if f["code"] == "github-not-connected"]
+print("github-connection" in d["checked"], len(found), found and found[0]["problem"], found and found[0]["fix"] == "a maintainer of the repository connects it at " + sys.argv[1])' "$ORIGIN2/connect/github")" "True 1 True True"
+cd "$TMP/repo" || exit 1
+
+echo "── J. a repository stored under another address than the server's is moved there, and setup follows it"
+# A repository can be stored under an address its server is not reached at: one made against a development server
+# whose database was then served elsewhere. The clone's origin is the old address, and a transport endpoint points it
+# at the server. An operator gives the stored repository the address its workspace is reached at now, in the
+# database and with the server stopped; cxt setup with that address then moves the clone's origin to it. What the
+# repository held reads under the new address, and what follows is uploaded there. Here the old address is this
+# server under another name. Only the PostgreSQL store can be moved.
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  echo "  (PostgreSQL only: the operator command moves a repository in the database)"
+else
+  SLUG3=$(ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d "{\"name\":\"Moved$SUFFIX\"}" | jget "['slug']")
+  WS3=$(curl -fsSb "$J" "$B/repositories" | python3 -c 'import json,sys;print(next(r["id"] for r in json.load(sys.stdin) if r["slug"] == sys.argv[1]))' "$SLUG3")
+  OLD3="http://localhost:$PORT/$OWN/$SLUG3"
+  NEW3="$ORIGIN/$OWN/$SLUG3"
+  stored3() { curl -fsSb "$J" "$B/repos?repository=$WS3" | python3 -c 'import json,sys;print(" ".join(r["id"] for r in json.load(sys.stdin)))'; }
+  origin3() { python3 -c 'import json;print(json.load(open(".cxt/config"))["remotes"].get("origin", "none"))'; }
+  on3() { curl -fsSb "$J" "$B/repos/$1/anchored-sessions/claude/sync-moved"; }
+  rev3() { on3 "$1" | jget "['revision']"; }
+  admin3() { CXT_ENV_FILE=/dev/null CXT_POSTGRES_DSN="$CXT_E2E_DSN" CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" "$TMP/bin/cxt-admin" repo-address "$@"; }
+  git init -q --bare "$TMP/moved.git"
+  mkdir -p "$TMP/moved"; cd "$TMP/moved" || exit 1
+  git init -q; git remote add origin "$TMP/moved.git"
+  git commit -q --allow-empty -m "before cxt"
+  # The old address has a login of its own, as the development server had.
+  CXT_NO_BROWSER=1 cxt login --server "http://localhost:$PORT" >"$TMP/login3.out" 2>&1 &
+  LPID=$!
+  DCODE3=""
+  for i in $(seq 1 40); do
+    DCODE3=$(grep -o '[B-Z2-9]\{3\}-[B-Z2-9]\{3\}' "$TMP/login3.out" 2>/dev/null | head -1)
+    [ -n "$DCODE3" ] && break; sleep 0.25
+  done
+  ccurl -sb "$J" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE3\"}" >/dev/null
+  wait "$LPID"; LPID=""
+  cxt setup "$OLD3" --no-login >"$TMP/moved-setup.out" 2>&1; SET3=$?
+  cxt remote set-endpoint origin "$B" >"$TMP/moved-endpoint.out" 2>&1; ENDPOINT3=$?
+  OLDID3="$(stored3)"
+  expect "a clone is connected under the old address, and an endpoint points it at the server" "$SET3 $ENDPOINT3 $(origin3) $([ -n "$OLDID3" ] && echo stored)" "0 0 $OLD3 stored"
+  STATE="$(git rev-parse --absolute-git-dir)/cxt/collector-v1.json"
+  T3="$(at 8)"
+  commit_at "$T3" "first moved"
+  until_true 20 test -f "$STATE"
+  claude_session "$PWD" sync-moved main "$(git rev-parse HEAD)" "$T3"
+  quiet
+  git commit -q --allow-empty -m "second moved"
+  expect "a session is uploaded under the old address" "$(until_true 30 on3 "$OLDID3" && rev3 "$OLDID3")" 1
+  quiet
+  cxt setup "$NEW3" --no-login >"$TMP/moved-early.out" 2>&1; EARLY3=$?
+  expect "before the move, setup with the new address says where the repository is kept, and changes nothing" "$([ "$EARLY3" -ne 0 ] && echo stopped) $(grep -cF "the server keeps this repository under $OLD3, the address this clone is connected to" "$TMP/moved-early.out") $(origin3)" "stopped 1 $OLD3"
+
+  kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
+  expect "the operator finds the repository stored under the old address" "$(admin3 --list | python3 -c 'import json,sys;e=next(e for e in json.load(sys.stdin) if e["id"] == sys.argv[1]);print(e["address"] == sys.argv[2], e["path"] == sys.argv[3])' "$OLDID3" "$OLD3" "$OWN/$SLUG3")" "True True"
+  admin3 --from "$OLD3" --to "$NEW3" >"$TMP/move-preview.json" 2>"$TMP/move-preview.err"; LOOK3=$?
+  expect "looking at the move says what it would change, and changes nothing" "$LOOK3 $(python3 -c 'import json,sys;m=json.load(open(sys.argv[1]));print(m["applied"], {"table": "anchored_sessions", "column": "repo_id", "rows": 1} in m["changed"])' "$TMP/move-preview.json") $(grep -c 'nothing was changed' "$TMP/move-preview.err")" "0 False True 1"
+  admin3 --from "$OLD3" --to "$NEW3" --apply >"$TMP/move.json" 2>"$TMP/move.err"; MOVE3=$?
+  expect "the move is applied, and says to run setup with the new address" "$MOVE3 $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["applied"])' "$TMP/move.json") $(grep -cF "cxt setup $NEW3" "$TMP/move.err")" "0 True 1"
+  "${fixture_server[@]}" >"$TMP/srv-moved.log" 2>&1 &
+  SRV_PID=$!
+  until_true 15 curl -sf -o /dev/null "$B/repos"
+
+  cxt setup "$NEW3" --no-login >"$TMP/moved-setup2.out" 2>&1; SET4=$?
+  NEWID3="$(stored3)"
+  expect "setup with the new address moves the origin of the clone" "$SET4 $(grep -cF "remote origin moved from $OLD3" "$TMP/moved-setup2.out") $(origin3)" "0 1 $NEW3"
+  expect "the server keeps the repository under the new address only" "$([ -n "$NEWID3" ] && [ "$NEWID3" != "$OLDID3" ] && echo moved) $(curl -sb "$J" -o /dev/null -w '%{http_code}' "$B/repos/$OLDID3/anchored-sessions/claude/sync-moved")" "moved 404"
+  expect "what was uploaded reads under the new address" "$(rev3 "$NEWID3")" 1
+  quiet
+  REWOUND="$(last_run_at)"
+  git commit -q --allow-empty -m "after the move"
+  expect "after the move a commit wakes the collector, and the session it reads again is unchanged" "$(until_true 40 ran_again && echo ran) $(rev3 "$NEWID3")" "ran 1"
+  session_goes_on "$PWD" sync-moved main mm5 "$(at 9)"
+  quiet
+  printf '%s' "{\"session_id\":\"sync-moved\",\"cwd\":\"$PWD\"}" | cxt hook --provider claude --event Stop
+  rev3_is() { [ "$(rev3 "$NEWID3" 2>/dev/null)" = "$1" ]; }
+  expect "the session that went on is uploaded under the new address" "$(until_true 30 rev3_is 2 && rev3 "$NEWID3")" 2
+  expect "the diagnosis finds nothing that does not fit" "$(cxt doctor --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin).get("findings") or []))')" 0
+  cd "$TMP/repo" || exit 1
 fi
-python3 - "$(git rev-parse HEAD)" <<'PYBIGCAPTURE'
-import json,pathlib,sys
-passes=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/worktrees').glob('*/capture-passes/*.json')]
-p=[p for p in passes if p['proof']['git_after']==sys.argv[1]]
-assert len(p)==1 and p[0].get('inputs_ready') and p[0].get('memory_finalized') and p[0].get('complete'), 'large frozen capture did not complete'
-assert any(o.get('state')=='saved' and o.get('input',{}).get('size',0)>1024*1024 for o in p[0]['outcomes']), 'large source was not saved from sealed input'
-ref=json.loads(pathlib.Path('.cxt/refs/heads/main').read_text())
-assert p[0]['proof']['target']==ref['target'], 'background capture did not advance its unchanged local branch'
-PYBIGCAPTURE
-if [ "$?" != 0 ]; then exit 1; fi
-BIG_EXPECTED=$(python3 - <<'PYBIGEXPECTED'
-import json,re
-with open('.cxt/refs/heads/main') as f:
-    ref=json.load(f)
-target=ref.get('target','')
-assert ref.get('branch_id') and re.fullmatch(r'sha256:[0-9a-f]{64}',target), 'missing captured context identity/target'
-print(target)
-PYBIGEXPECTED
-) || exit 1
-BIG_HEAD=$(main_head)
-expect "oversized captured context is the published main" "$BIG_HEAD" "$BIG_EXPECTED"
-[ "$BIG_HEAD" = "$BIG_EXPECTED" ] || { cat "$TMP/big-push.out"; exit 1; }
-BIG_MANIFEST=$(ccurl -sb "$J" -X POST "$B/repos/$RID/pull/objects" -H 'Content-Type: application/json' \
-  -d "{\"doc_manifest_wants\":[\"$BIG_HEAD\"],\"chunk_formats_supported\":[\"cxt-doc-chunks-v1\",\"cxt-doc-chunks-v2\"]}" | python3 -c "
-import json,sys
-r=json.load(sys.stdin); m=(r.get('doc_manifests') or [{}])[0]
-print(f\"{m.get('format','')}:{len(m.get('chunks') or [])}\")
-")
-expect "oversized event stored and served as v2" "$(echo "$BIG_MANIFEST" | cut -d: -f1)" cxt-doc-chunks-v2
-expect "oversized event split into bounded chunks" "$([ "$(echo "$BIG_MANIFEST" | cut -d: -f2)" -gt 1 ] && echo yes)" yes
-OLD_FALLBACK=$(ccurl -sb "$J" -X POST "$B/repos/$RID/pull/objects" -H 'Content-Type: application/json' \
-  -d "{\"doc_manifest_wants\":[\"$BIG_HEAD\"]}" | python3 -c "import json,sys;r=json.load(sys.stdin);print(f\"{len(r.get('docs') or [])}:{len(r.get('doc_manifests') or [])}\")")
-expect "client without v2 capability receives full-doc fallback" "$OLD_FALLBACK" 1:0
-git clone -q "$TMP/bare.git" "$TMP/repo5"
-cd "$TMP/repo5"; cxt init >/dev/null 2>&1; cxt remote add origin "$REMOTE" >/dev/null 2>&1
-if ! cxt pull >"$TMP/big-pull.out" 2>&1; then cat "$TMP/big-pull.out"; exit 1; fi
-expect "fresh client pulls and verifies v2 history" "$(cxt fsck | grep -c 'Missing 0')" 1
 
 echo
-source "$ROOT/scripts/e2e-context-history.inc.sh"
-source "$ROOT/scripts/e2e-publication.inc.sh"
-
-source "$ROOT/scripts/e2e-live-capture.inc.sh"
-
-echo "── R. Exact memory-body reuse through the real CLI client and API"
-REUSE_TOKEN=$(python3 - "$J" <<'PYREUSE'
-import pathlib,sys
-for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
-    fields=line.split('\t')
-    if len(fields)==7 and fields[5]=='cxt_session':
-        print(fields[6]); break
-PYREUSE
-)
-CXT_MEMORY_REUSE_TEST_URL="$B" CXT_MEMORY_REUSE_TEST_TOKEN="$REUSE_TOKEN" \
-  CXT_BRANCH_PULL_TEST_REQUIRED="$([ -n "${CXT_E2E_DSN:-}" ] && echo 1 || echo 0)" \
-  CXT_MEMORY_REUSE_TEST_REPO="$RID" "$TMP/bin/memory-reuse-test" \
-  -test.run '^(TestMemoryReuseLiveProtocol|TestBranchPullLiveProtocol|TestCatalogMerkleLiveProtocol)$' -test.v >"$TMP/memory-reuse.out" 2>&1
-REUSE_EXIT=$?
-if [ "$REUSE_EXIT" != 0 ]; then cat "$TMP/memory-reuse.out"; fi
-expect "memory reuse, branch and Merkle wire protocols verified by server" "$REUSE_EXIT" 0
-unset REUSE_TOKEN
-
-source "$ROOT/scripts/e2e-initialization.inc.sh"
-source "$ROOT/scripts/e2e-setup.inc.sh"
-source "$ROOT/scripts/e2e-first-owner.inc.sh"
-
-if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi
+if [ "$FAIL" = 0 ]; then echo "SYNC E2E: all passed ✓"; else echo "SYNC E2E: FAILED ✗"; fi
 exit "$FAIL"

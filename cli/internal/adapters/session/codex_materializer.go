@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
@@ -18,9 +17,6 @@ type CodexMaterializer struct{}
 
 // NewCodexMaterializer creates a CodexMaterializer.
 func NewCodexMaterializer() *CodexMaterializer { return &CodexMaterializer{} }
-
-// Provider returns codex.
-func (m *CodexMaterializer) Provider() domain.ProviderKind { return domain.ProviderCodex }
 
 // Materialize records raw (encoded Codex rollout JSONL) as a native session file.
 func (m *CodexMaterializer) Materialize(ctx context.Context, raw []byte, cwd string) (string, string, error) {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -18,13 +19,15 @@ func (worker *GitHubWorker) EvidenceInstallation(ctx context.Context, path strin
 	if err != nil {
 		return 0, "", err
 	}
-	local, err := worker.repositories.GetRepository(ctx, repo.RepositoryID)
-	if err != nil {
+	if _, err := worker.repositories.GetRepository(ctx, repo.RepositoryID); err != nil {
 		return 0, "", err
 	}
-	connection, err := worker.store.GetGitHubConnection(ctx, local.OwnerNamespaceID)
+	connection, err := worker.store.FindGitHubBinding(ctx, repoID)
 	if errors.Is(err, domain.ErrNotFound) {
-		return 0, path, nil
+		// No installation was told to read this repository: the server does
+		// not read it. An owner's installation reads only what it was told
+		// to, and no credential of the server stands in for a missing one.
+		return 0, "", fmt.Errorf("%w: %w", outbound.ErrGitRepositoryNotConnected, domain.ErrForbidden)
 	}
 	if err != nil {
 		return 0, "", err

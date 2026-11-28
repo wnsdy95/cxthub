@@ -56,14 +56,3 @@ func (s *IdentityService) enqueueInvitationEmail(ctx context.Context, i domain.C
 	body := fmt.Sprintf(`<h1>CXTHub invitation</h1><p>You are invited to <strong>%s</strong> as %s.</p><p><a href="%s">Review invitation</a></p><p>Sign in with %s and accept explicitly. Expires: %s.</p><p>If you did not expect this invitation, you can ignore it.</p>`, html.EscapeString(view.SpaceName), html.EscapeString(string(i.Role)), html.EscapeString(link), html.EscapeString(i.Email), i.ExpiresAt.UTC().Format(time.RFC3339))
 	return s.repositories.(outbound.InvitationEmailStore).PutInvitationEmail(ctx, domain.InvitationEmail{InvitationID: i.ID, State: "queued", NextAttempt: i.CreatedAt, Message: domain.EmailMessage{From: s.invitationEmail.from, To: []string{i.Email}, Subject: "CXTHub invitation", Text: text, HTML: body}})
 }
-
-func (s *IdentityService) claimInvitationEmail(ctx context.Context) (domain.InvitationEmail, error) {
-	return s.invitationEmailWorker().claimInvitationEmail(ctx)
-}
-
-func (s *IdentityService) ProcessInvitationEmail(ctx context.Context) (bool, error) {
-	return s.invitationEmailWorker().ProcessInvitationEmail(ctx)
-}
-func (s *IdentityService) RunInvitationEmailWorker(ctx context.Context) {
-	s.invitationEmailWorker().RunInvitationEmailWorker(ctx)
-}

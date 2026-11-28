@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 type fixedVerifier struct{ user domain.User }
@@ -24,62 +22,14 @@ type fixedVerifier struct{ user domain.User }
 func (v fixedVerifier) Verify(context.Context, string) (domain.User, error) { return v.user, nil }
 
 type fakeContextBackend struct {
-	repos     []domain.Repo
-	snapshots map[domain.ContentHash][]domain.Snapshot
-	memories  map[domain.ContentHash]domain.MemoryDigest
-}
-
-func (f fakeContextBackend) QueryContext(_ context.Context, repo domain.ContentHash, in domain.ContextSelection) (domain.ContextQueryView, error) {
-	return domain.SelectContext(domain.RepositoryView{Snapshots: f.snapshots[repo]}, in, "main")
+	repos []domain.Repo
 }
 
 func (f fakeContextBackend) ListRepos(context.Context, string) ([]domain.Repo, error) {
 	return f.repos, nil
 }
-func (f fakeContextBackend) List(_ context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error) {
-	return f.snapshots[in.RepoID], nil
-}
-func (fakeContextBackend) Search(context.Context, inbound.SearchInput) (inbound.SearchOutput, error) {
-	return inbound.SearchOutput{}, nil
-}
-func (f fakeContextBackend) GetSnapshot(_ context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
-	for _, snapshot := range f.snapshots[repoID] {
-		if snapshot.ID == id {
-			return snapshot, nil
-		}
-	}
-	return domain.Snapshot{}, domain.ErrNotFound
-}
 func (fakeContextBackend) GetDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.SessionDoc, error) {
 	return domain.SessionDoc{}, domain.ErrNotFound
-}
-func (f fakeContextBackend) GetMemoryObject(_ context.Context, _ domain.ContentHash, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	if memory, ok := f.memories[hash]; ok {
-		return memory, nil
-	}
-	return domain.MemoryDigest{}, domain.ErrNotFound
-}
-
-func (f fakeContextBackend) GetMemoryDigest(ctx context.Context, repo, snapshot domain.ContentHash) (domain.MemoryDigest, error) {
-	selected, err := f.GetSnapshot(ctx, repo, snapshot)
-	if err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	return f.GetMemoryObject(ctx, repo, selected.MemoryHash)
-}
-
-func (fakeContextBackend) WithMemoryReadResources(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
-	if authorize := inbound.DocumentReadAuthorizer(ctx); authorize != nil {
-		var err error
-		ctx, err = authorize(ctx, repo)
-		if err != nil {
-			return err
-		}
-	}
-	return read(ctx)
-}
-func (fakeContextBackend) ListRefs(context.Context, domain.ContentHash) ([]domain.Ref, error) {
-	return nil, nil
 }
 
 func mcpRequest(t *testing.T, handler http.Handler, method, target string, body io.Reader, headers map[string]string) *httptest.ResponseRecorder {
@@ -524,8 +474,14 @@ func webSessionCookie(token string) string { return sessionCookieName + "=" + to
 
 func TestRemoteMCPToolsAreReadOnly(t *testing.T) {
 	tools := toolDefinitions()
-	if len(tools) != 11 {
-		t.Fatalf("tool count = %d, want 11 read-only tools", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("tool count = %d, want 6 read-only tools", len(tools))
+	}
+	// The list of repositories and the five session tools, and nothing that read captures.
+	for position, name := range []string{"repository_list", "session_list", "session_read", "session_commit", "session_summaries", "session_search"} {
+		if tools[position]["name"] != name {
+			t.Fatalf("tool %d = %v, want %s", position, tools[position]["name"], name)
+		}
 	}
 	for _, tool := range tools {
 		annotations := tool["annotations"].(map[string]any)
@@ -564,71 +520,6 @@ func TestRequestGateAndProtocolSpecificRateLimitResponses(t *testing.T) {
 	assertLimited(t, s.oauthRateLimit(newRequestGate(1, time.Minute), next), `"temporarily_unavailable"`)
 	assertLimited(t, s.apiRateLimit(newRequestGate(1, time.Minute), next), `"rate_limited"`)
 	assertLimited(t, s.mcpRateLimit(newRequestGate(1, time.Minute), next), `"code":-32002`)
-}
-
-func TestRemoteMemoryOutputIsBounded(t *testing.T) {
-	repoID := domain.HashContent([]byte("bounded-memory-repo"))
-	snapshotID := domain.HashContent([]byte("bounded-memory-snapshot"))
-	memoryHash := domain.HashContent([]byte("bounded-memory-object"))
-	facts := make([]string, 45)
-	for i := range facts {
-		facts[i] = fmt.Sprintf("project fact %02d", i)
-	}
-	memoryHash, _ = domain.MemoryDigestHash(domain.MemoryDigest{SnapshotID: snapshotID, Summary: "bounded", KeyFacts: facts})
-	backend := fakeContextBackend{
-		snapshots: map[domain.ContentHash][]domain.Snapshot{
-			repoID: {{ID: snapshotID, RepoID: repoID, DocHash: snapshotID, MemoryHash: memoryHash}},
-		},
-		memories: map[domain.ContentHash]domain.MemoryDigest{
-			memoryHash: {SnapshotID: snapshotID, Summary: "bounded", KeyFacts: facts},
-		},
-	}
-	s := &Server{context: backend, memorySnapshots: backend}
-	got, err := s.toolMemoryLoad(systemTestContext(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(got, facts[40]) || !strings.Contains(got, "5 additional facts omitted") {
-		t.Fatalf("memory output was not bounded:\n%s", got)
-	}
-}
-
-func TestRemoteRepositoryListOutputIsBoundedAndFilterable(t *testing.T) {
-	repositories := make([]listedRepository, 105)
-	for i := range repositories {
-		repositories[i] = listedRepository{Path: fmt.Sprintf("acme/repository-%03d", i), Repo: domain.Repo{
-			ID:            domain.HashContent([]byte(fmt.Sprintf("repository-%03d", i))),
-			RemoteURL:     fmt.Sprintf("https://cxthub.test/acme/platform/repository-%03d", i),
-			DefaultBranch: "main",
-		}}
-	}
-	got, err := formatRepositoryList(repositories, "", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := strings.Count(got, "\n-"); rows != 50 || !strings.Contains(got, "55 additional repositories omitted") {
-		t.Fatalf("bounded repository list rows=%d:\n%s", rows, got)
-	}
-	filtered, err := formatRepositoryList(repositories, "repository-104", 100)
-	if err != nil || !strings.Contains(filtered, "repository-104") || strings.Contains(filtered, "repository-103") {
-		t.Fatalf("filtered repository list = %q, err=%v", filtered, err)
-	}
-	if _, err := formatRepositoryList(repositories, strings.Repeat("q", 129), 10); err == nil {
-		t.Fatal("oversized repository query was accepted")
-	}
-}
-
-// Exercise the same application projection used by the production composition root.
-type fakeProjectionSource struct{ fakeContextBackend }
-
-func (f fakeProjectionSource) ListSnapshots(ctx context.Context, repo domain.ContentHash, _ string) ([]domain.Snapshot, error) {
-	return f.snapshots[repo], nil
-}
-func (f fakeProjectionSource) GetMemory(ctx context.Context, repo, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	return f.GetMemoryObject(ctx, repo, hash)
-}
-func (f fakeContextBackend) GetMemoryProjection(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryProjection, error) {
-	return app.ProjectMemory(ctx, fakeProjectionSource{f}, repo, id)
 }
 
 func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {

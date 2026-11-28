@@ -1,5 +1,7 @@
-import type { CIREvent, DocViewEvent, DocViewMode } from '../types';
+import { useMemo, useState } from 'react';
+import type { CIREvent, DocViewEvent } from '../types';
 import { useT } from '../i18n';
+import { conversationAnswers, conversationTurns, type ConversationAnswer, type ConversationMode, type ConversationTurn } from '../conversationView';
 import { Markdown } from './Markdown';
 import { useDocEvent, useDocEventFragment } from '../hooks';
 import { ApiError } from '../api';
@@ -9,34 +11,94 @@ import { documentEventIsSummary, documentSeedPrefixes } from '../documentEventCl
 
 type DisplayEvent = DocViewEvent & { seed_summary?: boolean; empty_reasoning?: boolean };
 
-export type ViewMode = DocViewMode;
+type RowsProps = { inherited: number; repoId: string; hash: string };
 
-export function EventStream({ events, inherited = 0, repoId = '', hash = '' }: {
-  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string;
+/**
+ * The events of a conversation, as the mode shows them. `continues` says that
+ * the events do not start at the beginning of the conversation, so those
+ * before their first prompt are the rest of a turn begun above.
+ */
+export function EventStream({ events, inherited = 0, repoId = '', hash = '', mode = 'all', continues = false }: {
+  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string; mode?: ConversationMode; continues?: boolean;
 }) {
-  return events.map(event => <DocumentEventRow key={event.event_index} event={event} index={event.event_index!}
-    inherited={inherited} repoId={repoId} hash={hash} />);
+  const props = { inherited, repoId, hash };
+  if (mode === 'all') return <EventRows events={events} {...props} />;
+  return conversationTurns(events).map(turn => (
+    <ConversationTurnView key={(turn.prompt ?? turn.rest[0]).event_index} turn={turn} mode={mode} continues={continues} {...props} />
+  ));
+}
+
+function EventRows({ events, ...props }: RowsProps & { events: DisplayEvent[] }) {
+  return events.map(event => <DocumentEventRow key={event.event_index} event={event} index={event.event_index!} {...props} />);
+}
+
+/** A button that opens and closes what it names; the arrow is drawn, not read. */
+function FoldButton({ open, toggle, children }: { open: boolean; toggle: () => void; children: string }) {
+  return (
+    <button type="button" className="turn-lead" aria-expanded={open} onClick={toggle}>
+      <span aria-hidden="true">{open ? '▾' : '▸'} </span>{children}
+    </button>
+  );
+}
+
+// A prompt and what followed it. With only the prompts shown, the button under
+// a prompt opens its turn; with the conversation shown, each answer opens the
+// work before it.
+function ConversationTurnView({ turn, mode, continues, ...props }: RowsProps & {
+  turn: ConversationTurn<DisplayEvent>; mode: Exclude<ConversationMode, 'all'>; continues: boolean;
+}) {
+  const translate = useT();
+  const [open, setOpen] = useState(false);
+  const answers = useMemo(() => (mode === 'chat' ? conversationAnswers(turn.rest) : []), [mode, turn.rest]);
+  const toggle = () => setOpen(value => !value);
+  const count = turn.rest.length;
+  return (
+    <div className={`turn${open ? ' open' : ''}`}>
+      {turn.prompt && <EventRows events={[turn.prompt]} {...props} />}
+      {mode === 'prompts' && count > 0 && (
+        <FoldButton open={open} toggle={toggle}>
+          {translate(turn.prompt ? 'anchored.turnEvents' : continues ? 'anchored.continuedEvents' : 'anchored.leadingEvents', { count })}
+        </FoldButton>
+      )}
+      {mode === 'prompts' && open && <EventRows events={turn.rest} {...props} />}
+      {mode === 'chat' && answers.map(answer => (
+        <ConversationAnswerView key={(answer.work[0] ?? answer.answer!).event_index} answer={answer} {...props} />
+      ))}
+    </div>
+  );
+}
+
+// An answer, with the work that led to it folded above it.
+function ConversationAnswerView({ answer, ...props }: RowsProps & { answer: ConversationAnswer<DisplayEvent> }) {
+  const translate = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="turn-answer">
+      {answer.work.length > 0 && (
+        <FoldButton open={open} toggle={() => setOpen(value => !value)}>
+          {translate('anchored.answerWork', { count: answer.work.length })}
+        </FoldButton>
+      )}
+      {open && <div className="asst-work"><EventRows events={answer.work} {...props} /></div>}
+      {answer.answer && <EventRows events={[answer.answer]} {...props} />}
+    </div>
+  );
 }
 
 type DeferredEventProps = { event: DisplayEvent; repoId: string; hash: string; index: number };
 
-export function DocumentEventRow({ event, index, inherited, repoId, hash, revealed = false, targeted = false, navigationTarget = targeted }: {
-  event: DisplayEvent; index: number; inherited: number; repoId: string; hash: string; revealed?: boolean; targeted?: boolean; navigationTarget?: boolean;
-}) {
+function DocumentEventRow({ event, index, inherited, repoId, hash }: RowsProps & { event: DisplayEvent; index: number }) {
   if (event.empty_reasoning) return null;
-  return <DocumentEventIdentity index={index} targeted={targeted}><div data-event-index={index} data-document-target={navigationTarget ? index : undefined} className={index < inherited ? 'doc-inherited' : undefined}>
+  return <DocumentEventIdentity index={index}><div data-event-index={index} className={index < inherited ? 'doc-inherited' : undefined}>
     {event.deferred && event.kind !== 'compaction'
-      ? <DeferredEventRow event={event} index={index} repoId={repoId} hash={hash} revealed={revealed} />
+      ? <DeferredEventRow event={event} index={index} repoId={repoId} hash={hash} />
       : <EventRow ev={event} />}
   </div></DocumentEventIdentity>;
 }
 
-function DeferredEventRow({ event, repoId, hash, index, revealed }: DeferredEventProps & { revealed: boolean }) {
+function DeferredEventRow({ event, repoId, hash, index }: DeferredEventProps) {
   const translate = useT();
   const [expanded, setExpanded] = useDocumentDisclosureState('deferred');
-  if (revealed && event.kind === 'message' && !event.compact_summary) {
-    return <DeferredEventContent event={event} repoId={repoId} hash={hash} index={index} />;
-  }
   const label = event.seed_summary ? translate('context.cxtSeedSummary') : event.compact_summary ? translate('context.compactSummary')
     : event.provider_tool_name || event.tool_name || event.role || event.kind;
   return <div className={`msg ${event.role ?? 'tool'}`}>

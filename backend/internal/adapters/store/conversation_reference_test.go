@@ -32,7 +32,8 @@ func TestStoredConversationReferenceReusableLoader(test *testing.T) {
 			return buffer, nil
 		})
 		clear(buffer)
-		if err != nil || calls != len(fixture.manifest.Chunks) || !proof.Matches(domain.Snapshot{ID: fixture.hash, DocHash: fixture.hash, DocIdentity: domain.DocumentIdentityRootV1}) {
+		if err != nil || calls != len(fixture.manifest.Chunks) || !proof.Valid() ||
+			proof.DocumentRef() != (domain.DocumentRef{Hash: fixture.hash, Identity: domain.DocumentIdentityRootV1}) {
 			test.Fatal("stored reference", compressed, calls, proof, err)
 		}
 	}

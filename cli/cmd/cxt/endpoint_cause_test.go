@@ -7,13 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"testing/synctest"
-	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type endpointCauseTransport func(*http.Request) (*http.Response, error)
@@ -46,16 +43,6 @@ func endpointCauseClient(t *testing.T, connectionFailures int, failure func(*htt
 func overloaded(request *http.Request) (*http.Response, error) {
 	body := `{"error":{"code":"resource_overloaded","message":"resource capacity unavailable; retry later"}}`
 	return &http.Response{StatusCode: 503, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-}
-
-func TestEndpointVerificationRetriesTransientUnderUploadPolicy(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		client, binding, calls := endpointCauseClient(t, 2, overloaded)
-		ctx := outbound.WithUploadPolicy(context.Background(), outbound.UploadPolicy{StallBudget: time.Minute})
-		if _, err := verifyEndpointRepository(ctx, client, binding); err != nil || *calls != 3 {
-			t.Fatalf("transient verification failure burned the attempt: err=%v calls=%d", err, *calls)
-		}
-	})
 }
 
 func TestEndpointVerificationKeepsClassifiedCause(t *testing.T) {

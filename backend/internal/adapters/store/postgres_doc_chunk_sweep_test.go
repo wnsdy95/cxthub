@@ -120,6 +120,28 @@ func (fixture *chunkSweepFixture) stored(t *testing.T, hash domain.ContentHash) 
 	return present
 }
 
+// readsBack reads the stored document through the repository's own chunks and
+// compares it, byte for byte in canonical form, with the document it was
+// stored from. It also runs the stored-document verifier.
+func (fixture *chunkSweepFixture) readsBack(repo domain.ContentHash, want domain.VerifiedSessionDoc) error {
+	got, err := fixture.store.GetDoc(fixture.ctx, repo, want.Hash())
+	if err != nil {
+		return err
+	}
+	if err := domain.ValidateSessionDocHash(got); err != nil {
+		return err
+	}
+	canonical, err := domain.CanonicalBytes(got.CIR)
+	if err != nil {
+		return err
+	}
+	if got.Hash != want.Hash() || !bytes.Equal(canonical, want.Bytes()) {
+		return fmt.Errorf("stored document %s differs from the one that was stored", want.Hash())
+	}
+	_, err = fixture.store.VerifyStoredDoc(fixture.ctx, repo, want.Hash())
+	return err
+}
+
 func (fixture *chunkSweepFixture) usage(t *testing.T) domain.StorageUsage {
 	t.Helper()
 	usage, err := fixture.store.ReadStorageUsage(fixture.ctx, fixture.namespace, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Minute))
@@ -197,8 +219,7 @@ func TestPGDocChunkSweepRemovesSupersededTailAndKeepsGrownDocument(t *testing.T)
 	}
 
 	// The grown document still reads back and verifies from its stored chunks.
-	read, err := st.ReadVerifiedDoc(ctx, repo, grown.Hash())
-	if err != nil || read.Hash() != grown.Hash() || !bytes.Equal(read.Bytes(), grown.Bytes()) {
+	if err := fixture.readsBack(repo, grown); err != nil {
 		t.Fatal("grown document no longer reads back", err)
 	}
 	if _, err := st.VerifyStoredDoc(ctx, repo, grown.Hash()); err != nil {
@@ -243,7 +264,7 @@ func TestPGDocChunkSweepRemovesSupersededTailAndKeepsGrownDocument(t *testing.T)
 	if _, err := st.PutVerifiedDoc(ctx, repo, first); err != nil {
 		t.Fatal(err)
 	}
-	if again, err := st.ReadVerifiedDoc(ctx, repo, first.Hash()); err != nil || !bytes.Equal(again.Bytes(), first.Bytes()) {
+	if err := fixture.readsBack(repo, first); err != nil {
 		t.Fatal("first capture could not be stored again after its tail was cleaned up", err)
 	}
 	if result := fixture.sweep(t, repo); result.Orphans != 0 {
@@ -321,7 +342,7 @@ func TestPGDocChunkSweepKeepsUploadsInProgress(t *testing.T) {
 	if err := st.CompleteDocJob(ctx, claimed, pending, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if read, err := st.ReadVerifiedDoc(ctx, repo, pending.Hash()); err != nil || !bytes.Equal(read.Bytes(), pending.Bytes()) {
+	if err := fixture.readsBack(repo, pending); err != nil {
 		t.Fatal("document finalized after the cleanup does not read back", err)
 	}
 	if result := fixture.sweep(t, repo); result.Orphans != 0 {
@@ -465,7 +486,7 @@ func TestPGDocChunkSweepRechecksReferencesUnderItsLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	kept("named by a new manifest", publishedPlan, stale)
-	if read, err := st.ReadVerifiedDoc(ctx, repo, published.Hash()); err != nil || !bytes.Equal(read.Bytes(), published.Bytes()) {
+	if err := fixture.readsBack(repo, published); err != nil {
 		t.Fatal("document published during the sweep does not read back", err)
 	}
 
@@ -548,7 +569,7 @@ func TestPGDocChunkSweepWriterWaitsThenStoresChunksAgain(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("writer still blocked after the cleanup committed")
 	}
-	if read, err := st.ReadVerifiedDoc(ctx, repo, doc.Hash()); err != nil || !bytes.Equal(read.Bytes(), doc.Bytes()) {
+	if err := fixture.readsBack(repo, doc); err != nil {
 		t.Fatal("document stored across the cleanup is incomplete", err)
 	}
 	if result := fixture.sweep(t, repo); result.Orphans != 0 {
@@ -948,7 +969,7 @@ func TestPGDocChunkSweepKeepsBodiesAnotherRepositoryOwns(t *testing.T) {
 	if owned := fixture.owned(t, other, plan.Order); len(owned) != len(plan.Bodies) {
 		t.Fatal("cleanup of one repository removed another repository's chunks")
 	}
-	if read, err := st.ReadVerifiedDoc(ctx, other, doc.Hash()); err != nil || !bytes.Equal(read.Bytes(), doc.Bytes()) {
+	if err := fixture.readsBack(other, doc); err != nil {
 		t.Fatal("other repository's document no longer reads back", err)
 	}
 	// The other repository's sweep sees its own manifest and removes nothing.

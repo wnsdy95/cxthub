@@ -4,13 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app/documentquery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -44,6 +40,10 @@ type eventPrefixLocalScope struct {
 	calls         []eventPrefixCall
 	before        func(context.Context, eventPrefixCall) error
 	afterError    error
+	// authorized counts how often a read asked whether its caller may read;
+	// refusal, when set, is the answer it gets.
+	authorized int
+	refusal    error
 }
 
 func (scope *eventPrefixLocalScope) record(ctx context.Context, stage string, repo, hash domain.ContentHash) error {
@@ -74,10 +74,10 @@ func (scope *eventPrefixLocalScope) port(ctx context.Context, stage string, repo
 }
 
 func (scope *eventPrefixLocalScope) AuthorizeDocumentRead(ctx context.Context, _ domain.ContentHash) (context.Context, error) {
-	return ctx, ctx.Err()
-}
-
-func (scope *eventPrefixLocalScope) AuthorizeDocumentPreparation(ctx context.Context, _ domain.ContentHash) (context.Context, error) {
+	scope.authorized++
+	if scope.refusal != nil {
+		return ctx, scope.refusal
+	}
 	return ctx, ctx.Err()
 }
 
@@ -96,10 +96,20 @@ func (scope *eventPrefixLocalScope) WithinDocumentRead(ctx context.Context, repo
 	return scope.afterError
 }
 
+// WithinDocumentSnapshot is entered inside a document read, or on its own by
+// the paged reads, which are admitted before they come here. On its own it is
+// the read scope of the document ports, as in the server's scope.
 func (scope *eventPrefixLocalScope) WithinDocumentSnapshot(ctx context.Context, repo domain.ContentHash, read func(context.Context) error) error {
-	scope.requireBound(ctx, repo)
+	if scope.active {
+		scope.requireBound(ctx, repo)
+	}
 	if err := scope.record(ctx, "snapshot", repo, ""); err != nil {
 		return err
+	}
+	if !scope.active {
+		scope.repo, scope.active = repo, true
+		defer func() { scope.active = false }()
+		ctx = context.WithValue(ctx, eventPrefixScopeKey{}, scope)
 	}
 	scope.snapshotDepth++
 	defer func() { scope.snapshotDepth-- }()
@@ -163,17 +173,6 @@ type eventPrefixSnapshots struct {
 	scope     *eventPrefixLocalScope
 	repo      domain.ContentHash
 	snapshots map[domain.ContentHash]domain.Snapshot
-}
-
-func (snapshots *eventPrefixSnapshots) GetSnapshot(ctx context.Context, repo, hash domain.ContentHash) (domain.Snapshot, error) {
-	if err := snapshots.scope.port(ctx, "metadata", repo, hash); err != nil {
-		return domain.Snapshot{}, err
-	}
-	snapshot, exists := snapshots.snapshots[hash]
-	if repo != snapshots.repo || !exists {
-		return domain.Snapshot{}, domain.ErrNotFound
-	}
-	return snapshot, nil
 }
 
 type eventPrefixDocument struct {
@@ -247,21 +246,12 @@ func (fixture *eventPrefixFixture) addDocument(eventJSON []string) eventPrefixDo
 func (fixture *eventPrefixFixture) queries(atomicRead bool) *documentquery.Queries {
 	fixture.test.Helper()
 	queries, err := documentquery.New(documentquery.Config{Profile: documentquery.LegacyCompatibility,
-		Scope: fixture.scope, Snapshots: fixture.snapshots, Legacy: fixture.legacy,
-		Index: nil, Verified: nil, RootEvents: nil, AtomicRead: atomicRead})
+		Scope: fixture.scope, Legacy: fixture.legacy,
+		Index: nil, AtomicRead: atomicRead})
 	if err != nil {
 		fixture.test.Fatal(err)
 	}
 	return queries
-}
-
-func (document eventPrefixDocument) page(offset, next, inherited int, positions ...int) domain.DocEventPage {
-	events := make([]domain.CIREvent, 0, len(positions))
-	for _, position := range positions {
-		events = append(events, document.events[position])
-	}
-	return domain.DocEventPage{Hash: document.document.Hash, Envelope: document.document.CIR.Envelope,
-		Events: events, Total: len(document.events), Offset: offset, Next: next, Inherited: inherited}
 }
 
 func (document eventPrefixDocument) entry(position int, text string) domain.DocEventIndex {
@@ -272,185 +262,6 @@ func (document eventPrefixDocument) entry(position int, text string) domain.DocE
 	event := document.events[position]
 	return domain.DocEventIndex{Index: position, Offset: offset, Length: len(document.json[position]),
 		Hash: domain.HashContent([]byte(document.json[position])), Seq: event.Seq, Role: string(event.Role), Text: text}
-}
-
-type eventPrefixAPI struct {
-	name string
-	zero any
-	read func(context.Context, *documentquery.Queries, domain.ContentHash, domain.ContentHash) (any, error)
-}
-
-func eventPrefixAPIs() []eventPrefixAPI {
-	return []eventPrefixAPI{
-		{name: "events", zero: domain.DocEventPage{}, read: func(ctx context.Context, queries *documentquery.Queries, repo, hash domain.ContentHash) (any, error) {
-			result, err := queries.ReadDocEvents(ctx, repo, hash, "", 0, 2)
-			return result, err
-		}},
-		{name: "fragments", zero: domain.DocFragmentPage{}, read: func(ctx context.Context, queries *documentquery.Queries, repo, hash domain.ContentHash) (any, error) {
-			result, err := queries.ReadDocFragments(ctx, repo, hash, 0, 0, 2, 1024)
-			return result, err
-		}},
-		{name: "search", zero: []domain.DocEventIndex(nil), read: func(ctx context.Context, queries *documentquery.Queries, repo, hash domain.ContentHash) (any, error) {
-			result, err := queries.SearchDocEvents(ctx, repo, hash, " \tNeEdLe\n ", -1, 2)
-			return result, err
-		}},
-	}
-}
-
-func (fixture *eventPrefixFixture) golden(api string) any {
-	switch api {
-	case "events":
-		return fixture.document.page(0, 2, 0, 0, 1)
-	case "fragments":
-		return domain.DocFragmentPage{Total: len(fixture.document.events), NextIndex: 2,
-			Fragments: []domain.DocEventFragment{{Index: 0, Complete: true, JSON: fixture.document.json[0]}, {Index: 1, Complete: true, JSON: fixture.document.json[1]}}}
-	case "search":
-		return []domain.DocEventIndex{fixture.document.entry(0, "\uc55e\ub9d0 NEEDLE"), fixture.document.entry(1, "\ub450\ubc88\uc9f8 🌿 needle")}
-	default:
-		fixture.test.Fatalf("unknown event API %q", api)
-		return nil
-	}
-}
-
-func TestEventPrefixLegacyGoldenAPIsAndScopes(test *testing.T) {
-	for _, chunked := range []bool{false, true} {
-		for _, api := range eventPrefixAPIs() {
-			test.Run(fmt.Sprintf("%s/chunked=%t", api.name, chunked), func(test *testing.T) {
-				fixture := eventPrefix(test)
-				fixture.legacy.chunked = chunked
-				original := append([]domain.CIREvent{}, fixture.document.document.CIR.Events...)
-				result, err := api.read(context.Background(), fixture.queries(true), fixture.repo, fixture.document.document.Hash)
-				if err != nil || !reflect.DeepEqual(result, fixture.golden(api.name)) {
-					test.Fatalf("legacy golden output changed: got=%+v err=%v", result, err)
-				}
-				stages := []string{"read", "snapshot", "metadata", "doc"}
-				if api.name != "search" {
-					stages = append(stages, "manifest")
-					if chunked {
-						stages = append(stages, "chunk")
-					} else {
-						stages = append(stages, "doc")
-					}
-				}
-				if !reflect.DeepEqual(fixture.scope.stages(), stages) || fixture.scope.active || fixture.scope.snapshotDepth != 0 {
-					test.Fatalf("read/snapshot boundary changed: %+v", fixture.scope.calls)
-				}
-				for _, call := range fixture.scope.calls {
-					if call.repo != fixture.repo || call.stage != "chunk" && call.hash != "" && call.hash != fixture.document.document.Hash {
-						test.Fatalf("query changed the exact repository/hash selection: %+v", call)
-					}
-				}
-				stored := fixture.legacy.documents[fixture.document.document.Hash]
-				canonical, err := domain.CanonicalBytes(stored.CIR)
-				if err != nil || !bytes.Equal(canonical, fixture.document.canonical) || !reflect.DeepEqual(stored.CIR.Events, original) {
-					test.Fatal("query mutated the original archive, canonical hash, or sequence input")
-				}
-			})
-		}
-	}
-}
-
-func TestEventPrefixEmptyArchiveIsSuccessfulAndDoesNotReadPayload(test *testing.T) {
-	for _, atomicRead := range []bool{false, true} {
-		for _, api := range eventPrefixAPIs() {
-			test.Run(fmt.Sprintf("%s/atomic=%t", api.name, atomicRead), func(test *testing.T) {
-				fixture := eventPrefixWithJSON(test, nil)
-				fixture.legacy.chunked = true
-				result, err := api.read(context.Background(), fixture.queries(atomicRead), fixture.repo, fixture.document.document.Hash)
-				var want any
-				switch api.name {
-				case "events":
-					want = fixture.document.page(0, -1, 0)
-				case "fragments":
-					want = domain.DocFragmentPage{Fragments: []domain.DocEventFragment{}}
-				case "search":
-					want = []domain.DocEventIndex{}
-				}
-				if err != nil || !reflect.DeepEqual(result, want) || reflect.DeepEqual(result, api.zero) ||
-					!reflect.DeepEqual(fixture.scope.stages(), []string{"read", "snapshot", "metadata", "doc"}) {
-					test.Fatalf("empty success became an atomic failure or unnecessary payload read: result=%+v err=%v", result, err)
-				}
-			})
-		}
-	}
-}
-
-func TestEventPrefixMissingManifestFallsBackOnlyToExactVerifiedLegacyDoc(test *testing.T) {
-	for _, api := range eventPrefixAPIs()[:2] {
-		test.Run(api.name, func(test *testing.T) {
-			fixture := eventPrefix(test)
-			fixture.scope.before = func(_ context.Context, call eventPrefixCall) error {
-				if call.stage == "manifest" {
-					return domain.ErrNotFound
-				}
-				return nil
-			}
-			result, err := api.read(context.Background(), fixture.queries(true), fixture.repo, fixture.document.document.Hash)
-			if err != nil || !reflect.DeepEqual(result, fixture.golden(api.name)) ||
-				!reflect.DeepEqual(fixture.scope.stages(), []string{"read", "snapshot", "metadata", "doc", "manifest", "doc"}) {
-				test.Fatalf("missing-manifest legacy fallback changed its selected source or scope: %v", err)
-			}
-		})
-	}
-}
-
-func TestEventPrefixEventSelectionUsesOnlyExactInheritedPrefix(test *testing.T) {
-	fixture := eventPrefix(test)
-	fixture.legacy.chunked = true
-	prefix := fixture.addDocument(eventPrefixGoldenJSON[:2])
-	sparse := fixture.addDocument([]string{eventPrefixGoldenJSON[0], eventPrefixGoldenJSON[2]})
-	diverged := fixture.addDocument([]string{eventPrefixGoldenJSON[0], eventPrefixMessageJSON(test, 20, "changed"), eventPrefixGoldenJSON[2]})
-	longer := fixture.addDocument(append(append([]string{}, eventPrefixGoldenJSON...), eventPrefixMessageJSON(test, 80, "extra")))
-	cases := []struct {
-		name      string
-		base      domain.ContentHash
-		offset    int
-		limit     int
-		positions []int
-		next      int
-		inherited int
-		selected  int
-	}{
-		{name: "default limit", limit: 0, positions: []int{0, 1, 2, 3, 4, 5, 6}, next: -1},
-		{name: "selected window", offset: 2, limit: 2, positions: []int{2, 3}, next: 4, selected: 2},
-		{name: "without base", offset: -1, limit: 100, positions: []int{0, 1, 2, 3, 4, 5, 6}, next: -1},
-		{name: "exact eof", offset: 7, limit: 100, next: -1, selected: 7},
-		{name: "inherited", base: prefix.document.Hash, offset: -1, limit: 100, positions: []int{2, 3, 4, 5, 6}, next: -1, inherited: 2, selected: 2},
-		{name: "explicit offset wins", base: prefix.document.Hash, limit: 1, positions: []int{0}, next: 1, inherited: 2},
-		{name: "not a subsequence", base: sparse.document.Hash, offset: -1, limit: 100, positions: []int{1, 2, 3, 4, 5, 6}, next: -1, inherited: 1, selected: 1},
-		{name: "same sequence changed hash", base: diverged.document.Hash, offset: -1, limit: 100, positions: []int{1, 2, 3, 4, 5, 6}, next: -1, inherited: 1, selected: 1},
-		{name: "same document", base: fixture.document.document.Hash, offset: -1, limit: 100, next: -1, inherited: 7, selected: 7},
-		{name: "base longer than target", base: longer.document.Hash, offset: -1, limit: 100, next: -1, inherited: 7, selected: 7},
-	}
-	for _, scenario := range cases {
-		test.Run(scenario.name, func(test *testing.T) {
-			fixture.scope.calls = nil
-			page, err := fixture.queries(true).ReadDocEvents(context.Background(), fixture.repo, fixture.document.document.Hash, scenario.base, scenario.offset, scenario.limit)
-			want := fixture.document.page(scenario.selected, scenario.next, scenario.inherited, scenario.positions...)
-			if err != nil || !reflect.DeepEqual(page, want) {
-				test.Fatalf("exact inherited selection changed: got=%+v want=%+v err=%v", page, want, err)
-			}
-			var requested []domain.ContentHash
-			admissions, snapshots := 0, 0
-			for _, call := range fixture.scope.calls {
-				switch call.stage {
-				case "read":
-					admissions++
-				case "snapshot":
-					snapshots++
-				case "doc":
-					requested = append(requested, call.hash)
-				}
-			}
-			wantHashes := []domain.ContentHash{fixture.document.document.Hash}
-			if scenario.base != "" {
-				wantHashes = append([]domain.ContentHash{scenario.base}, wantHashes...)
-			}
-			if admissions != 1 || snapshots != len(wantHashes) || !reflect.DeepEqual(requested, wantHashes) {
-				test.Fatalf("base/target left their single read scope or exact hash ownership: %+v", fixture.scope.calls)
-			}
-		})
-	}
 }
 
 func TestEventPrefixFragmentGoldenUTF8AndCursors(test *testing.T) {
@@ -487,102 +298,6 @@ func TestEventPrefixFragmentGoldenUTF8AndCursors(test *testing.T) {
 	}
 }
 
-func eventPrefixMessageJSON(test *testing.T, sequence int, text string) string {
-	test.Helper()
-	encoded, err := json.Marshal(text)
-	if err != nil {
-		test.Fatal(err)
-	}
-	return `{"blocks":[{"text":` + string(encoded) + `,"type":"text"}],"kind":"message","role":"user","seq":` + strconv.Itoa(sequence) + `}`
-}
-
-func eventPrefixPaddedMessage(test *testing.T, sequence, length int) string {
-	test.Helper()
-	empty := eventPrefixMessageJSON(test, sequence, "")
-	if length < len(empty) {
-		test.Fatal("invalid padded event fixture extent")
-	}
-	return eventPrefixMessageJSON(test, sequence, strings.Repeat("x", length-len(empty)))
-}
-
-func TestEventPrefixChunkBoundariesAndResponseBudgets(test *testing.T) {
-	test.Run("event response cap", func(test *testing.T) {
-		fixture := eventPrefixWithJSON(test, []string{eventPrefixPaddedMessage(test, 10, domain.ChunkTarget-10), eventPrefixMessageJSON(test, 20, "\ub05d 🌿")})
-		fixture.legacy.chunked = true
-		queries := fixture.queries(true)
-		first, err := queries.ReadDocEvents(context.Background(), fixture.repo, fixture.document.document.Hash, "", 0, 100)
-		if err != nil || !reflect.DeepEqual(first, fixture.document.page(0, 1, 0, 0)) {
-			test.Fatalf("event response crossed its 512KiB boundary: %v", err)
-		}
-		fixture.scope.calls = nil
-		second, err := queries.ReadDocEvents(context.Background(), fixture.repo, fixture.document.document.Hash, "", first.Next, 100)
-		if err != nil || !reflect.DeepEqual(second, fixture.document.page(1, -1, 0, 1)) {
-			test.Fatalf("event crossing a physical chunk boundary changed: %v", err)
-		}
-		var chunks []domain.ContentHash
-		for _, call := range fixture.scope.calls {
-			if call.stage == "chunk" {
-				chunks = append(chunks, call.hash)
-			}
-		}
-		if !reflect.DeepEqual(chunks, fixture.document.plan.Manifest.Chunks) || len(chunks) != 2 {
-			test.Fatal("boundary read did not authenticate exactly its two selected chunks")
-		}
-	})
-	test.Run("UTF8 split across physical chunks", func(test *testing.T) {
-		empty := eventPrefixMessageJSON(test, 10, "")
-		textStart := strings.Index(empty, `"text":"`) + len(`"text":"`)
-		encoded := eventPrefixMessageJSON(test, 10, strings.Repeat("x", domain.ChunkTarget-1-textStart)+"🌿tail")
-		fixture := eventPrefixWithJSON(test, []string{encoded})
-		fixture.legacy.chunked = true
-		queries := fixture.queries(true)
-		page, err := queries.ReadDocEvents(context.Background(), fixture.repo, fixture.document.document.Hash, "", 0, 1)
-		if err != nil || !reflect.DeepEqual(page, fixture.document.page(0, -1, 0, 0)) || len(encoded) <= 512<<10 {
-			test.Fatalf("the first oversized event was truncated or rejected: %v", err)
-		}
-		for _, boundary := range []struct {
-			offset int
-			text   string
-			next   int
-		}{{domain.ChunkTarget - 2, "x", domain.ChunkTarget - 1}, {domain.ChunkTarget - 1, "🌿", domain.ChunkTarget + 3}} {
-			fragments, err := queries.ReadDocFragments(context.Background(), fixture.repo, fixture.document.document.Hash, 0, boundary.offset, 1, 4)
-			want := domain.DocFragmentPage{Total: 1, NextOffset: boundary.next, Fragments: []domain.DocEventFragment{{Offset: boundary.offset, JSON: boundary.text}}}
-			if err != nil || !reflect.DeepEqual(fragments, want) {
-				test.Fatalf("physical chunk boundary changed a UTF-8 cursor: %v", err)
-			}
-		}
-		var joined strings.Builder
-		index, offset := 0, 0
-		for step := 0; step < 32 && index == 0; step++ {
-			fixture.scope.calls = nil
-			fragments, err := queries.ReadDocFragments(context.Background(), fixture.repo, fixture.document.document.Hash, index, offset, 50, 64<<10)
-			if err != nil {
-				test.Fatal(err)
-			}
-			bytesRead, chunks := 0, 0
-			for _, fragment := range fragments.Fragments {
-				if fragment.Index != 0 || fragment.Offset != joined.Len() || !utf8.ValidString(fragment.JSON) {
-					test.Fatal("fragment gap, reordered event, or invalid UTF-8")
-				}
-				joined.WriteString(fragment.JSON)
-				bytesRead += len(fragment.JSON)
-			}
-			for _, call := range fixture.scope.calls {
-				if call.stage == "chunk" {
-					chunks++
-				}
-			}
-			if bytesRead == 0 || bytesRead > 64<<10 || chunks > 2 || fragments.Total != 1 || fragments.NextIndex == index && fragments.NextOffset <= offset {
-				test.Fatal("fragment budget, two-load bound, or cursor progress changed")
-			}
-			index, offset = fragments.NextIndex, fragments.NextOffset
-		}
-		if index != 1 || offset != 0 || joined.String() != encoded || domain.HashContent([]byte(joined.String())) != fixture.document.entry(0, "").Hash {
-			test.Fatal("fragment reassembly changed the complete canonical event bytes/hash")
-		}
-	})
-}
-
 func TestEventPrefixSearchGoldenTextAndExclusiveCursor(test *testing.T) {
 	fixture := eventPrefix(test)
 	texts := []string{"\uc55e\ub9d0 NEEDLE", "\ub450\ubc88\uc9f8 🌿 needle", "", "Needle \uc0dd\uac01", "", "\ub9c8\uc9c0\ub9c9 \uc904\nNEEDLE🙂", ""}
@@ -610,263 +325,9 @@ func TestEventPrefixSearchGoldenTextAndExclusiveCursor(test *testing.T) {
 			for _, position := range scenario.positions {
 				want = append(want, fixture.document.entry(position, texts[position]))
 			}
-			if err != nil || !reflect.DeepEqual(hits, want) || !reflect.DeepEqual(fixture.scope.stages(), []string{"read", "snapshot", "metadata", "doc"}) {
+			if err != nil || !reflect.DeepEqual(hits, want) || !reflect.DeepEqual(fixture.scope.stages(), []string{"read", "doc"}) {
 				test.Fatalf("search changed canonical event offsets, hashes, text, or scope: hits=%+v err=%v", hits, err)
 			}
 		})
-	}
-}
-
-func TestEventPrefixPublicValidationBounds(test *testing.T) {
-	fixture := eventPrefix(test)
-	queries := fixture.queries(true)
-	ctx, repo, hash := context.Background(), fixture.repo, fixture.document.document.Hash
-	for _, bounds := range [][2]int{{-2, 1}, {0, -1}, {0, 101}, {8, 1}} {
-		page, err := queries.ReadDocEvents(ctx, repo, hash, "", bounds[0], bounds[1])
-		if !errors.Is(err, domain.ErrValidation) || !reflect.DeepEqual(page, domain.DocEventPage{}) {
-			test.Fatalf("event range %v escaped validation/atomic zero: %v", bounds, err)
-		}
-	}
-	insideRune := strings.Index(fixture.document.json[0], "\uc55e") + 1
-	for _, bounds := range [][4]int{{-1, 0, 1, 4}, {0, -1, 1, 4}, {0, 0, 0, 4}, {0, 0, 51, 4}, {0, 0, 1, 3}, {0, 0, 1, (64 << 10) + 1}, {8, 0, 1, 4}, {7, 1, 1, 4}, {0, len(fixture.document.json[0]), 1, 4}, {0, insideRune, 1, 4}} {
-		page, err := queries.ReadDocFragments(ctx, repo, hash, bounds[0], bounds[1], bounds[2], bounds[3])
-		if !errors.Is(err, domain.ErrValidation) || !reflect.DeepEqual(page, domain.DocFragmentPage{}) {
-			test.Fatalf("fragment range %v escaped validation/atomic zero: %v", bounds, err)
-		}
-	}
-	for _, bounds := range []struct {
-		query string
-		after int
-		limit int
-	}{{"", -1, 1}, {" \uac00 ", -1, 1}, {strings.Repeat("\uac00", 257), -1, 1}, {"needle", -2, 1}, {"needle", -1, 0}, {"needle", -1, 202}} {
-		hits, err := queries.SearchDocEvents(ctx, repo, hash, bounds.query, bounds.after, bounds.limit)
-		if !errors.Is(err, domain.ErrValidation) || hits != nil {
-			test.Fatalf("search bounds escaped validation: after=%d limit=%d err=%v", bounds.after, bounds.limit, err)
-		}
-	}
-}
-
-func TestEventPrefixStageErrorsAndCancellationStopAtTheirBoundary(test *testing.T) {
-	for _, api := range eventPrefixAPIs() {
-		stages := []string{"read", "snapshot", "metadata", "doc"}
-		if api.name != "search" {
-			stages = append(stages, "manifest", "chunk")
-		}
-		for boundary, stage := range stages {
-			for _, canceled := range []bool{false, true} {
-				test.Run(fmt.Sprintf("%s/%s/canceled=%t", api.name, stage, canceled), func(test *testing.T) {
-					fixture := eventPrefix(test)
-					fixture.legacy.chunked = true
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					failure := error(errors.New("event-prefix injected " + stage))
-					if canceled {
-						failure = context.Canceled
-					}
-					fixture.scope.before = func(bound context.Context, call eventPrefixCall) error {
-						if call.stage != stage {
-							return nil
-						}
-						if canceled {
-							cancel()
-							return bound.Err()
-						}
-						return failure
-					}
-					result, err := api.read(ctx, fixture.queries(true), fixture.repo, fixture.document.document.Hash)
-					if !errors.Is(err, failure) || !reflect.DeepEqual(result, api.zero) || !reflect.DeepEqual(fixture.scope.stages(), stages[:boundary+1]) {
-						test.Fatalf("error/cancellation crossed a stage or leaked an atomic result: result=%+v err=%v calls=%+v", result, err, fixture.scope.calls)
-					}
-				})
-			}
-		}
-		for _, atomicRead := range []bool{false, true} {
-			test.Run(fmt.Sprintf("%s/already canceled/atomic=%t", api.name, atomicRead), func(test *testing.T) {
-				fixture := eventPrefix(test)
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				result, err := api.read(ctx, fixture.queries(atomicRead), fixture.repo, fixture.document.document.Hash)
-				if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, api.zero) || !reflect.DeepEqual(fixture.scope.stages(), []string{"read"}) {
-					test.Fatal("canceled admission invoked a document port or manufactured a result")
-				}
-			})
-		}
-	}
-}
-
-func TestEventPrefixAtomicReadDropsResultsOnlyWhenEnabled(test *testing.T) {
-	for _, api := range eventPrefixAPIs() {
-		for _, atomicRead := range []bool{false, true} {
-			test.Run(fmt.Sprintf("%s/atomic=%t", api.name, atomicRead), func(test *testing.T) {
-				fixture := eventPrefix(test)
-				failure := errors.New("event-prefix snapshot completion failed")
-				fixture.scope.afterError = failure
-				result, err := api.read(context.Background(), fixture.queries(atomicRead), fixture.repo, fixture.document.document.Hash)
-				want := fixture.golden(api.name)
-				if atomicRead {
-					want = api.zero
-				}
-				if !errors.Is(err, failure) || !reflect.DeepEqual(result, want) {
-					test.Fatalf("AtomicRead changed its zero-result contract: got=%+v want=%+v err=%v", result, want, err)
-				}
-			})
-		}
-	}
-}
-
-func TestEventPrefixAtomicReadHandlesLateChunkErrorsAndCancellation(test *testing.T) {
-	for _, api := range []string{"events", "fragments"} {
-		for _, atomicRead := range []bool{false, true} {
-			for _, canceled := range []bool{false, true} {
-				test.Run(fmt.Sprintf("%s/atomic=%t/canceled=%t", api, atomicRead, canceled), func(test *testing.T) {
-					fixture := eventPrefixWithJSON(test, []string{eventPrefixPaddedMessage(test, 10, domain.ChunkTarget-200), eventPrefixMessageJSON(test, 20, "first selected"), eventPrefixMessageJSON(test, 30, strings.Repeat("needle", 50))})
-					fixture.legacy.chunked = true
-					if len(fixture.document.plan.Manifest.Chunks) != 2 {
-						test.Fatal("late-error fixture must cross exactly two chunks")
-					}
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					failure := error(errors.New("event-prefix selected second chunk failed"))
-					if canceled {
-						failure = context.Canceled
-					}
-					fixture.scope.before = func(bound context.Context, call eventPrefixCall) error {
-						if call.stage != "chunk" || call.hash != fixture.document.plan.Manifest.Chunks[1] {
-							return nil
-						}
-						if canceled {
-							cancel()
-							return bound.Err()
-						}
-						return failure
-					}
-					queries := fixture.queries(atomicRead)
-					if api == "events" {
-						page, err := queries.ReadDocEvents(ctx, fixture.repo, fixture.document.document.Hash, "", 1, 2)
-						want := fixture.document.page(1, -1, 0, 1)
-						if atomicRead {
-							want = domain.DocEventPage{}
-						}
-						if !errors.Is(err, failure) || !reflect.DeepEqual(page, want) {
-							test.Fatalf("late event failure changed partial/zero output: %v", err)
-						}
-					} else {
-						page, err := queries.ReadDocFragments(ctx, fixture.repo, fixture.document.document.Hash, 1, 0, 2, 1024)
-						want := domain.DocFragmentPage{Total: 3, NextIndex: 1, Fragments: []domain.DocEventFragment{{Index: 1, Complete: true, JSON: fixture.document.json[1]}}}
-						if atomicRead {
-							want = domain.DocFragmentPage{}
-						}
-						if !errors.Is(err, failure) || !reflect.DeepEqual(page, want) {
-							test.Fatalf("late fragment failure changed partial/zero output: %v", err)
-						}
-					}
-				})
-			}
-		}
-	}
-}
-
-func TestEventPrefixCanonicalHashSnapshotAndOwnershipFences(test *testing.T) {
-	for _, api := range eventPrefixAPIs() {
-		for _, damage := range []string{"foreign repository", "unknown exact hash", "snapshot id", "snapshot doc hash", "canonical bytes"} {
-			test.Run(api.name+"/"+damage, func(test *testing.T) {
-				fixture := eventPrefix(test)
-				repo, hash := fixture.repo, fixture.document.document.Hash
-				wantError := domain.ErrIntegrity
-				switch damage {
-				case "foreign repository":
-					repo = domain.HashContent([]byte("event-prefix-foreign-repository"))
-					wantError = domain.ErrNotFound
-				case "unknown exact hash":
-					hash = domain.HashContent([]byte("event-prefix-unowned-document"))
-					wantError = domain.ErrNotFound
-				case "snapshot id", "snapshot doc hash":
-					snapshot := fixture.snapshots.snapshots[hash]
-					other := domain.HashContent([]byte("event-prefix-other-document"))
-					if damage == "snapshot id" {
-						snapshot.ID = other
-					} else {
-						snapshot.DocHash = other
-					}
-					fixture.snapshots.snapshots[hash] = snapshot
-				case "canonical bytes":
-					document := fixture.legacy.documents[hash]
-					document.CIR.Events = append([]domain.CIREvent{}, document.CIR.Events...)
-					for position, event := range document.CIR.Events {
-						if event.Kind == domain.EventMessage {
-							event.Blocks = append([]domain.ContentBlock{}, event.Blocks...)
-							event.Blocks[0].Text += " tampered"
-							document.CIR.Events[position] = event
-							break
-						}
-					}
-					fixture.legacy.documents[hash] = document
-				}
-				result, err := api.read(context.Background(), fixture.queries(true), repo, hash)
-				if !errors.Is(err, wantError) || !reflect.DeepEqual(result, api.zero) {
-					test.Fatalf("canonical/source ownership fence was weakened: result=%+v err=%v", result, err)
-				}
-				for _, call := range fixture.scope.calls {
-					if call.repo != repo || call.hash != "" && call.hash != hash || call.stage == "manifest" || call.stage == "chunk" {
-						test.Fatalf("rejected source selected another hash or read payload: %+v", call)
-					}
-				}
-			})
-		}
-		test.Run(api.name+"/legacy snapshot absent", func(test *testing.T) {
-			fixture := eventPrefix(test)
-			delete(fixture.snapshots.snapshots, fixture.document.document.Hash)
-			result, err := api.read(context.Background(), fixture.queries(true), fixture.repo, fixture.document.document.Hash)
-			if err != nil || !reflect.DeepEqual(result, fixture.golden(api.name)) {
-				test.Fatalf("legacy missing-snapshot compatibility changed: %v", err)
-			}
-		})
-	}
-	test.Run("base ownership checked before target", func(test *testing.T) {
-		fixture := eventPrefix(test)
-		base := domain.HashContent([]byte("event-prefix-unowned-base"))
-		page, err := fixture.queries(true).ReadDocEvents(context.Background(), fixture.repo, fixture.document.document.Hash, base, -1, 100)
-		if !errors.Is(err, domain.ErrNotFound) || !reflect.DeepEqual(page, domain.DocEventPage{}) {
-			test.Fatal("an unowned base was treated as an empty inherited prefix")
-		}
-		for _, call := range fixture.scope.calls {
-			if call.hash != "" && call.hash != base {
-				test.Fatalf("target payload was read after base ownership failed: %+v", call)
-			}
-		}
-	})
-}
-
-func TestEventPrefixSelectedChunksKeepTheirHashAndFormatFences(test *testing.T) {
-	for _, api := range eventPrefixAPIs()[:2] {
-		for _, damage := range []string{"chunk hash", "chunk short", "v1 manifest", "unowned chunk"} {
-			test.Run(api.name+"/"+damage, func(test *testing.T) {
-				fixture := eventPrefix(test)
-				fixture.legacy.chunked = true
-				hash := fixture.document.document.Hash
-				manifest := fixture.legacy.manifests[hash]
-				manifest.Chunks = append([]domain.ContentHash{}, manifest.Chunks...)
-				chunkHash := manifest.Chunks[0]
-				body := bytes.Clone(fixture.legacy.chunks[chunkHash])
-				wantError := domain.ErrIntegrity
-				switch damage {
-				case "chunk hash":
-					body[0] ^= 1
-					fixture.legacy.chunks[chunkHash] = body
-				case "chunk short":
-					fixture.legacy.chunks[chunkHash] = body[:len(body)-1]
-				case "v1 manifest":
-					manifest.Format = domain.ChunkFormatV1
-				case "unowned chunk":
-					manifest.Chunks[0] = domain.HashContent([]byte("event-prefix-unowned-chunk"))
-					wantError = domain.ErrNotFound
-				}
-				fixture.legacy.manifests[hash] = manifest
-				result, err := api.read(context.Background(), fixture.queries(true), fixture.repo, hash)
-				if !errors.Is(err, wantError) || !reflect.DeepEqual(result, api.zero) {
-					test.Fatalf("selected chunk corruption/ownership became a successful read: %v", err)
-				}
-			})
-		}
 	}
 }

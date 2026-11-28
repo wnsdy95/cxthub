@@ -38,6 +38,11 @@ export function GitHubConnectionsPage() {
   </main>
  </div>;
 }
+// A repository is offered by where it is: it can lie in another owner space
+// than the installation it is connected through.
+function repositoryPath(repository?: { slug: string; owner_username?: string }) {
+ return repository && (repository.owner_username ? repository.owner_username + '/' + repository.slug : repository.slug);
+}
 function OwnerConnection({ owner }: { owner: GitHubOwner }) {
  const t = useT(), qc = useQueryClient(), c = owner.connection;
  const [external, setExternal] = useState(''), [local, setLocal] = useState('');
@@ -58,10 +63,10 @@ function OwnerConnection({ owner }: { owner: GitHubOwner }) {
   {(connect.error || edit.error) && <p className="err" role="alert">{(connect.error || edit.error)?.message}</p>}
   {c?.enabled && <>
    <h3>{t('github.repositories')}</h3><p className="hint">{t('github.repositoriesHint')}</p>
-   <ul className="github-binding-list">{c.bindings.map(b => <li key={b.context_repo_id}><span>{c.repositories.find(r => r.id === b.external_id)?.full_name ?? `GitHub #${b.external_id}`} → {owner.repositories.find(r => r.id === b.repository_id)?.slug ?? b.repository_id}</span><button type="button" className="ghost mini" disabled={busy} onClick={() => edit.mutate({ action: 'unbind', binding: b })}>{t('github.unlink')}</button></li>)}</ul>
+   <ul className="github-binding-list">{c.bindings.map(b => <li key={b.context_repo_id}><span>{c.repositories.find(r => r.id === b.external_id)?.full_name ?? `GitHub #${b.external_id}`} → {repositoryPath(owner.repositories.find(r => r.id === b.repository_id)) ?? b.repository_id}</span><button type="button" className="ghost mini" disabled={busy} onClick={() => edit.mutate({ action: 'unbind', binding: b })}>{t('github.unlink')}</button></li>)}</ul>
    {available && <div className="github-controls">
     <label>{t('github.remoteRepository')}<select value={external} onChange={e => setExternal(e.target.value)}><option value="">{t('github.choose')}</option>{c.repositories.filter(r => !c.bindings.some(b => b.external_id === r.id)).map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}</select></label>
-    <label>{t('github.localRepository')}<select value={local} onChange={e => setLocal(e.target.value)}><option value="">{t('github.choose')}</option>{owner.context_repos.filter(r => !c.bindings.some(b => b.context_repo_id === r.id)).map(r => <option key={r.id} value={r.id}>{owner.repositories.find(local => local.id === r.repository_id)?.slug} · {r.git_remote_url}</option>)}</select></label>
+    <label>{t('github.localRepository')}<select value={local} onChange={e => setLocal(e.target.value)}><option value="">{t('github.choose')}</option>{owner.context_repos.filter(r => !c.bindings.some(b => b.context_repo_id === r.id)).map(r => <option key={r.id} value={r.id}>{repositoryPath(owner.repositories.find(local => local.id === r.repository_id))} · {r.git_remote_url}</option>)}</select></label>
     <button type="button" disabled={busy || !external || !repo?.repository_id} onClick={() => repo?.repository_id && edit.mutate({ action: 'bind', binding: { repository_id: repo.repository_id, context_repo_id: repo.id, external_id: Number(external) } })}>{t('github.bind')}</button>
    </div>}
    {owner.namespace.kind === 'organization' && <>

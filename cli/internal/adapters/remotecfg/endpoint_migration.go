@@ -47,25 +47,3 @@ func endpointMigrations(fields map[string]json.RawMessage) (map[string]EndpointM
 	}
 	return receipts, nil
 }
-
-func (observed Observation) PendingEndpointSources(raw, repoID string) ([]EndpointBinding, error) {
-	current, err := observed.ResolveEndpoint(raw)
-	if err != nil {
-		return nil, err
-	}
-	fields, err := observed.fields()
-	if err != nil {
-		return nil, err
-	}
-	receipts, err := endpointMigrations(fields)
-	if err != nil {
-		return nil, err
-	}
-	var sources []EndpointBinding
-	for _, receipt := range receipts {
-		if receipt.To == current && receipt.To.RepoID == repoID {
-			sources = append(sources, receipt.From)
-		}
-	}
-	return sources, nil
-}

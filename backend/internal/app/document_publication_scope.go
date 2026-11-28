@@ -27,18 +27,10 @@ func (service *Service) documentPublications(profile DocumentPublicationProfile)
 		}
 	}
 	identities := service.DocumentIdentitiesSupported()
-	sources := documentPublicationSourcesFromStores(service.meta, service.blobs, service.engine, identities)
 	verified, _ := service.blobs.(outbound.VerifiedDocStore)
-	if sources.stored != nil && !rootAdapterPresent(sources.stored) {
-		return nil, domain.ErrValidation
-	}
-	var sourcePort DocumentPublicationSources = sources
-	if profile == DocumentPublicationComplete && sources.stored == nil {
-		sourcePort = nil
-	}
 	return NewDocumentPublicationCommands(DocumentPublicationCommandsConfig{
 		Profile: profile, Store: service.meta, Chunks: service.blobs,
-		Scope: &documentPublicationScope{work: work}, Sources: sourcePort,
+		Scope:    &documentPublicationScope{work: work},
 		Verified: verified, LegacyWriter: service.blobs, SupportedIdentities: identities,
 	})
 }
@@ -67,11 +59,4 @@ func (scope *documentPublicationScope) WithinChunkStore(ctx context.Context, rep
 	defer release()
 	ctx = context.WithValue(auditOperation(ctx, "context.chunks.stored"), revisionScopeKey{}, "none")
 	return repositoryWriteWithWork(ctx, scope.work, repo, write)
-}
-
-func (scope *documentPublicationScope) GraphChanged(ctx context.Context, repo domain.ContentHash) error {
-	if scope == nil || scope.work == nil {
-		return domain.ErrValidation
-	}
-	return scope.work.revisionWrite(context.WithValue(ctx, revisionScopeKey{}, "graph"), repo)
 }

@@ -18,10 +18,10 @@ const ReactDOMClient = clientModule.default ?? clientModule;
 await import('/src/styles.css');
 const { I18nProvider } = await import('/src/i18n/index.tsx');
 const { DocumentPresentation } = await import('/src/components/DocumentPresentation.tsx');
-const { DocumentEventRow } = await import('/src/components/EventStream.tsx');
+const { EventStream } = await import('/src/components/EventStream.tsx');
 ReactDOMClient.createRoot(document.getElementById('root')).render(React.createElement(I18nProvider, null,
-  React.createElement(DocumentPresentation, null, React.createElement(DocumentEventRow, {
-    event: JSON.parse(${literal}), index: 0, inherited: 0, repoId: 'repo', hash: 'document'
+  React.createElement(DocumentPresentation, null, React.createElement(EventStream, {
+    events: [{ ...JSON.parse(${literal}), event_index: 0 }], repoId: 'repo', hash: 'document'
   }))));
 </script></body></html>` }));
   await page.goto('/__event-display-harness', { waitUntil: 'domcontentloaded' });

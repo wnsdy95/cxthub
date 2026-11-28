@@ -98,10 +98,6 @@ func acquireResources(ctx context.Context, class ResourceClass, wait bool) (cont
 	return gate.acquireWithWait(ctx, class, wait)
 }
 
-func (gate *resourceAdmission) acquire(ctx context.Context, class ResourceClass) (context.Context, func(), error) {
-	return gate.acquireWithWait(ctx, class, true)
-}
-
 func (gate *resourceAdmission) acquireWithWait(ctx context.Context, class ResourceClass, wait bool) (context.Context, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return ctx, nil, err
@@ -279,16 +275,6 @@ func resourceWorkWithWait(ctx context.Context, class ResourceClass, wait bool, w
 	}
 	defer release()
 	return work(bound)
-}
-
-func admittedJob[Job any](ctx context.Context, claim func(context.Context) (Job, error), run func(context.Context, Job) error) error {
-	return admittedWork(ctx, func(bound context.Context) error {
-		job, err := claim(bound)
-		if err != nil {
-			return err
-		}
-		return run(bound, job)
-	})
 }
 
 func admittedWork(ctx context.Context, work func(context.Context) error) error {

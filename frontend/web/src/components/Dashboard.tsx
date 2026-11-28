@@ -4,8 +4,8 @@ import type { Repository } from '../types';
 import { useUiStore } from '../store';
 import {
   repositoryPath,
+  anchoredPath,
   repositoryCreationPath,
-  repoPath,
   invitePath,
   parseRoute,
   findByRoute,
@@ -30,8 +30,7 @@ import { HeaderActions } from './HeaderActions';
 import { AppLink } from './AppLink';
 import { useT } from '../i18n';
 import { Breadcrumb } from './Breadcrumb';
-import { ContextView } from './ContextView';
-import { OnHoldView } from './OnHoldView';
+import { AnchoredView } from './AnchoredView';
 import { RepositorySettings } from './Settings';
 import { RoleCapabilities } from './RoleCapabilities';
 import { LockIcon } from './Breadcrumb';
@@ -106,26 +105,17 @@ export function Dashboard() {
 
   // Tabs are query parameters, independent of repository names.
   const routedTab = resolvedRepositoryTab(route, repos);
-  const tab: 'context' | 'connections' | 'members' | 'onhold' | 'settings' =
-    routedTab === 'members' || routedTab === 'connections' || routedTab === 'onhold' || routedTab === 'settings'
-      ? routedTab
-      : 'context';
-  function goTab(next: 'context' | 'connections' | 'members' | 'onhold' | 'settings') {
+  // The sessions tab is the first one and what an address without a tab shows.
+  const tab: 'connections' | 'members' | 'sessions' | 'settings' = routedTab ?? 'sessions';
+  const anchoredSelection = route?.kind === 'repository' || route?.kind === 'repositoryId' ? route.anchored : undefined;
+  function goTab(next: 'connections' | 'members' | 'sessions' | 'settings') {
     if (!selected) return;
     if (next === 'settings' && !atLeast(role, 'owner')) {
       setAccessNotice(t('dashboard.repositoryAccessDenied'));
       return;
     }
     setAccessNotice(null);
-    if (next === 'context') {
-      navigate(activeRepo ? repoPath(selected, activeRepo) : repositoryPath(selected));
-      return;
-    }
-    if (next === 'onhold') {
-      if (activeRepo) navigate(repoPath(selected, activeRepo, 'onhold'));
-      return;
-    }
-    navigate(repositoryPath(selected, next));
+    navigate(next === 'sessions' ? anchoredPath(selected) : repositoryPath(selected, next));
   }
 
   const err = repositoriesQ.error;
@@ -181,11 +171,8 @@ export function Dashboard() {
                   </code>
                 </p>
                 <nav className="tabs" aria-label={t('dashboard.tabsAria')}>
-                  <button className={`tab${tab === 'context' ? ' on' : ''}`} onClick={() => goTab('context')}>
-                    {t('dashboard.context')}
-                  </button>
-                  <button className={`tab${tab === 'onhold' ? ' on' : ''}`} onClick={() => goTab('onhold')}>
-                    On Hold
+                  <button className={`tab${tab === 'sessions' ? ' on' : ''}`} onClick={() => goTab('sessions')}>
+                    {t('dashboard.sessions')}
                   </button>
                   <button className={`tab${tab === 'connections' ? ' on' : ''}`} onClick={() => goTab('connections')}>
                     {t('dashboard.connected')} <span className="count-badge">{repos.length}</span>
@@ -266,39 +253,26 @@ export function Dashboard() {
                   </section>
 
                 </>
-              ) : tab === 'context' ? (
+              ) : tab === 'sessions' ? (
                 <section className="panel">
                   <div className="panel-head">
                     <h4>
-                      {t('dashboard.context')} {activeRepo && <code className="repo-tag">{sanitizeRemoteUrl(activeRepo.remote_url) || short(activeRepo.id)}</code>}
+                      {t('dashboard.sessions')}{' '}
+                      {activeRepo && <code className="repo-tag">{sanitizeRemoteUrl(activeRepo.remote_url) || short(activeRepo.id)}</code>}
                     </h4>
                   </div>
                   {activeRepo ? (
-                    <ContextView key={activeRepo.id} repo={activeRepo} repositoryMetadata={selected} role={role} />
+                    <AnchoredView key={activeRepo.id} repo={activeRepo} member={atLeast(role, 'member')} manage={atLeast(role, 'maintainer')} selection={anchoredSelection} href={(selection) => anchoredPath(selected, selection)} />
                   ) : (
                     <div className="empty-box">
-                      {t('dashboard.contextEmptyLead')}
+                      {t('dashboard.sessionsEmptyLead')}
                       <br />
                       <code>
                         cxt setup {location.origin}/{selected.owner_username}/{selected.slug}
                       </code>
                       <br />
-                      {t('dashboard.contextEmptyTail')}
+                      {t('dashboard.sessionsEmptyTail')}
                     </div>
-                  )}
-                </section>
-              ) : tab === 'onhold' ? (
-                <section className="panel">
-                  <div className="panel-head">
-                    <h4>
-                      On Hold{' '}
-                      {activeRepo && <code className="repo-tag">{sanitizeRemoteUrl(activeRepo.remote_url) || short(activeRepo.id)}</code>}
-                    </h4>
-                  </div>
-                  {activeRepo ? (
-                    <OnHoldView repo={activeRepo} role={role} />
-                  ) : (
-                    <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}
                 </section>
               ) : null}
@@ -336,13 +310,12 @@ export function Dashboard() {
                             <button
                               className={`repo-row${activeRepo?.id === r.id ? ' on' : ''}`}
                               onClick={() => {
-                                navigate(repoPath(selected, r));
+                                navigate(anchoredPath(selected));
                               }}
-                              title={t('dashboard.viewRepoContext')}
+                              title={t('dashboard.viewRepoSessions')}
                             >
                               <code>{short(r.id)}</code>
                               <span className="remote">{sanitizeRemoteUrl(r.remote_url) || '(local)'}</span>
-                              <span className="branch-chip">{r.default_branch}</span>
                             </button>
                             {gh && (
                               <a

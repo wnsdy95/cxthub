@@ -46,18 +46,14 @@ func TestDeviceLoginRootManualLoginBeforeRepositoryConnection(test *testing.T) {
 	}
 }
 
-func TestDeviceLoginRootRejectsUnsafeTransportAndHidesFromReader(test *testing.T) {
+func TestDeviceLoginRootRejectsUnsafeTransport(test *testing.T) {
 	for _, base := range []string{"http://example.test/api/v1", "https://secret@example.test/api/v1", "https://example.test/api/v1?token=secret", "https://example.test/api/v1#fragment"} {
 		if client, err := deviceLoginClient(base); client != nil || err == nil {
 			test.Fatal("unsafe login transport accepted")
 		}
 	}
-	read := buildReadContainer(config{RepoRoot: test.TempDir()}).clictr
-	if read.DeviceLoginClient != nil || read.OpenLoginBrowser != nil {
-		test.Fatal("read-only root exposes login effects")
-	}
-	write := buildContainer(config{RepoRoot: test.TempDir()}).clictr
-	if write.DeviceLoginClient == nil || write.OpenLoginBrowser == nil {
-		test.Fatal("write root did not compose device login")
+	composed := buildContainer(config{RepoRoot: test.TempDir()}).clictr
+	if composed.DeviceLoginClient == nil || composed.OpenLoginBrowser == nil {
+		test.Fatal("the composition root did not compose device login")
 	}
 }

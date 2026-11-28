@@ -1,8 +1,8 @@
 // setup.go — cxt setup: single command for new team member onboarding (idempotent — re-run = status check).
 //
-//	cxt setup [remote-url] [--no-login]
+//	cxt setup [remote-url] [--no-login] [--git-remote <name>]
 //
-// Completes in one go after cloning: .cxt initialization → git hooks → login (device flow) → verified remote registration
+// Completes in one go after cloning: .cxt → login (device flow) → verified remote registration → git hooks
 // → agent hooks (Claude repo setup, Codex global merge) → team basic settings pull.
 // Each step reports with a checklist (✓/✗/⚠), and completed steps are not modified.
 package cli
@@ -23,6 +23,7 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/githooks"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
@@ -36,7 +37,7 @@ type cxtHookEntry struct {
 	} `json:"hooks"`
 }
 
-// agentHookEvents are the target events for registration by provider (capture path).
+// agentHookEvents are the events at which a tool runs `cxt hook`.
 func agentHookEvents(_ string) map[string]string {
 	return map[string]string{
 		"SessionStart":     "startup|resume",
@@ -102,27 +103,57 @@ func mergeAgentHooks(path, provider string) (bool, error) {
 }
 
 // runSetup runs the cxt setup.
+// setupGitRemote returns the value of --git-remote among the arguments, and
+// whether the flag was given.
+func setupGitRemote(args []string) (string, bool) {
+	for index, arg := range args {
+		name, value, inline := splitFlagValue(arg)
+		if name != "--git-remote" {
+			continue
+		}
+		if !inline && index+1 < len(args) {
+			value = args[index+1]
+		}
+		return value, true
+	}
+	return "", false
+}
+
 func runSetup(ctx context.Context, c *Container, cwd string, rest []string) error {
 	remoteURL := firstPositional(rest)
 	ok := func(f string, a ...interface{}) { fmt.Printf("  ✓ "+f+"\n", a...) }
 	bad := func(f string, a ...interface{}) { fmt.Printf("  ✗ "+f+"\n", a...) }
 	warn := func(f string, a ...interface{}) { fmt.Printf("  ⚠ "+f+"\n", a...) }
 
+	// 0) The Git remote cxt follows, before anything reads it: its address
+	// names the repository. It is the one named with --git-remote, else the
+	// one set before, else origin, else the repository's only remote.
+	if name, named := setupGitRemote(rest); named {
+		if err := gitctx.FollowRemote(ctx, cwd, name); err != nil {
+			return err
+		}
+	}
+	followed, followedExists := gitctx.FollowOnlyRemote(ctx, cwd)
+
 	// 1) .cxt store (git repo required — otherwise, fail here).
 	var out inbound.InitOutput
 	var err error
-	// Init writes the working HEAD; rerunning setup must not reset a selection.
 	if state := gitctx.InspectContextRoot(ctx, cwd); state.Initialized {
 		repo, rerr := resolveLocalRepo(ctx, c, cwd)
 		err = rerr
 		out = inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(state.Root, ".cxt")}
 	} else {
-		out, err = c.Init.Init(ctx, inbound.InitInput{Cwd: cwd, PreserveExisting: true})
+		out, err = c.Init.Init(ctx, inbound.InitInput{Cwd: cwd})
 	}
 	if err != nil {
 		return fmt.Errorf(".cxt initialization failed: %w", err)
 	}
 	ok(".cxt store (repo %s)", shortHash(out.RepoID))
+	if followedExists {
+		ok("Git remote %s (cxt reads from it what was pushed)", followed)
+	} else {
+		warn("this repository has no Git remote named %s, so cxt cannot see what was pushed — name the one to follow: cxt setup --git-remote <name>", followed)
+	}
 	_, _ = githooks.EnsureGitignore(cwd)
 	_ = githooks.EnsureExcluded(cwd)
 
@@ -151,10 +182,21 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 			if err != nil {
 				return err
 			}
-			if matches {
+			moved := false
+			if !matches {
+				if moved, err = setupOriginMoved(ctx, c, cwd, cur, remoteURL); err != nil {
+					return err
+				}
+			}
+			switch {
+			case matches:
 				ok("remote origin already registered = %s", cur)
-			} else {
+			case !moved:
 				return fmt.Errorf("requested repository differs from configured origin (%s); preserved without attachment — change: cxt remote remove origin then setup", cur)
+			default:
+				if err := setupMoveOrigin(ctx, c, cwd, cur, remoteURL); err != nil {
+					return err
+				}
 			}
 		} else if rerr := runRemote(ctx, c, cwd, []string{"add", "origin", remoteURL}); rerr != nil {
 			// Git origin mismatch is server rejection — invalid folder, so stop setup.
@@ -188,21 +230,14 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
-	// Resolve first-connection identity before enabling automatic capture.
-	if status, err := setupFirstTracking(ctx, c, cwd); err != nil {
-		return fmt.Errorf("setup tracking stopped; local captures and queued operations are preserved. Resolve the reported conflict or use explicit cxt pull, then rerun cxt setup: %w", err)
-	} else if status != "" {
-		ok("%s", status)
-	}
-
-	// 2) git hooks — wiring for "cxt follows git".
+	// 2) Git hooks. They only wake the reading of the tools' session records.
 	if installed, herr := githooks.Install(cwd); herr == nil {
-		ok("git hooks %d (commit·checkout·merge·push·ref-tx·rewrite; stash detected as ref-tx)", len(installed))
+		ok("git hooks %d (commit·checkout·merge·rewrite·push; each only wakes the reading of your sessions)", len(installed))
 	} else {
 		bad("git hook installation failed: %v", herr)
 	}
 
-	// 5) Agent hooks — the same lifecycle capture works in Claude Code/Codex
+	// 5) Agent hooks — the same events exist in the Claude Code/Codex
 	// desktop clients as well as their CLIs. Claude settings are project-scoped;
 	// Codex performs a global merge shared by its app and CLI clients.
 	claudePath := filepath.Join(cwd, ".claude", "settings.json")
@@ -229,22 +264,40 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
+	// Automatic upload is on unless someone turned it off in this repository.
+	// Whoever sets up is told which, and how to change it.
+	mark, line := setupAutomaticUploadLine(remotecfg.SegmentsAuto(cxtRepoRoot(ctx, cwd)))
+	fmt.Printf("  %s %s\n", mark, line)
+
 	// 6) Team default settings pull(.claude/.agents/.codex) — only when login and origin exist.
+	connectGitHubAt, githubMissing := "", false
 	if hasOrigin && authTokenPresent(cwd) {
-		if conn, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd}); cerr == nil {
+		if conn, cerr := c.Connection.Connect(ctx, cwd); cerr == nil {
+			// The connection with GitHub: the server reads through it what
+			// was pushed.
+			if c.GitHub != nil {
+				connection, gerr := c.GitHub.ReadGitHubConnection(ctx, string(conn.Repo.ID))
+				mark, line := setupGitHubLine(connection, gerr)
+				if mark != "" {
+					fmt.Printf("  %s %s\n", mark, line)
+				}
+				connectGitHubAt, githubMissing = connection.ConnectURL, mark == setupMissing
+			}
 			// The server derives RepositoryID from the URL's namespace/repository
 			// prefix. A missing binding is a legacy/local state worth surfacing.
 			if conn.Repo.RepositoryID == "" {
 				warn("connection has no repository ownership record and will not appear on the web — check <owner>/<repository> in the URL: %s", origin)
 			}
 			applied := 0
+			keep := rememberSettings(ctx, c, cwd, "before cxt setup")
 			for _, kind := range []string{"claude", "agents", "codex"} {
 				if n, aerr := applySettings(ctx, c, cwd, string(conn.Repo.ID), kind); aerr == nil && n > 0 {
 					applied += n
 				}
 			}
 			if applied > 0 {
-				ok("Team default settings pulled (%d files applied)", applied)
+				keep()
+				ok("Team default settings pulled (%d files applied; the folders as they were: cxt settings list)", applied)
 			} else {
 				ok("No team default settings (upload possible in web About ⚙)")
 			}
@@ -253,8 +306,44 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
-	fmt.Println("Complete — use Claude Code/Codex in the CLI or supported desktop apps; commits, switches, and pushes remain ordinary git")
+	if githubMissing {
+		return fmt.Errorf("not complete: this repository is not connected to GitHub — a maintainer of the repository connects it at %s; everything on this computer is set up", connectGitHubAt)
+	}
+	fmt.Println("Complete — use Claude Code/Codex as usual; your sessions are read from their own records and shown with your commits once you push them. Check with: cxt doctor")
 	return nil
+}
+
+// The marks of a checklist line that setupGitHubLine answers.
+const (
+	setupDone    = "✓"
+	setupMissing = "✗"
+	setupToKnow  = "⚠"
+)
+
+// setupGitHubLine is what cxt setup says of the repository's connection with
+// GitHub: the mark of the line and the line. A repository that is not
+// connected is missing something, and setup does not end as complete. A server
+// without a GitHub App, or one that does not say, gets no line.
+func setupGitHubLine(connection domain.GitHubRepositoryConnection, err error) (string, string) {
+	switch {
+	case err != nil:
+		return setupToKnow, fmt.Sprintf("the server did not say whether this repository is connected to GitHub: %v", err)
+	case connection.State == domain.GitHubRepositoryConnected:
+		return setupDone, "GitHub connected (the server reads what is pushed through the GitHub App)"
+	case connection.State == domain.GitHubRepositoryNotConnected:
+		return setupMissing, "GitHub is not connected — a maintainer of the repository connects it at " + connection.ConnectURL
+	}
+	return "", ""
+}
+
+// setupAutomaticUploadLine is what cxt setup says of automatic upload. It is
+// on by default: the hooks set up above wake the collector, which uploads the
+// sessions recorded from then on. Off is a choice made in this repository.
+func setupAutomaticUploadLine(on bool) (string, string) {
+	if on {
+		return setupDone, "automatic upload on: your Claude Code and Codex sessions in this repository go to the server on their own as you work; sessions that ended before it began go with cxt push (to stop it: cxt config segments.auto off)"
+	}
+	return setupToKnow, "automatic upload off in this repository: sessions go to the server only with cxt push (to turn it on: cxt config segments.auto on)"
 }
 
 func setupRemoteMatches(ctx context.Context, c *Container, existing, requested string) (bool, error) {
@@ -265,11 +354,91 @@ func setupRemoteMatches(ctx context.Context, c *Container, existing, requested s
 	if remotecfg.RepoIDFor(existing) == remotecfg.RepoIDFor(canonical) {
 		return true, nil // An unchanged connection also works offline.
 	}
-	stable, err := resolvedRepositoryURL(ctx, c, canonical)
+	if c.ResolveConnection == nil {
+		return false, nil
+	}
+	resolved, err := c.ResolveConnection(ctx, canonical)
+	if err != nil {
+		return false, unverifiedRepository(err)
+	}
+	stable, err := ValidatedRepositoryURL(canonical, resolved)
+	if err != nil && resolved.RepositoryID != "" && resolved.RepoID == remotecfg.RepoIDFor(existing) && remotecfg.RepoIDFor(resolved.RemoteURL) == resolved.RepoID {
+		// The server keeps this clone's repository under the address the
+		// clone is connected to, on another server address than the one
+		// asked: the repository was not moved to the requested address.
+		return false, fmt.Errorf("the server keeps this repository under %s, the address this clone is connected to, not under %s; nothing was changed — once an operator of the server moves it there (cxt-admin repo-address), cxt setup %s moves this clone", resolved.RemoteURL, canonical, canonical)
+	}
 	if err != nil {
 		return false, err
 	}
 	return remotecfg.RepoIDFor(existing) == remotecfg.RepoIDFor(stable), nil
+}
+
+// setupOriginMoved says whether the repository this clone is connected to was
+// moved on the server to the requested address. A clone connected through
+// another address than the server's own keeps the workspace it was connected
+// to; when the server names that same workspace under the requested address,
+// the repository moved there. Without such a record nothing is proven.
+func setupOriginMoved(ctx context.Context, c *Container, cwd, current, requested string) (bool, error) {
+	if c.ResolveConnection == nil {
+		return false, nil
+	}
+	observed, err := remotecfg.Observe(ctx, cwd)
+	if err != nil {
+		return false, err
+	}
+	pinned, err := observed.ResolveEndpoint(current)
+	if err != nil || pinned.RepositoryID == "" {
+		return false, err
+	}
+	canonical, err := remotecfg.CanonicalURL(requested)
+	if err != nil {
+		return false, err
+	}
+	resolved, err := c.ResolveConnection(ctx, canonical)
+	if err != nil {
+		return false, fmt.Errorf("the server did not say which repository %s is: %w", canonical, err)
+	}
+	if _, err := ValidatedRepositoryURL(canonical, resolved); err != nil {
+		return false, err
+	}
+	return resolved.RepositoryID == pinned.RepositoryID, nil
+}
+
+// setupMoveOrigin points this clone at the address the server keeps its
+// repository under now. The identity the clone's conversation documents are
+// sent in is bound to the origin, so it is confirmed again for the new one,
+// as cxt remote set-endpoint does; without that confirmation the documents
+// are sent in the legacy identity.
+func setupMoveOrigin(ctx context.Context, c *Container, cwd, current, requested string) error {
+	observed, err := remotecfg.Observe(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	identity, err := observed.CaptureIdentity()
+	if err != nil {
+		return err
+	}
+	if err := remotecfg.Remove(ctx, observed, "origin"); err != nil {
+		return err
+	}
+	if err := runRemote(ctx, c, cwd, []string{"add", "origin", requested}); err != nil {
+		return fmt.Errorf("the origin %s was removed and %s could not be registered; run cxt setup %s again: %w", current, requested, requested, err)
+	}
+	fmt.Printf("  ✓ remote origin moved from %s: the server keeps this repository under %s now\n", current, requested)
+	if identity == domain.DocumentIdentityLegacy {
+		return nil
+	}
+	err = errors.New("capture identity configuration unavailable")
+	if c.SetCaptureIdentity != nil {
+		err = c.SetCaptureIdentity(ctx, cwd, identity)
+	}
+	if err != nil {
+		fmt.Printf("  ⚠ capture.identity %s was not confirmed for the moved origin (%v); conversation documents are sent in the legacy identity until this succeeds: cxt config capture.identity %s\n", identity, err, identity)
+		return nil
+	}
+	fmt.Printf("  ✓ capture.identity %s confirmed for the moved origin\n", identity)
+	return nil
 }
 
 // authTokenPresent indicates the presence of a stored token on the origin host (validity is determined by the first request).

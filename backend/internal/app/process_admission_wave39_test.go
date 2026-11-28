@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
@@ -548,42 +547,6 @@ func TestWave39ProcessAdmissionPrivateWorkErrorAndPanicRelease(t *testing.T) {
 		t.Fatal("private work lifetime leaked remote permit")
 	}
 	assertResourcesReleased(t, gate)
-}
-
-func TestWave39ProcessAdmissionActualDocumentResponseOwnsRemoteLifetime(t *testing.T) {
-	governor := newWave39ProcessGovernor(t)
-	remote := &wave39ProcessPermit{}
-	governor.acquire = func(context.Context, bool, bool) (outbound.ProcessAdmissionPermit, error) { return remote, nil }
-	restore, err := ConfigureProcessAdmission(governor, ProcessAdmissionLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restore()
-	config, _, repo, document := readServicesFixture(t)
-	services, err := NewReadServices(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var retained func()
-	ctx := inbound.WithDocumentResponseRetainer(inbound.WithSystemActor(context.Background()), func(release func()) bool {
-		retained = release
-		return true
-	})
-	defer func() {
-		if retained != nil {
-			retained()
-		}
-	}()
-	page, err := services.Documents.ReadDocFindFragment(ctx, repo, document.Hash, domain.DocFindFragmentRequest{Legacy: true, Total: 1, Budget: 4096})
-	if err != nil || page.JSON == "" || retained == nil || remote.releases.Load() != 0 || governor.acquisitions.Load() != 1 {
-		t.Fatal("actual document response escaped remote lifetime", err)
-	}
-	retained()
-	retained()
-	if remote.releases.Load() != 1 {
-		t.Fatal("response cleanup did not release exactly once")
-	}
-	assertResourcesReleased(t, processResources)
 }
 
 func TestWave39ProcessYieldRemoteParkDispatchAndResumeOrdering(t *testing.T) {

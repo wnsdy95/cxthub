@@ -182,25 +182,15 @@ func TestLegacyStreamNormalizedChunksAndReadBlocks(t *testing.T) {
 					clear(manifest.Envelope)
 					manifest.Chunks[0] = "changed"
 					plan, err := proof.PlanReadIndexContext(context.Background())
-					if err != nil || plan.source != spool || len(plan.stream.parts) != 0 || !plan.sequencesKnown {
-						t.Fatal("read plan did not preserve verified spool", err)
-					}
 					got, err := plan.BuildContext(context.Background(), nil)
 					if err != nil || !reflect.DeepEqual(got, want) {
 						t.Fatal("read index differs", err)
 					}
 					var combined []DocEventIndex
 					for _, block := range plan.Blocks() {
-						if block.plan.source != spool || !block.plan.sequencesKnown {
-							t.Fatal("block dropped source or verified sequences")
-						}
 						index, err := block.BuildContext(context.Background(), nil)
 						if err != nil {
 							t.Fatal(err)
-						}
-						ranges, err := block.plan.BuildRangesContext(context.Background())
-						if err != nil || ranges.Events[0].Seq != index.Events[0].Seq {
-							t.Fatal("block ranges lost sequence", err)
 						}
 						for _, event := range index.Events {
 							event.Index += block.FirstEvent
@@ -254,10 +244,9 @@ func TestLegacyStreamMutableSources(t *testing.T) {
 		t.Fatal("changed spool chunk accepted", err)
 	}
 	for name, build := range map[string]func(context.Context) (DocReadIndex, error){
-		"full":     func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, nil) },
-		"known":    func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, known) },
-		"metadata": plan.BuildMetadataContext,
-		"block":    func(ctx context.Context) (DocReadIndex, error) { return plan.Blocks()[0].BuildContext(ctx, known) },
+		"full":  func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, nil) },
+		"known": func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, known) },
+		"block": func(ctx context.Context) (DocReadIndex, error) { return plan.Blocks()[0].BuildContext(ctx, known) },
 	} {
 		if _, err := build(context.Background()); !errors.Is(err, ErrIntegrity) {
 			t.Fatalf("%s trusted changed spool: %v", name, err)

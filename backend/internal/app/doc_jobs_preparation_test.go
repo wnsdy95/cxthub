@@ -76,7 +76,7 @@ func preparationFixture(t *testing.T) (*Service, domain.DocFinalizationJob) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewService(preparationMetadata{}, preparationChunks{repo: repo, bodies: plan.Bodies}, nil, nil, nil), j.Claim(time.Now().UTC(), docJobLease)
+	return NewService(preparationMetadata{}, preparationChunks{repo: repo, bodies: plan.Bodies}, nil), j.Claim(time.Now().UTC(), docJobLease)
 }
 
 func TestDocJobPreparationRenewsAndJoinsBeforeCompletion(t *testing.T) {
@@ -135,7 +135,7 @@ func TestDocJobPreparationRenewsAndJoinsBeforeCompletion(t *testing.T) {
 			},
 		}
 		done := make(chan error, 1)
-		go func() { done <- svc.runDocJob(ctx, st, job) }()
+		go func() { done <- runDocJob(ctx, svc, st, job) }()
 		<-preparing
 		synctest.Wait() // Install the ticker before advancing virtual time.
 		interval := docJobLease / 3
@@ -226,7 +226,7 @@ func TestDocJobPreparationCancellationPreventsCompletion(t *testing.T) {
 						},
 					}
 					done := make(chan error, 1)
-					go func() { done <- svc.runDocJob(ctx, st, job) }()
+					go func() { done <- runDocJob(ctx, svc, st, job) }()
 					<-preparing
 					synctest.Wait()
 					if readyOnCancel {
@@ -319,7 +319,7 @@ func TestDocJobPreparationErrorClassification(t *testing.T) {
 						return nil
 					},
 				}
-				if err := svc.runDocJob(context.Background(), st, job); !errors.Is(err, tc.err) {
+				if err := runDocJob(context.Background(), svc, st, job); !errors.Is(err, tc.err) {
 					t.Errorf("worker error = %v, want wrapped %v", err, tc.err)
 				}
 				if prepareCalls != 1 || finishCalls != 1 {

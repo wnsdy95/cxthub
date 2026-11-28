@@ -17,7 +17,6 @@ import (
 
 type repositoryAssetHTTPCommands struct {
 	calls         []string
-	repo          domain.ContentHash
 	hash          domain.ContentHash
 	bundle        domain.SettingsBundle
 	secrets       inbound.SaveSecretsInput
@@ -29,19 +28,10 @@ type repositoryAssetHTTPCommands struct {
 
 func (commands *repositoryAssetHTTPCommands) record(ctx context.Context, repo domain.ContentHash, command string) error {
 	commands.calls = append(commands.calls, command)
-	commands.repo = repo
 	if commands.observe != nil {
 		commands.observe(ctx, repo)
 	}
 	return commands.err
-}
-
-func (commands *repositoryAssetHTTPCommands) UpdateAbout(ctx context.Context, repo domain.ContentHash, description, website string, topics []string) error {
-	return commands.record(ctx, repo, "about")
-}
-
-func (commands *repositoryAssetHTTPCommands) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	return commands.record(ctx, repo, "config")
 }
 
 func (commands *repositoryAssetHTTPCommands) PatchRepoProfile(ctx context.Context, repo domain.ContentHash, patch inbound.RepoProfilePatch) (domain.Repo, error) {
@@ -52,11 +42,6 @@ func (commands *repositoryAssetHTTPCommands) PatchRepoProfile(ctx context.Contex
 func (commands *repositoryAssetHTTPCommands) PutSettings(ctx context.Context, repo domain.ContentHash, bundle domain.SettingsBundle) error {
 	commands.bundle = bundle
 	return commands.record(ctx, repo, "settings")
-}
-
-func (commands *repositoryAssetHTTPCommands) PutSettingsObject(ctx context.Context, repo, hash domain.ContentHash, bundle domain.SettingsBundle) error {
-	commands.hash, commands.bundle = hash, bundle
-	return commands.record(ctx, repo, "settings object")
 }
 
 func (commands *repositoryAssetHTTPCommands) SaveSecrets(ctx context.Context, input inbound.SaveSecretsInput) (inbound.SaveSecretsOutput, error) {
@@ -74,14 +59,6 @@ func (backend *repositoryAssetHTTPBackend) GetRepo(context.Context, domain.Conte
 	return backend.repository, nil
 }
 
-func (backend *repositoryAssetHTTPBackend) UpdateAbout(ctx context.Context, repo domain.ContentHash, description, website string, topics []string) error {
-	return backend.repositoryAssetHTTPCommands.UpdateAbout(ctx, repo, description, website, topics)
-}
-
-func (backend *repositoryAssetHTTPBackend) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	return backend.repositoryAssetHTTPCommands.UpdateRepoConfig(ctx, repo, defaultBranch, protectDefault)
-}
-
 func (backend *repositoryAssetHTTPBackend) PatchRepoProfile(ctx context.Context, repo domain.ContentHash, patch inbound.RepoProfilePatch) (domain.Repo, error) {
 	return backend.repositoryAssetHTTPCommands.PatchRepoProfile(ctx, repo, patch)
 }
@@ -90,23 +67,11 @@ func (backend *repositoryAssetHTTPBackend) PutSettings(ctx context.Context, repo
 	return backend.repositoryAssetHTTPCommands.PutSettings(ctx, repo, bundle)
 }
 
-func (backend *repositoryAssetHTTPBackend) PutSettingsObject(ctx context.Context, repo, hash domain.ContentHash, bundle domain.SettingsBundle) error {
-	return backend.repositoryAssetHTTPCommands.PutSettingsObject(ctx, repo, hash, bundle)
-}
-
 func (backend *repositoryAssetHTTPBackend) SaveSecrets(ctx context.Context, input inbound.SaveSecretsInput) (inbound.SaveSecretsOutput, error) {
 	return backend.repositoryAssetHTTPCommands.SaveSecrets(ctx, input)
 }
 
 type repositoryAssetHTTPPoisonedBackend struct{ *repositoryAssetHTTPBackend }
-
-func (*repositoryAssetHTTPPoisonedBackend) UpdateAbout(context.Context, domain.ContentHash, string, string, []string) error {
-	panic("about command reached the legacy HTTP facade")
-}
-
-func (*repositoryAssetHTTPPoisonedBackend) UpdateRepoConfig(context.Context, domain.ContentHash, *string, *bool) error {
-	panic("repository config command reached the legacy HTTP facade")
-}
 
 func (*repositoryAssetHTTPPoisonedBackend) PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error) {
 	panic("profile patch command reached the legacy HTTP facade")
@@ -114,10 +79,6 @@ func (*repositoryAssetHTTPPoisonedBackend) PatchRepoProfile(context.Context, dom
 
 func (*repositoryAssetHTTPPoisonedBackend) PutSettings(context.Context, domain.ContentHash, domain.SettingsBundle) error {
 	panic("settings command reached the legacy HTTP facade")
-}
-
-func (*repositoryAssetHTTPPoisonedBackend) PutSettingsObject(context.Context, domain.ContentHash, domain.ContentHash, domain.SettingsBundle) error {
-	panic("settings object command reached the legacy HTTP facade")
 }
 
 func (*repositoryAssetHTTPPoisonedBackend) SaveSecrets(context.Context, inbound.SaveSecretsInput) (inbound.SaveSecretsOutput, error) {
@@ -183,7 +144,6 @@ func repositoryAssetHTTPRequests(hash domain.ContentHash) []repositoryAssetHTTPR
 		{name: "about", command: "profile", method: http.MethodPatch, path: "/about", body: `{"description":"retained","website":"https://about.example","topics":["context"]}`},
 		{name: "config", command: "profile", method: http.MethodPatch, path: "/about", body: `{"default_branch":"next","protect_default":false}`},
 		{name: "settings", command: "settings", method: http.MethodPut, path: "/settings/claude", body: `{"kind":"agents","files":[{"path":"AGENTS.md","content_b64":"cmV0YWluZWQ="}],"updated_by":"forged"}`, response: `{"kind":"claude","files":1}`},
-		{name: "settings object", command: "settings object", method: http.MethodPut, path: "/settings-objects/" + string(hash), body: `{"kind":"codex","files":[{"path":"AGENTS.md","content_b64":"cmV0YWluZWQ="}],"updated_by":"object-author"}`, response: `{"status":"stored"}`},
 		{name: "secrets", command: "secrets", method: http.MethodPut, path: "/secrets?expected_revision=previous&rotate=true&expect=fingerprint", body: `{"version":1,"ciphertext":"retained"}`, response: `{"status":"stored","revision":"explicit-revision"}`},
 	}
 }

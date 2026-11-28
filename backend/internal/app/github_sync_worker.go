@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
@@ -16,18 +15,15 @@ const (
 )
 
 type GitHubWorkerConfig struct {
-	Profile               GitHubWorkerProfile
-	Store                 outbound.GitHubStore
-	Remote                outbound.GitHubApp
-	Metadata              outbound.MetadataStore
-	Blobs                 outbound.BlobStore
-	Repositories          outbound.RepositoryStore
-	Organizations         outbound.OrganizationStore
-	Teams                 outbound.TeamStore
-	IdentityTransactions  outbound.IdentityTransactions
-	Evidence              outbound.RepositoryReader
-	Memory                outbound.MemoryObjectReader
-	RequireCompleteMemory bool
+	Profile              GitHubWorkerProfile
+	Store                outbound.GitHubStore
+	Remote               outbound.GitHubApp
+	Metadata             outbound.MetadataStore
+	Blobs                outbound.BlobStore
+	Repositories         outbound.RepositoryStore
+	Organizations        outbound.OrganizationStore
+	Teams                outbound.TeamStore
+	IdentityTransactions outbound.IdentityTransactions
 }
 
 type GitHubWorker struct {
@@ -39,7 +35,6 @@ type GitHubWorker struct {
 	teams         outbound.TeamStore
 	transactions  outbound.IdentityTransactions
 	work          *repositoryWork
-	publications  *prPublicationCommands
 }
 
 func NewGitHubWorker(config GitHubWorkerConfig) (*GitHubWorker, error) {
@@ -49,7 +44,7 @@ func NewGitHubWorker(config GitHubWorkerConfig) (*GitHubWorker, error) {
 	if !rootAdapterPresent(config.Store) || !rootAdapterPresent(config.Metadata) {
 		return nil, domain.ErrValidation
 	}
-	for _, dependency := range []any{config.Remote, config.Blobs, config.Repositories, config.Organizations, config.Teams, config.IdentityTransactions, config.Evidence, config.Memory} {
+	for _, dependency := range []any{config.Remote, config.Blobs, config.Repositories, config.Organizations, config.Teams, config.IdentityTransactions} {
 		if dependency != nil && !rootAdapterPresent(dependency) {
 			return nil, domain.ErrValidation
 		}
@@ -60,57 +55,28 @@ func NewGitHubWorker(config GitHubWorkerConfig) (*GitHubWorker, error) {
 		}
 	}
 	work := newRepositoryWork(config.Metadata, config.Repositories, ReadDocumentIdentities(config.Metadata, config.Blobs))
-	revisions, revisionError := gitIntegrationRevisionQueries(work)
-	if config.Profile == GitHubWorkerComplete && revisionError != nil {
-		return nil, revisionError
-	}
-	return assembleGitHubWorker(config, work, revisions, revisionError), nil
+	return assembleGitHubWorker(config, work), nil
 }
 
+// validateGitHubWorkerDependencies checks what the worker writes through: the
+// repository transaction in which a push is carried into the branch ledger,
+// and the identity stores it reconciles.
 func validateGitHubWorkerDependencies(config GitHubWorkerConfig) error {
 	transactions, _ := config.Metadata.(outbound.RepositoryTransactions)
-	snapshots, _ := config.Metadata.(documentQuerySnapshots)
-	presence, _ := config.Metadata.(outbound.RepositoryTransactionPresence)
-	state, _ := config.Metadata.(outbound.RepositoryTransactionState)
-	revisions, _ := config.Metadata.(outbound.RepositoryRevisions)
-	history, _ := config.Metadata.(outbound.HistoryStore)
-	jobs, _ := config.Metadata.(outbound.PRJobStore)
-	scans, _ := config.Metadata.(outbound.GitScanStore)
 	access, _ := config.Repositories.(outbound.RepositoryAccessLocker)
-	reader := config.Evidence
-	if reader == nil {
-		reader = config.Metadata
-	}
-	evidence, _ := reader.(outbound.GraphEvidenceReader)
-	for _, dependency := range []any{config.Remote, config.Blobs, config.Repositories, config.Organizations, config.Teams, config.IdentityTransactions, transactions, snapshots, presence, state, revisions, history, jobs, scans, access, evidence} {
+	for _, dependency := range []any{config.Remote, config.Blobs, config.Repositories, config.Organizations, config.Teams, config.IdentityTransactions, transactions, access} {
 		if !rootAdapterPresent(dependency) {
-			return domain.ErrCatalogUnsupported
-		}
-	}
-	if _, supported := config.Remote.(outbound.GitHubPRHistory); supported {
-		history, _ := config.Metadata.(outbound.PRHistoryStore)
-		contributions, _ := config.Metadata.(outbound.PRContributionStore)
-		if !rootAdapterPresent(history) || !rootAdapterPresent(contributions) {
 			return domain.ErrCatalogUnsupported
 		}
 	}
 	return nil
 }
 
-func assembleGitHubWorker(config GitHubWorkerConfig, work *repositoryWork, revisions inbound.RepositoryStateQueries, revisionError error) *GitHubWorker {
-	evidence := config.Evidence
-	if evidence == nil {
-		evidence = config.Metadata
-	}
-	memory := config.Memory
-	if memory == nil {
-		memory = serviceProjectionSource{config.Metadata, config.Blobs}
-	}
+func assembleGitHubWorker(config GitHubWorkerConfig, work *repositoryWork) *GitHubWorker {
 	return &GitHubWorker{store: config.Store, remote: config.Remote, metadata: config.Metadata,
 		repositories: config.Repositories, organizations: config.Organizations, teams: config.Teams,
 		transactions: config.IdentityTransactions, work: work,
-		publications: &prPublicationCommands{work: work, evidence: evidence, memory: memory,
-			requireCompleteMemory: config.RequireCompleteMemory, revisions: revisions, revisionError: revisionError}}
+	}
 }
 
 func (worker *GitHubWorker) withIdentity(ctx context.Context, execute func(context.Context) error) error {
@@ -119,10 +85,6 @@ func (worker *GitHubWorker) withIdentity(ctx context.Context, execute func(conte
 
 func (worker *GitHubWorker) workerDocumentIdentityContext(ctx context.Context) context.Context {
 	return (gitChangeScope{work: worker.work}).WorkerContext(ctx)
-}
-
-func (worker *GitHubWorker) ListHistory(ctx context.Context, repo domain.ContentHash) ([]domain.HistoryEvent, error) {
-	return listHistoryWithWork(ctx, worker.work, repo)
 }
 
 func (worker *GitHubWorker) organizationRoleOf(ctx context.Context, organization, user string) (domain.OrganizationRole, bool) {

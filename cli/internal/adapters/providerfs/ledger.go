@@ -26,10 +26,6 @@ type ledgerFile struct {
 	Sessions map[string]LedgerEntry `json:"sessions"`
 }
 
-func ledgerPath(repoRoot string) string {
-	return filepath.Join(repoRoot, ".cxt", "session-ledger.json")
-}
-
 // --- Ledger File Lock ---
 // The ledger can suffer from lost update if load-modify-save operations (context switch isolation marking ↔ hook capture growth criterion) overlap (review #3 — violation of isolation invariant).
 // Serializes using the O_EXCL + stale argument pattern like the .lock of the capture coordinator.
@@ -105,40 +101,6 @@ func RecordMaterialized(repoRoot, path string) error {
 		return err
 	}
 	return RecordCaptureBaseline(repoRoot, path, info.Size())
-}
-
-// MarkSuperseded records session files in an isolated manner (excluding permanent captures).
-// The exclusion persists even if the file is recreated (path reused).
-func MarkSuperseded(repoRoot, path string) error {
-	unlock, _ := lockLedger(repoRoot)
-	defer unlock()
-	lf := loadLedger(repoRoot)
-	e := lf.Sessions[path]
-	e.Superseded = true
-	e.At = time.Now().UTC().Format(time.RFC3339)
-	lf.Sessions[path] = e
-	return saveLedger(repoRoot, lf)
-}
-
-// UnmarkSuperseded rolls back a transition that failed before its boundary was
-// durably recorded. It removes only a superseded marker; materialization
-// entries retain their size gate.
-func UnmarkSuperseded(repoRoot, path string) error {
-	unlock, _ := lockLedger(repoRoot)
-	defer unlock()
-	lf := loadLedger(repoRoot)
-	e, ok := lf.Sessions[path]
-	if !ok || !e.Superseded {
-		return nil
-	}
-	if e.Size > 0 {
-		e.Superseded = false
-		e.At = time.Now().UTC().Format(time.RFC3339)
-		lf.Sessions[path] = e
-	} else {
-		delete(lf.Sessions, path)
-	}
-	return saveLedger(repoRoot, lf)
 }
 
 // CaptureExcluded returns whether the path should be excluded from active session determination.

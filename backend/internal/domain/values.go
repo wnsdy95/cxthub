@@ -48,14 +48,6 @@ func ValidateOptionalContentHash(h ContentHash) error {
 	return ValidateContentHash(h)
 }
 
-// ContentHashHex returns only the hex part of the validated content hash.
-func ContentHashHex(h ContentHash) (string, error) {
-	if err := ValidateContentHash(h); err != nil {
-		return "", err
-	}
-	return string(h)[len(contentHashPrefix):], nil
-}
-
 // ProviderKind is the type of the original/target provider (schemas/cir.schema.json $defs/providerKind).
 //
 // The backend does not interpret provider raw formats but stores and projects the provider type as is in the CIR envelope and Snapshot metadata.
@@ -66,8 +58,6 @@ const (
 	ProviderClaude ProviderKind = "claude"
 	// ProviderCodex identifies a Codex CLI session source.
 	ProviderCodex ProviderKind = "codex"
-	// ProviderUnknown represents an unknown provider (the third enum value required by compatibility rules).
-	ProviderUnknown ProviderKind = "unknown"
 )
 
 // FidelityTier is the restoration-fidelity tier (schemas/cir.schema.json $defs/fidelityTier).
@@ -82,10 +72,6 @@ type FidelityTier string
 const (
 	// FidelityFull is a lossless original.
 	FidelityFull FidelityTier = "full"
-	// FidelityReconstructed is a cross-provider reconstruction.
-	FidelityReconstructed FidelityTier = "reconstructed"
-	// FidelityMemory contains only a distilled summary.
-	FidelityMemory FidelityTier = "memory"
 )
 
 // RefKind identifies a ref type (schemas/manifest.schema.json $defs/refKind).
@@ -97,56 +83,9 @@ const (
 type RefKind string
 
 const (
-	// RefHead is symbolic HEAD.
-	RefHead RefKind = "head"
 	// RefBranch is a branch tip.
 	RefBranch RefKind = "branch"
-	// RefSession is a session-fork tip within one Git branch.
-	RefSession RefKind = "session"
-	// RefTag is an immutable tag.
-	RefTag RefKind = "tag"
 )
-
-// HeadRefName is the fixed head-ref name (invariant REF3, data model).
-const HeadRefName = "HEAD"
-
-// SessionRefPrefix builds the Git-branch scope for an internal ref that preserves the session fork
-// left by a partial join. Encoding the branch's byte length as its own path component prevents a prefix
-// comparison from treating "feature" and "feature/foo" as the same scope.
-//
-// Example ref name: fork/v1/4/main/<short-tip>
-func SessionRefPrefix(branch string) string {
-	return fmt.Sprintf("fork/v1/%d/%s/", len(branch), branch)
-}
-
-// ValidateRefKind restricts the ref kind accepted at wire and ref-path boundaries.
-func ValidateRefKind(kind RefKind) error {
-	switch kind {
-	case RefHead, RefBranch, RefSession, RefTag:
-		return nil
-	default:
-		return fmt.Errorf("%w: invalid ref kind %q", ErrValidation, kind)
-	}
-}
-
-// ValidateRefName validates a ref name by kind. Branch, session, and tag names may contain slash
-// hierarchies, but path traversal and Git-invalid names are rejected.
-func ValidateRefName(kind RefKind, name string) error {
-	if err := ValidateRefKind(kind); err != nil {
-		return err
-	}
-	if kind == RefHead {
-		if name != HeadRefName {
-			return fmt.Errorf("%w: head ref name must be %q", ErrValidation, HeadRefName)
-		}
-		return nil
-	}
-	if kind == RefTag && strings.HasPrefix(name, BranchLifecycleTagPrefix) {
-		_, _, err := parseBranchLifecycleTagName(name)
-		return err
-	}
-	return ValidateBranchName(name)
-}
 
 // ValidateBranchName permits only safe ref paths for branch, session, and tag names.
 func ValidateBranchName(name string) error {
@@ -177,46 +116,6 @@ func ValidateBranchName(name string) error {
 	}
 	return nil
 }
-
-// ValidateRef performs complete ref validation at backend store and service boundaries.
-func ValidateRef(ref Ref) error {
-	if len(ref.BranchID) > 128 || strings.ContainsAny(ref.BranchID, "\r\n") {
-		return fmt.Errorf("invalid branch identity")
-	}
-	if err := ValidateContentHash(ref.RepoID); err != nil {
-		return err
-	}
-	if err := ValidateRefName(ref.Kind, ref.Name); err != nil {
-		return err
-	}
-	if ref.Kind == RefHead {
-		if err := ValidateOptionalContentHash(ref.Target); err != nil {
-			return err
-		}
-		if ref.Symbolic != "" {
-			if ref.Target != "" {
-				return fmt.Errorf("%w: HEAD cannot be symbolic and detached at once", ErrIntegrity)
-			}
-			return ValidateBranchName(strings.TrimPrefix(ref.Symbolic, "refs/heads/"))
-		}
-		if ref.Target == "" {
-			return fmt.Errorf("%w: HEAD target or symbolic branch required", ErrIntegrity)
-		}
-		return nil
-	}
-	if ref.Target == "" {
-		return fmt.Errorf("%w: ref target required", ErrIntegrity)
-	}
-	return ValidateContentHash(ref.Target)
-}
-
-// StashBranchLabel is the Branch label for stash snapshots (the same value used by the CLI). Stashes are
-// normally local-only, but content-hash deduplication can make a stash object share an ID with commit history;
-// ref-based reachability can then include it in a push. The label is used for statistics exclusion and promotion decisions.
-const StashBranchLabel = "(stash)"
-
-// HookMessagePrefix is the Message prefix for hook-capture snapshots (the same value used by the CLI).
-const HookMessagePrefix = "hook: "
 
 // TeamIdentity identifies a snapshot author (data model table, sync protocol).
 //

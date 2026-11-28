@@ -3,26 +3,19 @@ package serverruntime
 import (
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/app/gitchangeworker"
-	"github.com/wnsdy95/cxthub/backend/internal/app/notificationworker"
-	"github.com/wnsdy95/cxthub/backend/internal/app/projectionworker"
 	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 type ApplicationWorkerConfig struct {
-	PendingRepositories       []domain.ContentHash
-	GraphRepositories         []domain.ContentHash
-	QualificationRepositories []domain.ContentHash
-	MemoryRepositories        []domain.ContentHash
-	GitReader                 outbound.GitEvidenceReader
-	GitHubWorker              *app.GitHubWorker
-	InvitationSender          outbound.InvitationMailer
-	NotificationSender        outbound.NotificationSender
+	// GitReader reads the remote of a repository: its branches, commits and pull requests.
+	GitReader          app.RemoteGitProvider
+	GitHubWorker       *app.GitHubWorker
+	InvitationSender   outbound.InvitationMailer
+	NotificationSender outbound.NotificationSender
 }
 
 func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) ([]workerBinding, error) {
@@ -30,62 +23,16 @@ func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) 
 		return nil, fmt.Errorf("%w: application workers require production storage capabilities", domain.ErrCatalogUnsupported)
 	}
 	if config.GitReader == nil {
-		return nil, fmt.Errorf("%w: application workers require a Git evidence reader", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: application workers require a reader of the remote Git", domain.ErrValidation)
 	}
-	commitReader, supportsCommits := config.GitReader.(outbound.GitCommitReader)
-	if !supportsCommits {
-		return nil, fmt.Errorf("%w: application worker Git reader must support commit discovery", domain.ErrValidation)
-	}
-	var authorizer outbound.GitSourceAuthorizer
-	if config.GitHubWorker != nil {
-		authorizer = config.GitHubWorker
-	}
-	gitChangeWorker, err := app.NewGitChangeWorker(app.GitChangeWorkerConfig{
-		Profile: gitchangeworker.Complete, Metadata: storage, Blobs: storage, Repositories: storage,
-		Reader: config.GitReader, Authorizer: authorizer,
+	remoteGitSync, err := app.NewRemoteGitSync(app.RemoteGitSyncConfig{
+		Metadata: storage, Blobs: storage, Repositories: storage, Reader: config.GitReader,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("configure Git change worker: %w", err)
-	}
-	gitIntegrationWorkers, err := app.NewGitIntegrationWorkers(app.GitIntegrationWorkerConfig{
-		Profile: app.GitIntegrationComplete, Metadata: storage, Blobs: storage, Repositories: storage,
-		Reader: commitReader, Authorizer: authorizer,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure Git integration workers: %w", err)
-	}
-	projectionWorkers, err := app.NewProjectionWorkers(app.ProjectionWorkersConfig{
-		Profile: projectionworker.Complete, Metadata: storage, Blobs: storage,
-		PendingEnabled: len(config.PendingRepositories) != 0, GraphEnabled: len(config.GraphRepositories) != 0,
-		QualificationRepositories: config.QualificationRepositories,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure projection workers: %w", err)
-	}
-	if projectionWorkers.Pending == nil || projectionWorkers.Graph == nil || projectionWorkers.Qualification == nil {
-		return nil, fmt.Errorf("%w: application workers require pending, graph and qualification storage capabilities", domain.ErrCatalogUnsupported)
-	}
-	memoryResources, err := app.NewMemoryPreparationResources(app.MemoryPreparationResourceConfig{
-		Metadata: storage, Blobs: storage, Repositories: storage,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure memory preparation resources: %w", err)
-	}
-	memoryPreparations, err := app.NewMemoryPreparationWorkers(app.MemoryPreparationWorkerConfig{
-		Profile: app.MemoryPreparationComplete, Resources: memoryResources, Repositories: config.MemoryRepositories,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure memory preparation workers: %w", err)
-	}
-	prPromotionWorker, err := app.NewPRPromotionWorker(app.PRPromotionWorkerConfig{
-		Profile: app.PRPromotionComplete, Metadata: storage, Blobs: storage, Repositories: storage,
-		Engine: gitengine.NewEngine(storage), Evidence: storage,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure PR promotion worker: %w", err)
+		return nil, fmt.Errorf("configure remote Git worker: %w", err)
 	}
 	notificationWorker, err := app.NewNotificationWorker(app.NotificationWorkerConfig{
-		Profile: notificationworker.Complete, Metadata: storage, Blobs: storage, Repositories: storage,
+		Metadata: storage, Blobs: storage, Repositories: storage,
 		Sender: config.NotificationSender,
 	})
 	if err != nil {
@@ -115,14 +62,7 @@ func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) 
 		workers = append(workers, workerBinding{name: "github", run: config.GitHubWorker.Run})
 	}
 	return append(workers, []workerBinding{
-		{name: "git-change", run: gitChangeWorker.Run},
-		{name: "git-integration", run: gitIntegrationWorkers.Run},
-		{name: "git-reconciler", run: gitIntegrationWorkers.RunReconciler},
-		{name: "pending-projection", run: projectionWorkers.Pending.Run},
-		{name: "graph-projection", run: projectionWorkers.Graph.Run},
-		{name: "memory-preparation", run: memoryPreparations.Run},
-		{name: "graph-qualification", run: projectionWorkers.Qualification.Run},
-		{name: "pr-promotion", run: prPromotionWorker.Run},
+		{name: "remote-git", run: remoteGitSync.Run},
 		{name: "notification", run: notificationWorker.Run},
 		{name: "invitation-email", run: invitationEmailWorker.Run},
 		{name: "runtime-maintenance", run: maintenanceWorkers.Runtime.Run},

@@ -9,11 +9,9 @@ import (
 	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/app"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // Only the configured origin may inherit CXT_TOKEN. Other servers use their
@@ -31,56 +29,6 @@ func tokenForObservedDestination(cfg config, target, configuredOrigin string) st
 		}
 	}
 	return authcfg.TokenForDestination(target, base, cfg.RemoteToken)
-}
-
-func selectedPullApplication(store *storage.FileStore, remote *backendclient.BackendClient, git outbound.GitContext) func(context.Context, string) (outbound.SelectedPullReceipt, error) {
-	service := app.NewSelectedPullService(store, remote, remote, gitctx.NewGitContextAdapter(), git, remote.SyncRemoteIdentity())
-	return func(ctx context.Context, cwd string) (outbound.SelectedPullReceipt, error) {
-		if err := service.InitializeSelection(ctx, app.SelectedPullInput{Cwd: cwd}); err != nil {
-			return outbound.SelectedPullReceipt{}, err
-		}
-		return service.ApplyCurrent(ctx, app.SelectedPullInput{Cwd: cwd})
-	}
-}
-
-func namedSyncDestination(cfg config, store *storage.FileStore, git outbound.GitContext) func(context.Context, string, string) (delivcli.SyncDestination, error) {
-	return func(ctx context.Context, cwd, name string) (delivcli.SyncDestination, error) {
-		var out delivcli.SyncDestination
-		observed, err := remotecfg.Observe(ctx, cwd)
-		if err != nil {
-			return out, err
-		}
-		remotes, err := observed.Remotes()
-		if err != nil {
-			return out, err
-		}
-		raw, exists := remotes[name]
-		if !exists {
-			return out, fmt.Errorf("remote %q is not configured", name)
-		}
-		binding, err := observed.ResolveEndpoint(raw)
-		if err != nil {
-			return out, err
-		}
-		base := binding.Endpoint
-		token := tokenForObservedDestination(cfg, base, remotes["origin"])
-		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
-		repo, err := git.CurrentRepo(ctx, cwd)
-		if err != nil {
-			return out, err
-		}
-		connection, err := resolveEndpointConnection(ctx, client, binding)
-		if err != nil {
-			return out, fmt.Errorf("verify remote %q identity: %w", name, err)
-		}
-		if connection.RepoID != repo.ID {
-			return out, fmt.Errorf("remote %q identifies a different repository; no local identity or refs changed", name)
-		}
-		client.SetChunkLocal(store)
-		out.Sync = app.NewSyncRepoService(store, client, git, storage.NewSyncOutbox())
-		out.ApplySelectedPull = selectedPullApplication(store, client, git)
-		return out, nil
-	}
 }
 
 // prepareRemoteConnection freezes endpoint, credential and Git evidence once.
@@ -114,10 +62,7 @@ func prepareRemoteConnection(cfg config) func(context.Context, string, string, s
 		}
 		repo := before
 		repo.ID, repo.RemoteURL = connection.RepoID, stable
-		// Connection preflight inspects existing document identities before any
-		// registration writes. Constructing this local reader creates no files.
-		store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
-		service := app.NewSyncRepoService(store, client, nil, nil)
+		service := app.NewRepositoryConnectService(client, nil)
 		out.URL = stable
 		out.Connect = func(ctx context.Context) (inbound.ConnectOutput, error) { return service.ConnectRepository(ctx, repo) }
 		out.ValidateLocal = func(ctx context.Context) error {

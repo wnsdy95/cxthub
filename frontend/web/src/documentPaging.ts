@@ -1,33 +1,7 @@
-import type { DocViewEventPage } from './api';
-import type { DocFragmentPage } from './types';
+import type { DocFragmentPage, DocViewEvent } from './types';
 import { DOCUMENT_FRAGMENT_BYTES } from './documentReads';
 
 export const DOCUMENT_VISIBLE_MESSAGES = 20;
-export const DOCUMENT_TRAVERSED_EVENTS = 512;
-
-export function validateDocViewPage(page: DocViewEventPage, hash: string, requested: number): DocViewEventPage {
-  if (!Array.isArray(page.events)) throw new Error('Invalid document events');
-  const end = page.offset + page.events.length;
-  if (page.hash !== hash || page.events.length > DOCUMENT_TRAVERSED_EVENTS ||
-      ![page.offset, page.total, page.inherited, page.next].every(Number.isSafeInteger) ||
-      page.offset < 0 || page.total < end || page.inherited < 0 || page.inherited > page.total ||
-      (requested >= 0 && page.offset !== requested) ||
-      (page.next === -1 ? end !== page.total : page.next !== end || page.next <= page.offset || page.next >= page.total)) {
-    throw new Error('Invalid document page range');
-  }
-  const events = page.events.map((event, index) => {
-    const absolute = page.offset + index;
-    if (event.event_index !== undefined && event.event_index !== absolute) throw new Error('Invalid document event index');
-    return { ...event, event_index: absolute };
-  });
-  return { ...page, events };
-}
-
-export function validateDocEventDetail(page: DocViewEventPage, hash: string, index: number) {
-  if (page.hash !== hash || page.offset !== index || page.events?.length !== 1 ||
-      (page.events[0].event_index !== undefined && page.events[0].event_index !== index)) throw new Error('Invalid document event detail');
-  return page.events[0];
-}
 
 export function validateDocFragment(page: DocFragmentPage, index: number, offset: number) {
   if (typeof page.json_fragment !== 'string' || ![page.event_index, page.byte_offset, page.next, page.total_bytes].every(Number.isSafeInteger)) throw new Error('Invalid document fragment');
@@ -38,4 +12,20 @@ export function validateDocFragment(page: DocFragmentPage, index: number, offset
     throw new Error('Invalid document fragment range');
   }
   return page;
+}
+
+/** A page of a session's conversation as one reader may read it. `next` is -1 at the end of what is open from here. */
+export interface AnchoredEventPage { events: DocViewEvent[]; offset: number; next: number }
+
+export function validateAnchoredEventPage(page: AnchoredEventPage, requested: number, limit: number): AnchoredEventPage {
+  if (!Array.isArray(page.events) || page.events.length > limit || !Number.isSafeInteger(page.offset) || !Number.isSafeInteger(page.next) ||
+      page.offset !== requested || (page.next !== -1 && (page.events.length === 0 || page.next !== page.offset + page.events.length))) {
+    throw new Error('Invalid session conversation page');
+  }
+  const events = page.events.map((event, index) => {
+    const absolute = page.offset + index;
+    if (event.event_index !== undefined && event.event_index !== absolute) throw new Error('Invalid session conversation event index');
+    return { ...event, event_index: absolute };
+  });
+  return { ...page, events };
 }

@@ -16,20 +16,9 @@ url  = "https://cxthub.com/mcp"
 auth = "oauth"
 
 # ---------------------------------------------------------------------------
-# [projects] Section Guide (Optional)
+# Repository connection (separate from MCP)
 # ---------------------------------------------------------------------------
-# To connect cxt to a specific project directory, add it in the following format:
-#
-# [projects."/path/to/your/project"]
-# # Project-specific settings (e.g., remote server address) are managed in .cxt/config.
-#
-# Example:
-# [projects."/Users/work/projects/my-app"]
-# # mcp_servers inherit from global settings.
-
-# ---------------------------------------------------------------------------
-# Team Remote Server Configuration (Optional)
-# ---------------------------------------------------------------------------
-# MCP never pushes or pulls. Configure the local working replica separately:
-#   cxt remote add origin https://<host>/<owner>/<repository>
-#   cxt login
+# The MCP server only reads sessions that are already on the server. Uploading
+# them is the work of the cxt CLI, which is connected per repository:
+#   cxt setup https://<host>/<owner>/<repository>
+# The repository's connection is kept in its own .cxt/config, not in this file.

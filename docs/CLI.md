@@ -1,8 +1,11 @@
 # `cxt` CLI reference
 
-`cxt` is the Git-integrated client for capturing, restoring, and synchronizing
-coding-agent context. This reference describes the public command surface on
-the `main` branch.
+`cxt` keeps your coding-agent sessions with the Git commits they produced. It
+reads what Claude Code and Codex recorded on your computer, and Git, cuts each
+session at the commits it made, and uploads the result to your team's CXTHub
+server, where a session becomes readable once the commits it explains are
+pushed. This reference describes the public command surface on the `main`
+branch.
 
 Check the installed version and built-in command catalog first:
 
@@ -19,65 +22,43 @@ For installation and first-run setup, see
 - Run repository commands inside an existing Git working tree.
 - New connections use `https://<host>/<owner>/<repository>`. The server resolves
   this canonical display address to the original connection identity before it
-  is saved. Existing two- and three-segment remotes remain valid exact aliases;
-  their normalized URL and RepoID are never rewritten during ownership migration.
-  An unavailable server prevents saving a new unverified connection, while
-  existing connections and local captures continue to work offline.
-- `<ref>` accepts `HEAD`, a branch name, a tag name, or a full
-  `sha256:<64-hex-character>` snapshot ID. An omitted ref resolves to the
-  current context head where supported for archive reads and context operations.
-  Managed fresh input uses the latest authorized server `main` independently of
-  that local selection.
-- Providers are `claude` and `codex`.
-- Explicit legacy archive restore modes are separate from prepared fresh input:
-  - `full`: materialize the native session when possible;
-  - `reconstructed`: rebuild a provider-compatible session from normalized
-    context; and
-  - `memory`: inject the distilled memory representation.
-- Managed Git branch creation requires a durable local creation record before
-  Git commits the ref transaction. Failure to record that evidence blocks
-  creation. Provider capture and network synchronization failures are reported
-  and retried without blocking Git or terminating an agent.
+  is saved. Existing two- and three-segment remotes remain valid exact aliases.
+  An unavailable server prevents saving a new unverified connection.
+- A session is named by its tool and its identifier: `claude <session>` or
+  `codex <session>`. `cxt segments` and `cxt log` print both.
+- cxt never judges anything by whether a hook or cxt itself ran at some moment.
+  Hooks only wake the reading of the tools' own records and of Git; a hook that
+  did not run is made up for by the next one that does, and `cxt push` reads the
+  same records at any time.
+- cxt cannot stop a Git command or an agent. A failure is reported, kept in
+  the collector's state, and shown by `cxt doctor`.
 - Every public command supports `-h` and `--help`. Help and usage errors are
-  resolved before cxt creates adapters, contacts a remote, or changes local
-  context state. Unknown flags, missing values, invalid provider/mode values,
-  duplicate options, extra positionals and unsupported option combinations are
-  rejected. `-f` and `--force` count as the same option. `push`, `pull` and `fetch` accept a configured remote name and optional
-  branch. Repository identity is verified; unsupported refspec mappings fail. Value
-  flags also accept `--flag=value` (or `-m=value`) when the value itself starts
-  with a hyphen.
-- `cxt claude` and `cxt codex` pass provider-owned arguments through. Use a
-  `--` separator when the provider itself should receive a help flag, for
-  example `cxt codex -- --help`; without the separator, `--help` describes the
-  cxt wrapper command. The Claude wrapper forwards only auto-memory-relevant
-  launch metadata from isolated inline `--settings`, `--setting-sources`,
-  `--bare`, and `--safe-mode` to cxt hooks; unrelated settings values are never
-  copied into the environment. External or mixed-purpose `--settings` remain
-  provider-owned and make native-memory projection fail closed.
-- Inspection commands (`log`, `list`, `branch list`, `remote`, config reads,
-  `tag` without a name, `stash list`, and `settings list`) do not replay pending
-  branch operations. Use `cxt branch replay` or synchronization to retry them.
-  `fsck` and `reflog` identify the configured replica without registering it on
-  the server. Missing remote state is reported by the read endpoint; inspection
-  does not create it. `settings list` computes current hashes without saving
-  configuration objects.
+  resolved before cxt creates adapters, contacts a remote, or changes anything.
+  Unknown flags, missing values, duplicate options, extra positionals and
+  unsupported option combinations are rejected. Value flags also accept
+  `--flag=value` when the value itself starts with a hyphen.
+- Commands that take `--json` print one JSON document on standard output, and
+  on failure one JSON error on standard error.
 
 ## Recommended onboarding
 
 ### `cxt setup`
 
 ```text
-cxt setup [remote-url] [--no-login]
+cxt setup [remote-url] [--no-login] [--git-remote <name>]
 ```
 
 Runs the complete, idempotent onboarding sequence:
 
-1. initialize a missing local `.cxt` store, preserving an existing HEAD and worktree selection;
-2. authenticate and verify the repository remote when supplied (`--no-login` uses existing credentials);
-3. on a pristine clone, attach its actual Git origin upstream and select context at the checked-out code;
-4. install managed Git hooks;
-5. merge Claude Code and Codex lifecycle hooks; and
-6. pull team settings when authenticated.
+1. decide which Git remote of the clone cxt follows (`origin`, the one named with `--git-remote`, or the repository's only remote when it has no `origin`; what is read of it is said where the automatic upload is described) and make the repository's `.cxt` directory and its mark (`.cxt/HEAD`) when they are absent;
+2. log in and verify the repository remote when one is supplied (`--no-login` uses existing credentials);
+3. register the connection with the server;
+4. install the managed Git hooks;
+5. merge the Claude Code and Codex hooks into their settings;
+6. say whether automatic upload is on in the repository, and how to turn it
+   off or on;
+7. ask the server whether the repository is connected to GitHub; and
+8. pull team settings when logged in.
 
 Example:
 
@@ -86,142 +67,40 @@ cxt setup https://cxthub.example/alice/platform
 ```
 
 Rerunning the command reports and repairs missing setup steps without replacing
-an existing remote that points somewhere else.
-
-Automatic tracking uses one verified server observation for branch identity,
-code-aligned context and recorded memory. It requires the checked-out commit to
-match the locally recorded Git upstream and the server to verify the Git origin.
-It does not launch an agent or inject a conversation. Existing captures,
-staging, selections and queued operations are preserved; setup skips automatic
-attachment when local work already exists. Concurrent local changes or missing
-proof stop attachment before new capture hooks are installed. Resolve the
-reported conflict or use an explicit `cxt pull`, then rerun setup.
-
-`cxt remote add` remains registration only. On a manual connection, use an
-explicit `cxt pull` to select the server context before starting local capture.
-
-For a proven-new PostgreSQL repository with no context on this branch, setup
-can prepare an empty position at the actual code when the server affirmatively
-reports first-capture eligibility. This requires matching local and upstream
-branch names. It creates no context ref, birth or attachment; the first push
-still passes normal server authorization and initial-observation checks.
-An absent branch or failed query alone does not authorize this path. Detached,
-unborn and no-upstream setup remains registration only. An explicitly requested
+an existing remote that points somewhere else. An explicitly requested
 different repository is rejected while the existing connection is preserved.
 
-The lifecycle hooks also cover Codex app/IDE sessions and Claude Desktop's
-**Code** tab. Apps are not launched through a cxt wrapper: hook payloads identify
-the exact session and linked worktree, and CXTHub stores all worktrees in the
-primary repository's shared `.cxt`. Concurrent app sessions retain independent
-capture cursors and pending pointers.
+The one exception is a repository the server moved. A clone that reaches its
+server through a [transport endpoint](../cli/TRANSPORT_MIGRATION.md) keeps the
+workspace the endpoint was verified for. When the server keeps that workspace's
+repository under the requested address, because an operator moved it there
+with `cxt-admin repo-address`, setup replaces `origin` with the requested
+address. An active `capture.identity` root preference is confirmed again for the
+new origin; when the server does not confirm it, setup says so and conversation
+documents are sent in the legacy identity. Before the move, setup with the new
+address says that the server keeps the repository under the clone's address,
+and changes nothing.
 
-Codex's provider hook is global, but cxt activation is not. A Git repository is
-capture-enabled only after `cxt init` or `cxt setup` creates `.cxt/HEAD`.
-Directory-only residue from older hooks is kept intact and automatically added
-to both `.gitignore` and `.git/info/exclude`; it is not treated as an initialized
-context store.
+Where the server has a GitHub App and says the repository is not connected to
+it, setup prints the page where a maintainer of the repository connects it and ends
+as not complete, with exit status 1, after everything on the computer was set
+up: the server sees what is pushed through that connection. Run setup again once
+it is connected. A server without a GitHub App is not asked for more; see
+[GitHub connections](GITHUB_CONNECTIONS.md#what-readers-of-a-repository-are-told).
+
+Nothing is uploaded by setup itself. From then on the hooks wake the collector
+described under [Automatic upload](#automatic-upload); `cxt doctor` says whether
+it runs and what, if anything, does not fit. Automatic upload is on unless
+`cxt config segments.auto off` turned it off in the repository, and setup says
+which. Sessions that ended before the collector first ran go with `cxt push`.
+
+The agent hooks also cover Codex app/IDE sessions and Claude Desktop's **Code**
+tab. Codex's hook is registered for every folder, but cxt acts only where
+`cxt init` or `cxt setup` wrote `.cxt/HEAD`. A `.cxt` directory without that
+mark is left as it is and is added to both `.gitignore` and
+`.git/info/exclude`.
 
 ## Repository and authentication
-
-### `cxt sync status`
-
-```text
-cxt sync status [--json]
-cxt sync pause-history
-cxt sync resume-history
-```
-
-Reads local retained-history upload jobs and unresolved branch operations without
-opening context or memory bodies, contacting the server, or retrying work. Use it
-for a quick queue inspection while a large synchronization is in progress.
-Eligible jobs can be retried now; that count does not mean a worker is running.
-An empty queue does not establish server acknowledgement or object integrity.
-Unreadable queue metadata produces a nonzero exit status without repairing it.
-
-Status also shows whether retained-history uploads are paused, or held until a
-given time. The background uploader rests after each long upload for as long as
-it took, and waits at least a minute after the server answers that it is busy.
-
-`pause-history` stops background retained-history uploads for this repository;
-`resume-history` lets them continue and wakes the uploader. Neither changes the
-queued records, so paused snapshots stay retained on this machine.
-
-Run `cxt push` to retry current work and wake retained-history uploads, or
-`cxt push --wait-history` to wait for the retained backlog, even while paused. Explicit `push` and
-`pull` print phase progress to stderr. Item counts advance after acknowledgement
-and apply only to the named phase, not to the entire synchronization. Use
-`cxt doctor` for a complete local object audit and `cxt fsck` for a server audit.
-
-### `cxt doctor`
-
-```text
-cxt doctor [--json]
-cxt branch operations [--json]
-cxt branch replay
-```
-
-`doctor` inspects the local replica's snapshot objects, refs, history roots,
-hashes, and pending save/branch transactions. Inspection is read-only and works
-without initializing a missing `.cxt`. Issues produce a nonzero exit status.
-It does not contact the server or assert that local data has been uploaded.
-
-V2 chunked documents are verified from current bytes one chunk and one event
-at a time, including the complete reconstructed hash and the ordinary reader's
-JSON validation. Legacy document formats retain their existing full verification.
-This reduces retained document memory; it does not skip content checks or
-guarantee a constant memory bound for a single oversized event.
-
-Within one inspection, successful current event JSON validation may be reused
-by its exact byte hash when most chunks have already been observed. Bounded
-hash markers retain no dialogue payload and are discarded when inspection ends.
-Every document still reads its current files and verifies its complete hash,
-envelope, JSON syntax and depth. Unique chunks use the direct decoder; repeated
-chunks with too many event misses fall back to it. These cost heuristics do not
-certify validity or guarantee that every workload becomes faster.
-
-`Ctrl-C` cancels the inspection at cooperative read/event boundaries. Doctor
-prints the partial report and exits 130. JSON includes `completed`,
-`replica_inspection_completed`, `documents_checked`, and `unchecked` phases.
-The snapshot count is metadata discovered, not the number of documents verified.
-`completed: true` means all phases finished, even when `issues` contains damage;
-an interrupted inspection cannot certify the unchecked portion. This is a
-read-only observation of current files, not an atomic disk snapshot.
-
-`branch operations` reads the Git-directory journal even if `.cxt` is damaged
-or missing. `branch replay` retries committed operations and prepared operations
-with an exact Git reflog witness. Unproven operations remain pending and are
-reported as `needs-git-evidence`; no branch birth is inferred from a name alone.
-Replay queues server synchronization. Run `cxt push` to wait for acknowledgement.
-For a prepared orphan operation whose committed callback was lost, inspect the
-operation and run `cxt branch recover <operation-id> --confirm-orphan` in its
-recorded worktree. This works only while HEAD still names that exact unborn
-branch. It records user confirmation as separate evidence, verifies inherited
-memory, and replays the operation. A moved/committed branch is not guessed.
-
-### `cxt repair --from-server`
-
-```bash
-cxt repair --from-server
-# Missing/damaged remote configuration:
-cxt repair --from-server --remote https://cxthub.com/owner/repository
-```
-
-`--remote=https://cxthub.com/owner/repository` is equivalent to the spaced
-form. Repeated `--remote` options are rejected before repair starts.
-
-Repair requires the repository identity recorded under the Git common directory.
-It downloads and verifies an isolated server replica first, then restores missing
-or corrupt objects in place. Every replaced predecessor is quarantined under
-`.git/cxt/repairs/<id>/` before atomic replacement. Healthy local-only objects,
-ahead refs, and worktree positions remain intact. It does not rewrite provider
-sessions or send any repair writes to the server. Config can be restored only
-when the supplied URL matches the durable identity.
-
-Interrupted repairs are safe to retry. A corrupt server copy, identity conflict,
-or failed quarantine stops replacement. Local-only damage without another valid
-copy and invalid local transactions remain explicit errors; repair cannot infer
-who caused the damage or reconstruct missing bytes. Run `cxt doctor` afterward,
-then `cxt branch replay` to process verified Git operations.
 
 ### `cxt init`
 
@@ -229,17 +108,12 @@ then `cxt branch replay` to process verified Git operations.
 cxt init [--no-hooks] [--remote <repository-url>]
 ```
 
-Initializes `.cxt/`, updates local ignore protections, creates `.cxtsecrets`
-from eligible `.env` values when appropriate, and installs managed Git hooks.
+Makes `.cxt/` and its mark, updates local ignore protections, creates
+`.cxtsecrets` from eligible `.env` values when appropriate, and installs the
+managed Git hooks.
 
 - `--no-hooks` skips Git hook installation.
 - `--remote` also registers `origin`.
-
-Local-only initialization:
-
-```bash
-cxt init
-```
 
 ### `cxt repo create`
 
@@ -247,7 +121,7 @@ cxt init
 cxt repo create <repository-url>
 ```
 
-Convenience alias for initialization plus `origin` registration.
+Convenience alias for `cxt init` plus `origin` registration.
 
 ### `cxt remote`
 
@@ -255,11 +129,12 @@ Convenience alias for initialization plus `origin` registration.
 cxt remote [-v]
 cxt remote add <name> <repository-url>
 cxt remote remove <name>
+cxt remote set-endpoint <name> <https-api-endpoint>
 ```
 
 The server resolves the display URL to its stable connection identity before
-registration. The saved `origin` determines the API endpoint and content ID;
-renaming a repository does not create a new context history.
+registration. The saved `origin` determines the API endpoint and the
+repository's identity; renaming a repository on the server does not change it.
 
 ```bash
 cxt login --server https://cxthub.example
@@ -269,6 +144,8 @@ cxt remote remove origin
 ```
 
 Changing an existing remote requires removing it and adding the replacement.
+`set-endpoint` saves another API endpoint for the same repository after the
+destination confirmed the login and the repository's identity.
 
 ### `cxt login`
 
@@ -292,71 +169,660 @@ cxt logout
 Removes the locally stored credential for the configured origin host. It does
 not revoke the token on the server.
 
-## Agent and integration commands
+## Session records
 
-### `cxt claude`
+Every command of this section is also a top-level command: `cxt push` is
+`cxt segments push`, and likewise `cxt log`, `cxt remove`, `cxt allow`,
+`cxt doctor`, `cxt refresh`, `cxt archive`, `cxt unarchive`, `cxt resend` and
+`cxt fork`. Both spellings take the same arguments and do the same thing; the
+headings below use the long one.
 
-```text
-cxt claude [claude-arguments...]
-```
-
-Runs Claude Code with fresh input from latest authorized server `main` and
-passes remaining arguments to the installed `claude` executable. The wrapper
-owns process restart/resume on a branch switch. It is optional for Claude
-Desktop's Code tab, where lifecycle hooks preserve the live app session and
-apply one bounded memory handoff from latest authorized server `main`.
-Existing native resume does not reinject context.
-
-### `cxt codex`
+### `cxt segments`
 
 ```text
-cxt codex [codex-arguments...]
+cxt segments [--json]
 ```
 
-Runs Codex with fresh input from latest authorized server `main` and passes
-remaining arguments to the installed `codex` executable. The wrapper owns
-process restart/resume on a branch switch. It is optional for Codex app/IDE
-sessions, where lifecycle hooks preserve the live app session and apply one
-bounded memory handoff from latest authorized server `main`.
-Existing native resume does not reinject context.
+Reads the session records Claude Code and Codex keep on this computer, and
+what Git recorded about the current repository, and shows each session cut at
+the commits it made. It is read-only: it writes nothing to the repository, Git
+configuration, `.cxt`, the server, or a tool's own records, and it needs no
+`cxt init`, remote or login. It does not depend on cxt or a hook having run
+when the work happened, so the same records give the same report every time.
 
-All managed fresh injections use this source rule: default memory, explicit
-budgeted history, `load` delivery, branch seeds and desktop handoffs. The server
-resolves `main` directly; the local branch/worktree, local `main`, local Git
-commit and rewound memory cursor cannot select its tip. Source selection
-`branch`, `snapshot_id` and `code_commit` identify main. The additive, optional
-`source_policy: latest_server_main` and `working_position` fields record that
-policy and the separate actual Git branch/code being edited.
+What is read:
 
-Missing or denied server main, invalid source data and memory errors stop the
-injection without local fallback. Source and memory are reauthorized and
-revalidated before delivery, along with the actual working position. Concurrent
-changes abort delivery or require fresh preparation; these checks are bounded
-observations, not a distributed transaction across the server, Git and provider.
-Verified-empty new-repository bootstrap remains a distinct first-launch path
-requiring an authorized empty server repository; it never invents `main` or
-treats missing main in a nonempty repository as empty. See
-[context input and bootstrap](CONTEXT_INPUT.md).
+- **Git:** every worktree of the repository, the HEAD log of each one, and
+  every commit object Git still has.
+- **Claude Code:** the session files under `~/.claude/projects`, including the
+  sub-session files in each session's `subagents` folder.
+- **Codex:** the newest `state_<n>.sqlite` and `thread_history_<n>.sqlite` in
+  `~/.codex`, through the `sqlite3` program, opened read-only. Items still in a
+  write-ahead log are read. A database with nothing in its log is opened as
+  immutable, so that SQLite creates no lock file beside it. Older Codex rollout
+  files are not read.
 
-### `cxt mcp --local`
+  These databases are Codex's own and their layout is not a published
+  interface. cxt names only the tables and columns it needs (three tables), so
+  Codex may add to them freely. When a Codex release lays them out another way,
+  the threads are listed as unread with each difference named, for example
+  `thread_history_2.sqlite: table thread_items has no column item_json`, and a
+  newer cxt is needed. Nothing is lost meanwhile: the threads stay where Codex
+  keeps them, and `cxt segments push` uploads them once cxt reads them again.
+
+A session belongs to the repository when a working folder its records name is
+inside one of the repository's worktrees. The one fallback is a Codex thread
+whose recorded remote address is the repository's `origin`, for a thread whose
+folder is no longer a worktree.
+
+How the report is computed:
+
+- **Session to commit.** A command's output printed the commit number, and the
+  commit was created while that command ran, from two seconds before it started
+  to three seconds after it ended (`printed-number`). The one fallback applies
+  only to a commit no session printed: a worktree's HEAD log records that the
+  commit was made there, and a command of the session was running in that
+  worktree at that time (`same-folder-and-time`). Each link names its rule.
+- **Segments.** A session is cut at every command that made a commit. The last
+  commit of a turn keeps the rest of that turn; earlier commits of the same
+  turn close right after their command. A command that made several commits
+  ends one segment linked to all of them. Two sessions linked to one commit
+  each keep their own segment. A range is given by the tool's own first and
+  last record identifiers. A turn is the unit the tool recorded: Claude Code's
+  prompt identifier, or Codex's turn identifier. Without a recorded turn, a
+  segment closes at its commit.
+- **Commits made in a worktree.** The HEAD log lines counted are a commit of
+  any kind, a cherry-pick, a revert, and a merge that made a merge commit. A
+  fast-forward creates nothing. A rebase is not counted: the commits it writes
+  are copies of commits already made.
+- **Uncommitted part.** Records after a session's last commit, or all of a
+  session that made none, are not cut further. They are placed on every
+  worktree and branch they passed through: the branch the tool recorded;
+  otherwise the branch in that worktree's HEAD log at that time; otherwise, for
+  a worktree with no recorded move, the branch it is on now. Work done without
+  a branch is placed on its worktree. A folder outside every worktree is never
+  turned into a guess, and a part with no readable place is reported as such.
+- **Copied conversation.** A forked or resumed session repeats earlier records
+  under the same identifiers. Each record is counted once, for the session that
+  started first, and a commit in the copied part is linked only there. Because
+  a copy keeps its original time, a session starts at its earliest record that
+  no other session holds. A sub-session file copied into another session's
+  folder is read once, and its parent is the session its records name, not the
+  folder the file sits in.
+- **Session relations.** Which session spawned which, and at which record of
+  the parent: the record that made the recorded call, or, when the tool
+  recorded none, the parent's last record when the spawned session started.
+  Agent-to-agent calls are listed as Codex recorded them. No relation is
+  inferred.
+- **Unread records.** A record that exists but cannot be read, such as an
+  unknown format, a database whose layout changed or a missing `sqlite3`, is
+  listed under unread records and never skipped silently. A last line a tool is
+  still writing is left for the next run.
+
+A commit a HEAD log records but no session is linked to is listed with no
+session, so the gap is visible. Each commit also carries a `local` state
+(`on-a-branch`, `through-its-copy`, `not-on-a-branch`, `object-not-in-git`).
+This is only what this clone shows: a copy is a commit on a local or
+remote-tracking branch with the same author time, author and subject, and
+pull-request commit lists are not read here.
+
+`--json` prints one JSON object with `version`, `repository`, `summary`,
+`unread`, `sessions`, `commits`, `spawns` and `agent_calls`. The layout
+describes this report and is not a storage or wire format; it may change.
+
+Every run reads all records again, which can take a while on a computer with
+many long sessions.
+
+### `cxt segments push`
 
 ```text
-cxt mcp --local
+cxt segments push [--json]
+cxt segments push claude|codex <session id> [--json]
 ```
 
-Starts the optional read-only **offline-development** MCP helper on standard
-input/output. It reads the current repository's `.cxt` working replica and is
-distinct from the default product connector at `https://cxthub.com/mcp`, which
-runs in `cxtd` against cloud PostgreSQL. Bare `cxt mcp` is rejected so a local
-replica cannot be mistaken for the shared product data source.
-See [MCP connections](MCP.md). The local helper exposes:
+Computes the same report and uploads it to the repository's CXTHub server, one
+report per session, together with the conversation of each session's own
+records. It needs a connected remote and a login, and repository member access.
+On this computer it writes two things,
+both described below: a branch ID in Git's own configuration of each branch,
+and, where cxt is set up, a copy of what it sent under `.cxt/sessions`.
 
-| Tool | Purpose |
-|---|---|
-| `context_list` | List local repository snapshots |
-| `context_fetch` | Fetch snapshot metadata, memory, and recent conversation context |
-| `memory_load` | Load the bounded memory projection across all natural and graft parent lineages for a ref |
-| `context_search` | Search synchronized team context through the configured origin |
+What is uploaded for a session:
+
+- its tool, its identifier, whether another session spawned it, and for a
+  spawned session its parent and the record of the parent it was spawned at;
+- its segments: the first and last record identifier, where the range sits
+  among the session's own records, the number of commands, the times, and the
+  commits the segment ends at, each with the rule that linked it and the
+  commit's creation time, author time, author email and subject. The server
+  uses the last three to recognize a cherry-picked or rebased copy;
+- its uncommitted part and the places it passed through. A worktree is uploaded
+  as its folder name only, never as a path, together with this computer's host
+  name so that your own computers can be told apart. The part is not cut any
+  further, but where each of its turns begins is uploaded (the position of the
+  turn's first record, its place in the conversation and its time), so that
+  the server can tell which turns had begun when a branch was pushed;
+- how many of its records are copies that belong to an earlier session, and the
+  agent-to-agent calls the session recorded.
+
+Each run also sends the list of the repository's worktrees on this computer:
+for each one its folder name and the branch checked out in it, with this
+computer's host name. No path is sent. The list replaces what you stored for
+this computer; a worktree that is no longer listed keeps its name on the
+server, marked removed, so that a note you wrote about it stays readable. Two
+folders with the same name are listed once. Only you can read the list. A list
+the server refuses does not stop the reports; the next run sends it again.
+
+The conversation is uploaded in documents, one or more per session:
+
+- They hold the session's own records only, in order. A record copied from an
+  earlier session is stored once, with that session, so a forked session's
+  documents hold only what the fork added.
+- A part of the conversation is sealed where the bytes of its records, as the
+  tool keeps them, reach 4 MiB. A sealed part is one document and never
+  changes. What follows the last sealed part is one more document, which is
+  built again while the session goes on. A session shorter than that is one
+  document.
+- The records are read back from where the tool keeps them, converted to one
+  format for both tools, and masked by two steps: the values listed
+  in `.cxtsecrets`, then the pattern scrub of the repository's `secrets.scrub`
+  tier.
+- Each document goes through the existing document path. The server says
+  which chunks it lacks, only those are sent, and the server verifies the
+  whole document. A session that did not change sends nothing.
+- The report names the documents in order and, for every segment and for the
+  uncommitted part, where it starts in the conversation and how many events
+  it holds.
+- A document's own header names the session, and no folder or branch. What
+  the conversation itself says, including paths in commands and their output,
+  is uploaded as recorded, after masking.
+
+A Codex thread's conversation is read from the thread history database its
+records were listed from, one record per item of the thread:
+
+- An item is converted by the shape Codex publishes for it in its app-server
+  protocol: a message, a plan, reasoning (the text Codex kept of it), a command with
+  its output, a file change, a tool call with its result, a web search.
+- An item of a kind cxt has no rule for is not dropped and does not stop the
+  upload. It is carried whole as one event named after its kind, so a Codex
+  release that adds a kind of item loses nothing.
+- The folder a command ran in, a process number and a path where Codex saved
+  a file stay on this computer.
+
+A session is uploaded as its report alone, and listed as without conversation,
+when its records changed while they were read, when a document of it was not
+taken by the server, or when a Codex thread's items could not be read (no `sqlite3`
+program, or a database Codex laid out another way); each one says why. That is
+not a failure of the command: the next run uploads it.
+
+On the server a report belongs to the account that uploaded it. A push is what
+opens it, part by part, to whoever may view the repository: its members and
+viewers, and in a public repository also a visitor who is not signed in:
+
+- a segment, when one of its commits, or a cherry-picked or rebased copy of
+  it, is on the remote;
+- the uncommitted part, up to the turns that had begun when a branch it passed
+  through was pushed. The turn in progress at the push is included whole;
+- a spawned session as a whole, when the point of its parent that spawned it
+  is open.
+
+The server decides this from its own read of the Git hosting provider, never
+from what a CLI says. The time of a push is the time the server saw the branch
+changed: seconds after the push where the server was told of it, by the host
+or by the collector, and later where nothing told it. The first read
+of a repository says nothing about when its branches were pushed. What was
+opened stays open: a forced push that removes the commit, or cutting the
+session another way, takes nothing back.
+
+Anyone but the uploader reads only the open parts, and is given the uploader's
+public handle with them. Worktree names, the computer's host
+name, the agent calls, and the author email of a commit stay with the
+uploader. Only a member writes a note. The conversation is read through the session; the hash of the
+document that holds it is shown to nobody else. That document is still an
+ordinary repository document, so the server does not keep a member who learned
+the hash some other way from reading it.
+
+After a session's report is stored, cxt writes the session down at each commit
+it made and stores that summary on the server: what was done, what is worth
+keeping, what is left to do. It is made by fixed rules, without asking a
+model, from the conversation up to the commit and, when cxt can read it, the
+tool's own memory as it is when cxt runs. A session that made no commit has no
+summary. A summary is read like the segment that ends at its commit: by the
+uploader always, by anyone else once the commit is pushed. `summaries` in the
+result counts what this run stored, and a session says in `summary_reason` why
+one was not; the next run tries it again. The collector writes a commit's
+summary once; `cxt segments push` writes every one again.
+
+The server lists the summaries along a branch, the summary of the newest commit
+first (`GET /repos/{id}/anchored-memory?branch=`). It walks back from the
+branch's newest commit through the commits it read from GitHub, so the
+summaries of the branch itself come first and those of the branch it was made
+from after them. A commit a pull request was merged as, also by a squash,
+stands for that pull request's commits, and a rebased or cherry-picked commit
+is found where its copy stands. A branch GitHub does not hold is read as the
+default branch. A commit that is on no branch of GitHub is not on the walk. The
+caller names the newest commits of the branch as its own folder has it
+(`local=`), and they are looked at first, so that what a member committed and
+did not push, or pushed a moment ago, is found.
+
+The Sessions tab searches all of this at once: pull request titles, branch
+names, commit subjects and the beginning of commit numbers, the conversations
+and the notes. Each result says which of these it is. A reader is answered
+only from what that reader may read, so a part that is not pushed is found by
+its uploader alone.
+
+Two commits can be compared in the Sessions tab. One commit is set as the
+base; every commit opened from the list afterwards shows what lies between the
+two, as `git log base..commit` lists it: the commits the opened one descends
+from and the base does not, newest first, each with the segments that explain
+it. Only commits the server read from GitHub can be compared.
+
+A session can be archived, by the member it belongs to or by a maintainer of
+the repository. An archived session is left out of a commit's segments, of the
+search and of the summaries, also those a session is given along a branch, for
+every reader including its uploader. It is listed under "Archived sessions"
+and is opened from there under the usual rule; nothing of it is removed, and a
+report cxt uploads again leaves it archived. Restoring it brings it back
+everywhere.
+
+Uploading again replaces the session's report as a whole; a report with the
+same content changes nothing. Reports do not advance the repository revision.
+
+Branch IDs. Before the sessions, every branch of the repository that has no ID
+gets a random one, stored by Git with the branch itself:
+
+```text
+branch.<name>.cxtBranchId            the ID (32 hexadecimal characters)
+branch.<name>.cxtBranchIdIssuedFor   the name the ID was issued for
+```
+
+- Git keeps these settings with the branch: a rename moves them, deleting the
+  branch drops them, a branch made again under the same name starts without an
+  ID, and every worktree of the repository sees the same value. The ID only
+  tells two uses of one name apart. It proves nothing about when or how the
+  branch was made.
+- `git branch -c` copies the settings. When two branches hold one ID, every
+  holder whose name is not the name the ID was issued for gets a new ID. A
+  branch that was renamed keeps the old issued-for name, so if it is copied
+  later, both the branch and its copy get a new ID.
+- The IDs of branches that Git's own records show on `origin` are then
+  registered with the server: a branch whose configured upstream is on
+  `origin`, or else one with a remote-tracking branch of `origin` under the
+  same name. A branch that was never pushed is not reported. On the server a
+  name alive on the remote has one lifetime, and a registration joins it, or
+  opens one when none is alive.
+- Neither step stops the upload. If Git refuses the write or the server does
+  not take the report, the output says so and the next run tries again.
+
+With a tool and a session identifier only that session is uploaded, by the
+same rules: everything is read again and the report, the conversation and the
+summaries of that one session are sent. A session the tools' records on this
+computer do not hold makes the command fail and is named under `not_found`.
+
+Every session is listed with what happened to it: `stored`, `unchanged`,
+`refused` or `removed`. A session that was removed from the server (see
+`cxt segments remove`) is `removed`: nothing of it is read back or sent, the
+reason says who removed it and what brings it back, and it is no failure. A
+run that is about to send something first asks the server, once, which of your
+sessions are removed.
+
+A report is refused when another account already reported the same
+session identifier, when the tool's identifier cannot be used as a key, or when
+the server finds the report too large or not well formed. The other sessions
+are still uploaded, and the command then exits with a failure so that the gap
+is noticed. A caller the server does not accept, such as a missing login or no
+member access, stops the run at the first request. Records that could not be
+read are listed again here, because no report covers them, and so is the number
+of agent calls recorded by a session outside this repository, which are
+uploaded with no session.
+
+`--json` prints one JSON object with `version`, `stored`, `unchanged`,
+`refused`, `content_not_uploaded`, `sessions`, `unread`,
+`agent_calls_without_sender` and `branches` (`with_id`, `assigned`,
+`on_origin`, `registered`, and `not_assigned` or `not_registered` with the
+reason when a step did not happen) and `local_records`. Each session carries
+`content` (`stored`, `none` or `not-uploaded`) and, for the last,
+`content_reason`.
+
+Every run reads all records again and rebuilds every session's document to
+know its identity, which can take a while on a computer with many long
+sessions, even when the server then needs nothing sent.
+
+Copies on this computer. Where cxt is set up in the repository, every upload
+keeps what it sent for a session in the repository's `.cxt` folder, which Git
+ignores:
+
+```text
+.cxt/sessions/<tool>/<session id>/report.json                      the report as it was last sent and taken
+.cxt/sessions/<tool>/<session id>/conversation/<document>.json.gz  each document of the conversation that report names
+.cxt/sessions/<tool>/<session id>/log.jsonl                        one line per run that sent something or failed
+```
+
+- They are a record, kept so that the server and this computer can be compared
+  when they do not agree, and so that what was sent can be sent again after
+  the tool removed its own files. No upload is computed from them: every run
+  still reads the tools' records and Git.
+- A conversation is uploaded in parts, one document each, and the copy is
+  those documents, each named by the hash the report names it by. They are the
+  masked documents that were uploaded, not the tool's file. A session that
+  goes on gets a file for what was added and another one for its last part;
+  the files of the parts before stay as they are, and a file of a document the
+  kept report no longer names is removed. Together the copies take about as
+  much disk as the conversations uploaded from this computer, compressed.
+- A log line says when the run was, whether a person asked for it or the
+  collector ran, what the server did with the report (`stored` with its
+  revision, `unchanged`, or `refused` with the reason), how many documents the
+  report names for the conversation (`parts`) and which is the last of them
+  (`doc`), how many summaries were stored, and why something was not. A run in which nothing was sent and nothing failed leaves
+  no line, and a failure that repeats is logged once.
+- The files are readable by you alone. A copy that cannot be written, or
+  that lacks a document its report names, does not stop the upload: the
+  result says so under `local_records` (`kept`, `not_kept`). The next run
+  that reads that session's conversation builds all of it and writes the copy
+  whole; `cxt segments push` does that at once. In a repository where cxt is not
+  set up, nothing is kept.
+
+### `cxt segments log`
+
+```text
+cxt segments log [--json]
+cxt segments log claude|codex <session id> [--json]
+```
+
+Shows what `.cxt/sessions` keeps, from this computer alone: every session with
+what its copies hold and its last log line, or one session with its whole log.
+It reads only and needs no server. `--json` prints one object with `version`
+and `sessions`; each session carries `report_kept`, `conversation_kept`
+(true when every document the report names is kept), `segments`, `records`,
+`parts`, `doc` (the last of the documents), `events`, `report_hash`, `lines`
+and `log`.
+`report_hash` is the fingerprint of the report copy; the last `stored` or
+`unchanged` line of the log carries the same value when the copy is the report
+the server last took.
+
+### `cxt segments remove` and `cxt segments allow`
+
+```text
+cxt segments remove claude|codex <session id> --yes [--json]
+cxt segments allow claude|codex <session id> [--json]
+```
+
+`remove` takes a session off the server for every reader: its report with its
+commit links, its summaries and the ranges that were open, and its conversation
+document when no other report uses it. The sessions it spawned, as far as they
+are yours, are removed with it, and each one is listed in the result. The
+member the session belongs to may remove it, and so may a maintainer of the
+repository.
+
+- Without `--yes` nothing is removed and the command fails, saying what it
+  would do. That is deliberate: removing is not something to try.
+- Nothing on this computer is removed. The tool's records and the copies under
+  `.cxt/sessions` stay, and the session's log gets a line.
+- The server remembers the removal. No upload sends the session again, neither
+  `cxt segments push` nor the collector, and the server refuses its report
+  from anyone, until it is allowed again. Archiving, by contrast, only hides a
+  session from lists; an archived session is still opened by its address.
+- Manual notes are not removed.
+- On the server the conversation can no longer be read through any route. The
+  pieces it was stored in stay in the server's storage until the operator
+  removes pieces no document uses; with the file store that is `cxtd repack`,
+  and the PostgreSQL store has no such step yet.
+
+`allow` takes back the removal of one session and uploads it again at once,
+from the tool's records. A session that was removed together with the one that
+spawned it has a removal of its own and is allowed by its own name. When the
+tool no longer holds the session's records, the session is allowed but not
+uploaded, and the command fails saying so.
+
+### `cxt segments doctor`
+
+```text
+cxt segments doctor [--json]
+```
+
+Finds what does not fit between the sessions the tools recorded on this
+computer, what cxt keeps here and what the server holds, and gives for each
+thing the command that puts it right. It is made for the coding agent to run
+when something looks wrong: every finding has a code that does not change, a
+sentence that says what is so, why it matters, and, when something can be done,
+the exact command.
+
+It reads everything again at that moment: the tools' records and Git, the
+collector's memory, the copies under `.cxt/sessions`, and, when a server is
+configured, the server. Nothing is taken from a hook having run, and nothing
+is changed anywhere. A finding does not make the command fail; a server that
+cannot be read is itself a finding, and what this computer alone shows is still
+said. `checked` lists what was looked at, so that no finding means something.
+
+| Code | What it says | The command it gives |
+| --- | --- | --- |
+| `not-set-up`, `not-connected` | cxt is not set up here, or no server is configured | `cxt setup` |
+| `collector-off` | automatic upload is turned off | `cxt config segments.auto on` |
+| `collector-never-ran` | the collector has not run here yet | `cxt segments push` |
+| `collector-failing` | its last run failed, with the error | `cxt login` for a missing login, else `cxt segments push` |
+| `collector-behind` | sessions have records newer than its last run, more than 10 minutes old | `cxt segments push` |
+| `unread-records` | records exist that were not read, with the reason | install `sqlite3`, or update cxt, when that is the reason |
+| `weak-link` | a commit is linked to a session by the fallback rule, not by a printed commit number | none: it is something to check |
+| `not-on-server` | a session of this computer is not on the server | `cxt segments push <tool> <session>` |
+| `server-behind` | the server holds fewer records of a session than this computer | `cxt segments push <tool> <session>` |
+| `server-differs` | the report on the server is not the one this computer last sent | `cxt segments push <tool> <session>` |
+| `push-not-seen` | a commit is on origin here, but the server has not seen it on GitHub | `cxt segments refresh` |
+| `github-not-connected` | the server has a GitHub App and this repository is not connected to it | none: a maintainer of the repository opens the page the finding names |
+| `summary-missing` | a session has no summary at one of its commits | `cxt segments push <tool> <session>` |
+| `removed` | a session was removed from the server | `cxt segments allow <tool> <session>` |
+| `archived` | a session is archived on the server | `cxt segments unarchive <tool> <session>` |
+| `no-copy` | sessions on the server have no copy under `.cxt/sessions` | `cxt segments push` |
+| `records-gone` | the tool no longer holds the records of sessions uploaded from here | none: the copies are what is left |
+| `only-in-copy` | a session is neither on the server nor among the tool's records | `cxt segments resend <tool> <session>` |
+| `server-not-read` | the server could not be read, with the error | `cxt login` for a missing login |
+
+More than ten sessions that are not on the server are counted, not listed.
+Summaries are asked about for the newest twenty commits of this computer's
+sessions, one request each. Whether a commit is on origin is read from this
+clone's remote-tracking branches, without asking the remote.
+
+What it cannot find: a conversation linked to the wrong commit is not
+detectable from records; `weak-link` only names the links made by the weaker
+rule. Nothing re-links a commit by hand.
+
+### `cxt segments refresh`, `archive`, `unarchive` and `resend`
+
+```text
+cxt segments refresh
+cxt segments archive claude|codex <session id>
+cxt segments unarchive claude|codex <session id>
+cxt segments resend claude|codex <session id> [--json]
+```
+
+- `refresh` asks the server to read the repository from GitHub again soon. A
+  part of a session opens to teammates when the server sees its commit there.
+  The collector asks the same by itself after a push, so this command is for a
+  push made where cxt does not run.
+- `archive` and `unarchive` do what the Sessions tab does: an archived session
+  is left out of commits, the search and the summaries for every reader, and
+  nothing of it is removed.
+- `resend` sends again what was last sent for a session, from the copy under
+  `.cxt/sessions`: the conversation document and the report as they were, and
+  the summaries written anew from that conversation. It is for a session whose
+  records the tool no longer holds and that the server lost; nothing is read
+  from the tool. A copy of the conversation that is not the document its
+  report names is not sent, and neither is a session that is removed.
+
+### `cxt segments fork`
+
+```text
+cxt segments fork --at <commit> --branch <name> [--json]
+cxt segments fork claude|codex <session id> [--at <commit>] [--to claude|codex] [--branch <name>] [--json]
+```
+
+Starts new work from a commit, in one of two ways or in both at once.
+
+**A Git branch only.** Without a session, the branch `<name>` is made at the
+commit and nothing else happens: no folder is switched to it, and no upstream
+is set. A session started on that branch is given the most recent summary
+along it, like a session on any branch, so the work that led to the commit is
+known to it without the conversation being copied. The commit is named by its
+number, an abbreviation of it or any revision this clone holds.
+
+**A continued conversation.** With a session, its conversation is read from the
+server and written as a new session of a tool in this folder; the command
+prints what starts it (`claude --resume …` or `codex resume …`).
+
+- With `--at`, the new session holds the conversation up to the end of the
+  segment that ends at that commit. Without it, all of the conversation.
+- It is read as far as this account may read it. Your own session is read
+  whole; a teammate's as far as it is pushed, and the result says how many
+  events up to there were not readable. A commit no readable part ends at is
+  refused.
+- `--to` names the tool of the new session; without it, the tool that recorded
+  the conversation. The same tool keeps the conversation as it was. Another
+  tool gets it rebuilt in its own format, which loses what only the first tool
+  can read, such as locked reasoning.
+- A conversation larger than the tool takes at the start of a session is cut to
+  its newest whole turns. The summary the session
+  has at the commit is put first in place of what was left out; without a
+  summary there, a line says how many events were left out. The result names
+  which of the two it was.
+- With `--branch` the Git branch is made too, after the session was written.
+  When the branch cannot be made, the session is still there and the command
+  says both.
+
+Nothing is uploaded by a fork. The new session is a session of its tool like
+any other: once it is used, the collector reads it and uploads it as yours.
+Reading a long conversation takes one request for every 64 KiB of it.
+
+In the Sessions tab every commit has "Fork from this commit", which shows these
+commands filled in for that commit and for each session a segment of which
+ends there. A browser cannot make a branch or write a session file on your
+computer, so the tab shows the commands and runs nothing.
+
+### Automatic upload
+
+In a repository cxt is set up in and connected to a server, the same upload
+also runs without being asked. Hooks only wake it: the Git hooks `post-commit`,
+`post-checkout`, `post-merge`, `post-rewrite` and `pre-push`, and the agent
+hooks at the end of a turn and of a session. A hook is never what is
+read. The collector reads the records the tools and Git left, by the same
+rules, whichever hook ran, so a hook that did not run is made up for by the
+next one that does, and work in a worktree where no hook runs is read when a
+hook runs anywhere in the repository.
+
+It differs from `cxt segments push` in two ways only:
+
+- **What it uploads.** Sessions recorded since automatic reading began in this
+  repository: a session whose last own record, or recorded start when it has
+  none, is at or after the moment the collector first ran here. Earlier
+  sessions are uploaded only by `cxt segments push`.
+- **How much it sends.** It remembers what the server last stored and sends
+  only what changed: a report is uploaded again when it differs, a conversation
+  is read back and built again when the session's records or their cut changed,
+  or when the masking policy or the document identity did, and branch IDs are
+  registered again when the branches on origin or their IDs changed.
+
+**After a push.** The server opens a part of a session to others once it has
+seen the part's commit on the Git host. On a server with a GitHub App it
+reads only a repository connected through the App, and learns of a push from
+the App's own notification. A server without a GitHub App reads public GitHub
+repositories without a credential and has no notification. Either server also
+reads the host when somebody opens the Sessions tab and its last read started
+five minutes ago or more, and without being asked every six hours. So a
+run also asks
+the server to read the host when origin's branches, as this clone holds them,
+are not what they were when it last asked: after this computer pushed or
+fetched. Git runs `pre-push` before the push and has no hook after it. So that
+hook does not wake the collector at once: its script names the Git process
+that runs it, the one that pushes, and the collector is woken when that
+process has ended, however long the push took. That run finds the branches
+changed, and it does not wait out the collector's pause between two runs: a
+push of this clone ends the pause, because what was pushed is what the team
+is shown. A push still going after thirty minutes is no longer waited for, and
+is read at the next wake. Two kinds of push start no wait, because Git runs no
+`pre-push` hook for them: one made by a graphical Git program that does not
+call the `git` command but pushes with an implementation of its own (a
+graphical program that calls `git` runs the hook like a terminal does), and
+`git push --no-verify`. Such a push is read at the collector's next wake: the
+next commit, checkout or merge in that clone, or the end of an agent's turn.
+Nothing is asked when the branches are the same, or
+when the clone holds no branch of origin. A server that knows no Git host for
+the repository says so, and is not asked again about the same branches.
+
+A run also tells the server about the collector itself, so that the Sessions
+tab can say of a commit without a session where it was pushed from. Git
+records in a clone each push that clone made, whether or not cxt ran at that
+moment. The collector sends the newest 200 of those pushes (branch, commit and
+the clone's own time), this computer's label, the version of cxt, and what
+went wrong in its run, on one line, when the run failed. It sends this when
+there is something the server was not told yet: the clone pushed or fetched,
+or the run ended otherwise than the last one it reported. From that the server
+says of each push one of four things. A push a collector named was made on a
+computer where cxt runs; once a run of that collector has ended well after
+it, a commit of that push without a session simply had no agent session, and
+until then the cxt on that computer is failing. A push no collector named was
+made on a computer where cxt does not run, once every collector heard from in
+the last thirty days was heard from after the push. Until then it is not known
+yet: a collector that has said nothing since may still name it. What this
+cannot tell apart: a computer whose cxt cannot reach the server at all looks
+like one that is switched off, until it is heard from again. A member is shown
+what went wrong on that member's own computers; other members are shown only
+that it failed. Two clones of one repository on the same computer report as
+one collector.
+
+All of this reads one Git remote of the clone: its address names the
+repository, and its branches say what was pushed. That remote is the one named
+`origin`. A repository whose remote has another name is told once:
+`cxt setup --git-remote <name>` checks that the repository has a remote of
+that name and keeps the name in the repository's own Git configuration
+(`cxt.gitremote`), which every worktree of the clone shares. Without the flag
+`cxt setup` follows the repository's only remote when it has exactly one and
+none named `origin`; with several remotes and no `origin` it follows none and
+says how to choose. Because the address of the followed remote names the
+repository, choosing another remote in a clone that is already connected
+makes it another repository to the server.
+
+Like every upload it sends nothing of a session that was removed from the
+server, and it then forgets what it had sent of that session, so that the
+session is sent whole again once it is allowed again. A run with nothing new
+still makes no request at all: the server is asked which sessions are removed
+only by a run that is about to send something.
+
+One collector runs per repository at a time, detached from the hook that woke
+it. A wake that arrives while one runs is answered by one more run afterwards.
+Two runs start at least 10 seconds apart. A run that took long is followed by
+a longer pause, six times what it took and at most 10 minutes. A run converts
+and sends only what follows the last sealed part of a session that went on,
+which takes about a second also for a session file of more than 100 MB. It
+reads a session from its beginning, which takes about ten seconds for such a
+file, when it sees the session for the first time, when a summary is written
+(a summary is written from the whole conversation), when the masking rules
+changed, and when the copy on this computer was not whole. After a run that
+failed for a reason that holds for every session (no login, no access, a
+server without these routes, no connection) the next one waits 10 minutes. A failed run never
+fails the hook, Git or the agent.
+
+What it keeps on this computer:
+
+- beside Git's own files of the repository (`<git-dir>/cxt/`): what was last
+  sent (`collector-v1.json`, with the moment automatic reading began, how
+  the last run ended and, for each session, where its sealed parts end and
+  which documents hold them), a lock and a request marker. This is a memory of what
+  was sent, not a source of facts: deleting it only makes the next run begin
+  again from now and send more.
+- in your user cache directory (`cxthub/session-records-v1`): what the readers
+  made of session files and thread databases that have not changed since, so
+  that a run reads again only what changed. It holds identifiers, times,
+  folders, branch names and commit-number candidates, and no conversation text.
+- in the repository's `.cxt` folder (`.cxt/sessions`): the same copies
+  `cxt segments push` keeps, each log line marked as automatic. A run that
+  did not read a session's conversation back, because nothing of it changed,
+  leaves the conversation copies as they are.
+  It can be deleted at any time.
+
+`cxt segments` and `cxt segments push` use neither: they read everything again
+and write no cache.
+
+Turn automatic upload off with `cxt config segments.auto off`.
+
+## Hooks
 
 ### `cxt hook`
 
@@ -364,657 +830,69 @@ See [MCP connections](MCP.md). The local helper exposes:
 cxt hook --provider <claude|codex> --event <event>
 ```
 
-Provider-integration entry point. `cxt setup` writes these invocations into
-provider hook settings; users normally do not call it directly. Hook failures
-are reported without blocking the provider.
+What the agent tools run. `cxt setup` writes these invocations into the tools'
+hook settings; users normally do not call it directly. A failure is reported
+without blocking the tool.
 
-Supported coding-app events are `SessionStart`, `UserPromptSubmit`, `Stop`, and
-`SessionEnd`. A desktop branch switch never renames the vendor-owned active
-session file. Instead, the next start/prompt hook consumes a session-scoped,
-maximum-16-KiB project-memory handoff from latest authorized server `main`
-after source/memory revalidation. Successful delivery acknowledges the queued
-request; a process crash between output and acknowledgement can cause a retry.
-Its input is independent of the
-selected local branch or historical cursor. Full transcripts remain in
-the immutable CXTHub DAG. The web viewer exposes archived conversation; current
-MCP tools provide bounded history results with the limits documented in
-[MCP connections](MCP.md#current-history-retrieval-limits). A per-handoff limit
-does not bound the total input accumulated across many branch switches.
+The events are `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd`.
+`Stop` and `SessionEnd`, the end of a turn and of a session, wake the collector
+described under [Automatic upload](#automatic-upload): a commit and a push
+usually happen in the middle of a turn and Git has no hook after a push, so
+the Git hooks wake the collector while the turn is still being written, and
+its end lets the collector read the rest. A start or prompt hook wakes nothing
+and gives the session the most recent summary along the branch its folder is on, once for
+each branch the session comes to: at its first hook, and again after the folder
+moved to another branch. cxt reads the branch from Git when the hook runs and
+remembers beside Git's files which branch each session was last given a summary
+for, so nothing depends on a hook having run at the checkout. The summary is
+the newest one another session wrote: first at the newest 50 commits of the
+branch as this folder has it, then along the branch on GitHub, and where the
+branch has none, along the branch it was made from. It is at most 16 KiB, and a
+session is not given what it wrote itself. Of a summary's open tasks, a session
+is given only the tool's own list, the one the tool wrote in the summary of its
+conversation (`tasks_authoritative`); tasks that cxt picked out of a
+conversation are shown to people and never handed to a session as what is left
+to do. A branch without a summary gives nothing and is not asked for again; a
+server that did not answer within four seconds, or a text that did not reach
+the tool, is tried again at the next hook. A folder on no branch, and a
+repository without a server, are given nothing.
 
-Claude Desktop's general Chat tab is outside this hook model and is not
-passively captured.
+A hook carries no conversation to the server. What a session said and did is
+read from the tool's own records by the collector.
 
-Start/prompt hooks also launch one background observer for their validated
-session in that exact worktree. While the transcript changes, it captures and
-syncs the uncommitted pointer about every 10 seconds; it never advances a
-branch ref or inserts team conversation into the active provider session.
-Every sample resolves the current Git position afresh. Failed uploads retain
-the local pointer and retry even when no more text is written. Duplicate
-observers are excluded by an OS lock. Observation ends when the session
-registration is removed, after 30 minutes without transcript activity, or after
-24 hours; a later start/prompt hook starts it again.
+Claude Desktop's general Chat tab is outside this hook model.
 
-Capture and publication run as separate bounded steps. A saved capture is the
-retry checkpoint: upload failures retry that capture before reading newer
-transcript growth. Acknowledged server documents are not reopened on a pointer
-retry. Large sessions can take longer than one observation interval to process.
-
-On Hold checks for updates every 5 seconds and follows the selected session's
-latest snapshot. LIVE means transcript activity within the last two minutes, not a
-guarantee that the app or network connection is still open. The badge expires
-without further activity, including while the server is unreachable. Replaying
-an old pointer does not refresh its activity date. Hidden sessions stay hidden,
-and committed captures remain on the shared timeline.
-
-
-## Capture and commit commands
-
-### `cxt add`
+### `cxt hooks`
 
 ```text
-cxt add [claude|codex|.]... [--expect <index-revision>] [--json]
+cxt hooks install
+cxt hooks uninstall
 ```
 
-Freezes matching native sessions in this Git worktree into a versioned index.
-With no provider, or with `.`, both providers are considered. Adds are cumulative:
-adding Codex does not remove staged Claude sources. Each entry records its exact
-source identity, generation, immutable document and event range. Later native
-conversation edits cannot silently change what a manual commit publishes.
-`--expect` performs a compare-and-swap against the displayed index revision.
-
-### `cxt commit`
+Installs or removes the five managed Git hooks:
 
 ```text
-cxt commit [-m <message>] [--expect <index-revision>] [--json]
-cxt commit --resume <operation-id> [--json]
+post-commit
+post-checkout
+post-merge
+post-rewrite
+pre-push
 ```
 
-Publishes only the frozen index. An empty index is an error; run `cxt add` first.
-Commit does not reread live provider files. Its durable operation journal lets a
-retry finish the same publication without consuming concurrently added entries.
-A local finalization receipt is not evidence of server acceptance; publish with
-`cxt push` and inspect upload status separately.
-
-Ordinary `git commit` captures eligible sessions from both providers independently.
-The automatic hook does not consume or clear the manual frozen index. The old
-provider-selector `staged` configuration is ignored: it contains no frozen content
-and cannot safely be migrated into an index.
-
-Before heavy processing, automatic commit capture now stores an exact native
-input prefix, its hash, selected Git/worktree/branch, settings references and
-memory selection. Provider memory found at freeze time is retained in the private
-receipt (at most 8 MiB); replay derives a fresh summary from those bytes and the
-frozen conversation, never from subsequently changed provider files. The private input is split into reusable 1 MiB chunks under
-`.cxt/capture/inputs`; it is not part of the public object store or synchronization.
-Directories use mode 0700 and files 0600. Raw evidence remains local and is not
-automatically collected; it may contain secrets. Each input is limited to 2 GiB.
-The source prefix is read again to detect rewrites while freezing. Appends after
-the frozen boundary are left for a subsequent capture.
-
-Inputs totaling at most 1 MiB may finish in the hook, reserving five seconds
-of the unchanged 60-second hook budget for return and handoff. Larger inputs
-are queued immediately after sealing, before normalization. A separate local
-worker resumes sealed input, even after the provider file is edited or removed.
-It revalidates every private chunk and masking-policy fingerprint; changed policy,
-corrupt/missing input, or an incomplete final JSONL record cannot be published.
-The worker runs for at most 30 minutes, with a 10-minute per-attempt limit and
-eight persisted automatic attempts. Further Git synchronization wakes pending
-work; `cxt capture list` / `show` report retry counts and failures. After resolving
-a failure, `cxt capture retry <id> --expect <fingerprint>` explicitly retries the
-same archived input. An unsealed capture cannot rediscover missing input later.
-
-If `git push origin` selects a commit whose sealed capture is still running,
-the hook records that exact Git ref, SHA, context branch identity and destination
-under `.cxt/capture/push-requests`. After capture and publication evidence complete,
-the same worker retries only that selection (eight attempts, one minute each).
-It never turns a background capture into an implicit all-branches push. Changed
-code, branch identity, destination or context target leaves the request retained;
-run an explicit `cxt push` after resolving the mismatch. A successful Git push
-alone does not prove that its context upload has completed.
-
-Replay first persists each derived memory hash and its attachment predecessor.
-Live capture and deferred commit capture share the same initial inherited memory
-version when creating the same snapshot concurrently.
-Attachment-only compare-and-swap retains concurrent winners; a conflicting
-independent memory version remains pending instead of being silently replaced.
-A final immutable observation aggregates both providers, including when snapshot
-deduplication makes an earlier capture the covering target. Frozen imports are
-retained explicitly, without claiming that the current graph was projected.
-
-Consecutive queued commits retain an explicit capture dependency: when the Git
-first parent has an unfinished capture from the same worktree, branch identity
-and unchanged context selection, the successor records that attempt's ID. It
-waits for the exact finalized predecessor observation before deriving memory or
-storing its snapshot, then inherits both the predecessor context and its pinned
-memory. It does not choose a predecessor by completion time, and an explicit
-context/memory selection change breaks that implicit continuation. Missing or
-ambiguous predecessor evidence leaves publication pending.
-
-Completion records an explicit code-position observation with the original
-capture time and finalized memory. Intermediate baseline/provider observations
-remain retained but cannot win the same-time code selection by hash order. A later
-independent user selection keeps precedence over delayed completion. Empty-provider
-continuations retain their predecessor's exact memory and its root-selection
-witness, without rewriting the snapshot's current memory attachment.
-
-The current worktree advances only when its entire original selection still matches; another
-branch, newer commit or memory repin is left intact. Local completion and remote
-PR/context acceptance remain separate states. Old version-1 attempts without
-frozen input are preserved and cannot be repaired from a newer conversation.
-Older CLIs do not understand version-2 receipts; keep the updated CLI while these
-receipts exist. Normalization still reads the whole frozen input, and journal
-inspection still scans retained attempts; this is durable replay, not incremental
-normalization or a retention policy.
-
-### `cxt restore`
-
-```text
-cxt restore --staged <source-key>...|. [--expect <index-revision>] [--json]
-```
-
-Removes selected entries (or all entries with `.`) from this worktree's index.
-Raw archives and native sessions are preserved. `cxt stash push --staged` saves
-this index; `cxt stash list --staged` lists it without mutation; restore it with
-`cxt stash pop --staged --id <stash-id>`. Incompatible entries fail without
-silently replacing newly staged sources.
-
-### `cxt status`
-
-```text
-cxt status [--json]
-```
-
-Reads the actual Git SHA, selected context and pinned memory, index revision,
-staged event ranges, stored pending captures and local commit receipts. It does
-not scan provider files, contact the server or replay journals. Pending captures
-are repository-scoped; their presence does not prove a session is currently live.
-Unavailable watcher/server evidence is reported as unknown, not clean.
-
-### `cxt diff`
-
-```text
-cxt diff [--staged] [--json]
-```
-
-The default compares stored pending captures with the index or selected HEAD.
-`--staged` compares the frozen index with finalized coverage reachable from the
-selected history. Events are compared by verified source identity and canonical
-content, never by timestamps or source-file length alone. Replaced, older and
-unavailable sources remain distinguishable.
-
-### `cxt fetch`
-
-```text
-cxt fetch [remote [branch]]
-cxt pull [remote [branch]]
-cxt push [remote [branch]] [--force|--append] [--wait-history]
-```
-
-A named remote is verified against the local immutable repository ID before any
-sync mutation. Unknown names, other repositories and unsupported refspecs fail.
-An explicit branch fixes the selected context identity for history, lifecycle
-changes and final pointer updates. Required immutable dependency objects and
-ordinary observations can still be transferred. Unaccepted state changes for a
-different identity remain pending rather than expanding this selection. Selected
-push requires context protocol 1; it never falls back to a repository-wide push.
-A push without a branch keeps the existing repository-wide behavior. Credentials from the configured
-origin are never forwarded to a different server; log in to that server separately.
-With a branch selector, push waits for the complete selected dependency closure;
-`--wait-history` does not authorize unrelated branches or widen that scope.
-Without a selector, `push origin` publishes current work first and
-`--wait-history` also waits for the retained origin backlog. Other named remotes
-complete their authorized uploads in the foreground because the background queue
-is currently bound to origin. They never wake a worker for a different destination.
-
-`fetch` updates a separate remote observation and immutable cache. It leaves the
-working context, applied memory, index and branch refs unchanged. `pull` also
-reconciles permitted pointers and pins a complete authorized context/memory
-projection to the selected Git code. It does not execute an agent or edit an
-ongoing conversation. Local-ahead refs are preserved.
-
-`pull --force` and `pull -f` fail argument preflight before composition, queued
-branch/PR replay, or sync work (exit 2; mutation state `unchanged`). To resolve a
-conflict, preview one pointer and apply exactly that plan:
-
-```text
-cxt repair --preview --ref feature --reason 'adopt reviewed remote tip' --output repair.json
-cxt repair --apply repair.json --expect sha256:<plan-id>
-```
-
-For a memory conflict replace `--ref feature` with `--snapshot sha256:<snapshot>`.
-The first apply rechecks remote authorization/revision, Git position and local
-pointer/index state; intervening changes invalidate the plan. Losing refs/digests
-are retained. Apply output identifies the durable receipt, its `state=applied`
-and original `applied_at` time. Repeating the same approved plan returns that
-existing receipt without reapplying or rechecking current authorization,
-remote revision, or local position. The receipt records the completed operation;
-it does not assert that its pointer is still current.
-Plan files contain private context metadata and should not be committed.
-
-### `cxt save`
-
-```text
-cxt save [-m <message>] [--provider <claude|codex>]
-```
-
-Creates a manual snapshot for one provider. An explicit `--provider` wins. If
-it is omitted, cxt follows the provider owned by the live `cxt claude` or
-`cxt codex` wrapper; in a plain shell it chooses the most recently updated
-capture-eligible session in this worktree. Stale inherited wrapper markers are
-ignored. A managed wrapper also binds the command to its exact native session,
-so a newer same-provider session in another terminal cannot be captured by
-accident.
-
-The command does not consume `cxt add` staging and does not schedule the commit
-path's detached remote pending synchronization.
-
-Use `cxt commit` when the capture represents a code commit. Use `cxt save` for
-an explicit standalone checkpoint.
-
-### `cxt list` and `cxt log`
-
-```text
-cxt log [<ref>|--branch <branch>|--all|--retained] [--server] [--json]
-cxt list [<ref>|--branch <branch>|--all|--retained] [--server] [--json]
-```
-
-`log` and `list` share one read contract. The default walks this worktree's
-selected context HEAD, including natural parents and graft parents. A capture's
-original branch label does not decide membership. Children appear before their
-parents even when capture timestamps are out of order; independent captures use
-newest timestamp, then content ID as a stable tie-break.
-
-- `<ref>` or `--branch` selects a context ref. Ambiguous branch/tag names fail.
-- `--all` walks all known local ref targets. `--retained` inspects every locally
-  retained snapshot, including records outside the selected history.
-- `--server` queries the cloud's shared context projection for the selected
-  source and actual Git commit. It preserves the server's inclusion order,
-  evidence revision, and state hash. It does not combine with `--all` or
-  `--retained`, and an unavailable/denied server never silently becomes a local
-  answer.
-- `--json` returns versioned selection, source, state hash, coverage gaps and
-  server evidence. A local result says `server_checked: false`; an incomplete
-  ancestor chain is explicit. A local state hash includes mutable memory and
-  graft metadata, not just snapshot IDs.
-
-These reads do not register repositories, replay pending operations, capture
-providers, or move refs/working positions. Changing from the old label-filtered
-list to ancestry can change which rows appear; it does not delete stored data.
-
-## Restore and branch commands
-
-The accepted behavior for exact code/context positions, orphan memory
-inheritance, retained progress, and retryable branch creation is tracked in
-[Context history](CONTEXT_HISTORY.md). Worktrees share immutable objects but
-retain independent code/context positions; moving one worktree does not rewind
-another worker or delete server history.
-
-### `cxt checkout`
-
-```text
-cxt checkout [<ref>] [-b <new-branch>]
-  [--provider <claude|codex>]
-  [--mode <full|reconstructed|memory>]
-```
-
-Restores a ref. With `-b`, creates and restores a new context branch from that
-ref. Git checkout hooks normally invoke the corresponding behavior
-automatically. A branch's natural parents and archival memory follow its actual
-creation source, including an explicit historical ref. Managed fresh seed input
-and desktop handoffs use latest authorized server `main`; that input does not
-rewrite branch ancestry, archival memory or the worktree's selected cursor.
-An orphan's inherited archival memory remains distinct from prepared main input.
-
-Explicit legacy replay restores the selected source archive instead of preparing
-a fresh input package. In that restoration path, conversations that fit are
-preserved in full; larger sessions keep a bounded recent tail starting at a
-user-turn boundary and distill the exact omitted slice into a bounded bridge.
-That bridge is merged with the inherited compact/project memory, so work after
-an older provider compaction does not disappear between the summary and recent
-tail. The source snapshot remains immutable and reachable; the inherited
-memory plus bridge is attached to the seed for future memorize and branch
-operations without enlarging the provider prompt budget. When current
-conversation events are also replayed verbatim, their extractive memory delta
-is removed only from the prompt projection, so the new session receives each
-turn once while the full digest remains attached to the seed.
-Provider-native baselines follow the same prompt-only rule with an explicit
-scope. Claude auto memory is resolved from the canonical Git repository, so
-linked worktrees and subdirectories share the same source.
-`CLAUDE_CONFIG_DIR`, safe `CLAUDE_CODE_PROJECT_DIR_NAME`, isolated
-user/inline-flag/managed `autoMemoryDirectory`, settings precedence, and
-auto-memory disablement are honored. The supervised wrapper fingerprints every
-observable settings input at launch; if the profile is absent, changes later,
-uses an external or mixed-purpose settings document, invokes a policy helper,
-or uses an unmodeled remote memory store, cxt does not ingest that native file.
-Even after the file is resolved, cxt does not selectively strip the Claude
-`MEMORY.md` baseline from the normal budgeted projection: configuration cannot
-attest that the target runtime loaded those exact bytes, because model/runtime
-gates and a startup-time file change remain possible. Exact-baseline merge
-deduplication keeps one copy rather than recursively nesting it across seed
-generations. Codex
-`memories_1.sqlite` memory is retained because it belongs to the source thread
-and the seed receives a new thread ID.
-
-### `cxt switch`
-
-```text
-cxt switch [<branch>] [-c <new-branch>]
-  [--mode <full|reconstructed|memory>]
-```
-
-Git-style alias for checkout. `-c` creates a branch.
-
-### `cxt fork`
-
-```text
-cxt fork <ref> --as <branch>
-  [--provider <claude|codex>]
-  [--mode <full|reconstructed|memory>]
-```
-
-Creates a context branch from a specific ref and restores it. The ref determines
-natural ancestry and archival memory. Any managed fresh input uses latest
-authorized server `main`; explicit legacy replay remains archive restoration.
-
-### `cxt branch` / `cxt branch list`
-
-```text
-cxt branch
-cxt branch list
-```
-
-Lists active local context branch refs and their targets, with `*` marking the
-selected named context HEAD. This is a local observation, not a server freshness
-check. It does not create branches, replay queued operations, load conversations,
-or restore archived records.
-
-### `cxt branch archive` / `cxt branch restore`
-
-```text
-cxt branch archive <name>
-cxt branch restore <name>
-  [--provider <claude|codex>]
-  [--mode <full|reconstructed|memory>]
-```
-
-`archive` removes only the active context-branch pointer after the matching
-Git branch has been deleted. It first records an immutable lifecycle tag, so
-all snapshots, conversations, compact memory, and graph ancestry remain
-reachable and syncable. Git's branch-deletion hook performs this automatically;
-the command is also available for repairing historical stale pointers.
-
-`restore` resolves the latest archived target, records a newer active lifecycle
-event, recreates the context pointer, and restores the provider session. Managed
-fresh delivery uses latest authorized server `main` while preserving that
-archived lineage; explicit legacy replay restores the archive. A stale client
-cannot recreate an archived pointer by an ordinary push; it must
-observe or explicitly create the newer active generation.
-
-### `cxt load`
-
-```text
-cxt load [<ref>]
-  [--provider <claude|codex>]
-  [--mode <full|reconstructed|memory>]
-```
-
-Prepares managed fresh input from latest authorized server `main` without
-creating a branch or moving HEAD. For delivery, an explicit ref or rewound
-memory cursor does not replace main as the prepared source. With no explicit
-replay mode, the package supplies main's structured project memory, main source
-metadata, separate actual working position, coverage gaps and MCP source
-references. Raw transcript is not automatically inserted. Exact personal work
-state is included only when an explicit principal/session/worktree scope is
-available; missing scope is reported, never replaced with a teammate's tasks.
-
-When `--provider` is omitted, managed `load` can infer the provider from the
-authorized server main snapshot metadata. The package's optional `provider`
-field carries that choice; no local archive is required for this inference.
-
-Only an explicit `--mode` on the current command selects legacy archive replay.
-Without it, commands use structured managed input from latest authorized server
-`main`. Stored `load.mode` and account server preferences remain for
-compatibility but cannot override managed injection. Git hooks always use
-structured managed input, regardless of those stored preferences.
-
-Explicit legacy replay modes retain archive restoration for the selected ref;
-they are not prepared fresh injection. `full` and `reconstructed` restore the
-archived conversation. Oversized replay distills the omitted span before
-materializing a session, uses user-turn boundaries, and preserves the original
-archive. Replay fidelity is separate from the new history input token budget.
-
-Without an explicit ref, `cxt load --output` previews the latest authorized
-server `main` input, including the `200k` and `full` examples below. An explicit
-`<ref>` instead selects historical archive inspection and its exact memory
-revision. Both paths produce inspection artifacts only; neither launches a
-provider nor changes its files:
-
-```text
-cxt load --provider codex --model gpt-5.4 --context-budget 200k --output context.json
-cxt load --provider claude --context-budget full --output context.json
-cxt load <historical-ref> --provider codex --model gpt-5.4 --context-budget 200k --output historical-context.json
-```
-
-Existing files are not overwritten. Artifacts contain private memory and dialogue;
-keep them out of Git. `full` means a ceiling of 800,000 tokens, not a promise that
-a model can accept that much. A documented `--model` mapping uses an offline
-text tokenizer; omitted/unknown models and Claude use explicitly inexact UTF-8
-byte allowances. `usage.scope: text` excludes native-host inputs outside the
-rendered package. Output artifacts cannot be relabeled for delivery; a
-managed fresh injection must prepare and revalidate latest server main and its
-memory. Provider acceptance remains unverified. See
-[local accounting and resource limits](CONTEXT_INPUT.md#local-text-accounting).
-
-The interactive wrapper also recognizes:
-
-```text
-cxt --pull --context-budget 200k codex --yolo
-cxt --pull --context-budget full codex --yolo
-cxt --pull codex --yolo
-```
-
-These managed history requests use latest authorized server `main`, independent
-of the local branch or historical cursor. The final two commands request the
-same 800,000-token package ceiling. Requests in 100k steps are supported.
-A verified runtime's total initial input is limited to 80% of its window;
-host input/framing is deducted before selecting recent
-complete turns. Required output reserves or an earlier compaction trigger can
-lower that limit further. Requested, effective and selected budgets are recorded
-separately, without shortening stored source records.
-
-Fresh Codex history launches support verified native versions, existing static
-model catalogs and exact supported text tokenizers. Refreshable catalogs and
-unsupported combinations report `provider_capability_unknown`; an unknown
-window is not replaced by a 1M guess or a hidden memory-only launch.
-Claude Code 2.1.287 uses its resolved window with an explicit conservative
-estimate/reserve policy. CXT collects the first question, handles supported
-one-time tool decisions, verifies the saved response and opens the same native
-session without replaying the question. This is not exact Claude token counting.
-See [supported native input and accounting](CONTEXT_INPUT.md#explicit-budgeted-history-input).
-
-Actual 200k/full provider acceptance, initial compaction and general dynamic
-Codex support remain unverified. `full=800k` is a requested ceiling. No global
-model-window or auto-compaction setting is changed. Native resume, provider help
-and noninteractive commands preserve provider-owned behavior and receive no
-injected package. `cxt load --output` remains available for artifact inspection.
-
-The explicit legacy `--mode memory` archive-restoration path keeps the full
-immutable digest in cxt storage but projects at most 64 KiB into the target
-provider's instruction file. cxt appends or
-refreshes one marked region in `CLAUDE.md` or `AGENTS.md`; text and permissions
-outside that region are preserved. Malformed or duplicate cxt markers fail
-closed instead of guessing a destructive replacement range.
-The provider-visible projection may remove a working-tree-scoped native prefix
-only when the provider supplies an exact runtime load attestation. Claude does
-not currently expose one, so its full resolved baseline, conversation delta,
-and every unrelated lineage fragment remain portable. Session-scoped native
-memory is likewise carried into the managed region so a newly materialized
-provider session cannot lose it.
-
-### `cxt memorize` and `cxt memory`
-
-```text
-cxt memorize [<ref>] [--provider <claude|codex>]
-cxt memory [<ref>] [--provider <claude|codex>]
-```
-
-Distills a snapshot into reusable memory and attaches it for the next push.
-With no ref, uses the current branch head. `memory` is an alias for
-`memorize`; there is no `cxt memory save` subcommand. Modern snapshots select
-their recorded source provider automatically. An explicit `--provider` must
-match it; cxt never imports unrelated native memory from another provider or
-terminal into that snapshot. A provider compact summary or native memory is
-kept as the long-term baseline, and meaningful user/assistant turns after that
-baseline are attached as a deterministic bounded conversation delta. Repeated
-baseline text is rendered once across merged lineage fragments.
-
-Immutable memory objects retain their original structured fields for audit and
-recovery. Before cxt places those fields in a provider prompt, branch seed,
-managed memory file, MCP response, or a carried generation, it creates a
-non-mutating prompt projection. Legacy tool/provenance entries are omitted, and
-an `open_tasks` list is treated as active work only when it came from a
-provider-structured extraction. Extractive or legacy task lists remain in the
-archive but are not reintroduced as instructions. A versioned hidden marker in
-new cxt seed text preserves authoritative task lists and explicit empty task
-tombstones during memoryless recovery; unmarked historical seed sections are
-never promoted to authority retroactively.
-
-Provider compaction summaries can themselves be cumulative and contain prior
-continuation generations verbatim. Fresh distillation keeps only the latest
-recognized generation, while inherited provenance fragments receive the same
-non-mutating prompt projection. Detailed `Pending Tasks` narrative is retained
-only for the latest authoritative task fragment; older or unattested task
-sections remain recoverable from their immutable memory/CIR objects but do not
-enter active context. Distinct sibling summaries are kept, and containment
-deduplication applies only when one canonical provider summary contains the
-other byte-for-byte. Opaque legacy digests without fragment provenance are not
-generation-truncated.
-
-## Synchronization
-
-### `cxt push`
-
-```text
-cxt push [remote [branch]] [--append | --force]
-```
-
-Synchronizes local objects and selected refs to the specified remote (`origin` by default).
-The reported `checked N ref(s)` counts the requested reconciliation set,
-including retained-history refs. Unchanged remote refs may be omitted from the
-request; this count is not the number of ref updates sent over the network.
-
-- The default rejects a non-fast-forward update.
-- `--append` preserves both histories by placing the local segment after the
-  remote head through the graph overlay.
-- `--force` replaces remote ref state and may make remote-only history
-  unreachable from that ref.
-
-Prefer `--append` or pull-and-retry over `--force`.
-
-Immutable chunk and object upload batches retry only an explicit HTTP 503
-`resource_overloaded` rejection, at most four times with 1/2/4/8-second backoff
-and 1–250 ms positive jitter. Each batch keeps the same serialized payload and
-destination, with one shared budget of at most 30 seconds (a shorter client
-timeout or caller deadline wins). Valid `Retry-After` seconds or HTTP dates up
-to 10 seconds are honored; malformed, duplicate, or longer hints stop retries.
-A missing hint uses the backoff. Cancellation stops waiting, and a delay that
-cannot fit the remaining budget returns the rejection without another attempt.
-Already acknowledged batches are not replayed. Network errors, timeouts, and
-successful-write ACK cleanup failures do not trigger retries. This policy does
-not retry ref, history, PR, or other mutation requests, reset exhausted outbox
-attempts, or bypass branch conflict checks. Sustained pressure can still fail
-the push; it is not a reason to use `--force` or `--append`.
-
-For a slow or failing push, enable optional diagnostics for that invocation:
-
-```sh
-CXT_SYNC_DIAGNOSTICS=1 cxt push
-CXT_SYNC_DIAGNOSTICS=1 git push
-```
-
-When a recorded stage fails, stderr receives one `cxt sync diagnostics:` JSON
-report, including when an append retry subsequently succeeds. Operations with
-no recorded failures remain silent. The report distinguishes inventory from
-document/chunk negotiation and records preparation, token lookup, request,
-response-header and response-body timing, caller budget remaining, numeric
-counts and process-local operation/request ordinals. An append retry shares
-the same caller budget and collector. The report retains at most 64 events;
-stage aggregates and the number of dropped events survive eviction.
-
-Reports contain no request/response contents, credentials, addresses, identities,
-file paths or raw errors. A request-write milestone does not prove that the
-server processed or committed the request. `timeout_active` means a timeout
-was observed while the caller context was still active; it does not identify
-the server's internal cause. Diagnostics do not change cancellation, retries,
-acknowledged progress, the hook's existing 60-second context deadline, or the
-HTTP client's 30-second timeout. Synchronous token lookup and Git subprocesses
-can still run beyond a context deadline; recording that deadline does not
-turn it into a hard wall-clock limit.
-
-### `cxt pull`
-
-```text
-cxt pull [remote [branch]]
-```
-
-On a connected clone's first pull, an empty worktree selection can be initialized
-only when the authorized server history binds the fetched current branch tip to
-the exact current Git commit. Branch identity, code, memory preparation and the
-local selection are checked again before publication. An unrelated latest tip,
-an orphan selection, or an existing historical cursor is never substituted.
-
-Observes the named remote, reconciles permitted local pointers, then records the
-selected-code context/memory application. The default remote is `origin`.
-
-- The default keeps local state and reports diverged branches or causal memory
-  forks instead of choosing a winner by arrival time.
-- `--force` is rejected before mutation. Use `cxt repair --preview` and
-  `cxt repair --apply` for a reviewed exact-pointer conflict resolution.
-- If validated server metadata intentionally remains behind a local snapshot,
-  cxt keeps a guarded local cursor so later pulls do not download that same
-  projection forever. The cursor is only a disposable negotiation hint: a
-  local or remote metadata change invalidates it, and it never participates in
-  refs, reachability, or push state.
-
-Review the old and new pointers in the repair plan before applying it.
-
-## Tags and stashes
-
-### `cxt tag`
-
-```text
-cxt tag
-cxt tag <name> [<ref>]
-```
-
-Lists tags or creates an immutable tag. With no ref, tags the current head.
-Tags are synchronized on the next push.
-
-### `cxt stash`
-
-```text
-cxt stash
-cxt stash push [-m <message>] [--provider <claude|codex>]
-cxt stash list
-cxt stash pop
-```
-
-Stores active context separately and restores the branch-head context. `pop`
-restores and removes the newest context stash. Managed Git hooks mirror
-ordinary `git stash` and `git stash pop` operations.
-
-Session `stash pop` explicitly restores the original conversation, including
-unpublished local work, using the existing provider replay path. It does not
-use the default cloud memory-only input package. Replay may use the provider's
-saved compaction state and bounded seed rules; the original archive stays
-unchanged. Failure or a memory-only downgrade keeps the stash. The stack entry
-is removed only after a resumable file is prepared and only if the whole stack
-still matches the observed version. A concurrent push keeps both entries and
-reports a conflict; preparation does not prove the provider resumed the file.
-
-`stash push` uses the same provider selection rule as `cxt save`: explicit
-`--provider`, then a verified live wrapper, then the newest capture-eligible
-session.
+Each one runs a hook you already had first, with the hook's own input, and
+ends with that hook's result. Then it wakes the collector and tells it which
+hook it is, by its own file name. It reads nothing Git passes to it, decides
+nothing, and cannot stop the Git command: a missing
+or failing cxt changes nothing about the result. Existing user hooks are
+restored on uninstall.
+
+Installation requires `.cxt/HEAD` (`cxt init` or `cxt setup`) and repairs both
+`.gitignore` and `.git/info/exclude` before writing hook scripts.
+
+Hook scripts that an earlier version of cxt installed are replaced the first
+time any hook runs with this version, and by `cxt setup` and
+`cxt hooks install`. The earlier `reference-transaction` hook is removed, and
+a hook of your own that it had chained is put back in its place.
 
 ## Team settings and secret masks
 
@@ -1045,7 +923,8 @@ cxt secrets pull [-p <passphrase>] [--remember] [--force]
 ```
 
 Encrypts or decrypts the repository's `.cxtsecrets` list locally. The
-passphrase is not sent to the server.
+passphrase is not sent to the server. The values listed there are masked in
+every conversation before it is uploaded.
 
 Passphrase lookup order:
 
@@ -1058,8 +937,7 @@ records that revision, server/repository identity, passphrase fingerprint and a
 hash of the downloaded plaintext in this worktree's `.cxt/secrets-baseline.json`.
 `push` uses that original revision; it never fetches a newer one to bless an
 already-edited file. A missing baseline permits first creation only when the
-server confirms that no envelope exists. Upgrade the server and all clients
-before writing; older clients without the precondition receive HTTP 428.
+server confirms that no envelope exists.
 
 If another editor saves first, push fails and leaves your draft unchanged.
 Copy the draft aside, pull the latest, compare and reapply your changes. A pull
@@ -1074,59 +952,6 @@ separate secure channel.
 The scrubber is defense in depth, not a credential-management system. Revoke
 any secret that may have entered a session.
 
-## Git hook management
-
-### `cxt hooks`
-
-```text
-cxt hooks install
-cxt hooks uninstall
-```
-
-Installs or removes the six managed Git hooks:
-
-```text
-post-commit
-post-checkout
-post-merge
-pre-push
-reference-transaction
-post-rewrite
-```
-
-Existing user hooks are chained and restored on uninstall.
-
-The pre-push hook reads Git's complete update list before doing any work. It
-publishes only the selected branches to the configured CXT origin when Git is
-pushing to its named `origin`. Pushing another branch does not publish `HEAD`.
-Same-name branches, their canonical context name, and recorded tracking aliases
-are supported. Other Git remotes, direct URL pushes, tags, deletions and raw-OID
-refspecs do not authorize automatic context publication; use an explicit `cxt
-push` for that destination. An unknown alias or a concurrently changed Git ref
-leaves context publication pending while Git continues. Automatic append retries
-retain the exact identity selection and original timeout.
-
-Branch/capture completion wakes a bounded history-only delivery helper. It
-retries durable events across identities without reconciling all current tips
-or clearing pending sessions. A blocked identity does not prevent independent
-history from being delivered. Local immutable history and the server's exact
-acceptance are the retry record; no second publication queue is created.
-Installation requires an initialized store (`cxt init` or `cxt setup`) and
-repairs both `.gitignore` and `.git/info/exclude` before writing hook scripts.
-
-After `git pull` or merge, the post-merge hook first fetches new team context
-without moving the active local context ref. A merged branch context is then
-losslessly appended to the base timeline; the local context ref converges only
-when that preserves its history. This does not replace, slice, or copy another
-conversation into the running agent session. The next prompt instead receives
-one terminal-scoped notice containing only the validated incoming snapshot
-IDs. Its range is calculated from a durable pre-promotion baseline, so a local
-PR promotion cannot hide its own delta and a failed delivery remains retryable.
-Teammate-authored commit labels, author fields, and conversation text are not
-copied into the model's `additionalContext`; inspect those untrusted details in
-the web context view. The notice is consumed once, expires after 24 hours,
-keeps the newest 12 visible snapshots, and remains capped at 4 KiB.
-
 ## Configuration
 
 ### `cxt config`
@@ -1140,80 +965,28 @@ Reading a key prints its effective local value. Supported keys are:
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `checkout.mode` | `auto`, `prepare` | `auto` | Restore automatically or only prepare the resume action after Git checkout |
-| `load.mode` | `full`, `reconstructed`, `memory`, `default` | structured memory | Retained for compatibility; does not override managed latest-server-main input. Archive replay requires explicit `--mode` per command; `default` clears the stored preference. |
-| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Managed fresh wrappers prepare and validate the next input before stopping their current child; failed preparation preserves it. Legacy native-resume wrappers use the prepared-seed restart path. Unmanaged app sessions stay open and receive a bounded handoff. |
-| `capture.debounce` | non-negative seconds, `default` | 60 seconds | Minimum interval for repeated Stop-event captures |
-| `capture.identity` | `cxt-manifest-sha256-v1`, `legacy`, `default` | `legacy` | Explicit local capture-format preference; root selection requires a successful capability confirmation for the configured origin. |
-| `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
+| `segments.auto` | `on`, `off`, `default` | `on` | Whether hooks wake the collector. `off` leaves uploads to `cxt push`. |
+| `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier for uploaded conversations |
 | `secrets.redact` | replacement text, `default` | built-in redaction token | Exact-secret replacement text |
 | `secrets.minlen` | `0` through `64` | `4` | Minimum exact-secret length; `0` restores the default |
+| `capture.identity` | `cxt-manifest-sha256-v1`, `legacy`, `default` | `legacy` | The identity conversation documents are sent in; the root identity requires a successful capability confirmation for the configured origin. |
 
 Examples:
 
 ```bash
-cxt config checkout.mode prepare
-cxt config load.mode default
+cxt config segments.auto off
 cxt config secrets.scrub strict
-cxt config capture.debounce 120
 ```
 
 Configuration is repository-local.
 
-Root capture is available only after the server release supports it, an
-administrator opts the repository into the root identity, and new root
-publication is enabled. Then use:
-
-```bash
-cxt config capture.identity cxt-manifest-sha256-v1
-```
-
-This command checks the selected origin's current repository and upload
-capabilities before storing a preference bound to that exact destination. It
-does not enable server policy. A concurrent configuration change rejects the
-update. Ordinary save, add, stash and automatic captures subsequently use that
-preference offline; hooks do not poll the server for format selection.
-
-The preference is not a cached permission to publish. Every push checks current
-server capabilities, ownership and admission again. If new publication becomes
-disabled, new local roots remain pending and keep their identity. Switching
-origin or having no matching preference selects legacy for future captures.
-`cxt config capture.identity default` clears the preference offline without
-rewriting any existing root, staged record or archived memory. See
+`cxt config capture.identity cxt-manifest-sha256-v1` checks the selected
+origin's current repository and upload capabilities before storing a preference
+bound to that exact destination. It does not enable server policy. A concurrent
+configuration change rejects the update. Changing the identity makes the
+collector build every conversation again. See
 [conversation storage](CONVERSATION_MEMORY_STORAGE.md#explicit-conversation-roots)
 for rollout and verification limits.
-
-## Maintenance and diagnostics
-
-### `cxt fsck`
-
-```text
-cxt fsck
-```
-
-Runs a read-only server audit for reachability, roots, unreachable snapshots,
-and missing parents. An unreachable snapshot remains stored but is not
-referenced by a current ref or pending session; this can include superseded
-captures or intentionally detached history. A missing parent is the structural
-integrity error. Requires a configured remote.
-
-### `cxt reflog`
-
-```text
-cxt reflog
-```
-
-Lists server ref movements newest first. Requires a configured remote.
-
-### `cxt repack`
-
-```text
-cxt repack
-```
-
-Repackages legacy local documents into chunked content-addressed storage and
-reports reclaimed duplicate-prefix bytes. Snapshot identity remains unchanged.
-Back up important alpha data before storage maintenance.
 
 ## Global information
 
@@ -1221,6 +994,7 @@ Back up important alpha data before storage maintenance.
 cxt version
 cxt --version
 cxt help
+cxt help <command>
 cxt -h
 cxt --help
 ```
@@ -1234,137 +1008,42 @@ catalog and return success.
 |---|---|
 | `CXT_REMOTE` | API base fallback when no repository remote is configured |
 | `CXT_TOKEN` | Non-interactive authentication token |
-| `CXT_SYNC_DIAGNOSTICS=1` | Optional bounded failure diagnostics for explicit push and Git pre-push |
-| `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Snapshot author identity overrides |
+| `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Identity overrides sent with requests |
 | `CXT_NO_BROWSER=1` | Prevent automatic browser launch during login |
 | `CXT_SECRETS_PASSPHRASE` | Passphrase fallback for encrypted secret-mask sharing |
-| `CXT_KEEP_SESSION=1` | Suppress automatic session switching during a Git branch transition |
-| `CXT_CARRY=1` | Carry the active session across a context transition |
+| `CXT_CODEX_BIN` | Path of a Codex program for the opt-in test that checks what cxt reads against what Codex writes |
 
 Do not expose tokens, passphrases, or private session content in command output,
 shell history, issue reports, or CI logs.
 
-### Repository branch-history compatibility
+## Coming from a version that captured
 
-New repositories created by an updated CLI on PostgreSQL start with branch-history protection enabled. `cxt setup` / `cxt remote add origin` establishes a server-verified creation receipt. A recorded new Git branch can then publish normally. For a pre-existing Git branch without a recorded birth, each branch’s first selected push observes its saved context. If it contains recorded rewind continuations, the initial observation uses their exact starting tip before applying those events; this does not invent a historical branch-creation event. Creating the repository or accepting that initial observation requires maintainer permission. Later ordinary publication retains member permission.
+Earlier versions recorded a copy of each conversation ("capture") when a hook
+ran and kept a history of those copies beside Git. This version does not: it
+reads the tools' own records. What that changes on your computer:
 
-Existing repositories keep their current protocol. Before enabling protection on an existing legacy repository, update and synchronize every replica, then enable **Branch history protection** in settings. An existing empty repository is still existing. Selected push will not silently perform a broad bootstrap or enable protection.
+- These commands no longer exist: `cxt save`, `add`, `commit`, `restore`,
+  `status`, `diff`, `list`, `checkout`, `switch`, `load`, `memorize`, `memory`,
+  `stash`, `tag`, `branch`, `pull`, `fetch`, `repair`, `fsck`, `reflog`,
+  `repack`, `capture`, `sync`, `mcp --local`, and the wrappers `cxt claude` and
+  `cxt codex`. Start Claude Code and Codex the way you normally do.
+- `cxt push`, `cxt log`, `cxt fork` and `cxt doctor` now mean what this
+  reference describes.
+- The Git hooks are replaced by ones that only wake the collector, as described
+  under `cxt hooks`. Nothing of cxt can stop a branch from being created any
+  more.
+- The files an earlier version kept under `.cxt` (objects, refs, journals) are
+  not read and not changed. `.cxt/sessions`, the remote configuration and the
+  mark `.cxt/HEAD` are what this version uses. The rest can be deleted.
+- Before the server stops keeping captures, run `cxt push` once on every
+  computer you worked on, so that the sessions recorded there are on the
+  server in the new form.
 
-Creation and initial observation need PostgreSQL transactions. A filesystem development server or an older server returns an explicit unsupported error for this new flow. For an existing legacy development repository, deliberate bare publication followed by maintainer enablement remains the migration path; this is not an automatic fallback. Git success with a CXT delivery warning does not mean context publication succeeded; durable work remains available for retry.
+## Machine failures
 
-A same-name/same-hash identity conflict requires reconciliation; force-push does not override branch identity.
-
-`.cxt/refs/heads/*` may contain a JSON ref with `branch_id`, not just a hash.
-Use `cxt log`, `cxt branch list`, or `cxt doctor` instead of interpreting the
-replica's internal files as a public interface. Existing plaintext refs remain
-readable; only a first proven cloud identity can be adopted automatically.
-
-### PR discovery and delivery recovery
-
-Git merge ranges are durable discovery records. Discovery queues each verified
-PR request before considering the range delivered. Server acceptance transfers
-retry responsibility; it does not mean context or memory is already merged.
-Offline requests remain in the local delivery queue and retry on synchronization.
-Discovery and delivery rotate by their last durable attempt, so an older failing
-request cannot monopolize the per-run budget. Corrupt discovery records remain
-available for diagnosis while independent valid ranges continue. Exact source
-publication, Git order and idempotent completion remain server responsibilities.
-
-### Interrupted synchronization
-
-Pull stages each verified document before proceeding to the next. Verified
-chunks are also persisted before a large document finishes, so restarting the
-client can reuse progress after a network failure. Snapshot/ref publication waits
-until the entire selected pull passes integrity checks. Staged bodies are not
-published partial history. Unreferenced staging may later be garbage-collected;
-a retry then downloads it again safely.
-
-Foreground Git hooks replay durable branch operations for the current symbolic
-Git ref. Unrelated pending operations remain in the journal for background replay;
-they no longer make an ordinary current-branch hook restore another branch's
-context first. Existing hook deadlines are unchanged. Full explicit push/pull
-still synchronize retained history and may take longer on first synchronization;
-this change does not claim constant-time synchronization of a large archive.
-
-Git reference transactions describe both logical changes and storage maintenance.
-A zero-old-OID event for an already existing branch at the same target is packed
-storage creation, not branch birth. It must not create a context branch or enter
-the replay writer lock. Terminal callbacks without a matching durable vote do
-not schedule a replay. Real `git pack-refs --all` and a contended-journal fixture
-cover this distinction; genuine new branches retain the fail-closed birth vote.
-
-
-## Capture recovery
-
-`cxt capture list [--all] [--json]` inspects retained commit-capture attempts across
-all worktrees, without network access, live capture, automatic replay or changing
-refs. `show <id>` displays recorded outcomes and an expected fingerprint. Doctor
-also reports unresolved attempts; acknowledged gaps remain visible in its JSON.
-
-| State | Meaning | Action |
-| --- | --- | --- |
-| `needs-review` | A saved output or completion proof is missing | Inspect original evidence; never substitute today's transcript |
-| `ready-to-retry` | Every provider outcome was recorded | Retry exact finalization; immutable observations are still required |
-| `ready-to-publish` | Completion is durable; publication is missing | Retry publication |
-| `superseded` | A later completed publication covers this attempt at the same code/worktree/branch position | Record the verified replacement |
-| `acknowledged-gap` | An operator explicitly acknowledged unprovable missing capture | Preserve the gap and its reason |
-| `completed` | This attempt has its own accepted publication (or no context to publish) | No recovery needed |
-
-```sh
-cxt capture show <id>
-cxt capture retry <id> --expect <fingerprint>
-cxt capture resolve <id> --expect <fingerprint>
-cxt capture acknowledge <id> --expect <fingerprint> --reason "Evidence unavailable after investigation"
-```
-
-`resolve` requires the same repository, branch generation, local branch, worktree
-and Git SHA, a later completed attempt, matching provider/session evidence, a
-publication receipt and coverage of the original baseline and saved outputs.
-Inspection alone does not suppress retries. An immutable resolution sidecar records
-the original and replacement fingerprints; journal writers serialize and compare
-expected state. Stale reviews or conflicting decisions fail. Original attempts
-and their completion bits are never rewritten by resolve/acknowledge.
-
-`acknowledge` is not successful recovery and creates no publication. It retains
-an auditable gap and stops repeating an impossible automatic retry. `retry` never
-rescans the current provider; successful local publication still needs `cxt push`
-for delivery. These are local replica diagnostics, not server completion receipts.
-
-## Machine failures and upgrade notes
-
-Commands advertising `--json` emit version-1 failure envelopes on stderr. Success
-stays on stdout. Automation should use `error.code` and `exit_code`, not translated
-messages. Exit codes are 2 for argument errors, 3 for selection/conflict/index
-conditions, 4 for authorization, 5 for integrity/unsupported storage versions,
-6 for input preparation limits, 130 for cancellation, and 1 for other failures.
-`mutation_state: inspect_receipts` means a resumable operation may have completed
-partly; it is not a rollback claim. Preflight failures report `unchanged`.
-
-Precise causes are emitted only when the operation identifies them through a
-typed error; message text is never used to guess a machine code:
-
-| `error.code` | Exit | Meaning |
-| --- | --- | --- |
-| `index_changed` | 3 | An explicit staging `--expect` revision differs from the observed index. Re-read/review the index before trying again. |
-| `code_position_mismatch` | 3 | Staging, selected pull, or prepared input delivery observed a different Git commit from its selected commit. Prepare against the current code before retrying. |
-| `invalid_ref` | 2 | A typed reference validation/resolution failure reached command execution, such as an ambiguous branch/tag. |
-| `delivery_failed` | 1 | Prepared input encoding/materialization, launch validation/start, or a required delivery receipt failed. `phase` is `delivery`; provider acceptance and rollback remain unproven. |
-| `position_changed` | 3 | A broader context/branch/server selection changed without an identified commit mismatch. |
-| `conflict` | 3 | A typed conflict without a more specific cause, including sync ref rejection. |
-
-An index CAS failure without an exact typed cause can still be `conflict`; a
-general selection failure stays `position_changed`. Plain errors remain
-`needs_attention`, even if their text contains one of these code names.
-Cancellation, timeouts, integrity failures, and preparation limits retain their
-existing codes through delivery wrappers. A provider's later nonzero task exit
-is not proof that input delivery failed. `invalid_ref` reported during command
-execution retains `mutation_state: inspect_receipts`; only argument preflight
-can promise `unchanged`. Commands without a `--json` contract use the same exit
-classification and human-readable stderr, including provider-owned flags.
-
-Index, commit, pull and delivery receipts are additive versioned records. Unknown
-index versions fail closed. Raw documents, natural parents, branch IDs and older
-memories are preserved. Older binaries do not understand frozen staging; do not
-use them to commit a repository with an active new index. Before downgrade,
-finish or explicitly unstage the index and keep its archives/receipts. A new CLI
-cannot make an independently invoked old binary honor a new local contract.
+A command given `--json` that fails writes one JSON object on standard error:
+`{"error": {"version": 1, "code": ..., "phase": ..., "message": ..., "retryable": ..., "exit_code": ..., "mutation_state": ...}}`.
+The process exits `2` for arguments that were rejected before anything ran,
+`130` when it was cancelled, and otherwise with a code that tells apart a
+change underneath the command, damaged input, and a failure that needs
+attention.

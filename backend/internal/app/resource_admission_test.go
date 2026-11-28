@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 func admissionTestContext(wait time.Duration) (context.Context, *resourceAdmission) {
@@ -239,42 +238,6 @@ func TestResourceAdmissionNestedUpgradeDoesNotBypassBulkLimit(t *testing.T) {
 	assertResourcesReleased(t, gate)
 }
 
-func TestResourceAdmissionBeforeJobClaimAndFailureRelease(t *testing.T) {
-	ctx, gate := admissionTestContext(10 * time.Millisecond)
-	_, release, err := AcquireResources(ctx, ResourceBulk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claimed := 0
-	claim := func(context.Context) (int, error) { claimed++; return 1, nil }
-	failure := errors.New("job failed")
-	run := func(bound context.Context, _ int) error {
-		_, nestedRelease, err := AcquireResources(bound, ResourceBulk)
-		if err != nil {
-			return err
-		}
-		nestedRelease()
-		return failure
-	}
-	if err := admittedJob(ctx, claim, run); !errors.Is(err, domain.ErrResourceOverloaded) || claimed != 0 {
-		t.Fatalf("leased work while waiting: claimed=%d err=%v", claimed, err)
-	}
-	release()
-	if err := admittedJob(ctx, claim, run); !errors.Is(err, failure) || claimed != 1 {
-		t.Fatalf("job error changed: %v", err)
-	}
-	assertResourcesReleased(t, gate)
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("missing panic")
-			}
-		}()
-		_ = resourceWork(ctx, ResourceBulk, func(context.Context) error { panic("worker panic") })
-	}()
-	assertResourcesReleased(t, gate)
-}
-
 func TestResourceAdmissionMixedBuffersBounded(t *testing.T) {
 	ctx, gate := admissionTestContext(time.Minute)
 	var active, bulk, peak atomic.Int64
@@ -329,49 +292,4 @@ func TestResourceAdmissionMixedBuffersBounded(t *testing.T) {
 	}
 	assertResourcesReleased(t, gate)
 	t.Logf("synthetic admitted buffers peak <= %d bytes; not process RSS", peak.Load())
-}
-
-func TestResourceAdmissionWholeDocumentReadsShareBulkBeforeStorage(t *testing.T) {
-	ctx, gate := admissionTestContext(5 * time.Millisecond)
-	_, release, err := AcquireResources(ctx, ResourceBulk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	service, _ := newFsckSvc(t)
-	repo, hash := hh("read repo"), hh("read doc")
-	reads := map[string]func() error{
-		"events":             func() error { _, err := service.ReadDocEvents(ctx, repo, hash, "", 0, 1); return err },
-		"fragments":          func() error { _, err := service.ReadDocFragments(ctx, repo, hash, 0, 0, 1, 1024); return err },
-		"search events":      func() error { _, err := service.SearchDocEvents(ctx, repo, hash, "query", -1, 1); return err },
-		"matching documents": func() error { _, err := service.MatchingDocHashes(ctx, repo, "query"); return err },
-		"agent history": func() error {
-			_, err := service.ReadAgentHistoryPage(ctx, repo, hash, domain.AgentHistoryPageRequest{Before: -1, Limit: 1, MaxBytes: 4096})
-			return err
-		},
-		"raw document":  func() error { _, err := service.GetDoc(ctx, repo, hash); return err },
-		"fetch objects": func() error { _, err := service.Send(ctx, inbound.PullSendInput{RepoID: repo}); return err },
-		"pull chunks": func() error {
-			_, err := service.PullChunks(ctx, inbound.PullChunksInput{RepoID: repo, Wants: []domain.ContentHash{hash}})
-			return err
-		},
-		"search": func() error {
-			_, err := service.Search(ctx, inbound.SearchInput{RepoID: repo, Query: "query"})
-			return err
-		},
-		"diff": func() error {
-			_, err := service.Diff(ctx, inbound.DiffInput{RepoID: repo, Left: hash, Right: hash})
-			return err
-		},
-		"fsck": func() error { _, err := service.Fsck(ctx, repo); return err },
-	}
-	for name, read := range reads {
-		t.Run(name, func(t *testing.T) {
-			if err := read(); !errors.Is(err, domain.ErrResourceOverloaded) {
-				t.Fatalf("whole-document path escaped shared bulk gate: %v", err)
-			}
-		})
-	}
-	release()
-	assertResourcesReleased(t, gate)
 }

@@ -6,16 +6,6 @@ import (
 	"encoding/json"
 )
 
-func (plan LegacyByteBackfill) rangeEntry(ctx context.Context, position, offset int, body []byte) (DocRangeEntry, error) {
-	if err := ctx.Err(); err != nil {
-		return DocRangeEntry{}, err
-	}
-	if !plan.Valid() || plan.source == nil {
-		return DocRangeEntry{}, ErrIntegrity
-	}
-	return canonicalDocRangeEntry(ctx, position, offset, body, 0, false)
-}
-
 func canonicalDocRangeEntry(ctx context.Context, position, offset int, body []byte, sequence int, sequenceKnown bool) (DocRangeEntry, error) {
 	if len(body) < 2 || body[0] != '{' || body[len(body)-1] != '}' {
 		return DocRangeEntry{}, ErrIntegrity

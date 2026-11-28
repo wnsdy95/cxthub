@@ -2,22 +2,12 @@ package architecture
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 )
-
-func wave48File(test *testing.T, parts ...string) *ast.File {
-	test.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(parts...), nil, 0)
-	if err != nil {
-		test.Fatal(err)
-	}
-	return file
-}
 
 func wave48Package(test *testing.T, directory string) wave42LegacyGitSourceSet {
 	test.Helper()
@@ -50,23 +40,6 @@ func wave48Inside(node ast.Node, blocks []*ast.BlockStmt) bool {
 		}
 	}
 	return false
-}
-
-func wave48RuntimeGuards(function *ast.FuncDecl, method string) []*ast.BlockStmt {
-	var blocks []*ast.BlockStmt
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		conditional, ok := node.(*ast.IfStmt)
-		if !ok || conditional.Init != nil || conditional.Else != nil {
-			return true
-		}
-		if negated, ok := conditional.Cond.(*ast.UnaryExpr); ok && negated.Op == token.NOT {
-			if call, ok := negated.X.(*ast.CallExpr); ok && workerSelectorPath(call.Fun) == "runtime."+method && len(call.Args) == 0 {
-				blocks = append(blocks, conditional.Body)
-			}
-		}
-		return true
-	})
-	return blocks
 }
 
 func wave48FullWorkers(expression ast.Expr, flags map[string]bool) bool {
@@ -138,79 +111,6 @@ func wave48CheckRoot(test *testing.T, file *ast.File, providers bool) {
 		}
 		return true
 	})
-}
-
-func TestWave48DocumentWorkerRootDoesNotCaptureOrAutostartRuntime(test *testing.T) {
-	set := wave48Package(test, filepath.Join("..", "serverruntime"))
-	for _, name := range []string{"document_worker.go", "application_workers.go", "application_worker_sources.go"} {
-		file := set.files[filepath.Join("..", "serverruntime", name)]
-		if file == nil {
-			test.Fatal("missing actual shared worker root", name)
-		}
-		wave48CheckRoot(test, file, false)
-	}
-	root := set.files[filepath.Join("..", "serverruntime", "document_worker.go")]
-	counts := wave48Calls(root)
-	for _, name := range []string{"OpenInfrastructure", "NewDocumentWorkers", "NewDisplayMaintenanceWorker", "newApplicationWorkers"} {
-		if counts[name] != 1 {
-			test.Error("shared root must assemble one existing infrastructure/document/application owner", name, counts[name])
-		}
-	}
-	if counts["NewGitHubWorker"] != 0 || counts["EvidenceInstallation"] != 0 || set.methods["OpenDocumentWorker"] == nil {
-		test.Error("shared root must preserve the document entrypoint and leave GitHub provider assembly outside core")
-	}
-	helpers := set.files[filepath.Join("..", "serverruntime", "application_worker_sources.go")]
-	for _, declaration := range helpers.Decls {
-		if function, ok := declaration.(*ast.FuncDecl); ok && (function.Recv != nil || function.Name.Name != "WorkerRepositories" && function.Name.Name != "ValidateGitHubOrigin") {
-			test.Error("shared source helpers retain provider bootstrap", function.Name.Name)
-		}
-	}
-	if set.methods["WorkerRepositories"] == nil || set.methods["ValidateGitHubOrigin"] == nil {
-		test.Error("shared source validation helpers are missing")
-	}
-}
-
-func TestWave48ApplicationWorkerRootUsesDirectCompleteOwners(test *testing.T) {
-	set := wave48Package(test, filepath.Join("..", "serverruntime"))
-	function := set.methods["newApplicationWorkers"]
-	if function == nil {
-		test.Fatal("missing actual full worker assembly")
-	}
-	counts := wave48Calls(function.Body)
-	for _, name := range []string{"NewProjectionWorkers", "NewNotificationWorker", "NewMaintenanceWorkers", "NewGitChangeWorker", "NewGitIntegrationWorkers",
-		"NewMemoryPreparationResources", "NewMemoryPreparationWorkers", "NewPRPromotionWorker", "NewInvitationEmailWorker", "gitengine.NewEngine"} {
-		if counts[name] != 1 {
-			test.Error("full root must construct exactly one direct existing owner/resource", name, counts[name])
-		}
-	}
-	if counts["NewGitHubWorker"] != 0 || counts["webhookdelivery.New"] != 0 {
-		test.Error("full assembly must consume the shared GitHub owner and injected notification sender")
-	}
-	bindings := 0
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		field, ok := node.(*ast.KeyValueExpr)
-		if !ok {
-			return true
-		}
-		if workerSelectorPath(field.Key) == "Profile" && !strings.HasSuffix(workerSelectorPath(field.Value), "Complete") {
-			test.Error("full assembly weakens an explicit Complete worker profile")
-		}
-		if workerSelectorPath(field.Key) == "Sender" && !strings.HasSuffix(workerSelectorPath(field.Value), ".NotificationSender") &&
-			!strings.HasSuffix(workerSelectorPath(field.Value), ".InvitationSender") {
-			test.Error("full assembly must consume the injected worker provider sender")
-		}
-		if workerSelectorPath(field.Key) == "run" {
-			bindings++
-			method, ok := field.Value.(*ast.SelectorExpr)
-			if !ok || method.Sel.Name != "Run" && method.Sel.Name != "RunReconciler" {
-				test.Error("worker binding must name an existing owner method, not a callback")
-			}
-		}
-		return true
-	})
-	if bindings != 14 {
-		test.Error("full assembly must retain thirteen existing bindings and optional GitHub", bindings)
-	}
 }
 
 func TestWave48TemporarySourceFactoryIsConstructionOnly(test *testing.T) {
@@ -367,58 +267,5 @@ func TestWave48WorkerArgvCallsOpenWorker(test *testing.T) {
 	if !argv || counts["workerserver.OpenWorker"] != 1 || counts["worker.Run"] != 1 || counts["worker.Close"] != 1 ||
 		counts["serverruntime.OpenWorker"] != 0 || counts["OpenDocumentWorker"] != 0 {
 		test.Error("actual argv must open through workerserver and run/close the same worker, without bypassing provider/profile selection")
-	}
-}
-
-func TestWave48APIKeepsExistingWorkersInsideExactExternalGuard(test *testing.T) {
-	set := wave48Package(test, filepath.Join("..", "..", "cmd", "cxtd"))
-	serve := set.methods["serve"]
-	if serve == nil {
-		test.Fatal("missing actual API serve body")
-	}
-	external, documents := wave48RuntimeGuards(serve, "ExternalWorkers"), wave48RuntimeGuards(serve, "BoundedDocuments")
-	if len(external) != 1 || len(documents) != 1 || !wave48Inside(documents[0], external) {
-		test.Fatal("API must retain the document guard inside exactly !runtime.ExternalWorkers()")
-	}
-	constructors := map[string]bool{
-		"ProjectionWorkersForProfile": true, "NewNotificationWorker": true, "NewMaintenanceWorkers": true, "NewGitChangeWorker": true,
-		"NewGitIntegrationWorkers": true, "NewMemoryPreparationWorkers": true, "NewPRPromotionWorker": true,
-		"NewInvitationEmailWorker": true, "NewGitHubWorker": true, "DocumentWorkersForProfile": true, "NewDisplayMaintenanceWorker": true,
-	}
-	registrations := 0
-	ast.Inspect(serve.Body, func(node ast.Node) bool {
-		if selector, ok := node.(*ast.SelectorExpr); ok && workerSelectorPath(selector) == "lifecycle.start" && !wave48Inside(selector, external) {
-			test.Error("API starts or captures a worker outside the external-worker guard")
-		}
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		name, path := wave42LegacyGitFunctionName(call.Fun), workerSelectorPath(call.Fun)
-		if constructors[name] {
-			document := name == "DocumentWorkersForProfile" || name == "NewDisplayMaintenanceWorker"
-			if !wave48Inside(call, external) || wave48Inside(call, documents) != document {
-				test.Error("API worker construction escapes its exact profile ownership", name)
-			}
-		}
-		if path == "lifecycle.start" {
-			registrations++
-			if len(call.Args) != 1 {
-				test.Error("API lifecycle registration must retain one explicit owner")
-			} else {
-				method := workerSelectorPath(call.Args[0])
-				document := strings.HasPrefix(method, "documentWorkers.") || method == "worker.Run"
-				if wave48Inside(call, documents) != document {
-					test.Error("API changes ownership of the original five document bindings", method)
-				}
-			}
-		}
-		if path == "serverruntime.Serve" && wave48Inside(call, external) {
-			test.Error("external-worker API must retain its HTTP serving path")
-		}
-		return true
-	})
-	if registrations != 19 {
-		test.Error("API must keep its existing nineteen registrations directly in serve", registrations)
 	}
 }

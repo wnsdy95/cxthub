@@ -4,14 +4,10 @@ package store
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 func TestPGBlobIncarnationUpgradePreservesPayloadHeap(test *testing.T) {
@@ -87,43 +83,4 @@ func TestPGBlobIncarnationUpgradePreservesPayloadHeap(test *testing.T) {
 	if applied, err := storage.ApplyMigrations(ctx, upgrade); err != nil || applied != 0 {
 		test.Fatal("upgrade replay was not idempotent", applied, err)
 	}
-}
-
-func TestPGBlobIncarnationMetadataAndVersionCannotBeReused(test *testing.T) {
-	storage, ctx, repo := catalogPG(test)
-	digest := memoryCaptureTestDigest()
-	digest.SnapshotID = repo
-	hash, err := storage.PutMemory(ctx, repo, digest)
-	if err != nil {
-		test.Fatal(err)
-	}
-	original := memoryWitnessPGCapture(test, storage, ctx, repo, hash)
-	_, err = storage.pool.Exec(ctx, `UPDATE blob_source_incarnations SET incarnation=$2::uuid WHERE hash=$1`, string(hash), original.Witness.Root.Incarnation)
-	var constraint *pgconn.PgError
-	if !errors.As(err, &constraint) || constraint.Code != "23514" {
-		test.Fatal("incarnation update was allowed", err)
-	}
-	memoryWitnessPGCheck(test, storage, ctx, repo, []domain.MemoryObjectWitness{original.Witness}, nil)
-	catalogExecPG(test, ctx, storage.pool, `UPDATE blobs SET doc_range_source_version=0 WHERE hash=$1`, string(hash))
-	next := memoryWitnessPGCapture(test, storage, ctx, repo, hash)
-	if next.Witness.Root.Version != original.Witness.Root.Version+1 || next.Witness.Root.Incarnation != original.Witness.Root.Incarnation {
-		test.Fatal("source version assignment reset fencing")
-	}
-	catalogExecPG(test, ctx, storage.pool, `DELETE FROM blob_source_incarnations WHERE hash=$1`, string(hash))
-	memoryWitnessPGCheck(test, storage, ctx, repo, []domain.MemoryObjectWitness{next.Witness}, domain.ErrIntegrity)
-	if err := storage.WithinReadSnapshot(ctx, func(bound context.Context) error {
-		object, err := storage.CaptureMemoryObject(bound, repo, hash, 2<<20)
-		if !errors.Is(err, domain.ErrIntegrity) || object.Digest != nil || object.Witness.Root != nil {
-			test.Fatal("missing incarnation was silently repaired or trusted", err)
-		}
-		return nil
-	}); err != nil {
-		test.Fatal(err)
-	}
-	catalogExecPG(test, ctx, storage.pool, `INSERT INTO blob_source_incarnations(hash,incarnation) VALUES($1,$2::uuid)`, string(hash), original.Witness.Root.Incarnation)
-	regenerated := memoryWitnessPGCapture(test, storage, ctx, repo, hash)
-	if regenerated.Witness.Root.Incarnation == original.Witness.Root.Incarnation {
-		test.Fatal("explicit insertion reused previous incarnation")
-	}
-	memoryWitnessPGCheck(test, storage, ctx, repo, []domain.MemoryObjectWitness{next.Witness}, domain.ErrConflict)
 }

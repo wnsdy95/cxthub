@@ -4,8 +4,9 @@ This guide covers the `cxt` client, source builds, upgrades, removal, and the
 separate `cxtd` server.
 
 > [!WARNING]
-> CXTHub is alpha software. Back up important data and review captured context
-> before sharing it.
+> CXTHub is alpha software. Back up important data, and know who can read a
+> repository before you connect it: a connected repository uploads the
+> conversations of your coding-agent sessions.
 
 ## Choose what to install
 
@@ -25,9 +26,11 @@ Published `cxt` binaries support:
 
 - macOS on arm64 or amd64;
 - Linux on arm64 or amd64;
-- Git 2.28 or newer; and
-- at least one supported coding agent, Claude Code or Codex, for capture and
-  restore workflows.
+- Git 2.28 or newer;
+- at least one supported coding agent, Claude Code or Codex, whose session
+  records `cxt` reads; and
+- the `sqlite3` program, when Codex is used: `cxt` reads Codex's thread
+  databases through it. Without it, Codex threads are listed as unread.
 
 The installer also requires `curl`, `tar`, and either `sha256sum` or `shasum`.
 Native Windows archives are not currently published.
@@ -155,9 +158,10 @@ cxt setup https://<host>/<owner>/<repository>
 
 `cxt setup` is idempotent and performs:
 
-1. initialize a missing `.cxt` store, preserving an existing context selection;
-2. browser-based login and verified repository remote registration;
-3. resolve the actual Git origin upstream and code-aligned context on a pristine clone;
+1. making the repository's `.cxt` folder and its mark (`.cxt/HEAD`) when they
+   are absent;
+2. browser-based login and verification of the repository address;
+3. registration of the connection with the server;
 4. managed Git hook installation;
 5. Claude Code and Codex hook registration when available; and
 6. team settings pull when authenticated.
@@ -167,55 +171,71 @@ Code settings are written under the repository's `.claude/` directory. Codex
 hooks are merged into `~/.codex/hooks.json`; Codex may require a one-time `/hooks`
 approval.
 
-Automatic tracking does not launch a provider or inject conversation text. It
-requires matching checked-out/upstream code and a server-verified Git origin.
-Existing local context and queued operations are preserved. A conflicting or
-unverifiable first attachment stops before new hooks are installed; follow the
-reported recovery guidance, then rerun setup. `cxt remote add` only registers a
-connection; use explicit `cxt pull` to select context on that manual path. See
-the [setup reference](CLI.md#cxt-setup) for the complete contract.
+Setup uploads nothing itself, and it neither starts an agent nor adds anything
+to a conversation. An existing `origin` that points to another repository is
+kept, and setup stops instead of replacing it. See the
+[setup reference](CLI.md#cxt-setup) for each step.
 
-The Codex hook registration is global, but capture remains repository opt-in.
-Only `cxt init` or `cxt setup` writes the `.cxt/HEAD` activation marker. In any
-other Git repository the hook is a no-op and does not create `.cxt`. If a
-legacy version left a partial `.cxt` directory behind, the next hook preserves
-its contents, adds `.cxt/` and `.cxtsecrets` to `.gitignore` and
-`.git/info/exclude`, and leaves capture disabled until explicit initialization.
+### What happens after setup
 
-Those lifecycle hooks apply to both provider CLIs and supported app surfaces:
+`cxt` reads the session records Claude Code and Codex keep on your computer,
+and Git. It cuts each session at the commits it made and uploads one report
+per session, with the session's conversation after masking. Hooks only wake
+that reading:
 
-- Codex app and Codex IDE sessions that emit Codex lifecycle hooks;
+- the five managed Git hooks (`post-commit`, `post-checkout`, `post-merge`,
+  `post-rewrite`, `pre-push`); and
+- the agent hooks at the end of a turn and of a session.
+
+A hook is never what is read, so a hook that did not run is made up for by the
+next one that does. The automatic upload covers sessions recorded since it
+first ran in the repository. Run `cxt push` once to upload earlier sessions,
+and `cxt doctor` at any time to see what does not fit. Turn the automatic
+upload off with `cxt config segments.auto off`; see
+[automatic upload](CLI.md#automatic-upload).
+
+On the server a session is read by the account that uploaded it. A part of it
+opens to whoever may view the repository once the commit it explains is
+pushed. The repository page in the web opens on the **Sessions** tab.
+
+The Codex hook registration is global, but `cxt` acts only where `cxt init` or
+`cxt setup` wrote the `.cxt/HEAD` mark. In any other Git repository the hook
+does nothing and does not create `.cxt`. If a `.cxt` directory exists without
+that mark, the next hook leaves its contents as they are and adds `.cxt/` and
+`.cxtsecrets` to `.gitignore` and `.git/info/exclude`.
+
+The agent hooks apply to both provider CLIs and supported app surfaces:
+
+- Codex app and Codex IDE sessions that run Codex lifecycle hooks;
 - Claude Desktop's **Code** tab, which runs the Claude Code engine; and
 - ordinary Claude Code and Codex terminal sessions.
 
-Desktop apps do not need to be launched through `cxt`. Their official hooks
-report the session ID, transcript/rollout path, and working directory. CXTHub
-uses those values to capture each concurrent app session independently. App
-linked worktrees resolve to one shared `.cxt` store in the primary repository,
-while each worktree retains its own active Git branch.
+Start Claude Code and Codex the way you normally do; nothing has to be launched
+through `cxt`. Linked worktrees use the one `.cxt` folder of the primary
+repository, while each worktree keeps its own Git branch.
 
-When an app changes branches, CXTHub preserves the live vendor-owned session
-and sends a bounded memory handoff (maximum 16 KiB) once on the next prompt.
-The archived conversation is not copied into the app's active context window.
-The `cxt claude` and `cxt codex` wrappers remain optional for terminal users;
-they additionally support native process restart/resume after a branch switch.
+At session start and at a prompt, a hook gives the session the most recent
+summary another session wrote along the branch its folder is on, once for each
+branch the session comes to. The text is at most 16 KiB. No conversation is
+copied into the session.
 
-Claude Desktop's general **Chat** tab does not run Claude Code lifecycle hooks,
-so it cannot be passively captured by this integration. Use the Code tab or an
-explicit export/import workflow instead.
+Claude Desktop's general **Chat** tab does not run Claude Code lifecycle hooks
+and is outside this integration.
 
-To let Codex app or Claude app retrieve context already synchronized to the
-server, use the default product connector at `https://cxthub.com/mcp` (or the
+To let the Codex app or the Claude app read sessions that are on the server,
+use the default product connector at `https://cxthub.com/mcp` (or the
 corresponding self-hosted origin). This is an OAuth-protected Streamable HTTP
-service backed by `cxtd` and cloud PostgreSQL; it is separate from capture hooks
-and from the explicit offline helper `cxt mcp --local`. See
+service; it is separate from the hooks and from the `cxt` CLI. See
 [MCP connections](MCP.md) for setup, permissions, and deployment boundaries.
 
-To initialize local-only storage without a remote:
+To set up a repository without a server:
 
 ```bash
 cxt init
 ```
+
+Nothing is uploaded without a server. `cxt segments` still shows the sessions
+of the folder cut at their commits, from this computer alone.
 
 To skip browser login during setup (requires an existing credential or
 `CXT_TOKEN` for private repositories):
@@ -273,16 +293,21 @@ If the installer added a shell startup entry, remove the line ending with:
 
 Client removal does not remove:
 
-- `.cxt/` stores inside repositories;
+- `.cxt/` folders inside repositories, including the copies of what was
+  uploaded under `.cxt/sessions`;
+- what the automatic upload keeps beside Git's own files (`<git-dir>/cxt/`)
+  and in your user cache directory (`cxthub/session-records-v1`);
 - `.cxtsecrets`;
 - `~/.cxt/` credentials;
 - managed Git hooks;
-- `.claude/` or `~/.codex/` provider settings; or
-- remotely synchronized context.
+- the `cxt hook` entries in `.claude/settings.json` and `~/.codex/hooks.json`; or
+- sessions already uploaded to a server.
 
 Before uninstalling, run `cxt hooks uninstall` inside each repository where the
-managed Git hooks should be removed. Delete local data only after reviewing it
-and confirming that any required context has been backed up or synchronized.
+managed Git hooks should be removed, and remove the `cxt hook` entries from the
+agent settings by hand. To take a session off the server, run
+`cxt remove <tool> <session> --yes` before uninstalling. Delete local data only
+after reviewing it.
 
 ## Build from source
 
@@ -356,7 +381,7 @@ The CLI recognizes these environment variables:
 |---|---|
 | `CXT_REMOTE` | API base fallback when no repository `origin` is configured |
 | `CXT_TOKEN` | Non-interactive authentication token; takes precedence over stored credentials |
-| `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Snapshot author identity overrides |
+| `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Identity overrides sent with requests |
 | `CXT_NO_BROWSER=1` | Do not attempt to open a browser during device login |
 | `CXT_SECRETS_PASSPHRASE` | Passphrase fallback for `cxt secrets push|pull` |
 
@@ -385,10 +410,14 @@ arbitrary extra path segments are rejected. Credentials, query strings,
 fragments, and one-segment paths are rejected. New connections require a
 reachable server and sufficient access; existing remotes are not rewritten.
 
-### No active session to snapshot
+### Sessions do not appear on the server
 
-Run Claude Code or Codex from the same Git working tree before invoking a
-manual capture. `cxt` isolates sessions by repository path.
+Run `cxt doctor` inside the repository. It reads this computer and the server,
+changes nothing, and gives for each finding the command that puts it right:
+for example `cxt setup` when the repository is not connected, `cxt login` when
+the login is missing, or `cxt push` when the automatic upload has not run yet.
+A session belongs to the repository when a working folder its records name is
+inside one of the repository's worktrees.
 
 ### Login cannot open a browser
 
@@ -430,7 +459,7 @@ Set `RESEND_API_KEY` in that file, then restart `cxtd` (for local dogfooding,
 continue to work. The key belongs only to the backend: never use `VITE_` or put
 it in a frontend environment file.
 
-The default sender is `CXTHub <noreply@cxthub.com>`. Its domain must first be
+The default sender is a `noreply` address at `cxthub.com`. Its domain must first be
 [verified in Resend](https://resend.com/docs/dashboard/domains/introduction).
 If your account uses another verified domain, set `RESEND_FROM`. `CXT_WEB_URL`
 can override the invitation link origin: its default is `http://localhost:5173`

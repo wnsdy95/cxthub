@@ -87,21 +87,6 @@ type docRangeHeaderHeapEstimate struct {
 	err   error
 }
 
-func (estimate *docRangeHeaderHeapEstimate) include(other docRangeHeaderHeapEstimate) {
-	if estimate.err != nil {
-		return
-	}
-	if other.err != nil {
-		estimate.err = other.err
-		return
-	}
-	if estimate.bytes < 0 || other.bytes < 0 || estimate.bytes > math.MaxInt64-other.bytes {
-		estimate.err = ErrIntegrity
-		return
-	}
-	estimate.bytes += other.bytes
-}
-
 func (estimate *docRangeHeaderHeapEstimate) allocation(count, width int64) {
 	if estimate.err != nil {
 		return
@@ -621,6 +606,11 @@ type DocViewEvent struct {
 	Index    int
 	Deferred bool
 	Bytes    int
+	// What the range index knows of a deferred event's content, so that a
+	// reader draws it without reading it: reasoning with no readable
+	// summary draws nothing, and a cxt seed summary is labelled as one.
+	EmptyReasoning bool
+	SeedSummary    bool
 }
 
 func (event DocViewEvent) MarshalJSON() ([]byte, error) {
@@ -634,7 +624,10 @@ func (event DocViewEvent) MarshalJSON() ([]byte, error) {
 			Index          int       `json:"event_index"`
 			Bytes          int       `json:"event_bytes"`
 			Deferred       bool      `json:"deferred"`
-		}{event.Event.Kind, event.Event.Seq, event.Event.Role, event.Event.ToolName, event.Event.CompactSummary, event.Index, event.Bytes, true})
+			EmptyReasoning bool      `json:"empty_reasoning,omitempty"`
+			SeedSummary    bool      `json:"seed_summary,omitempty"`
+		}{event.Event.Kind, event.Event.Seq, event.Event.Role, event.Event.ToolName, event.Event.CompactSummary, event.Index, event.Bytes, true,
+			event.EmptyReasoning, event.SeedSummary})
 	}
 	raw, err := json.Marshal(event.Event)
 	if err != nil {

@@ -13,7 +13,6 @@ type EnterpriseIdentity interface {
 	ListEnterprises(context.Context, string) ([]domain.Enterprise, error)
 	GetEnterprise(context.Context, string, string) (domain.Enterprise, error)
 	UpdateEnterprise(context.Context, string, string, app.EnterprisePatch) (domain.Enterprise, error)
-	EnterpriseRoleOf(context.Context, string, string) (domain.EnterpriseRole, bool)
 	ListEnterpriseMembers(context.Context, string, string) ([]domain.EnterpriseMembership, error)
 	UpdateEnterpriseMember(context.Context, string, string, string, domain.EnterpriseRole) error
 	RemoveEnterpriseMember(context.Context, string, string, string) error

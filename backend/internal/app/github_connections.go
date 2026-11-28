@@ -42,6 +42,14 @@ func (g *GitHubConnections) owner(ctx context.Context, actor, nsID string) (doma
 	}
 	return ns, domain.ErrForbidden
 }
+
+// maintains says whether a person decides what a repository is connected to:
+// a maintainer or an owner of a repository that is not archived. The owner
+// space the repository is in does not matter.
+func (g *GitHubConnections) maintains(ctx context.Context, repository domain.Repository, actor string) bool {
+	role, ok := g.id.RoleOf(ctx, repository.ID, actor)
+	return ok && role.AtLeast(domain.RoleMaintainer) && !repository.Archived
+}
 func opaqueGitHub() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -247,27 +255,34 @@ func (g *GitHubConnections) Overview(ctx context.Context, actor string) (out Git
 	if err != nil {
 		return out, err
 	}
+	// What a person binds is a repository they maintain, in whichever owner
+	// space it is. Whoever manages an installation without maintaining a
+	// repository neither binds it nor is shown that it is bound.
+	candidates, err := g.id.repositories.ListRepositoriesForUser(ctx, actor)
+	if err != nil {
+		return out, err
+	}
+	maintained, manageable := []domain.Repository{}, make(map[string]bool)
+	for _, local := range candidates {
+		if g.maintains(ctx, local, actor) {
+			maintained = append(maintained, local)
+			manageable[local.ID] = true
+		}
+	}
+	stores := []domain.Repo{}
+	for _, r := range all {
+		if manageable[r.RepositoryID] {
+			stores = append(stores, r)
+		}
+	}
 	for _, ns := range namespaces {
-		v := GitHubOwnerView{Namespace: ns, Repositories: []domain.Repository{}, ContextRepos: []domain.Repo{}, Teams: []domain.Team{}}
+		v := GitHubOwnerView{Namespace: ns, Repositories: maintained, ContextRepos: stores, Teams: []domain.Team{}}
 		c, e := g.store.GetGitHubConnection(ctx, ns.ID)
 		if e == nil {
 			v.Connection = &c
 		} else if !errors.Is(e, domain.ErrNotFound) {
 			return out, e
 		}
-		locals, e := g.id.organization.ListRepositoriesForNamespace(ctx, ns.ID)
-		if e != nil {
-			return out, e
-		}
-		manageable := make(map[string]bool)
-		for _, local := range locals {
-			if g.id.IsOwner(ctx, local.ID, actor) {
-				v.Repositories = append(v.Repositories, local)
-				manageable[local.ID] = true
-			}
-		}
-		// Organization administration authorizes installation management, not
-		// reading or binding every private context repository in that organization.
 		if v.Connection != nil {
 			visible := []domain.GitHubBinding{}
 			for _, b := range c.Bindings {
@@ -277,13 +292,6 @@ func (g *GitHubConnections) Overview(ctx context.Context, actor string) (out Git
 			}
 			c.Bindings = visible
 			c.PRPages = nil // Internal reconciliation cursors are not a UI contract.
-		}
-		for _, r := range all {
-			for _, local := range v.Repositories {
-				if r.RepositoryID == local.ID {
-					v.ContextRepos = append(v.ContextRepos, r)
-				}
-			}
 		}
 		if ns.OrganizationID != "" {
 			v.Teams, e = g.id.teams.ListTeams(ctx, ns.OrganizationID)
@@ -330,7 +338,7 @@ func (g *GitHubConnections) Edit(ctx context.Context, actor, ns string, generati
 			if e != nil {
 				return e
 			}
-			if local.OwnerNamespaceID != ns || local.Archived || !g.id.IsOwner(tx, local.ID, actor) {
+			if !g.maintains(tx, local, actor) {
 				return domain.ErrForbidden
 			}
 			repo, e := g.core.meta.GetRepo(tx, binding.ContextRepoID)
@@ -352,18 +360,34 @@ func (g *GitHubConnections) Edit(ctx context.Context, actor, ns string, generati
 			if !found {
 				return domain.ErrForbidden
 			}
+			// A repository is read through one installation: it is bound once
+			// among all connections, and a GitHub repository once in its own.
+			if _, e := g.store.FindGitHubBinding(tx, binding.ContextRepoID); e == nil {
+				return domain.ErrConflict
+			} else if !errors.Is(e, domain.ErrNotFound) {
+				return e
+			}
 			for _, b := range c.Bindings {
-				if b.ContextRepoID == binding.ContextRepoID || b.ExternalID == binding.ExternalID {
+				if b.ExternalID == binding.ExternalID {
 					return domain.ErrConflict
 				}
 			}
 			binding.GitOrigin = repo.GitRemoteURL
 			c.Bindings = append(c.Bindings, binding)
+			// The server did not read the repository before it was bound: its
+			// first read through the installation starts when this is committed.
+			if e := requestRemoteGitSync(tx, g.core.meta, binding.ContextRepoID, time.Now().UTC()); e != nil {
+				return e
+			}
 		case "unbind":
 			next := []domain.GitHubBinding{}
 			for _, b := range c.Bindings {
 				if b.ContextRepoID == binding.ContextRepoID {
-					if !g.id.IsOwner(tx, b.RepositoryID, actor) {
+					local, e := g.id.repositories.GetRepository(tx, b.RepositoryID)
+					if e != nil {
+						return e
+					}
+					if !g.maintains(tx, local, actor) {
 						return domain.ErrForbidden
 					}
 					continue

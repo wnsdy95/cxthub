@@ -3,10 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/wnsdy95/cxthub/backend/internal/app/systemmaintenance"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
-	"log"
 	"strings"
 	"time"
 )
@@ -42,14 +40,4 @@ func (s *IdentityService) RedeemDevicePairing(ctx context.Context, code, pollHas
 	}
 	sess.Token = raw
 	return sess, true, nil
-}
-func (service *IdentityService) RunRuntimeMaintenance(ctx context.Context) {
-	worker, err := systemmaintenance.NewRuntime(systemmaintenance.RuntimeConfig{
-		Profile: systemmaintenance.Compatibility, Store: service.RuntimeStore(),
-	})
-	if err != nil {
-		log.Printf("runtime maintenance: %v", err)
-		return
-	}
-	worker.Run(ctx)
 }

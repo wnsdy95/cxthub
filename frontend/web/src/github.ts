@@ -1,8 +1,8 @@
 import type { Repo, Repository, Team } from './types';
-export interface GitHubRepository { id: number; account_id: number; full_name: string; private: boolean }
-export interface GitHubBinding { repository_id: string; context_repo_id: string; external_id: number }
-export interface GitHubTeamMapping { team_id: string; external_id: number; sync_members: boolean }
-export interface GitHubConnection {
+interface GitHubRepository { id: number; account_id: number; full_name: string; private: boolean }
+interface GitHubBinding { repository_id: string; context_repo_id: string; external_id: number }
+interface GitHubTeamMapping { team_id: string; external_id: number; sync_members: boolean }
+interface GitHubConnection {
  namespace_id: string; generation: number; enabled: boolean; status: string; checked_at: string; next_sync: string;
  installation: { id: number; account_id: number; login: string; kind: string; suspended: boolean };
  repositories: GitHubRepository[]; bindings: GitHubBinding[]; teams: { id: number; slug: string; name: string }[];

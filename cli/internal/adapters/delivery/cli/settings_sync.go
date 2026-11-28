@@ -1,6 +1,9 @@
-// settings_sync.go — Commit/branch movement sync of .claude/.agents/.codex folders + backup stack.
+// settings_sync.go — the team's settings folders (.claude, .agents, .codex) and the backups of what they replaced.
 //
-// Policy (user decision): If the target snapshot's settings folder is different from the current one on rollback/branch move, **replace** it. However, before replacement, store the current state as a content-addressed object and push it onto the .cxt/settings-backups.json stack to allow recovery at any time (to prevent losing my previous state while receiving team member settings).
+// `cxt settings pull` and `cxt setup` replace the local folders with the
+// team's. Before a folder is replaced, its state is stored as a
+// content-addressed object and noted on a stack of backups, so that
+// `cxt settings restore` can bring it back. Restoring is itself backed up.
 package cli
 
 import (
@@ -13,7 +16,6 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // settingsBackup is a single settings folder state before replacement (hash is the local settingsobjs object).
@@ -23,10 +25,6 @@ type settingsBackup struct {
 	Claude domain.ContentHash `json:"claude,omitempty"`
 	Agents domain.ContentHash `json:"agents,omitempty"`
 	Codex  domain.ContentHash `json:"codex,omitempty"`
-}
-
-func backupsPath(cwd string) string {
-	return filepath.Join(cxtRepoRoot(context.Background(), cwd), ".cxt", "settings-backups.json")
 }
 
 func loadBackups(cwd string) []settingsBackup {
@@ -45,6 +43,36 @@ func saveBackups(cwd string, list []settingsBackup) error {
 	}
 	b, _ := json.MarshalIndent(list, "", "  ")
 	return providerfs.WriteRepoFileAtomic(cwd, filepath.Join(".cxt", "settings-backups.json"), b, 0o644)
+}
+
+// rememberSettings reads the settings folders as they are now and returns
+// what stores that state and puts it on the stack of backups. The caller
+// calls it only after it replaced something, so that a pull that changed
+// nothing writes nothing.
+func rememberSettings(ctx context.Context, c *Container, cwd, note string) func() {
+	kinds := []string{"claude", "agents", "codex"}
+	before := map[string]domain.SettingsBundle{}
+	for _, kind := range kinds {
+		if bundle, ok := capture.ReadSettingsDir(cwd, kind); ok {
+			before[kind] = bundle
+		}
+	}
+	return func() {
+		if c == nil || c.SettingsObjects == nil || len(before) == 0 {
+			return
+		}
+		stored := map[string]domain.ContentHash{}
+		for kind, bundle := range before {
+			if hash, err := c.SettingsObjects.PutSettingsObject(ctx, bundle); err == nil {
+				stored[kind] = hash
+			}
+		}
+		if len(stored) == 0 {
+			return
+		}
+		entry := settingsBackup{At: time.Now().UTC(), Note: note, Claude: stored["claude"], Agents: stored["agents"], Codex: stored["codex"]}
+		_ = saveBackups(cwd, append([]settingsBackup{entry}, loadBackups(cwd)...))
+	}
 }
 
 // currentSettingsHashes stores the current folder state as an object and returns the hash (returns "" if none).
@@ -78,56 +106,6 @@ func inspectSettingsHashes(cwd string) (claude, agents, codex domain.ContentHash
 		}
 	}
 	return hashes[0], hashes[1], hashes[2], nil
-}
-
-// syncSettingsToSnapshot syncs the local state to the target snapshot's settings folder state. If different: push current to backup stack → replace with target bundle. Preserve kinds not recorded in the snapshot.
-func syncSettingsToSnapshot(ctx context.Context, c *Container, cwd string, snapID domain.ContentHash, note string) {
-	all, err := c.List.List(ctx, inbound.ListInput{})
-	if err != nil {
-		return
-	}
-	var snap *domain.Snapshot
-	for i := range all.Snapshots {
-		if all.Snapshots[i].ID == snapID {
-			snap = &all.Snapshots[i]
-			break
-		}
-	}
-	if snap == nil || (snap.ClaudeSettings == "" && snap.AgentsSettings == "" && snap.CodexSettings == "") {
-		return // legacy snapshot without settings metadata; preserve current folders
-	}
-	curClaude, curAgents, curCodex := currentSettingsHashes(ctx, c, cwd)
-	type job struct {
-		kind   string
-		cur    domain.ContentHash
-		target domain.ContentHash
-	}
-	jobs := []job{{"claude", curClaude, snap.ClaudeSettings}, {"agents", curAgents, snap.AgentsSettings}, {"codex", curCodex, snap.CodexSettings}}
-	changed := false
-	for _, j := range jobs {
-		if j.target == "" || j.target == j.cur {
-			continue
-		}
-		changed = true
-	}
-	if !changed {
-		return
-	}
-	// backup push (entire current state — even partial replacements are stored as a single point in time).
-	backups := append([]settingsBackup{{At: time.Now().UTC(), Note: note, Claude: curClaude, Agents: curAgents, Codex: curCodex}}, loadBackups(cwd)...)
-	_ = saveBackups(cwd, backups)
-	for _, j := range jobs {
-		if j.target == "" || j.target == j.cur {
-			continue
-		}
-		bundle, gerr := c.SettingsObjects.GetSettingsObject(ctx, j.target)
-		if gerr != nil {
-			continue
-		}
-		if n, werr := capture.WriteSettingsDir(cwd, j.kind, j.target, bundle); werr == nil {
-			fmt.Printf("cxt: .%s/ replaced by snapshot state (%d files) — previous state backed up (cxt settings list)\n", j.kind, n)
-		}
-	}
 }
 
 // restoreSettingsBackup restores the folder from the idx item in the backup stack (backing up the current state before restoration — symmetric).

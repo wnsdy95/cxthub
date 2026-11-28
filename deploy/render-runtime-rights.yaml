@@ -1,0 +1,27 @@
+# A one-off operator job for the Render deployment described in RENDER.md: it
+# gives the runtime accounts their rights on the tables of migrations 0161 to
+# 0170 (schemas/db/runtime_rights/0161_0170.sql), as the database's default
+# account, from inside the private network of cxthub-postgres. The database's
+# IP allow list stays closed and its credentials never leave Render.
+#
+# Create a Blueprint from this file (it defines only this cron job and changes
+# no other resource), run the job once, read its NOTICE lines in its logs, then
+# delete the job. Running it again changes nothing. The job is built from the
+# Blueprint's own repository and branch with runtime-rights.Dockerfile, which
+# copies the script of that commit. Where the account's password was changed
+# since Render made the address, set PGPASSWORD on the job to that password.
+services:
+  - type: cron
+    name: cxthub-runtime-rights
+    runtime: docker
+    dockerfilePath: ./deploy/runtime-rights.Dockerfile
+    dockerContext: .
+    plan: starter
+    region: singapore
+    # Once a year at most; it is meant to be run by hand and then deleted.
+    schedule: "0 0 1 1 *"
+    envVars:
+      - key: CXT_POSTGRES_DSN
+        fromDatabase:
+          name: cxthub-postgres
+          property: connectionString

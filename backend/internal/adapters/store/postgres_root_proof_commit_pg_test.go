@@ -112,7 +112,6 @@ func TestPGRootProofCommitMatchingGenerationSkipsDependencyPayload(test *testing
 			}); err != nil {
 				test.Fatal("matching source generation did not commit", err)
 			}
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
 			for hash, source := range sources {
 				assertRootSourceWitnessStatePG(test, storage, ctx, hash, source)
 			}

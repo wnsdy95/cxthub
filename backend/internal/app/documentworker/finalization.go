@@ -21,6 +21,8 @@ type Finalizer struct {
 	chunks   ChunkReader
 	verifier *domain.CanonicalDocVerifier
 	scope    Scope
+	// wake holds at most one request to look for a job at once.
+	wake chan struct{}
 }
 
 func NewFinalizer(storage outbound.DocJobStore, chunks ChunkReader, verifier *domain.CanonicalDocVerifier, scope Scope) (*Finalizer, error) {
@@ -30,7 +32,7 @@ func NewFinalizer(storage outbound.DocJobStore, chunks ChunkReader, verifier *do
 	if absent(scope) {
 		return nil, fmt.Errorf("%w: document finalization scope is required", domain.ErrValidation)
 	}
-	return &Finalizer{storage: storage, chunks: chunks, verifier: verifier, scope: scope}, nil
+	return &Finalizer{storage: storage, chunks: chunks, verifier: verifier, scope: scope, wake: make(chan struct{}, 1)}, nil
 }
 
 func (finalizer *Finalizer) Verify(ctx context.Context, job domain.DocFinalizationJob) (domain.VerifiedSessionDoc, error) {
@@ -189,13 +191,20 @@ func (finalizer *Finalizer) YieldRootPreparation(ctx context.Context, publicatio
 }
 
 func (finalizer *Finalizer) Process(ctx context.Context, limit int) error {
+	_, err := finalizer.process(ctx, limit)
+	return err
+}
+
+// process takes up to limit waiting jobs, one after another, and says how
+// many it finished without an error.
+func (finalizer *Finalizer) process(ctx context.Context, limit int) (processed int, err error) {
 	ctx = finalizer.scope.WorkerContext(ctx)
 	if finalizer.storage == nil {
-		return fmt.Errorf("durable document finalization unavailable")
+		return 0, fmt.Errorf("durable document finalization unavailable")
 	}
-	for processed := 0; processed < limit; processed++ {
+	for ; processed < limit; processed++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return processed, err
 		}
 		claimed := false
 		err := finalizer.scope.WithinWork(ctx, func(bound context.Context) error {
@@ -211,25 +220,44 @@ func (finalizer *Finalizer) Process(ctx context.Context, limit int) error {
 			return finalizer.RunJob(bound, job)
 		})
 		if !claimed && errors.Is(err, domain.ErrNotFound) {
-			return nil
+			return processed, nil
 		}
 		if err != nil {
-			return err
+			return processed, err
 		}
 	}
-	return nil
+	return processed, nil
 }
 
+// Wake makes Run look for a job at once. Whoever stored a job in this process
+// calls it when the job is committed.
+func (finalizer *Finalizer) Wake() {
+	select {
+	case finalizer.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Run takes the waiting jobs one after another. After a job it looks for the
+// next at once. With none waiting, or after a failure, it looks again when it
+// is woken, and otherwise after a second: that look finds what was stored by
+// another process, and what failed and is due again.
 func (finalizer *Finalizer) Run(ctx context.Context) {
 	for {
-		if err := finalizer.Process(ctx, 1); err != nil && ctx.Err() == nil {
+		taken, err := finalizer.process(ctx, 1)
+		if err != nil && ctx.Err() == nil {
 			log.Printf("document finalization: %v", err)
+		}
+		if taken > 0 {
+			continue
 		}
 		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-finalizer.wake:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}

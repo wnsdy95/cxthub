@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -67,15 +66,14 @@ func registrationScopeBlocked(test *testing.T, ctx context.Context, observer *pg
 }
 
 type registrationScopeEffects struct {
-	repos           int64
-	revisions       int64
-	refs            int64
-	reflog          int64
-	snapshots       int64
-	settings        int64
-	secrets         int64
-	initializations int64
-	notifications   int64
+	repos         int64
+	revisions     int64
+	refs          int64
+	reflog        int64
+	snapshots     int64
+	settings      int64
+	secrets       int64
+	notifications int64
 }
 
 func registrationScopeImage(test *testing.T, ctx context.Context, observer *pgxpool.Pool, repo domain.ContentHash, repository string) registrationScopeEffects {
@@ -89,9 +87,8 @@ func registrationScopeImage(test *testing.T, ctx context.Context, observer *pgxp
 		(SELECT count(*) FROM snapshots WHERE repo_id=$1),
 		(SELECT count(*) FROM repo_settings WHERE repo_id=$1),
 		(SELECT count(*) FROM repo_secrets WHERE repo_id=$1),
-		(SELECT count(*) FROM repository_initializations WHERE repo_id=$1),
 		(SELECT count(*) FROM notification_outbox WHERE repository_id=$2)`, string(repo), repository).
-		Scan(&image.repos, &image.revisions, &image.refs, &image.reflog, &image.snapshots, &image.settings, &image.secrets, &image.initializations, &image.notifications)
+		Scan(&image.repos, &image.revisions, &image.refs, &image.reflog, &image.snapshots, &image.settings, &image.secrets, &image.notifications)
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -246,11 +243,11 @@ func TestPGRegistrationScopeFirstRegistrationOrdersWithRevocation(test *testing.
 					paused := &authorityScopeHoldPG{PostgresStore: authority, ready: make(chan struct{}), release: release}
 					first = launch(func() error { return authorityScopeMutation(ctx, NewIdentityService(nil, paused), fixture, mutation) })
 					authorityScopeAwait(test, ctx, paused.ready, first)
-					second = launch(func() error { return register(NewService(writer, writer, nil, gitengine.NewEngine(writer), writer)) })
+					second = launch(func() error { return register(NewService(writer, writer, writer)) })
 					registrationScopeBlocked(test, ctx, observer, writerName, authorityName, second)
 				} else {
 					paused := &registrationScopePutHoldPG{PostgresStore: writer, ready: make(chan struct{}), release: release}
-					first = launch(func() error { return register(NewService(paused, writer, nil, gitengine.NewEngine(writer), writer)) })
+					first = launch(func() error { return register(NewService(paused, writer, writer)) })
 					authorityScopeAwait(test, ctx, paused.ready, first)
 					expected := registration
 					expected.RepositoryID = fixture.repository.ID

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestMachineCommandFailureIsStableAndProviderFlagsStayNative(t *testing.T) {
+func TestMachineCommandFailureIsStable(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code string
@@ -22,7 +22,7 @@ func TestMachineCommandFailureIsStableAndProviderFlagsStayNative(t *testing.T) {
 		{context.Canceled, "cancelled", 130},
 	} {
 		var b bytes.Buffer
-		if exit := WriteCommandFailure(&b, []string{"cxt", "status", "--json"}, tc.err); exit != tc.exit {
+		if exit := WriteCommandFailure(&b, []string{"cxt", "doctor", "--json"}, tc.err); exit != tc.exit {
 			t.Fatalf("exit=%d", exit)
 		}
 		var out struct {
@@ -35,17 +35,20 @@ func TestMachineCommandFailureIsStableAndProviderFlagsStayNative(t *testing.T) {
 			t.Fatalf("bad failure: %+v", out)
 		}
 	}
-	_, err := PreflightArgs([]string{"cxt", "add", "--expect", "not-a-hash", "--json"})
+	_, err := PreflightArgs([]string{"cxt", "push", "claude", "--json"})
 	if err == nil {
-		t.Fatal("bad revision passed preflight")
+		t.Fatal("a session named without its identifier passed preflight")
 	}
 	failure := ClassifyCommandFailure(err)
 	if failure.Code != "invalid_arguments" || failure.State != "unchanged" || failure.ExitCode != 2 {
 		t.Fatalf("preflight: %+v", failure)
 	}
-	var b bytes.Buffer
-	WriteCommandFailure(&b, []string{"cxt", "codex", "exec", "--json"}, domain.ErrNotFound)
-	if !strings.HasPrefix(b.String(), "cxt: ") {
-		t.Fatal("consumed native provider flag")
+	// Without --json, and for a command that has no --json, the failure is plain text.
+	for _, args := range [][]string{{"cxt", "doctor"}, {"cxt", "setup", "--json"}, {"cxt", "refresh"}} {
+		var b bytes.Buffer
+		WriteCommandFailure(&b, args, domain.ErrNotFound)
+		if !strings.HasPrefix(b.String(), "cxt: ") {
+			t.Fatalf("%v: %q", args, b.String())
+		}
 	}
 }

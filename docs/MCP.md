@@ -6,9 +6,11 @@ CXTHub's product MCP is the OAuth-protected Streamable HTTP endpoint at:
 https://cxthub.com/mcp
 ```
 
-Codex, Claude, ChatGPT, and other remote MCP clients query the same cloud
-context that the CXTHub web application reads. The local `.cxt` directory is a
-CLI working replica and offline cache; it is not the product MCP database.
+Codex, Claude, ChatGPT, and other remote MCP clients read the same sessions
+that the CXTHub web application shows in its Sessions tab. The server is the
+store that is read. A repository's local `.cxt` folder holds the CLI's
+connection settings and copies of what it uploaded; the MCP server never reads
+it.
 
 ## Architecture
 
@@ -23,8 +25,8 @@ Render cxt-mcp service (independent process)
         │
         ├─ OAuth user resolution (`mcp:read`)
         ├─ Repository public/member/break-glass policy
-        ├─ read-only context application service
-        └─ bounded response projection
+        ├─ read-only session queries
+        └─ bounded response pages
         │
         ▼
 Cloud PostgreSQL
@@ -33,221 +35,121 @@ Cloud PostgreSQL
 `cxt-mcp` and `cxtd` are independent executables, HTTP listeners, container
 images, and Render services. They use the same application query rules,
 identity policy, and PostgreSQL database through separate connection pools.
-Ready context reads use shared storage without an API round trip. API downtime
-does not stop those authorized reads; new web logins still require the API.
-The opt-in prepared-memory path also depends on the API to register and process
-cold selections, as described below. It never proxies the memory body via API.
+The tool server reads sessions from shared storage without an API round trip,
+so API downtime does not stop those authorized reads; new web logins still
+require the API.
 
 Vercel routes `/mcp`, `/oauth/*`, `/.well-known/*`, and
 `/api/v1/oauth/requests/*` to MCP. Other `/api/*` traffic goes to `cxtd`.
 `/connect/mcp` remains the frontend consent page. Both servers use the same
 `CXT_PUBLIC_URL` and Firebase project, preserving the public issuer, resource
-and browser cookie boundary. The API no longer exposes MCP/OAuth routes.
+and browser cookie boundary. The API does not expose MCP or OAuth routes.
 
-MCP starts no GitHub, promotion, email, notification or maintenance workers.
-Its tools are read-only; OAuth registration, consent, token rotation and shared
-rate limits still write their operational records to PostgreSQL. MCP always
-requires the PostgreSQL build and DSN, including during local development.
-See [Render deployment](../deploy/RENDER.md) for setup and migration steps.
+The MCP process starts none of the API's background workers. Its tools are
+read-only; OAuth registration, consent, token rotation and shared rate limits
+still write their operational records to PostgreSQL. MCP always requires the
+PostgreSQL build and DSN, including during local development. See
+[Render deployment](../deploy/RENDER.md) for setup and migration steps.
 
-### Prepared-memory cold selections (default off)
-
-`memory_load` with `mode=effective, read_version=1` can use verified durable
-memory pages. Both services require the same exact repository allowlist in
-`CXT_MEMORY_READ_REPOS`; API preparation is separately scoped by
-`CXT_MEMORY_PREPARATION_REPOS`. This is staged infrastructure, not a declaration
-that frontend adoption, load qualification or production rollout is complete.
-
-For MCP-only cold selections, configure:
-
-- API and MCP: the same explicit `CXT_MCP_PUBLIC_URL`, such as
-  `https://mcp.cxthub.io`, identifying the protected MCP resource.
-- MCP only: `CXT_READ_PREPARATION_API_ORIGIN`, such as `https://api.cxthub.io`,
-  naming the trusted API component that owns preparation. Enabling prepared
-  reads without this destination fails MCP startup instead of silently stranding
-  first-time selections. No frontend/public build receives these server settings.
-
-`CXT_MEMORY_PREPARATION_API_ORIGIN` remains a compatibility alias. If both names
-are set they must agree; conflicting destinations stop startup. The generic
-origin also supplies conversation-find preparation without enabling effective
-memory reads or changing their repository allowlists.
-
-After a permitted cold read releases its DB snapshot and processing slot, MCP
-sends the fixed minimum cursor and selection to the API's authenticated
-`POST /internal/mcp/memory-preparation`. The API validates the MCP audience,
-current token and repository authority, then records bounded derived work.
-It returns only an acknowledgment. MCP starts no worker and writes no work row.
-The normal API authentication path still rejects MCP credentials; this endpoint
-is an explicit component of the same resource, not generic token passthrough.
-
-Only HTTPS is allowed outside loopback development. Redirects, environment
-proxies, cookies and automatic transport retries are disabled; body sizes and
-deadlines are bounded. Never configure an unrelated destination. A transient
-forwarding error retains `retry_cursor`; retry with the same selection and
-cursor. Permission, integrity, expiry and reset failures are terminal, not
-preparation acknowledgments. Every successful page still checks current access.
-HTTP cancellation does not delete already committed derived work, and this path
-does not add protocol-level `notifications/cancelled` handling.
+`CXT_MCP_PUBLIC_URL`, when set on the MCP service, names the origin of the
+protected MCP resource, for example `https://mcp.cxthub.io`. Without it the
+resource origin is `CXT_PUBLIC_URL`.
 
 ## Read-only tools
 
+There are exactly six tools. They read the structure that is cut at Git
+commits: what the Sessions tab shows.
+
 | Tool | Purpose |
 |---|---|
-| `repository_list` | Discover authorized repositories with continuation cursors |
-| `context_list` | Browse all, current, previous, or archived context snapshots |
-| `context_history` | Read recorded branch births, attachments, selections, and continuations |
-| `context_fetch` | Retrieve the entire archived event stream in bounded fragments |
-| `context_find` | Find displayed text in one pinned conversation, preserving exact source ranges |
-| `memory_load` | Project merged memory or retrieve an exact archived object in bounded fragments |
-| `context_search` | Search messages and readable events, continuing through older records |
-| `context_link_status` | Read recorded publication, integration and immutable memory-pin progress |
+| `repository_list` | List the repositories whose sessions the signed-in user may read, with continuation cursors |
+| `session_list` | List the sessions of a repository, the one begun last first, with the commits each made and the branches its uncommitted part was on |
+| `session_read` | Read one session's conversation from its first event on, or only one segment of it (`segment`: a number, or `rest` for the part after the last commit) |
+| `session_commit` | Explain a commit: the segments that end at it, the events each covers, and the summary written there |
+| `session_summaries` | Read the summaries along a branch, the summary of the newest commit first: the branch's own, then those of the branch it was made from |
+| `session_search` | Search pull requests, branches, commits, conversations and notes at once |
 
 Every tool is marked read-only, non-destructive, and idempotent. There are no
-MCP tools for save, commit, checkout, fork, restore, push, pull, settings,
-secrets, membership, or break-glass administration.
+MCP tools for push, fork, remove, archive, settings, secrets, membership, or
+break-glass administration.
 
-`repository_list` is the cloud discovery step. The other tools require an
-explicit repository selector (`owner/repository` or repository
-ID). A remote client never depends on a workstation's current directory.
+### Naming things
 
-### Automatic linking status
+`repository_list` is the discovery step. Every other tool requires an explicit
+`repository`: the `owner/repository` path, the repository's CXTHub URL, or its
+repository ID. A remote client never depends on a workstation's current
+directory.
 
-`context_link_status` uses the same application query as
-`GET /repos/{repoID}/git/associations`. Select `kind=publication|integration|memory`
-(default `integration`) and `state=pending|all` (default `pending`). MCP pages
-default to 10 rows, allow at most 20, and shrink to the response byte budget.
-Keep repository and filters unchanged when following `next_cursor`.
+A session is named by its coding tool (`provider`: `claude` or `codex`) and its
+identifier (`session`), both taken from `session_list`. A part of a session is
+named by its segment number, and a commit by its full number (40 or 64
+hexadecimal digits). No tool takes or answers a document hash.
 
-The tool reads recorded evidence only: it cannot request a provider refresh,
-retry work or repair data. `admitted` means a publication has at least one
-prospective admission, not that integration completed. `completed` requires the
-historical integration proof or exact immutable memory pin; expired leases show
-`retrying` without changing the worker queue. An empty pending page or a recorded
-discovery checkpoint does not establish that every Git operation was captured.
-`current_applicability=not_evaluated` keeps historical completion separate from
-whether a selected code position currently includes the contribution. Start
-again without a cursor to include concurrent insertions before the current ID.
+| Tool | Arguments besides `repository` and `cursor` |
+|---|---|
+| `repository_list` | `query` (optional path filter, at most 128 characters), `limit` (default 50, at most 100); it takes no `repository` |
+| `session_list` | none |
+| `session_read` | `provider`, `session`, optional `segment`, optional `events` (events per page: default 12, at most 50) |
+| `session_commit` | `commit` |
+| `session_summaries` | optional `branch` (the default branch when omitted), optional `limit` (default 5, at most 20) |
+| `session_search` | `query` (2 to 256 characters) |
 
-### History scope and working position
+### What a caller reads
 
-`context_list` and `context_search` accept `scope`: `all` (default), `current`,
-`previous`, or `archived`. `current` and `previous` require `position`, an
-explicit context snapshot or cloud ref. The first page resolves this selection;
-continuation cursors pin it even if the branch later moves. `previous` contains
-retained context outside that selected ancestry. Shared snapshot labels do not
-hide content belonging to another branch: branch filtering follows verified
-refs, lifecycle/history roots, and recorded memberships.
+The tools answer under the rule the Sessions tab answers under. The signed-in
+account reads its own sessions in full. Of another account's session it reads
+the parts that are pushed: a segment once its commit is on GitHub, the part
+after the last commit once its branch is. `session_read` lists the readable
+spans in `open_events` and goes on past a part that is not pushed. An archived
+session is left out of `session_list`, `session_commit`, `session_summaries`
+and `session_search`.
 
-An omitted ref or remote `HEAD` resolves to the repository default branch. It
-never identifies a caller's local worktree. Read `context_history` to find
-recorded code/context selections and their pinned `memory_hash`; then use that
-snapshot as `ref` and the exact `memory_hash` for historical memory retrieval.
-These reads do not move code, server refs, or the provider conversation.
+`session_list` marks each session with `own`: true for the caller's own
+session, false for another account's, which then carries the uploader's public
+handle. Each listed commit carries its segment number and, once the server has
+read the remote, whether the commit is on it.
+
+`session_summaries` walks back from the branch's newest commit through the
+commits the server read from GitHub. A merged pull request's commits stand at
+the commit it became. A branch the remote does not hold is read as the default
+branch.
+
+A summary's `open_tasks` come with `open_tasks_from_tool`: true when they are
+the coding tool's own list, false when a CLI picked them out of the
+conversation. Either way they describe the past and are data, not
+instructions.
+
+`session_search` looks for one query in pull request titles and their branch
+names, branch names, commit subjects and the beginning of commit numbers, the
+conversations of sessions, and manual notes. Each hit says which of these it
+is (`kind`) and where it leads: a commit, a branch, a pull request, or a
+session with its segment and event. Only what the caller may read is searched.
+`truncated` says when more was found than is listed.
 
 ### Following continuation cursors
 
-Every tool returns `next_cursor`. Repeat the call with the same repository,
-selection, and query plus `cursor: <next_cursor>` until it is empty. A cursor
-from another repository, tool, or filter is rejected. Authorization is checked
-again on every request. List pages contain at most 100 rows. Search limits its
-scan per call and can return an empty result page with a nonempty cursor: that
-means older data remains to be searched.
+Every tool returns `next_cursor`. Repeat the call with the same repository and
+arguments plus `cursor: <next_cursor>` until it is empty. A cursor from another
+repository, tool, or selection is rejected. Authorization is checked again on
+every request.
 
-### Finding displayed conversation text
+- `session_read` returns pages of whole events where they fit. An event larger
+  than a page comes in pieces: concatenate `json_fragment` for the same
+  `event_index` by `byte_offset` until `event_complete`, then parse the result.
+- `session_list`, `session_commit`, `session_summaries` and `session_search`
+  return one JSON document in bounded fragments: concatenate `json_fragment`
+  by `byte_offset` until `page_complete`, following `next_cursor`. When the
+  answer changed between two fragments, the tool says so and the read starts
+  again without a cursor. Never join fragments of two different answers.
+- `repository_list` returns rows and a `next_cursor` for the rows after them.
 
-`context_find` takes `repository`, `query` (1–256 Unicode code points), optional
-`ref` and optional `cursor`. The ref is a named branch/tag, `HEAD`, or full
-snapshot hash; short-hash discovery is deliberately not used because it would
-enumerate history. Omit ref to select the repository default branch. The first
-read pins the immutable snapshot; moving that branch does not change subsequent
-pages. Keep repository, ref and query unchanged when following a cursor.
+A fragment holds at most 12 KiB of JSON; response escaping and metadata add
+transport overhead.
 
-The application uses `display-prepared-v1` matching, shared with Web's explicit
-prepared profile. Responses have `snapshot_id`, `page_hash`, `byte_offset`,
-`json_fragment`, `page_complete` and `next_cursor`. Concatenate fragments by byte
-offset, then parse the completed native find page. Offsets in its matches are
-whole-event displayed UTF-8 byte coordinates; `source_range` is the exact original
-JSON cover, not proof that historical prose describes current code. An empty
-match page can still have a next cursor. Transport JSON is capped at 12KiB per
-response, including metadata and escaped fragments.
-
-When a permitted read is not ready, MCP releases the read and forwards a bounded
-request to `POST /internal/mcp/conversation-find-preparation` at the configured
-API origin. Both services use the same explicit `CXT_MCP_PUBLIC_URL` resource
-audience. The API independently verifies the live MCP token and repository read
-authority and derives work from current document metadata; the request cannot
-declare an arbitrary event target. The API acknowledges only accepted work,
-while its workers create derived pages. MCP receives no display-job store and
-starts no worker. This endpoint is enabled only with an explicit MCP resource
-origin and is not a general bearer-token passthrough to ordinary REST routes.
-
-Structured not-ready errors carry `retry_cursor`; use it with the same arguments.
-An unreachable preparation API retains that cursor but reports preparation
-unavailable, not accepted work. Revocation, stale generation, integrity and
-unsupported-format failures are terminal. No raw-source or whole-document
-fallback is used. Large Markdown and generic/diff tool formatters are still
-separate R1 work; unsupported formatting returns an explicit error rather than
-silently searching different text. This new tool does not promote Web defaults
-or establish production performance/rollout acceptance.
-
-`context_fetch` starts at the oldest archived event and includes all event
-kinds. Each fragment has `event_index`, `byte_offset`, `event_complete`, and
-`json_fragment`. Concatenate fragments for the same event by byte offset, then
-parse the resulting JSON. This preserves oversized events and opaque provider
-state as stored; encrypted state is not decrypted or synthesized. The default
-is up to 12 fragments per call (maximum 50), with a shared 12 KiB raw JSON
-fragment budget. JSON response escaping and metadata add transport overhead.
-
-`memory_load` defaults to `mode: "project"`. It reconstructs knowledge across
-all current natural and graft parents, including the previous main immediately
-after PR promotion. The source snapshot's saved memory is never rewritten.
-Fragments retain provenance; removed grafts are excluded unless explicitly
-pinned imports, and opaque legacy cumulative digests are not repeatedly stacked.
-As in CLI prompt loading, provider cumulative generations and byte-contained
-summary duplicates are collapsed, transport noise is removed from facts, and
-unattested task lists are excluded from active project knowledge. These are
-read projections: stored mode preserves every original byte and task list.
-
-Both modes return `byte_offset`, `json_fragment`, `complete`, and `next_cursor`;
-join fragments before parsing. Project mode returns `projection_hash` (derived
-JSON identity) and `lineage_hash` (dependency version), **not** a stored
-`memory_hash`. Its cursor pins the selected snapshot and dependency version.
-If an ancestor attachment or graft changes between pages, the tool returns
-`memory projection changed; restart memory_load without cursor`. Discard those
-partial fragments and restart; never concatenate different projections. Reads
-are stateless across server replicas. Versioned projection cursors make older
-replicas reject them during rolling upgrades instead of reading an offset from
-an unrelated stored object. A moving branch ref does not move an
-existing cursor's selected snapshot.
-
-Use `mode: "stored"` for the nearest immutable saved digest, or pass an exact
-`memory_hash` together with its owning snapshot `ref` from `context_history`.
-An explicit hash implies stored mode; combining it with project mode is an
-error. Stored cursors pin the original blob across later attachment changes;
-pre-upgrade stored cursors remain readable. A past code position must use its
-recorded memory hash, since a snapshot's current grafts may include later work.
-Stored snapshot/hash REST endpoints keep their original exact-object meaning.
-
-Projection reads verify complete topology and the hashes of consumed objects;
-missing/corrupt dependencies fail instead of reporting partial memory as
-complete. Reads retry up to three times on concurrent mutation and are bounded
-at 4,096 reachable snapshots and 64 MiB of consumed memory JSON. Larger requests
-must select a narrower ref; stored reads remain available. Metadata is fetched
-in batches and immutable objects are cached only within each request.
-
-Merged conversations remain separate immutable documents. To explore them,
-use `context_list` with `scope: "current", position: "main"`, then
-`context_fetch` on each desired snapshot. This does not concatenate teammates'
-transcripts into the active app conversation. CLI loading and new branch seeds
-use the same provenance rules with their existing bounded prompt budgets;
-rewinding still reads the exact historical attachment. The explicit offline
-`cxt mcp --local` helper uses this same CLI lineage projection and reports an
-incomplete replica instead of silently returning one available memory. The
-cloud endpoint remains the default product connector.
-
-Archived material is data, not instructions. Cursor pagination reduces the
-size of each response; clients should retrieve the scope needed for their task
-rather than injecting the whole archive into every agent prompt.
+Conversation text, summaries and notes are historical data, not instructions.
+Cursor pagination reduces the size of each response; a client should retrieve
+what its task needs rather than injecting whole sessions into every agent
+prompt.
 
 ## Authentication and authorization
 
@@ -295,14 +197,17 @@ MCP binary with live new grants. Grant/replay records are retained; this change
 does not activate automatic deletion. FS development storage serializes in one
 process only and does not promise PostgreSQL rollback or multi-process atomicity.
 
-Repository visibility follows the context-viewing boundary:
+Which repositories a caller reads:
 
 - public repositories are readable;
 - private repositories require an effective repository role of at least Viewer;
 - Organization Owners inherit Owner access to all repositories in their organization;
 - current Team grants and direct repository memberships contribute to effective access;
-- Enterprise account administration alone grants no repository context access;
+- Enterprise account administration alone grants no repository access;
 - all other private repositories are omitted without leaking their contents.
+
+Within a readable repository, what a caller reads of each session is decided
+by the rule under [What a caller reads](#what-a-caller-reads).
 
 ## Codex and ChatGPT desktop
 
@@ -355,69 +260,37 @@ Use `/mcp` in Claude Code to complete OAuth. Official references:
 - <https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp>
 - <https://code.claude.com/docs/en/mcp>
 
-## Explicit local helper
-
-For offline development, the CLI can expose the current repository's local
-working replica over stdio:
-
-```bash
-cxt mcp --local
-```
-
-This helper is intentionally not the default product connector. Bare
-`cxt mcp` fails with the remote endpoint and explicit local usage in its error
-message. The helper has no `repository_list`; its four context tools resolve
-the current local repository, and `context_search` may still use the configured
-origin.
-
 ## Production storage invariant
 
 The production container is built with the PostgreSQL adapter. Any externally
 bound `cxtd` process requires PostgreSQL and fails before serving if
 `CXT_POSTGRES_DSN` is missing or unusable. Cloud Run additionally sets
-`CXT_REQUIRE_POSTGRES=1`, loads the DSN from Secret Manager, and applies the
-ordered migrations before accepting traffic.
+`CXT_REQUIRE_POSTGRES=1` and loads the DSN from Secret Manager. Startup
+verifies the schema and does not apply migrations; see
+[database migration ownership](DATABASE_MIGRATIONS.md).
 
 Filesystem storage remains available only to a loopback-bound development
-server and tests. It must not be treated as a production fallback.
+`cxtd` server and tests. It must not be treated as a production fallback. The
+MCP server has no filesystem mode.
 
-## Indexed reads and existing-data rollout
+## Reading conversations
 
-Event offsets and searchable text are derived from hash-verified canonical
-archives. Fetch reads only the required 512 KiB storage chunks; the 12 KiB MCP
-fragment budget also applies when a single event is very large. Canonical event
-fragments have versioned cursors. A cursor issued by the previous serializer
-must be restarted without `cursor` after upgrading, so byte offsets from two
-encodings cannot silently mix.
-
-Migration `0041_doc_read_index.sql` adds PostgreSQL event locations and a
-`pg_trgm` GIN index. Identical inherited events share searchable text. Repository
-ownership is checked on every read and search; deleting the last owning document
-also deletes its derived search text. Searches remain literal, case-insensitive
-substring matches (including Korean, identifiers, `%`, `_`, and backslashes),
-not vector similarity. This addresses archive scanning without adding a second
-database or an embedding dependency. GraphQL is not required for range reads.
-
-New documents create their read index on write. Before routing production
-traffic to a large existing archive, run this restartable maintenance command
-with the same PostgreSQL build, database secret, and migration directory as the
-server:
+A session's conversation is stored in one or more documents, and each is read
+through the read index stored with it. A document gets its index when it is
+stored. `cxtd index` is a restartable maintenance command that builds the
+index for documents stored without one. Run it with the same PostgreSQL build,
+database secret, and migration directory as the server:
 
 ```bash
 cxtd index --migrations ./schemas/db/migrations
 ```
 
 It reads `CXT_POSTGRES_DSN` from the environment and never prints it. For a local
-loopback development store, use `cxtd index --data ./cxt-data`. Missing indexes
-are built lazily for compatibility, so the first read of an unindexed legacy
-document may still be slow. The archive and its content hashes remain unchanged.
+loopback development store, use `cxtd index --data ./cxt-data`.
 
-The web viewer uses `GET /repos/{repoID}/docs/{hash}/events` (50 events by default,
-100 maximum, 512 KiB except for one intact oversized event). `base` selects the
-exact inherited prefix and `offset=-1` skips it. Inherited history and memory
-load when expanded; complete raw downloads remain available explicitly.
-React Query owns page caching and cancellation. Zustand continues to own client
-selection state, without duplicating server documents.
+The web application reads the same conversations through the session routes
+of the REST API (`GET /repos/{repoID}/anchored-sessions/{provider}/{sessionID}/events`
+and the routes beside it), under the same rule for what a caller may read.
 
 ## HTTP transport contract
 
@@ -437,30 +310,13 @@ supports compatible `2024-11-05` and `2025-03-26` clients:
 Transport specification:
 <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>
 
-## Capture is separate
+## Uploading is separate
 
-MCP only reads synchronized history. Codex and Claude coding sessions are
-captured through lifecycle/Git hooks, while the CLI maintains the local `.cxt`
-working replica and synchronizes it with `cxtd`. Connecting MCP does not grant
-the server access to a live desktop conversation and does not replace capture
-hooks.
-
-### Branch integration selection
-
-For `context_list(scope="current", position="main")`, the application includes
-completed PR contributions proven present at main's recorded Git code position.
-`code_commit` optionally selects another exact code SHA. Results follow Git
-integration order with causal children before parents; cursor pages pin this
-ordered projection rather than the captures' timestamps. A changed selection or
-dependency generation requires restarting pagination.
-
-`memory_load(ref="main", mode="project")` uses the same integrated branch roots,
-including retained PR source memory after a later context-placement change.
-The response's `inclusion` summarizes included, excluded and unresolved PRs.
-An exact snapshot/tag still reads that archived lineage; `mode="stored"` or an
-explicit memory hash keeps the immutable original. Effective mode assesses typed
-claims against explicit code; historical prose remains unverified. None of these
-queries moves shared refs, worktree positions or provider conversations.
+MCP only reads sessions that are already on the server. They get there through
+the `cxt` CLI, which reads what Codex and Claude Code recorded on a member's
+computer and uploads it; see the [CLI reference](CLI.md). Connecting MCP does
+not give the server access to a live desktop conversation, uploads nothing,
+and does not replace `cxt setup`.
 
 ## Connected application management
 

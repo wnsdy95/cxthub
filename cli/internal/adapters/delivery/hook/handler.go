@@ -1,64 +1,73 @@
-// Package hook contains the hook event handlers for the cxt hook subcommand (domain model, capture path).
+// Package hook contains the handler of `cxt hook`, which the agent tools run
+// at the events of a session.
 //
 // Usage: cxt hook --provider <claude|codex> --event <Name>
 //
-// Event-specific actions (capture path):
+// What an event does:
 //
-//	SessionStart(claude/codex):   CaptureCoordinator.MarkBaseline (no commit)
-//	Stop(claude/codex):           CaptureCoordinator.RequestCapture(debounce=true)
-//	SessionEnd(claude/codex):     CaptureCoordinator.RequestCapture(force=true) — force flush
-//	UserPromptSubmit(claude/codex): CaptureCoordinator.MarkTurn (no commit)
+//	SessionStart, UserPromptSubmit: give the session the most recent summary
+//	    along the branch its folder is on, once for each branch it comes to
+//	Stop, SessionEnd: wake the collector that reads the tools' own session
+//	    records and Git
 //
-// Safety Contract (invariants, capture path):
+// The end of a turn is the one moment an agent hook wakes the collector. A
+// commit and a push usually happen in the middle of a turn, and Git has no
+// hook after a push: the Git hooks wake the collector while the turn is still
+// being written, and the end of the turn lets it read the rest. Nothing is
+// recorded between the end of a turn and the next prompt, so the start of a
+// session and a prompt wake nothing.
+//
+// A hook carries no data to the server and decides nothing: what a session
+// said and did is read from the tool's records, whether or not a hook ran.
+//
+// Safety contract:
 //   - Always exit 0 (errors reported only to stderr — cmd/cxt hook branch ensures)
 //   - Terminate within 10 seconds (hooks.json timeout:10) — double defense with 8-second context timeout
-//   - Read original session file as read-only
-//   - ErrNoActiveSession → no-op silently
+//   - Never write to the tool's own files
 package hook
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/githooks"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
-// Handler is the hook event handler. Keep it thin (capture path) —
-// parse stdin and classify events, delegate core logic to CaptureCoordinator.
+// Handler is the hook event handler.
 type Handler struct {
-	coord    *capture.CaptureCoordinator
-	notices  inbound.SessionNotices
-	preparer inbound.PrepareAgentContext
-	admit    func(context.Context, string) error
-	observe  func(string, domain.ProviderKind, string)
-	stdin    io.Reader // for testing. nil means os.Stdin (no read from terminal)
-	stdout   io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
+	// summaries gives a session the most recent summary along its branch.
+	summaries inbound.BranchSummaries
+	// wakeCollector starts the detached session report collector at the end
+	// of a turn and of a session. A hook only wakes it; the collector reads
+	// what the tools recorded.
+	wakeCollector func(string)
+	stdin         io.Reader // for testing. nil means os.Stdin (no read from terminal)
+	stdout        io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
 }
 
-// NewHandler creates a Handler and injects CaptureCoordinator.
-func NewHandler(coord *capture.CaptureCoordinator) *Handler {
-	return &Handler{coord: coord}
+// NewHandler creates a Handler.
+func NewHandler() *Handler {
+	return &Handler{}
+}
+
+// WithSegmentCollector makes the end of a turn and the end of a session wake
+// the session report collector.
+func (h *Handler) WithSegmentCollector(wake func(string)) *Handler {
+	h.wakeCollector = wake
+	return h
 }
 
 // hookPayload contains the known keys from provider hook stdin JSON.
 type hookPayload struct {
-	SessionID      string `json:"session_id"`
-	TranscriptPath string `json:"transcript_path"` // claude
-	RolloutPath    string `json:"rollout_path"`    // Codex hint; falls back to discovery when absent
-	Cwd            string `json:"cwd"`
-	Prompt         string `json:"prompt"` // UserPromptSubmit
+	SessionID string `json:"session_id"`
+	Cwd       string `json:"cwd"`
 }
 
 // readPayload attempts best-effort parsing of stdin JSON. If not from a terminal (not a pipe),
@@ -97,30 +106,17 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 			cwd = wd
 		}
 	}
-	path := p.TranscriptPath
-	if path == "" {
-		path = p.RolloutPath
-	}
-
-	// Codex hooks are registered globally, so they run in every repository.
-	// Repair ignore rules for any existing store (including legacy residue),
-	// then require cxt init/setup's durable HEAD marker before writing capture
-	// state. A bare .cxt directory is not user opt-in.
 	switch event {
 	case "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd":
 	default:
 		return nil
 	}
+	// Codex hooks are registered globally, so they run in every repository.
+	// Only a folder where `cxt setup` or `cxt init` ran is handled: both write
+	// .cxt/HEAD, and a bare .cxt directory is not the user's choice.
 	state := gitctx.InspectContextRoot(ctx, cwd)
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	if state.Initialized {
-		// Payload IDs may be inherited by provider child processes. Never infer
-		// a corrected ID from their path or let a mismatch touch parent state.
-		if err := capture.ValidateHookSession(cwd, provider, p.SessionID, path); err != nil {
-			return err
-		}
 	}
 	if state.GitRepository && state.Exists {
 		_ = githooks.EnsureIgnored(state.Root)
@@ -128,164 +124,42 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 	if !state.GitRepository || !state.Initialized {
 		return nil
 	}
-	if path == "" && p.SessionID != "" {
-		// Correct discovery can replace an older poisoned pointer. This stays
-		// within the hook's exact worktree and never uses command-only fallback.
-		if resolved, err := capture.LocateCaptureSession(ctx, provider, cwd, p.SessionID); err == nil {
-			path = resolved
-		} else if event == "SessionEnd" {
-			return err
+	if event == "Stop" || event == "SessionEnd" {
+		if h.wakeCollector != nil {
+			h.wakeCollector(cwd)
 		}
+		return nil
 	}
-	if h.admit != nil {
-		if err := h.admit(ctx, cwd); err != nil {
-			return err
-		}
-	}
-	if err := capture.TrackAppSession(cwd, provider, p.SessionID, path); err != nil {
-		return err
-	}
-
-	switch event {
-	case "SessionStart":
-		err := h.coord.MarkBaseline(ctx, provider, cwd, path, p.SessionID)
-		noticeErr := h.emitBriefing(ctx, provider, event, cwd, p.SessionID) // app branch handoff + pull briefing
-		if h.observe != nil {
-			h.observe(cwd, provider, p.SessionID)
-		}
-		if err != nil {
-			return err
-		}
-		return noticeErr
-	case "UserPromptSubmit":
-		err := h.coord.MarkTurn(ctx, provider, cwd, p.SessionID, p.Prompt)
-		noticeErr := h.emitBriefing(ctx, provider, event, cwd, p.SessionID) // app branch handoff + team context notice
-		if h.observe != nil {
-			h.observe(cwd, provider, p.SessionID)
-		}
-		if err != nil {
-			return err
-		}
-		return noticeErr
-	case "Stop":
-		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, true, false)
-		if captured {
-			spawnPendingSync(cwd)
-		}
-		return err
-	case "SessionEnd":
-		// Resolve and persist the exact transcript before waiting on another
-		// capture. If the deadline or save fails, later hooks/checkpoints can
-		// retry using the retained on-disk liveness pointer.
-		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, false, true)
-		if err == nil {
-			capture.EndAppSession(cwd, provider, p.SessionID, path)
-		}
-		if captured {
-			spawnPendingSync(cwd)
-		}
-		return err
-	}
-	return nil
+	return h.giveSummary(ctx, provider, event, cwd, p.SessionID)
 }
 
-// WithCaptureAdmission validates the connected worktree before tracking or
-// preparing a live session. Repository policy stays in the application service.
-func (h *Handler) WithCaptureAdmission(admit func(context.Context, string) error) *Handler {
-	h.admit = admit
+// WithBranchSummaries makes a session's hooks give it the most recent summary
+// along the branch its folder is on, once for each branch it comes to. It
+// takes the place of the queued handoff: the summary is read from the server
+// and from Git as they are when the hook runs, whatever ran at the checkout.
+func (h *Handler) WithBranchSummaries(summaries inbound.BranchSummaries) *Handler {
+	h.summaries = summaries
 	return h
 }
 
-// WithSessionNotices enables code/selection notices through the application
-// port. Plain observers without a supported provider hook cannot emit them.
-func (h *Handler) WithSessionNotices(notices inbound.SessionNotices) *Handler {
-	h.notices = notices
-	return h
-}
+// branchSummaryWait bounds how long a prompt waits for the server's answer.
+const branchSummaryWait = 4 * time.Second
 
-// WithAgentContext enables fresh, authorized server-main input for queued app
-// handoffs. The queue is only a delivery request, never a trusted input body.
-func (h *Handler) WithAgentContext(preparer inbound.PrepareAgentContext) *Handler {
-	h.preparer = preparer
-	return h
-}
-
-const appHandoffMaxBytes = 16 << 10
-
-// emitBriefing uses the documented SessionStart/UserPromptSubmit JSON channel:
+// giveSummary uses the documented SessionStart/UserPromptSubmit JSON channel:
 // https://learn.chatgpt.com/docs/hooks and https://code.claude.com/docs/en/hooks.
-// The selection cursor is acknowledged only after the complete JSON write.
-func (h *Handler) emitBriefing(ctx context.Context, provider domain.ProviderKind, event, cwd, sessionID string) error {
-	var entries []string
-	if text, ok := capture.ConsumeBriefing(cwd); ok {
-		entries = append(entries, text)
+// The summary counts as given only after the complete JSON write.
+func (h *Handler) giveSummary(ctx context.Context, provider domain.ProviderKind, event, cwd, sessionID string) error {
+	if h.summaries == nil {
+		return nil
 	}
-	emissionAttempted := false
-	emit := func(handoff string, validate func() error) error {
-		emissionAttempted = true
-		emitted := false
-		var handoffErr, writeErr, noticeErr error
-		write := func(noticeEntries []string) error {
-			if writeErr = ctx.Err(); writeErr != nil {
-				return writeErr
-			}
-			if validate != nil {
-				// Check after notice preparation, immediately before the JSON write.
-				handoffErr = validate()
-				if handoffErr == nil {
-					noticeEntries = append([]string{handoff}, noticeEntries...)
-				}
-			}
-			if writeErr = ctx.Err(); writeErr != nil {
-				return writeErr
-			}
-			// Independent identifier/selection notices still deliver and acknowledge
-			// normally when authorization for the project-memory handoff fails.
-			writeErr = h.writeContext(event, noticeEntries)
-			return writeErr
-		}
-		if h.notices != nil {
-			noticeErr = h.notices.DeliverSessionNotice(ctx, inbound.SessionNoticeInput{Cwd: cwd, Provider: provider, SessionID: sessionID}, func(notice domain.SessionNotice) error {
-				emitted = true
-				return write(append(append([]string(nil), entries...), notice.Text()))
-			})
-		}
-		if !emitted {
-			writeErr = write(entries)
-		}
-		return errors.Join(handoffErr, writeErr, noticeErr)
-	}
-	_, handoffErr := capture.DeliverSessionHandoff(ctx, cwd, sessionID, func() error {
-		validator, ok := h.preparer.(inbound.AgentContextDeliveryValidator)
-		if h.preparer == nil || !ok {
-			return domain.ErrAgentContextUnavailable
-		}
-		policy := domain.MemoryInputPolicy()
-		p, err := h.preparer.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{Cwd: cwd, Provider: provider, LatestMain: true, ArtifactOnly: true, Policy: policy})
-		if err != nil {
+	read, cancel := context.WithTimeout(ctx, branchSummaryWait)
+	defer cancel()
+	return h.summaries.DeliverBranchSummary(read, inbound.BranchSummaryInput{Cwd: cwd, Provider: provider, SessionID: sessionID}, func(text string) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := p.ValidateIdentity(); err != nil {
-			return err
-		}
-		if p.Content.Selection.SourcePolicy != domain.AgentSourceLatestMain || p.Policy != policy {
-			return domain.ErrAgentContextUnavailable
-		}
-		prompt, err := p.Prompt()
-		if err != nil {
-			return err
-		}
-		if len(prompt) > appHandoffMaxBytes {
-			return domain.ErrContextBudgetExceeded
-		}
-		return emit(prompt, func() error {
-			return validator.ValidateAgentContextDelivery(ctx, cwd, p.Content.Selection)
-		})
+		return h.writeContext(event, []string{text})
 	})
-	if !emissionAttempted {
-		return errors.Join(handoffErr, emit("", nil))
-	}
-	return handoffErr
 }
 
 func (h *Handler) writeContext(event string, entries []string) error {
@@ -308,47 +182,3 @@ func (h *Handler) writeContext(event string, entries []string) error {
 	}
 	return err
 }
-
-// spawnPendingSync spawns a detached helper to reflect uncommitted capture pointers to the server.
-// The hook process is latency-sensitive and does not directly use the network.
-// A separate process performs best-effort work, and later capture or push
-// reconciliation recovers failures.
-func spawnPendingSync(cwd string) {
-	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
-	if !enabled {
-		return
-	}
-	if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
-		return
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(exe, "git-hook", "pending-sync")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	_ = cmd.Start()
-}
-
-// An observer is started only for the hook's proven exact-worktree identity.
-// It never holds up the hook and exits when the registry is removed or idle.
-func spawnLiveObserver(cwd string, provider domain.ProviderKind, id string) {
-	if _, ok := capture.RegisteredSession(cwd, provider, id); !ok {
-		return
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(exe, "git-hook", "live-watch", string(provider), id)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if cmd.Start() == nil {
-		_ = cmd.Process.Release()
-	}
-}
-
-// WithLiveObservation enables process creation in the production composition
-// root. Tests can inject a recorder without ever launching detached helpers.
-func (h *Handler) WithLiveObservation() *Handler { h.observe = spawnLiveObserver; return h }

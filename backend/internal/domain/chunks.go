@@ -26,8 +26,6 @@ const MaxPortableChunkBytes = 2 << 20
 const (
 	ChunkFormatV1 = "cxt-doc-chunks-v1"
 	ChunkFormatV2 = "cxt-doc-chunks-v2"
-	// ChunkFormat is the format emitted by new storage writes.
-	ChunkFormat = ChunkFormatV2
 )
 
 // DocChunkManifest is the manifest of a chunk doc (common form for storage and wire).

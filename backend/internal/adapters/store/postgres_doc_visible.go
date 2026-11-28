@@ -74,10 +74,6 @@ func (batch *postgresDocVisibleBatch) emitRangePage(ctx context.Context, positio
 	return nil
 }
 
-func (s *PostgresStore) putVisibleGeneration(ctx context.Context, repo domain.ContentHash, proof domain.VerifiedDocRangeGeneration) error {
-	return s.putDocVisibleGeneration(ctx, repo, proof, false)
-}
-
 func (s *PostgresStore) putDocVisibleGeneration(ctx context.Context, repo domain.ContentHash, proof domain.VerifiedDocRangeGeneration, includeRangePages bool) error {
 	bound, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
 	if !ok || bound.owner != s || bound.readOnly || bound.repo != repo {

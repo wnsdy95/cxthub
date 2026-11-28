@@ -54,7 +54,7 @@ func TestRootDocJobWorkerAndExternalFence(t *testing.T) {
 	}
 	// This repository never opted in. Even a complete released worker must
 	// refuse its root publication; admission-off accepted-job recovery is separate.
-	if err := svc.ProcessDocFinalizations(ctx, 1); !errors.Is(err, domain.ErrRootPublicationDisabled) {
+	if err := processDocFinalizations(ctx, svc, 1); !errors.Is(err, domain.ErrRootPublicationDisabled) {
 		t.Fatal(err)
 	}
 	if have, err := st.HasDocs(ctx, repo, []domain.ContentHash{representation.Hash}); err != nil || len(have) != 0 {
@@ -92,7 +92,7 @@ func TestRootDocJobWorkerInvalidRootIsTerminal(t *testing.T) {
 	if _, err := st.EnqueueDocJob(ctx, j); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ProcessDocFinalizations(ctx, 1); err == nil {
+	if err := processDocFinalizations(ctx, svc, 1); err == nil {
 		t.Fatal("semantic mismatch accepted")
 	}
 	status, err := svc.GetDocFinalization(ctx, repo, j.ID)
@@ -111,12 +111,12 @@ func TestRootDocJobWorkerFreshRepositoryBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(nil, rootPreparationChunks{preparationChunks{repo: repo, bodies: bodies}}, nil, nil, nil)
-	if _, err := svc.verifyDocJob(context.Background(), j); err != nil {
+	svc := NewService(nil, rootPreparationChunks{preparationChunks{repo: repo, bodies: bodies}}, nil)
+	if _, err := verifyDocJob(context.Background(), svc, j); err != nil {
 		t.Fatal(err)
 	}
 	svc.blobs = changedRootFinalizationChunks{svc.blobs}
-	if proof, err := svc.verifyDocJob(context.Background(), j); err == nil || proof.Valid() {
+	if proof, err := verifyDocJob(context.Background(), svc, j); err == nil || proof.Valid() {
 		t.Fatal("warm proof hid changed bytes")
 	}
 }

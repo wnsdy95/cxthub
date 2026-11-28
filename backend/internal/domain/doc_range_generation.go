@@ -16,14 +16,6 @@ type DocRangeDirectoryRoot struct {
 	Count int         `json:"count"`
 }
 
-type DocRangeByteStorage uint8
-
-const (
-	DocRangeByteStorageNone DocRangeByteStorage = iota
-	DocRangeByteStorageOriginal
-	DocRangeByteStorageDerived
-)
-
 type DocRangeGeneration struct {
 	Version        int                        `json:"version"`
 	SourceIdentity *DocumentIdentity          `json:"source_identity,omitempty"`
@@ -111,17 +103,6 @@ func (generation DocRangeGeneration) ChunkCount() int {
 	return int((generation.StreamBytes + ConversationManifestChunkBytes - 1) / ConversationManifestChunkBytes)
 }
 
-func (generation DocRangeGeneration) ByteStorage() DocRangeByteStorage {
-	switch generation.Version {
-	case 2, 4:
-		return DocRangeByteStorageOriginal
-	case 5, 6:
-		return DocRangeByteStorageDerived
-	default:
-		return DocRangeByteStorageNone
-	}
-}
-
 func (generation DocRangeGeneration) Identity() DocumentIdentity {
 	if generation.SourceIdentity != nil {
 		return *generation.SourceIdentity
@@ -172,97 +153,6 @@ func (generation DocRangeGeneration) Encode() ([]byte, error) {
 		return nil, ErrIntegrity
 	}
 	return raw, nil
-}
-
-func DecodeDocRangeGeneration(hash, expected ContentHash, raw []byte) (DocRangeGeneration, error) {
-	var generation DocRangeGeneration
-	if len(raw) == 0 || len(raw) > MaxDocRangeGenerationBytes || HashContent(raw) != expected || json.Unmarshal(raw, &generation) != nil {
-		return DocRangeGeneration{}, ErrIntegrity
-	}
-	if generation.Validate(hash) != nil {
-		return DocRangeGeneration{}, ErrIntegrity
-	}
-	canonical, err := generation.Encode()
-	if err != nil || !bytes.Equal(canonical, raw) {
-		return DocRangeGeneration{}, ErrIntegrity
-	}
-	return generation, nil
-}
-
-func (generation DocRangeGeneration) DecodePage(position int, expected ContentHash, raw []byte) ([]DocRangeEntry, error) {
-	return decodeDocRangeEntries(position, generation.EventCount, generation.StreamBytes, expected, raw)
-}
-
-func (generation DocRangeGeneration) DecodeChunks(position int, expected ContentHash, raw []byte) ([]ConversationManifestChunk, error) {
-	if position < 0 || position >= generation.ChunkPages.Count || len(raw) > MaxDocRangeDirectoryBytes || HashContent(raw) != expected {
-		return nil, ErrIntegrity
-	}
-	var chunks []ConversationManifestChunk
-	if json.Unmarshal(raw, &chunks) != nil || len(chunks) != min(DocRangeChunkPageSize, generation.ChunkCount()-position*DocRangeChunkPageSize) {
-		return nil, ErrIntegrity
-	}
-	for offset, chunk := range chunks {
-		ordinal := position*DocRangeChunkPageSize + offset
-		expectedBytes := min(int64(ConversationManifestChunkBytes), generation.StreamBytes-int64(ordinal)*ConversationManifestChunkBytes)
-		if ValidateContentHash(chunk.Hash) != nil || chunk.Bytes != expectedBytes {
-			return nil, ErrIntegrity
-		}
-	}
-	return chunks, nil
-}
-
-func docRangeDirectoryLevel(count int) (int, int) {
-	level, span := 0, DocRangeDirectoryFanout
-	for count > span {
-		level++
-		span *= DocRangeDirectoryFanout
-	}
-	return level, span
-}
-
-func ResolveDocRangeLeaf(ctx context.Context, root DocRangeDirectoryRoot, position int, load func(context.Context, ContentHash) ([]byte, error)) (ContentHash, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if root.validate(root.Count) != nil || position < 0 || position >= root.Count || load == nil {
-		return "", ErrIntegrity
-	}
-	level, span := docRangeDirectoryLevel(root.Count)
-	expected, start := root.Hash, 0
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		raw, err := load(ctx, expected)
-		if err != nil {
-			return "", err
-		}
-		if len(raw) == 0 || len(raw) > MaxDocRangeDirectoryBytes || HashContent(raw) != expected {
-			return "", ErrIntegrity
-		}
-		var directory docRangeDirectory
-		childSpan := span / DocRangeDirectoryFanout
-		count := (min(root.Count-start, span) + childSpan - 1) / childSpan
-		if json.Unmarshal(raw, &directory) != nil || directory.Level != level || directory.Start != start || len(directory.Hashes) != count {
-			return "", ErrIntegrity
-		}
-		canonical, err := canonicalJSON(directory)
-		if err != nil || !bytes.Equal(canonical, raw) {
-			return "", ErrIntegrity
-		}
-		for _, hash := range directory.Hashes {
-			if ValidateContentHash(hash) != nil {
-				return "", ErrIntegrity
-			}
-		}
-		slot := (position - start) / childSpan
-		expected = directory.Hashes[slot]
-		if level == 0 {
-			return expected, ctx.Err()
-		}
-		start += slot * childSpan
-		span, level = childSpan, level-1
-	}
 }
 
 func buildDocRangeDirectory(ctx context.Context, hashes []ContentHash, objects *[]DocRangeObject) (DocRangeDirectoryRoot, error) {

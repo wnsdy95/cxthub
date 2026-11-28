@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitevidence"
@@ -40,25 +39,6 @@ type applicationWorkerEnvironment struct {
 func applicationWorkerEnvironmentFromEnvironment() (applicationWorkerEnvironment, error) {
 	var environment applicationWorkerEnvironment
 	environment.configuration.NotificationSender = webhookdelivery.New()
-	for _, selection := range []struct {
-		variable string
-		selected *[]domain.ContentHash
-	}{
-		{"CXT_PENDING_PROJECTION_REPOS", &environment.configuration.PendingRepositories},
-		{"CXT_GRAPH_PROJECTION_REPOS", &environment.configuration.GraphRepositories},
-		{"CXT_GRAPH_SHADOW_REPOS", &environment.configuration.QualificationRepositories},
-		{"CXT_MEMORY_PREPARATION_REPOS", &environment.configuration.MemoryRepositories},
-	} {
-		repositories, err := serverruntime.WorkerRepositories(selection.variable, os.Getenv(selection.variable))
-		if err != nil {
-			return applicationWorkerEnvironment{}, err
-		}
-		*selection.selected = repositories
-	}
-	if len(environment.configuration.MemoryRepositories) > domain.MaxMemoryReadWorkerRepos {
-		return applicationWorkerEnvironment{}, domain.ErrValidation
-	}
-	slices.Sort(environment.configuration.QualificationRepositories)
 	if key := strings.TrimSpace(os.Getenv("RESEND_API_KEY")); key != "" {
 		environment.configuration.InvitationSender = resend.New(key)
 	}
@@ -92,7 +72,8 @@ func applicationWorkerEnvironmentFromEnvironment() (applicationWorkerEnvironment
 
 func (environment applicationWorkerEnvironment) sources(storage store.Store) (serverruntime.ApplicationWorkerConfig, error) {
 	configuration := environment.configuration
-	configuration.GitReader = gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") })
+	// Without a GitHub App public repositories are read without a credential.
+	configuration.GitReader = gitevidence.NewGitHub()
 	if environment.github == nil {
 		return configuration, nil
 	}
@@ -114,9 +95,6 @@ func (environment applicationWorkerEnvironment) sources(storage store.Store) (se
 		installation, resolved, err := worker.EvidenceInstallation(ctx, path)
 		if err != nil {
 			return "", "", "", err
-		}
-		if installation == 0 {
-			return os.Getenv("CXT_GITHUB_TOKEN"), "operator", resolved, nil
 		}
 		token, err := environment.github.InstallationToken(ctx, installation)
 		return token, fmt.Sprintf("installation:%d", installation), resolved, err

@@ -25,10 +25,6 @@ func canonicalEventJSONObject(e CIREvent) (map[string]any, error) {
 	return canonicalEventJSONObjectWithBlocks(e, false)
 }
 
-func legacyCanonicalEventJSONObject(event CIREvent) (map[string]any, error) {
-	return canonicalEventJSONObjectWithBlocks(event, true)
-}
-
 func canonicalEventJSONObjectWithBlocks(e CIREvent, typedBlocks bool) (map[string]any, error) {
 	return canonicalEventJSONObjectWithReplacement(e, typedBlocks, false)
 }
@@ -80,7 +76,7 @@ func canonicalEventJSONObjectWithReplacement(e CIREvent, typedBlocks, deferredRe
 				continue
 			}
 			if deferredReplacement {
-				m[key] = &legacyCanonicalReplacement{events: v}
+				m[key] = &legacyCanonicalReplacement{}
 				continue
 			}
 			events := make([]map[string]any, len(v))

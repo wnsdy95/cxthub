@@ -4,15 +4,30 @@ import type { Repo, Repository } from './types';
 
 type RepositoryAddress = Pick<Repository, 'id' | 'owner_username' | 'slug'>;
 const RESERVED = new Set(['invite', 'w', 'login', 'settings', 'pricing', 'api', 'assets', 'public', 'admin', 'static', 'cxt', 'connect', 'oauth', 'mcp', 'enterprises']);
-export type RepositoryTab = 'members' | 'connections' | 'onhold' | 'settings';
+/** The tabs of a repository. An address that names none shows the sessions tab. */
+type RepositoryTab = 'members' | 'connections' | 'sessions' | 'settings';
 export type AccountSection = 'organizations' | 'enterprises' | 'account';
-const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'settings']);
+const TABS = new Set<RepositoryTab>(['members', 'connections', 'sessions', 'settings']);
+/** What the sessions tab shows. It is the only selection below a tab that the address holds. */
+export type AnchoredSelection =
+ | { kind: 'all' }
+ | { kind: 'held' }
+ | { kind: 'archived' }
+ | { kind: 'search'; query: string }
+ | { kind: 'commit'; sha: string; /** The commit this one is compared with: what lies between the two is shown. */ base?: string }
+ | { kind: 'branch'; name: string }
+ | { kind: 'worktree'; name: string; machine?: string }
+ | { kind: 'pull'; number: number }
+ | { kind: 'session'; provider: 'claude' | 'codex'; id: string; segment?: number; rest?: true };
+const SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const COMMIT_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+const PLACE_NAME = /^[^\u0000-\u001f\u007f]{1,256}$/;
 export type Route =
  | { kind: 'repositoryCreate' }
  | { kind: 'account'; section: AccountSection; create?: true }
  | { kind: 'githubConnections' }
- | { kind: 'repository'; username: string; slug: string; tab?: RepositoryTab }
- | { kind: 'repositoryId'; id: string; tab?: RepositoryTab }
+ | { kind: 'repository'; username: string; slug: string; tab?: RepositoryTab; anchored?: AnchoredSelection }
+ | { kind: 'repositoryId'; id: string; tab?: RepositoryTab; anchored?: AnchoredSelection }
  | { kind: 'user'; username: string }
  | { kind: 'enterprise'; slug: string }
  | { kind: 'invite'; token: string }
@@ -28,13 +43,62 @@ export function repositoryPath(repository: RepositoryAddress, tab?: RepositoryTa
   : `/w/${repository.id}`;
  return tab ? `${base}?tab=${tab}` : base;
 }
-/** Display-only connection name. Identity comes from the server, never this segment. */
-export function repositorySlug(repo: Pick<Repo, 'remote_url'>): string {
- try { return decodeURIComponent(new URL(repo.remote_url).pathname.split('/').filter(Boolean).at(-1) ?? ''); }
- catch { return ''; }
+/** Address of the sessions tab with one selection. Every link to it is built here. */
+export function anchoredPath(repository: RepositoryAddress, selection?: AnchoredSelection): string {
+ const params = new URLSearchParams({ tab: 'sessions' });
+ if (selection?.kind === 'all') params.set('show', 'all');
+ if (selection?.kind === 'held') params.set('show', 'held');
+ if (selection?.kind === 'archived') params.set('show', 'archived');
+ if (selection?.kind === 'search') params.set('q', selection.query);
+ if (selection?.kind === 'commit') {
+  params.set('commit', selection.sha);
+  if (selection.base) params.set('base', selection.base);
+ }
+ if (selection?.kind === 'branch') params.set('branch', selection.name);
+ if (selection?.kind === 'worktree') {
+  params.set('worktree', selection.name);
+  if (selection.machine) params.set('machine', selection.machine);
+ }
+ if (selection?.kind === 'pull') params.set('pull', String(selection.number));
+ if (selection?.kind === 'session') {
+  params.set('session', `${selection.provider}:${selection.id}`);
+  if (selection.segment) params.set('segment', String(selection.segment));
+  else if (selection.rest) params.set('segment', 'rest');
+ }
+ return `${repositoryPath(repository)}?${params}`;
 }
-export function repoPath(repository: RepositoryAddress, _repo: Pick<Repo, 'remote_url'>, tab?: Extract<RepositoryTab, 'onhold'>): string {
- return repositoryPath(repository, tab);
+/** Reads the selection of the sessions tab. A value that is not well formed selects nothing. */
+function parseAnchoredSelection(query: URLSearchParams): AnchoredSelection | undefined {
+ const session = query.get('session');
+ if (session !== null) {
+  const split = session.indexOf(':');
+  const provider = session.slice(0, split), id = session.slice(split + 1);
+  if ((provider !== 'claude' && provider !== 'codex') || !SESSION_ID.test(id)) return undefined;
+  const raw = query.get('segment');
+  // A segment is named by its number; "rest" names the part after the last commit.
+  const segment = raw !== null && /^[1-9][0-9]{0,6}$/.test(raw) ? { segment: Number(raw) } : raw === 'rest' ? { rest: true as const } : {};
+  return { kind: 'session', provider, id, ...segment };
+ }
+ const commit = query.get('commit');
+ if (commit !== null) {
+  if (!COMMIT_SHA.test(commit)) return undefined;
+  const base = query.get('base');
+  return { kind: 'commit', sha: commit, ...(base !== null && COMMIT_SHA.test(base) ? { base } : {}) };
+ }
+ const pull = query.get('pull');
+ if (pull !== null) return /^[1-9][0-9]{0,8}$/.test(pull) ? { kind: 'pull', number: Number(pull) } : undefined;
+ const branch = query.get('branch');
+ if (branch !== null) return PLACE_NAME.test(branch) ? { kind: 'branch', name: branch } : undefined;
+ const worktree = query.get('worktree');
+ if (worktree !== null) {
+  if (!PLACE_NAME.test(worktree)) return undefined;
+  const machine = query.get('machine');
+  return { kind: 'worktree', name: worktree, ...(machine && PLACE_NAME.test(machine) ? { machine } : {}) };
+ }
+ const search = query.get('q');
+ if (search !== null) return search.trim() !== '' && search.length <= 256 ? { kind: 'search', query: search } : undefined;
+ const show = query.get('show');
+ return show === 'all' || show === 'held' || show === 'archived' ? { kind: show } : undefined;
 }
 export function enterprisePath(slug: string): string { return `/enterprises/${encodeURIComponent(slug)}`; }
 export function accountPath(section: AccountSection): string { return `/settings/${section}`; }
@@ -61,8 +125,14 @@ export function parseRoute(pathname: string = location.pathname, search: string 
  if (segments[0] === 'login' && segments[1] === 'device' && segments.length === 2) return { kind: 'device', code: query.get('code') ?? '' };
  if (segments[0] === 'connect' && segments[1] === 'github' && segments.length === 2) return { kind: 'githubConnections' };
  if (segments[0] === 'connect' && segments[1] === 'mcp' && segments.length === 2) return { kind: 'mcpConsent', request: query.get('request') ?? '' };
- const rawTab = query.get('tab') as RepositoryTab;
- const tab = TABS.has(rawTab) ? { tab: rawTab } : {};
+ const rawTab = query.get('tab');
+ // The sessions tab is where an address without a tab leads. An address of the earlier On Hold tab leads to the
+ // list of the same name inside it.
+ const sessions = rawTab === null || rawTab === 'sessions' || rawTab === 'onhold' || !TABS.has(rawTab as RepositoryTab);
+ const anchored = !sessions ? undefined : rawTab === 'onhold' ? { kind: 'held' as const } : parseAnchoredSelection(query);
+ const tab = sessions
+  ? { ...(rawTab === 'sessions' || rawTab === 'onhold' ? { tab: 'sessions' as const } : {}), ...(anchored ? { anchored } : {}) }
+  : { tab: rawTab as RepositoryTab };
  if (segments[0] === 'w' && segments.length === 2) return { kind: 'repositoryId', id: segments[1], ...tab };
  if (RESERVED.has(segments[0])) return { kind: 'notFound' };
  if (segments.length === 1) return { kind: 'user', username: segments[0] };
@@ -80,8 +150,9 @@ export function findRepositoryByRoute(route: Route, list: Repo[]): Repo | undefi
  if (route?.kind !== 'repository' && route?.kind !== 'repositoryId') return undefined;
  return list.length === 1 ? list[0] : undefined;
 }
+/** The tab an address shows. An address of a repository that names none shows the sessions tab. */
 export function resolvedRepositoryTab(route: Route, _repos: Repo[]): RepositoryTab | undefined {
- return route?.kind === 'repository' || route?.kind === 'repositoryId' ? route.tab : undefined;
+ return route?.kind === 'repository' || route?.kind === 'repositoryId' ? route.tab ?? 'sessions' : undefined;
 }
 function notifyRoute(): void { window.dispatchEvent(new PopStateEvent('popstate')); }
 export function navigate(path: string): void { history.pushState(null, '', path); notifyRoute(); }

@@ -224,16 +224,16 @@ func newFixture(test *testing.T) *notificationFixture {
 	return fixture
 }
 
-func (fixture *notificationFixture) config(profile notificationworker.Profile) notificationworker.Config {
+func (fixture *notificationFixture) config() notificationworker.Config {
 	return notificationworker.Config{
-		Profile: profile, Scope: fixture.scope, Jobs: fixture.jobs,
+		Scope: fixture.scope, Jobs: fixture.jobs,
 		Repositories: fixture.repositories, Guard: fixture.guard, Sender: fixture.sender,
 	}
 }
 
 func (fixture *notificationFixture) worker(test *testing.T) *notificationworker.Worker {
 	test.Helper()
-	worker, err := notificationworker.New(fixture.config(notificationworker.Complete))
+	worker, err := notificationworker.New(fixture.config())
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -268,52 +268,42 @@ func (fixture *notificationFixture) assertFinished(test *testing.T, state, reaso
 	}
 }
 
-func TestNewValidatesProfilesAndDeclaredDependencies(test *testing.T) {
+func TestNewRequiresEveryDependency(test *testing.T) {
 	var nilScope *workerScope
 	var nilJobs *notificationJobs
 	var nilRepositories *repositoryReader
 	var nilGuard *deliveryGuard
 	var nilSender *notificationSender
-	for _, profile := range []notificationworker.Profile{notificationworker.Compatibility, notificationworker.Complete} {
-		for _, candidate := range []struct {
-			name     string
-			set      func(*notificationworker.Config)
-			required bool
-		}{
-			{name: "scope", set: func(config *notificationworker.Config) { config.Scope = nil }, required: true},
-			{name: "jobs", set: func(config *notificationworker.Config) { config.Jobs = nil }},
-			{name: "repositories", set: func(config *notificationworker.Config) { config.Repositories = nil }},
-			{name: "guard", set: func(config *notificationworker.Config) { config.Guard = nil }},
-			{name: "sender", set: func(config *notificationworker.Config) { config.Sender = nil }},
-			{name: "typed-nil-scope", set: func(config *notificationworker.Config) { config.Scope = nilScope }, required: true},
-			{name: "typed-nil-jobs", set: func(config *notificationworker.Config) { config.Jobs = nilJobs }, required: true},
-			{name: "typed-nil-repositories", set: func(config *notificationworker.Config) { config.Repositories = nilRepositories }, required: true},
-			{name: "typed-nil-guard", set: func(config *notificationworker.Config) { config.Guard = nilGuard }, required: true},
-			{name: "typed-nil-sender", set: func(config *notificationworker.Config) { config.Sender = nilSender }, required: true},
-		} {
-			test.Run(string(profile)+"/"+candidate.name, func(test *testing.T) {
-				fixture := newFixture(test)
-				config := fixture.config(profile)
-				candidate.set(&config)
-				worker, err := notificationworker.New(config)
-				if profile == notificationworker.Complete || candidate.required {
-					if worker != nil || !errors.Is(err, domain.ErrValidation) {
-						test.Fatal("invalid construction was accepted", worker, err)
-					}
-				} else if worker == nil || err != nil {
-					test.Fatal("explicit compatibility omission was rejected", worker, err)
-				}
-				if fixture.scope.calls != 0 || len(fixture.order) != 0 {
-					test.Fatal("construction invoked a dependency", fixture.scope.calls, fixture.order)
-				}
-			})
-		}
+	for _, candidate := range []struct {
+		name string
+		set  func(*notificationworker.Config)
+	}{
+		{name: "scope", set: func(config *notificationworker.Config) { config.Scope = nil }},
+		{name: "jobs", set: func(config *notificationworker.Config) { config.Jobs = nil }},
+		{name: "repositories", set: func(config *notificationworker.Config) { config.Repositories = nil }},
+		{name: "guard", set: func(config *notificationworker.Config) { config.Guard = nil }},
+		{name: "sender", set: func(config *notificationworker.Config) { config.Sender = nil }},
+		{name: "typed-nil-scope", set: func(config *notificationworker.Config) { config.Scope = nilScope }},
+		{name: "typed-nil-jobs", set: func(config *notificationworker.Config) { config.Jobs = nilJobs }},
+		{name: "typed-nil-repositories", set: func(config *notificationworker.Config) { config.Repositories = nilRepositories }},
+		{name: "typed-nil-guard", set: func(config *notificationworker.Config) { config.Guard = nilGuard }},
+		{name: "typed-nil-sender", set: func(config *notificationworker.Config) { config.Sender = nilSender }},
+	} {
+		test.Run(candidate.name, func(test *testing.T) {
+			fixture := newFixture(test)
+			config := fixture.config()
+			candidate.set(&config)
+			if worker, err := notificationworker.New(config); worker != nil || !errors.Is(err, domain.ErrValidation) {
+				test.Fatal("invalid construction was accepted", worker, err)
+			}
+			if fixture.scope.calls != 0 || len(fixture.order) != 0 {
+				test.Fatal("construction invoked a dependency", fixture.scope.calls, fixture.order)
+			}
+		})
 	}
-	for _, profile := range []notificationworker.Profile{"", "unknown"} {
-		fixture := newFixture(test)
-		if worker, err := notificationworker.New(fixture.config(profile)); worker != nil || !errors.Is(err, domain.ErrValidation) {
-			test.Fatal("undeclared profile was accepted", worker, err)
-		}
+	fixture := newFixture(test)
+	if worker, err := notificationworker.New(fixture.config()); worker == nil || err != nil || fixture.scope.calls != 0 || len(fixture.order) != 0 {
+		test.Fatal("a complete construction was refused or invoked a dependency", worker, err, fixture.order)
 	}
 }
 
@@ -332,41 +322,6 @@ func TestNewDoesNotStartOrReplaceDependencies(test *testing.T) {
 		}
 		fixture.assertFinished(test, "delivered", "", 202, 0)
 	})
-}
-
-func TestCompatibilityNoopAndMissingSenderPrecedeClaim(test *testing.T) {
-	for _, candidate := range []struct {
-		name    string
-		missing string
-		failure error
-	}{
-		{name: "missing-jobs", missing: "jobs"},
-		{name: "missing-repositories", missing: "repositories"},
-		{name: "both-missing", missing: "both"},
-		{name: "missing-sender", missing: "sender", failure: domain.ErrCatalogUnsupported},
-	} {
-		test.Run(candidate.name, func(test *testing.T) {
-			fixture := newFixture(test)
-			config := fixture.config(notificationworker.Compatibility)
-			config.Sender = nil
-			switch candidate.missing {
-			case "jobs":
-				config.Jobs = nil
-			case "repositories":
-				config.Repositories = nil
-			case "both":
-				config.Jobs, config.Repositories = nil, nil
-			}
-			worker, err := notificationworker.New(config)
-			if err != nil {
-				test.Fatal(err)
-			}
-			worked, err := worker.Process(fixture.ctx)
-			if worked || err != candidate.failure || fixture.jobs.claims.Load() != 0 || len(fixture.order) != 0 || fixture.scope.calls != 1 {
-				test.Fatal("compatibility setup leased work or changed no-op/error precedence", worked, err, fixture.order)
-			}
-		})
-	}
 }
 
 func TestProcessClaimNoWorkAndErrors(test *testing.T) {
@@ -567,20 +522,6 @@ func TestProcessGuardFailuresNeverFinishOrSend(test *testing.T) {
 			fixture.assertOrder(test, "claim", "repository", "prepare", "guard")
 		})
 	}
-	test.Run("missing-guard", func(test *testing.T) {
-		fixture := newFixture(test)
-		config := fixture.config(notificationworker.Compatibility)
-		config.Guard = nil
-		worker, err := notificationworker.New(config)
-		if err != nil {
-			test.Fatal(err)
-		}
-		worked, err := worker.Process(fixture.ctx)
-		if !worked || err != domain.ErrForbidden || fixture.jobs.finishes.Load() != 0 || fixture.request.calls != 0 {
-			test.Fatal("missing compatibility guard did not fail closed", worked, err)
-		}
-		fixture.assertOrder(test, "claim", "repository", "prepare")
-	})
 	test.Run("revoked-after-prepare", func(test *testing.T) {
 		fixture := newFixture(test)
 		fixture.prepareHook = func(context.Context, outbound.NotificationDelivery) (outbound.NotificationRequest, error) {

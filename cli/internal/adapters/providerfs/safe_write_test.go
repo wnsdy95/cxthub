@@ -63,23 +63,6 @@ func TestWriteRepoFileAtomicCreatesRealDirectories(t *testing.T) {
 	}
 }
 
-func TestRemoveRepoFileRefusesSymlinkedDirectory(t *testing.T) {
-	repo := t.TempDir()
-	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "marker"), []byte("keep"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(repo, ".cxt")); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	if err := RemoveRepoFile(repo, filepath.Join(".cxt", "marker")); err == nil {
-		t.Fatal("remove through symlinked directory was accepted")
-	}
-	if data, err := os.ReadFile(filepath.Join(outside, "marker")); err != nil || string(data) != "keep" {
-		t.Fatalf("outside marker changed: %q, %v", data, err)
-	}
-}
-
 func TestReadRegularFileRefusesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.json")

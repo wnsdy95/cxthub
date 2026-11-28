@@ -1,8 +1,11 @@
 # /prompts:cxt-log
 
-Alias for `/prompts:cxt-list`.
+Show what this computer keeps about the session uploads of this repository.
 
-**Execution**: MCP read via `context_list`
+**Execution**: explicit `cxt` CLI
 
-Interpret `$ARGUMENTS` as an optional branch and optional limit, call
-`context_list`, and present the saved context commits without changing state.
+Usage: `/prompts:cxt-log [claude|codex <session>]`. Run `cxt log` through the
+shell, or `cxt log <tool> <session>` for the whole upload log of one session.
+The command reads the copies under `.cxt/sessions` on this computer only: it
+does not ask the server and changes nothing. Present each session with its
+last upload, and say so when no upload has been recorded yet.

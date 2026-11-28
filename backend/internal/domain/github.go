@@ -55,6 +55,29 @@ type GitHubConnection struct {
 	NextSync          time.Time           `json:"next_sync"`
 }
 
+// GitHubRepositoryState says whether the server reads a repository on GitHub
+// through an installation of the GitHub App.
+type GitHubRepositoryState string
+
+const (
+	// GitHubRepositoryConnected: an installation in use was told to read this
+	// repository.
+	GitHubRepositoryConnected GitHubRepositoryState = "connected"
+	// GitHubRepositoryNotConnected: no installation in use was told to read
+	// this repository.
+	GitHubRepositoryNotConnected GitHubRepositoryState = "not_connected"
+	// GitHubAppNotConfigured: this server has no GitHub App to connect with.
+	GitHubAppNotConfigured GitHubRepositoryState = "not_configured"
+)
+
+// GitHubRepositoryConnection is what a reader of a repository is told about
+// its connection with GitHub. ConnectURL is the page where a maintainer of
+// the repository connects it; a server without a GitHub App has no such page.
+type GitHubRepositoryConnection struct {
+	State      GitHubRepositoryState `json:"state"`
+	ConnectURL string                `json:"connect_url,omitempty"`
+}
+
 // These records never cross the HTTP boundary. PKCE/state are server-side,
 // short-lived and consumed before the authorization code is exchanged.
 type GitHubConnectRequest struct {

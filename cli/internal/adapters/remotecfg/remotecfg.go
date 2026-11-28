@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
@@ -27,15 +26,6 @@ import (
 
 // Remotes is a mapping of name → repo URL (corresponds to git's remote list).
 type Remotes map[string]string
-
-// CheckoutAuto / CheckoutPrepare are context action modes for git branch changes.
-//
-//	auto    — Restores the branch context to the session immediately upon branch change (default)
-//	prepare — Does not restore, only outputs "cxt checkout <branch>"
-const (
-	CheckoutAuto    = "auto"
-	CheckoutPrepare = "prepare"
-)
 
 // fileConfig is for the .cxt/config file schema.
 type fileConfig struct {
@@ -64,6 +54,9 @@ type fileConfig struct {
 	// CaptureDebounceSec is the debounce window (seconds) for hook Stop capture (capture path).
 	// 0 (default) = 60 seconds. Negative values not allowed.
 	CaptureDebounceSec int `json:"capture_debounce_sec,omitempty"`
+	// SegmentsAuto is "off" when session reports are uploaded only on request.
+	// Absent (default) = hooks wake the collector.
+	SegmentsAuto string `json:"segments_auto,omitempty"`
 }
 
 func configPath(repoRoot string) string {
@@ -109,15 +102,6 @@ func Load(repoRoot string) (Remotes, error) {
 		fc.Remotes = Remotes{}
 	}
 	return canonicalRemotes(fc.Remotes)
-}
-
-// CheckoutMode returns the context action mode of the git checkout hook (default is auto).
-func CheckoutMode(repoRoot string) string {
-	fc, err := loadFile(repoRoot)
-	if err != nil || fc.CheckoutMode == "" {
-		return CheckoutAuto
-	}
-	return fc.CheckoutMode
 }
 
 // SecretsRedact returns the masking replacement phrase ("" = use default phrase).
@@ -170,77 +154,23 @@ func SetSecretsScrub(ctx context.Context, repoRoot, tier string) error {
 	return setField(ctx, repoRoot, "secrets_scrub", tier)
 }
 
-// SetCheckoutMode sets the checkout mode (auto|prepare).
-func SetCheckoutMode(ctx context.Context, repoRoot, mode string) error {
-	if mode != CheckoutAuto && mode != CheckoutPrepare {
-		return fmt.Errorf("checkout.mode must be %q or %q: %q", CheckoutAuto, CheckoutPrepare, mode)
-	}
-	return setField(ctx, repoRoot, "checkout_mode", mode)
-}
-
-// LoadMode returns the default fidelity for load/checkout/fork ("" = full series default).
-func LoadMode(repoRoot string) string {
+// SegmentsAuto reports whether hooks wake the session report collector
+// (default true). A repository whose settings cannot be read keeps the default.
+func SegmentsAuto(repoRoot string) bool {
 	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return ""
-	}
-	return fc.LoadMode
+	return err != nil || fc.SegmentsAuto != "off"
 }
 
-// SetLoadMode sets the default fidelity (full|reconstructed|memory, "default" → unset).
-func SetLoadMode(ctx context.Context, repoRoot, mode string) error {
-	if mode != "" && mode != "full" && mode != "reconstructed" && mode != "memory" {
-		return fmt.Errorf("load.mode must be full|reconstructed|memory: %q", mode)
+// SetSegmentsAuto turns automatic session report upload on or off ("" = default on).
+func SetSegmentsAuto(ctx context.Context, repoRoot, value string) error {
+	switch value {
+	case "", "on":
+		value = ""
+	case "off":
+	default:
+		return fmt.Errorf("segments.auto must be on|off: %q", value)
 	}
-	return setField(ctx, repoRoot, "load_mode", mode)
-}
-
-// CaptureDebounce returns the debounce window for hook Stop capture (default 60s, capture path).
-func CaptureDebounce(repoRoot string) time.Duration {
-	fc, err := loadFile(repoRoot)
-	if err != nil || fc.CaptureDebounceSec <= 0 {
-		return 60 * time.Second
-	}
-	return time.Duration(fc.CaptureDebounceSec) * time.Second
-}
-
-// SetCaptureDebounce sets the debounce window (seconds) (0 → default 60 seconds off).
-func SetCaptureDebounce(ctx context.Context, repoRoot string, sec int) error {
-	if sec < 0 {
-		return fmt.Errorf("capture.debounce must be 0 or more seconds: %d", sec)
-	}
-	return setField(ctx, repoRoot, "capture_debounce_sec", sec)
-}
-
-// BoundaryEnforce returns the transition execution policy (default kill).
-func BoundaryEnforce(repoRoot string) string {
-	fc, err := loadFile(repoRoot)
-	if err != nil || fc.BoundaryEnforce == "" {
-		return "kill"
-	}
-	return fc.BoundaryEnforce
-}
-
-// SetBoundaryEnforce sets the transition execution policy (kill|none, "default" → off).
-func SetBoundaryEnforce(ctx context.Context, repoRoot, v string) error {
-	if v != "" && v != "kill" && v != "none" {
-		return fmt.Errorf("boundary.enforce must be kill|none: %q", v)
-	}
-	return setField(ctx, repoRoot, "boundary_enforce", v)
-}
-
-// StagedProviders returns the list of staged providers added via cxt add.
-func StagedProviders(repoRoot string) []string {
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return nil
-	}
-	return fc.Staged
-}
-
-// SetStagedProviders sets the staging list (empty slice = staging off).
-func SetStagedProviders(ctx context.Context, repoRoot string, providers []string) error {
-	return setField(ctx, repoRoot, "staged", providers)
+	return setField(ctx, repoRoot, "segments_auto", value)
 }
 
 // Origin returns the origin remote URL. Returns ("", false) if not set.
@@ -394,36 +324,5 @@ func (g *GitContextWithRemote) CurrentRepo(ctx context.Context, cwd string) (dom
 	return repo, nil
 }
 
-// CurrentBranch delegates to the internal adapter.
-func (g *GitContextWithRemote) CurrentBranch(ctx context.Context, cwd string) (string, error) {
-	return g.inner.CurrentBranch(ctx, cwd)
-}
-
-func (g *GitContextWithRemote) LocalBranches(ctx context.Context, cwd string) ([]string, error) {
-	inventory, ok := g.inner.(outbound.GitBranchInventory)
-	if !ok {
-		return nil, domain.ErrNotGitRepo
-	}
-	return inventory.LocalBranches(ctx, cwd)
-}
-
-// CurrentCommit observes the selected worktree even when repository identity
-// is reanchored to a CXT remote. Code selection never comes from the remote URL.
-func (g *GitContextWithRemote) CurrentCommit(ctx context.Context, cwd string) (string, error) {
-	reader, ok := g.inner.(outbound.CodePosition)
-	if !ok {
-		return "", domain.ErrSelectionChanged
-	}
-	return reader.CurrentCommit(ctx, cwd)
-}
-
 // Ensure interface implementation.
 var _ outbound.GitContext = (*GitContextWithRemote)(nil)
-var _ outbound.GitBranchInventory = (*GitContextWithRemote)(nil)
-
-// LoadAtRoot reads an already verified storage root without re-resolving it via
-// ambient Git environment variables. It performs no I/O outside that root.
-func LoadAtRoot(repoRoot string) (Remotes, error) {
-	fc, err := loadFileAtRoot(repoRoot)
-	return fc.Remotes, err
-}

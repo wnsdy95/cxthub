@@ -10,7 +10,7 @@ export type MarkdownBlock =
   | { type: 'heading'; level: 1 | 2 | 3; children: MarkdownInline[] }
   | { type: 'list'; ordered: boolean; items: MarkdownInline[][] };
 
-export type MarkdownPresentation = MarkdownBlock[];
+type MarkdownPresentation = MarkdownBlock[];
 
 type BlockStart =
   | { type: 'pre' }
@@ -141,35 +141,4 @@ export function parseMarkdownPresentation(text: string): MarkdownPresentation {
     blocks.push({ type: 'paragraph', children: parseInline(content.join('\n')) });
   }
   return blocks;
-}
-
-export function markdownDisplayText(text: string): string {
-  const parts: string[] = [];
-  let requiredBreaks = 0;
-  const append = (content: string, breaks: number) => {
-    requiredBreaks = Math.max(requiredBreaks, breaks);
-    if (!content) return;
-    if (parts.length) parts.push('\n'.repeat(requiredBreaks));
-    parts.push(content);
-    requiredBreaks = breaks;
-  };
-  const inlineText = (children: MarkdownInline[]) => children.map(child => child.text).join('');
-  const normalText = (children: MarkdownInline[]) => inlineText(children).replace(/[ \t\r\n]+/g, ' ').replace(/^ | $/g, '');
-  for (const block of parseMarkdownPresentation(text)) {
-    switch (block.type) {
-      case 'paragraph':
-        append(inlineText(block.children), 2);
-        break;
-      case 'pre':
-        append(block.text, 1);
-        break;
-      case 'heading':
-        append(normalText(block.children), 1);
-        break;
-      case 'list':
-        for (const item of block.items) append(normalText(item), 1);
-        break;
-    }
-  }
-  return parts.join('');
 }

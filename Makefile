@@ -1,7 +1,7 @@
 # cxthub Makefile
 #
 # Monorepo build/test entry point. Manages two Go modules and a web frontend:
-#   cli/          → binary cxt  (local CLI — the context layer beside Git)
+#   cli/          → binary cxt  (local CLI — agent sessions beside Git)
 #   backend/      → binaries cxtd (API) + cxt-mcp (remote MCP)
 #   frontend/web/ → React+Vite web UI (cxthub website)
 #   frontend/     → framework-independent clean layered core (contract stub)
@@ -48,13 +48,12 @@ e2e: ## Run real-binary E2E tests against the FS store (same as CI)
 	bash scripts/e2e.sh
 
 .PHONY: e2e-sync
-e2e-sync: ## Run advanced sync E2E: grafts, memory inheritance, boundaries, and fetch-only
+e2e-sync: ## Run the hook-to-server E2E with the real binaries (file store, or PostgreSQL with CXT_E2E_DSN)
 	bash scripts/e2e-sync.sh
 
 .PHONY: typecheck
-typecheck: ## Strictly type-check the web UI and framework-independent TypeScript core
+typecheck: ## Strictly type-check the web UI
 	cd frontend/web && npx tsc --noEmit
-	cd frontend && npx tsc --noEmit
 
 .PHONY: web
 web: ## Web UI production build (frontend/web/dist)
@@ -118,9 +117,3 @@ deploy-check-accounts: ## Legacy Cloud Run: read-only GCP/Vercel credential chec
 deploy-check-ready: ## Legacy Cloud Run: check bootstrap resources and image
 	bash scripts/deploy-preflight.sh cloudrun-ready
 
-.PHONY: webhook-check webhook-apply
-webhook-check: ## Verify the production signed GitHub PR webhook without changes
-	bash scripts/github-webhook.sh check
-
-webhook-apply: ## Create or reconcile the production signed GitHub PR webhook
-	bash scripts/github-webhook.sh apply

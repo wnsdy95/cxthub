@@ -29,7 +29,7 @@ func TestConversationReferenceIdentity(test *testing.T) {
 			if err != nil || !proof.Valid() || proof.DocumentRef() != (DocumentRef{Hash: hash, Identity: DocumentIdentityRootV1}) {
 				test.Fatal("root reference", proof, err)
 			}
-			if !proof.Matches(Snapshot{ID: hash, DocHash: hash, DocIdentity: DocumentIdentityRootV1}) || proof.Matches(Snapshot{ID: hash, DocHash: hash}) {
+			if proof.DocumentRef() != (DocumentRef{Hash: hash, Identity: DocumentIdentityRootV1}) {
 				test.Fatal("reference lost root identity")
 			}
 			for _, body := range bodies {

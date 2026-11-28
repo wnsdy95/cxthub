@@ -20,7 +20,7 @@ declare global {
 }
 
 // GearBtn is the shared settings control used across repository, team, secrets, account, and repository panels.
-export function GearBtn({ label, onClick }: { label: string; onClick: () => void }) {
+function GearBtn({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button className="gear" aria-label={label} title={label} onClick={onClick}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -197,7 +197,6 @@ export function About({ repo, canEdit }: { repo: Repo; canEdit: boolean }) {
   );
 }
 
-
 // TeamSettings manages shared .claude/.agents/.codex defaults in the side rail.
 // Pullers can view status and download. Public repositories keep the management
 // affordance visible, but deny it before mounting the dialog when canWrite is false.
@@ -358,7 +357,6 @@ function SettingsSlot({ repoId, kind }: { repoId: string; kind: 'claude' | 'agen
     </div>
   );
 }
-
 
 // SecretsPanel shares .cxtsecrets through end-to-end encryption. The rail shows only
 // status and encrypted save/load actions; secret input, passphrase, and details stay in

@@ -12,8 +12,7 @@ firebase_web_api_key = "replace-with-firebase-web-api-key"
 
 # Secret values are created outside Terraform. Override only when using
 # non-default Secret Manager IDs.
-# postgres_secret_id       = "cxt-postgres-dsn"
-# github_webhook_secret_id = "cxt-github-webhook-secret"
+# postgres_secret_id = "cxt-postgres-dsn"
 
 # The default value is <firebase_project>.firebaseapp.com.
 # firebase_auth_domain = "replace-with-firebase-project.firebaseapp.com"

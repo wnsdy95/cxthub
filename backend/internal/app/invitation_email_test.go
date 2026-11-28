@@ -65,7 +65,7 @@ func runInvitationEmailLifecycle(t *testing.T, st emailTestStore) {
 			if _, member := s.OrganizationRoleOf(ctx, space, f.outsider.ID); member {
 				t.Fatal("creation implicitly accepted")
 			}
-			worked, err := s.ProcessInvitationEmail(ctx)
+			worked, err := processInvitationEmail(ctx, s)
 			if !worked || err != nil {
 				t.Fatal(worked, err)
 			}
@@ -89,14 +89,14 @@ func runInvitationEmailLifecycle(t *testing.T, st emailTestStore) {
 			if err := restart.ConfigureInvitationEmail(m, "New <new@example.test>", "https://new.example.test"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := restart.ProcessInvitationEmail(ctx); err != nil {
+			if _, err := processInvitationEmail(ctx, restart); err != nil {
 				t.Fatal(err)
 			}
 			job, _ = st.GetInvitationEmail(ctx, i.ID)
 			if job.State != "accepted" || job.ProviderID != "provider-id" || len(m.keys) != 2 || m.keys[0] != m.keys[1] || !reflect.DeepEqual(m.messages[0], m.messages[1]) {
 				t.Fatal("retry contract", job)
 			}
-			if worked, err := restart.ProcessInvitationEmail(ctx); worked || err != nil {
+			if worked, err := processInvitationEmail(ctx, restart); worked || err != nil {
 				t.Fatal("sent twice", worked, err)
 			}
 			renewed, err := restart.ActOnCollaborationInvitation(ctx, f.owner.ID, i.ID, "resend")
@@ -109,7 +109,7 @@ func runInvitationEmailLifecycle(t *testing.T, st emailTestStore) {
 			if _, err := restart.ActOnCollaborationInvitation(ctx, f.owner.ID, renewed.ID, "revoke"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := restart.ProcessInvitationEmail(ctx); err != nil {
+			if _, err := processInvitationEmail(ctx, restart); err != nil {
 				t.Fatal(err)
 			}
 			job, _ = st.GetInvitationEmail(ctx, renewed.ID)
@@ -135,7 +135,7 @@ func TestInvitationEmailDisabledAndRetryWindow(t *testing.T) {
 	if err := s.ConfigureInvitationEmail(m, "from@example.test", "https://example.test"); err != nil {
 		t.Fatal(err)
 	}
-	if worked, err := s.ProcessInvitationEmail(ctx); worked || err != nil {
+	if worked, err := processInvitationEmail(ctx, s); worked || err != nil {
 		t.Fatal("enabling email must not send old invites")
 	}
 	i, err = s.ActOnCollaborationInvitation(ctx, f.owner.ID, i.ID, "resend")
@@ -150,7 +150,7 @@ func TestInvitationEmailDisabledAndRetryWindow(t *testing.T) {
 	if err := st.PutInvitationEmail(ctx, j); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ProcessInvitationEmail(ctx); err != nil {
+	if _, err := processInvitationEmail(ctx, s); err != nil {
 		t.Fatal(err)
 	}
 	j, _ = st.GetInvitationEmail(ctx, i.ID)
@@ -192,7 +192,7 @@ func runInvitationEmailConcurrentClaims(t *testing.T, st, peer emailTestStore) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			if _, err := services[n%2].ProcessInvitationEmail(ctx); err != nil && !errors.Is(err, domain.ErrConflict) {
+			if _, err := processInvitationEmail(ctx, services[n%2]); err != nil && !errors.Is(err, domain.ErrConflict) {
 				t.Error(err)
 			}
 		}(n)
@@ -233,7 +233,7 @@ func runInvitationEmailStaleWorkerFence(t *testing.T, st emailTestStore) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := f.identity.ProcessInvitationEmail(ctx); done <- err }()
+	go func() { _, err := processInvitationEmail(ctx, f.identity); done <- err }()
 	<-entered
 	// Simulate an expired lease while the first provider response is delayed.
 	if err := f.identity.withIdentity(ctx, func(ctx context.Context) error {
@@ -251,7 +251,7 @@ func runInvitationEmailStaleWorkerFence(t *testing.T, st emailTestStore) {
 	if err := peer.ConfigureInvitationEmail(m, "from@example.test", "https://example.test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := peer.ProcessInvitationEmail(ctx); err != nil {
+	if _, err := processInvitationEmail(ctx, peer); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -306,7 +306,7 @@ func TestInvitationEmailCancellationAndRejection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.ProcessInvitationEmail(ctx); err != nil {
+			if _, err := processInvitationEmail(ctx, s); err != nil {
 				t.Fatal(err)
 			}
 			j, _ := st.GetInvitationEmail(ctx, i.ID)
@@ -355,7 +355,7 @@ func TestInvitationEmailAuthorityOutageDoesNotCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.unavailable = true
-	if _, err := f.identity.ProcessInvitationEmail(ctx); err == nil {
+	if _, err := processInvitationEmail(ctx, f.identity); err == nil {
 		t.Fatal("storage error ignored")
 	}
 	j, _ := st.GetInvitationEmail(ctx, i.ID)
@@ -363,11 +363,22 @@ func TestInvitationEmailAuthorityOutageDoesNotCancel(t *testing.T) {
 		t.Fatal("temporary error cancelled mail", j)
 	}
 	st.unavailable = false
-	if _, err := f.identity.ProcessInvitationEmail(ctx); err != nil {
+	if _, err := processInvitationEmail(ctx, f.identity); err != nil {
 		t.Fatal(err)
 	}
 	j, _ = st.GetInvitationEmail(ctx, i.ID)
 	if j.State != "accepted" {
 		t.Fatal(j)
 	}
+}
+
+// processInvitationEmail handles one queued invitation email the way the
+// program does on a file store: with a worker built from the identity
+// service's own configuration.
+func processInvitationEmail(ctx context.Context, service *IdentityService) (bool, error) {
+	worker, err := NewInvitationEmailWorker(service.InvitationEmailWorkerConfig(InvitationEmailCompatibility))
+	if err != nil {
+		return false, err
+	}
+	return worker.ProcessInvitationEmail(ctx)
 }

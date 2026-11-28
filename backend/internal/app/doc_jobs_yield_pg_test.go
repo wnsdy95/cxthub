@@ -35,7 +35,7 @@ func TestPGPreparedRootDoesNotYieldBorrowedTransaction(t *testing.T) {
 				if !storage.InTransaction(transaction) {
 					t.Fatal("test did not borrow PostgreSQL transaction")
 				}
-				if err := service.yieldRootPreparation(transaction, publication); err != nil {
+				if err := yieldRootPreparation(transaction, service, publication); err != nil {
 					return err
 				}
 				gate.mu.Lock()

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Markdown } from '../src/components/Markdown';
-import { markdownDisplayText, parseMarkdownPresentation, type MarkdownInline } from '../src/markdownPresentation';
+import { parseMarkdownPresentation, type MarkdownInline } from '../src/markdownPresentation';
 import { loadDisplayFixture, loadMarkdownDisplayFixture } from './markdownDisplayFixture';
 
 function referenceInline(text: string): MarkdownInline[] {
@@ -173,23 +173,6 @@ test('renderer keeps existing element structure, literal content and URL securit
   assert.equal(render('# before\u2028after'), '<div class="md"><p># before\u2028after</p></div>');
 });
 
-test('display projection follows container breaks and DOM whitespace rather than source line normalization', () => {
-  assert.equal(markdownDisplayText('first\n\nsecond\n# heading\n- item\n```\ncode\n```\nlast'), 'first\n\nsecond\n\nheading\nitem\ncode\n\nlast');
-  assert.equal(markdownDisplayText('before\n```\n```\n# \n- \n# after'), 'before\n\nafter');
-  assert.equal(markdownDisplayText('```\n\nfirst\n\n```\n# after'), '\nfirst\n\nafter');
-  assert.equal(markdownDisplayText('first\r\nsecond\rthird'), 'first\r\nsecond\rthird');
-  assert.equal(markdownDisplayText('```\n  first\r\n\tsecond\rthird\n```'), '  first\r\n\tsecond\rthird');
-  assert.equal(markdownDisplayText('# first\fsecond\u000bthird\u00a0\n- alpha\tbeta\rnext\fend'), 'first\fsecond\u000bthird\u00a0\nalpha beta next\fend');
-  assert.equal(markdownDisplayText('[credentials](https://user:pass@example.test) [invalid](https://?)'), 'credentials invalid');
-});
-
-test('display projection matches the shared markdown display v1 fixture', () => {
-  const fixture = loadMarkdownDisplayFixture();
-  assert.equal(fixture.version, 1);
-  assert.ok(fixture.cases.length > 0);
-  for (const entry of fixture.cases) assert.equal(markdownDisplayText(entry.source), entry.text, entry.name);
-});
-
 test('standalone frontend exports retain the shared presentation fixture without a parent monorepo', () => {
   const root = mkdtempSync(join(tmpdir(), 'cxt-markdown-fixture-'));
   const fixture = loadMarkdownDisplayFixture();
@@ -241,7 +224,6 @@ test('long input makes one advancing pass through paragraphs, lists and fenced l
   if (list[0].type !== 'list') assert.fail('long list must remain one list');
   assert.equal(list[0].items.length, count);
   assert.deepEqual(list[0].items[count - 1], [{ type: 'text', text: `item ${count - 1}` }]);
-  assert.equal(markdownDisplayText(items), items.replace(/^- /gm, ''));
   assert.deepEqual(parseMarkdownPresentation(`\`\`\`\n${paragraph}\n\`\`\``), [{ type: 'pre', text: paragraph }]);
 });
 
@@ -252,6 +234,5 @@ test('long unmatched inline delimiters and URL suffixes are bounded linear scans
   ]) {
     const source = `prefix ${content} suffix`;
     assert.deepEqual(parseMarkdownPresentation(source), [{ type: 'paragraph', children: [{ type: 'text', text: source }] }]);
-    assert.equal(markdownDisplayText(source), source);
   }
 });

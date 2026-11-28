@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -24,10 +23,10 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken := failedInvitationAuditStore{st}
-	svc := NewService(broken, broken, nil, gitengine.NewEngine(broken), broken)
+	svc := NewService(broken, broken, broken)
 	actor := inbound.WithCorrelation(inbound.WithRepositoryActor(context.Background(), f.owner.ID), "req_write")
 	next := "next"
-	if err := svc.UpdateRepoConfig(actor, repo.ID, &next, nil); err == nil {
+	if _, err := svc.PatchRepoProfile(actor, repo.ID, inbound.RepoProfilePatch{DefaultBranch: &next}); err == nil {
 		t.Fatal("audit failure accepted")
 	}
 	current, err := st.GetRepo(ctx, repo.ID)
@@ -46,8 +45,8 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 	if err != nil || currentRepo.OwnerNamespaceID != f.repository.OwnerNamespaceID {
 		t.Fatal("transfer escaped rollback")
 	}
-	svc = NewService(st, st, nil, gitengine.NewEngine(st), st)
-	if err = svc.UpdateRepoConfig(actor, repo.ID, &next, nil); err != nil {
+	svc = NewService(st, st, st)
+	if _, err = svc.PatchRepoProfile(actor, repo.ID, inbound.RepoProfilePatch{DefaultBranch: &next}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := st.ListOrganizationAudit(ctx, f.organization.ID, 100)
@@ -56,7 +55,7 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 	}
 	found := 0
 	for _, e := range events {
-		if e.Action == "repository.config.updated" {
+		if e.Action == "repository.profile.updated" {
 			found++
 			if e.CorrelationID != "req_write" || e.TargetID != f.repository.ID || e.Reason != "" {
 				t.Fatalf("bad event %+v", e)

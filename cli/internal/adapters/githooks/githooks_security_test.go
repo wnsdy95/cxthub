@@ -26,30 +26,29 @@ func TestEnsureGitignoreRefusesSymlinkTarget(t *testing.T) {
 	}
 }
 
-func TestReferenceTransactionScriptCarriesPreparedStateByBranch(t *testing.T) {
-	got := script("reference-transaction", "/usr/local/bin/cxt")
+func TestHookScriptIsValidShellThatOnlyWakes(t *testing.T) {
+	got := script("/usr/local/bin/cxt")
 	check := exec.Command("/bin/sh", "-n")
 	check.Stdin = strings.NewReader(got)
 	if out, err := check.CombinedOutput(); err != nil {
-		t.Fatalf("invalid reference-transaction shell: %v\n%s", err, out)
+		t.Fatalf("invalid hook shell: %v\n%s", err, out)
 	}
-	for _, want := range []string{
-		`git-hook ref-prepare`,
-		`git-hook ref-abort`,
-		`git-hook ref-sync "$PPID"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("reference-transaction hook lacks %q:\n%s", want, got)
-		}
+	// The hook says which hook it is by its own file name, not by anything
+	// Git passed to it.
+	if !strings.Contains(got, version+" ") || !strings.Contains(got, `git-hook wake "${0##*/}" "$PPID" </dev/null`) {
+		t.Fatalf("the hook does not carry this version's mark or does not wake:\n%s", got)
 	}
-	for _, forbidden := range []string{`ref-prepare "$PPID"`, `ref-abort "$PPID"`} {
+	// Nothing in the script reads what Git passes to the hook, and nothing
+	// in it can end with a status of cxt's.
+	for _, forbidden := range []string{"$(cat", "exit $?", "cxt_status"} {
 		if strings.Contains(got, forbidden) {
-			t.Fatalf("prepared lifecycle is incorrectly keyed by unstable hook PPID %q:\n%s", forbidden, got)
+			t.Fatalf("the hook script contains %q:\n%s", forbidden, got)
 		}
 	}
 }
 
 func TestInstallRefusesSymlinkedHookTarget(t *testing.T) {
+	standIn(t)
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
 		t.Skipf("git init unavailable: %v (%s)", err, out)
@@ -79,6 +78,7 @@ func TestInstallRefusesSymlinkedHookTarget(t *testing.T) {
 }
 
 func TestInstallRegistersCxtIgnoreRules(t *testing.T) {
+	standIn(t)
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
 		t.Skipf("git init unavailable: %v (%s)", err, out)
@@ -101,6 +101,7 @@ func TestInstallRegistersCxtIgnoreRules(t *testing.T) {
 }
 
 func TestInstallFallsBackToLocalExcludeForSymlinkedGitignore(t *testing.T) {
+	standIn(t)
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
 		t.Skipf("git init unavailable: %v (%s)", err, out)
@@ -129,7 +130,7 @@ func TestHookScriptQuotesExecutablePathForShell(t *testing.T) {
 	marker := filepath.Join(dir, "injected")
 	maliciousPath := filepath.Join(dir, "$(touch "+marker+")")
 	hook := filepath.Join(dir, "hook")
-	if err := os.WriteFile(hook, []byte(script("post-commit", maliciousPath)), 0o755); err != nil {
+	if err := os.WriteFile(hook, []byte(script(maliciousPath)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("/bin/sh", hook)

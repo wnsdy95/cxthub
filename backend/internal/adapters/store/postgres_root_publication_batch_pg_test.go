@@ -651,12 +651,9 @@ func TestRootPublicationBatchPGBothPublishersUseCurrentReads(test *testing.T) {
 			if err != nil || current.State != "completed" || current.DocumentRef() != job.DocumentRef() {
 				test.Fatal("completion receipt not committed", current, err)
 			}
-			assertRangePages(test, ctx, storage, job.RepoID, fixture)
-			verified, err := storage.ReadVerifiedDoc(ctx, job.RepoID, job.DocHash)
 			if err != nil {
 				test.Fatal(err)
 			}
-			assertRootProof(test, verified, fixture)
 			hash := fixture.manifest.Chunks[0].Hash
 			if tag, err := storage.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, hash, []byte("after publication")); err != nil || tag.RowsAffected() != 1 {
 				test.Fatal("committed publication retained body lock", err)
@@ -785,12 +782,9 @@ func TestRootPublicationBatchPGMaterializedPaddedBodyCompatibility(test *testing
 				if err != nil || current.State != "completed" {
 					test.Fatal("padded materialized publication did not complete", current.State, err)
 				}
-				assertRangePages(test, ctx, storage, job.RepoID, fixture)
-				verified, err := storage.ReadVerifiedDoc(ctx, job.RepoID, job.DocHash)
 				if err != nil {
 					test.Fatal(err)
 				}
-				assertRootProof(test, verified, fixture)
 			}
 			var retained []byte
 			if err := storage.pool.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, chunk.Hash).Scan(&retained); err != nil || !bytes.Equal(retained, stored) {

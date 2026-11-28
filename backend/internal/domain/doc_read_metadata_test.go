@@ -59,51 +59,6 @@ func metadataReadPlans(t *testing.T) map[string]DocReadPlan {
 	return plans
 }
 
-func TestReadPlanMetadataPreservesExactLocationsSequenceAndRole(t *testing.T) {
-	for name, plan := range metadataReadPlans(t) {
-		t.Run(name, func(t *testing.T) {
-			full, err := plan.Build(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if full.Events[1].Text != "needle \uac80\uc0c9 \U0001f642\nsecond line" || full.Events[4].Text != "summary needle" {
-				t.Fatal("full search projection lost message or summary text")
-			}
-			for _, i := range []int{0, 2, 3, 5, 6} {
-				if full.Events[i].Text != "" {
-					t.Fatal("tool or nested replacement content entered search")
-				}
-			}
-			got, err := plan.BuildMetadataContext(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := full
-			want.Events = append([]DocEventIndex{}, full.Events...)
-			for i := range want.Events {
-				want.Events[i].Text = ""
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatal("metadata differs from full projection beyond text")
-			}
-			for i, seq := range []int{0, 7, 10, 20, 30, 31, 40} {
-				if got.Events[i].Seq != seq {
-					t.Fatalf("sequence at %d = %d, want %d", i, got.Events[i].Seq, seq)
-				}
-			}
-			if len(got.Events[1].Role) < 4096 || got.Events[6].Role != "" {
-				t.Fatal("arbitrary role truncated or nested role leaked")
-			}
-			got.Events[0].Role = "caller mutation"
-			got.Envelope.SourceModels[0] = "caller mutation"
-			again, err := plan.Build(nil)
-			if err != nil || !reflect.DeepEqual(again, full) {
-				t.Fatal("metadata build/output mutation changed later full build", err)
-			}
-		})
-	}
-}
-
 func TestReadPlanBuildCancellation(t *testing.T) {
 	for name, plan := range metadataReadPlans(t) {
 		known := map[ContentHash]bool{}
@@ -111,9 +66,8 @@ func TestReadPlanBuildCancellation(t *testing.T) {
 			known[hash] = true
 		}
 		for mode, build := range map[string]func(context.Context) (DocReadIndex, error){
-			"metadata": plan.BuildMetadataContext,
-			"search":   func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, nil) },
-			"reused":   func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, known) },
+			"search": func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, nil) },
+			"reused": func(ctx context.Context) (DocReadIndex, error) { return plan.BuildContext(ctx, known) },
 		} {
 			t.Run(name+"/"+mode, func(t *testing.T) {
 				checks := 0
@@ -141,34 +95,5 @@ func TestReadPlanBuildCancellation(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestReadPlanMetadataEmptyAndUnverified(t *testing.T) {
-	if _, err := (DocReadPlan{}).BuildMetadataContext(context.Background()); !errors.Is(err, ErrIntegrity) {
-		t.Fatal("zero plan accepted", err)
-	}
-	cir := CIRDocument{Envelope: CIREnvelope{CIRVersion: "2"}, Events: []CIREvent{}}
-	manifest, bodies, err := ConversationManifestForCIR(cir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var verifier CanonicalDocVerifier
-	doc, err := verifier.VerifyConversationManifestDoc(context.Background(), manifestProofHash(t, manifest), manifest, manifestProofLoad(bodies))
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := doc.PlanReadIndexContext(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := plan.BuildMetadataContext(context.Background())
-	if err != nil || got.Hash != doc.Hash() || got.Events == nil || len(got.Events) != 0 {
-		t.Fatal("empty root metadata changed", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := plan.BuildMetadataContext(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatal("empty plan ignored cancellation", err)
 	}
 }

@@ -44,8 +44,6 @@ func TestInfrastructureStartupVerifiesSchemaWithoutApplyingMigrations(test *test
 		"return nil, fmt.Errorf(\"verify schema (run cxt-admin migrate --apply before serving): %w\", err)",
 		"log.Print(\"schema: verified\")",
 		"infrastructure.DocumentProfile = documentquery.VerifiedRoots",
-		"publication.ConfigureLegacyByteRangePublication(config.LegacyByteRangePublication)",
-		"derivedPublication.ConfigureLegacyDerivedByteRangePublication(config.LegacyDerivedBytePublication)",
 		"config.execution.configure(ctx, storage)",
 	} {
 		position := strings.Index(body, required)
@@ -68,8 +66,6 @@ func TestInfrastructureConfigHasNoMigrationWritePolicy(test *testing.T) {
 		"DataDir",
 		"RequirePostgres",
 		"MigrationsDirectory",
-		"LegacyByteRangePublication",
-		"LegacyDerivedBytePublication",
 		"execution",
 	}
 	if configuration.NumField() != len(expected) {

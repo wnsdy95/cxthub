@@ -63,46 +63,6 @@ func TestMinimumInfrastructureDoesNotConstructApplicationRuntime(test *testing.T
 	}
 }
 
-func TestDisplayMaintenanceOwnerDoesNotDependOnCommandRuntime(test *testing.T) {
-	module, err := readGoModule(filepath.Join("..", ".."))
-	if err != nil {
-		test.Fatal(err)
-	}
-	paths, err := filepath.Glob(filepath.Join(module.directory, "internal", "app", "displaymaintenance", "*.go"))
-	if err != nil || len(paths) == 0 {
-		test.Fatal("actual display maintenance owner is missing", err)
-	}
-	for _, path := range paths {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if err != nil {
-			test.Fatal(err)
-		}
-		for _, dependency := range file.Imports {
-			name, err := strconv.Unquote(dependency.Path.Value)
-			if err != nil {
-				test.Fatal(err)
-			}
-			if name == module.path+"/internal/app" || strings.Contains(name, "/internal/adapters/") || strings.Contains(name, "/internal/serverruntime") {
-				test.Error(filepath.Base(path), "depends on command/infrastructure composition", name)
-			}
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			if pointer, ok := node.(*ast.StarExpr); ok {
-				if name, ok := pointer.X.(*ast.Ident); ok && name.Name == "Service" {
-					test.Error(filepath.Base(path), "retains command Service")
-				}
-				if selector, ok := pointer.X.(*ast.SelectorExpr); ok && selector.Sel.Name == "Service" {
-					test.Error(filepath.Base(path), "retains qualified command Service")
-				}
-			}
-			return true
-		})
-	}
-}
-
 func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 	module, err := readGoModule(filepath.Join("..", ".."))
 	if err != nil {
@@ -119,16 +79,11 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 		}
 		registered := make(map[string]int)
 		var registrationOrder []string
-		maintenanceOwner := false
 		deferredClose := false
 		documentOwners := 0
-		projectionOwners := 0
 		notificationOwners := 0
 		systemMaintenanceOwners := 0
-		gitChangeOwners := 0
-		gitIntegrationOwners := 0
-		memoryPreparationOwners := 0
-		prPromotionOwners := 0
+		remoteGitOwners := 0
 		invitationEmailOwners := 0
 		githubOwners := 0
 		ast.Inspect(function.Body, func(node ast.Node) bool {
@@ -154,12 +109,8 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			if !ok {
 				return true
 			}
-			maintenanceOwner = maintenanceOwner || owner.Name == "app" && selector.Sel.Name == "NewDisplayMaintenanceWorker"
 			if owner.Name == "svc" && selector.Sel.Name == "DocumentWorkersForProfile" {
 				documentOwners++
-			}
-			if owner.Name == "svc" && selector.Sel.Name == "ProjectionWorkersForProfile" {
-				projectionOwners++
 			}
 			if owner.Name == "app" && selector.Sel.Name == "NewNotificationWorker" {
 				notificationOwners++
@@ -167,17 +118,8 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			if owner.Name == "app" && selector.Sel.Name == "NewMaintenanceWorkers" {
 				systemMaintenanceOwners++
 			}
-			if owner.Name == "app" && selector.Sel.Name == "NewGitChangeWorker" {
-				gitChangeOwners++
-			}
-			if owner.Name == "app" && selector.Sel.Name == "NewGitIntegrationWorkers" {
-				gitIntegrationOwners++
-			}
-			if owner.Name == "app" && selector.Sel.Name == "NewMemoryPreparationWorkers" {
-				memoryPreparationOwners++
-			}
-			if owner.Name == "app" && selector.Sel.Name == "NewPRPromotionWorker" {
-				prPromotionOwners++
+			if owner.Name == "app" && selector.Sel.Name == "NewRemoteGitSync" {
+				remoteGitOwners++
 			}
 			if owner.Name == "app" && selector.Sel.Name == "NewInvitationEmailWorker" {
 				invitationEmailOwners++
@@ -201,11 +143,7 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 			return true
 		})
 		for _, method := range []string{
-			"githubWorker.Run", "gitChangeWorker.Run", "gitIntegrationWorkers.Run", "gitIntegrationWorkers.RunReconciler",
-			"documentWorkers.Finalization.Run", "documentWorkers.Range.Run", "documentWorkers.FindFields.Run",
-			"documentWorkers.Display.Run", "worker.Run", "projectionWorkers.Pending.Run",
-			"projectionWorkers.Graph.Run", "memoryPreparations.Run",
-			"projectionWorkers.Qualification.Run", "prPromotionWorker.Run", "notificationWorker.Run",
+			"githubWorker.Run", "remoteGitSync.Run", "documentWorkers.Finalization.Run", "notificationWorker.Run",
 			"invitationEmailWorker.Run", "maintenanceWorkers.Runtime.Run", "maintenanceWorkers.Storage.Run",
 			"maintenanceWorkers.Chunks.Run",
 		} {
@@ -213,19 +151,19 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 				test.Error("API worker must be registered exactly once", method, registered[method])
 			}
 		}
-		if len(registered) != 19 {
+		if len(registered) != 8 {
 			test.Error("API registered an unexpected additional worker", registered)
 		}
 		for position, method := range registrationOrder {
-			if method == "githubWorker.Run" && (position != 0 || position+1 >= len(registrationOrder) || registrationOrder[position+1] != "gitChangeWorker.Run") {
+			if method == "githubWorker.Run" && (position != 0 || position+1 >= len(registrationOrder) || registrationOrder[position+1] != "remoteGitSync.Run") {
 				test.Error("API GitHub owner moved from its original optional lifecycle slot", registrationOrder)
 			}
 			if method == "invitationEmailWorker.Run" && (position == 0 || position+1 >= len(registrationOrder) || registrationOrder[position-1] != "notificationWorker.Run" || registrationOrder[position+1] != "maintenanceWorkers.Runtime.Run") {
 				test.Error("API invitation email owner moved from its original lifecycle slot", registrationOrder)
 			}
 		}
-		if !maintenanceOwner || !deferredClose || documentOwners != 1 || projectionOwners != 1 || notificationOwners != 1 || systemMaintenanceOwners != 1 || gitChangeOwners != 1 || gitIntegrationOwners != 1 || memoryPreparationOwners != 1 || prPromotionOwners != 1 || invitationEmailOwners != 1 || githubOwners != 1 {
-			test.Error("API does not own concrete worker construction and deferred worker drain", maintenanceOwner, documentOwners, projectionOwners, notificationOwners, systemMaintenanceOwners, gitChangeOwners, gitIntegrationOwners, memoryPreparationOwners, prPromotionOwners, invitationEmailOwners, githubOwners, deferredClose)
+		if !deferredClose || documentOwners != 1 || notificationOwners != 1 || systemMaintenanceOwners != 1 || remoteGitOwners != 1 || invitationEmailOwners != 1 || githubOwners != 1 {
+			test.Error("API does not own concrete worker construction and deferred worker drain", documentOwners, notificationOwners, systemMaintenanceOwners, remoteGitOwners, invitationEmailOwners, githubOwners, deferredClose)
 		}
 		return
 	}

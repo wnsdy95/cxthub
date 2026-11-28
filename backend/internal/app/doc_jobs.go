@@ -3,20 +3,12 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/app/documentworker"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
-
-const docJobLease = documentworker.Lease
-
-// This bound is for background work, independent of the 30s HTTP deadline. It
-// prevents a pathological body from holding a worker indefinitely.
-const docJobWorkLimit = documentworker.WorkLimit
 
 func (s *Service) docJobs() (outbound.DocJobStore, error) {
 	st, ok := s.blobs.(outbound.DocJobStore)
@@ -88,6 +80,9 @@ func (s *Service) submitDocFinalizationWithPolicy(ctx context.Context, repo doma
 		}
 	}
 	j, err = st.EnqueueDocJob(ctx, j)
+	if err == nil && s.documentJobStored != nil {
+		afterRepositoryCommit(ctx, s.documentJobStored)
+	}
 	return docJobStatus(j), err
 }
 
@@ -106,40 +101,6 @@ func (s *Service) GetDocFinalization(ctx context.Context, repo domain.ContentHas
 		j, err := st.GetDocJob(read, repo, id)
 		return docJobStatus(j), err
 	})
-}
-func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob) (domain.VerifiedSessionDoc, error) {
-	finalizer, err := s.documentFinalizer(nil)
-	if err != nil {
-		return domain.VerifiedSessionDoc{}, err
-	}
-	return finalizer.Verify(ctx, j)
-}
-func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j domain.DocFinalizationJob) error {
-	finalizer, err := s.documentFinalizer(st)
-	if err != nil {
-		return err
-	}
-	return finalizer.RunJob(ctx, j)
-}
-func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error {
-	storage, _ := s.blobs.(outbound.DocJobStore)
-	finalizer, err := s.documentFinalizer(storage)
-	if err != nil {
-		return err
-	}
-	return finalizer.Process(ctx, limit)
-}
-
-// One worker per process bounds resident large bodies. Database claims also
-// serialize a repository across instances; no request spawns its own worker.
-func (s *Service) RunDocFinalizationWorker(ctx context.Context) {
-	storage, _ := s.blobs.(outbound.DocJobStore)
-	finalizer, err := s.documentFinalizer(storage)
-	if err != nil {
-		log.Printf("document finalization: %v", err)
-		return
-	}
-	finalizer.Run(ctx)
 }
 
 func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {

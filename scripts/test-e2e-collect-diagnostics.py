@@ -16,26 +16,26 @@ class DiagnosticsTest(unittest.TestCase):
             root = Path(tmp)
             source, output = root / "fixture", root / "output"
             source.mkdir()
-            (source / "doctor-after.json").write_text('{"issues":["exact first failure"]}')
-            (source / "pub-git-evidence.out").write_text("real Git evidence scan failed: fixture diagnostics")
+            (source / "setup.out").write_text("the first failure, exactly")
+            (source / "earlier-branch.out").write_text("what Git said when the branch was made")
             for name in ("cookies", "auth.json", "session.jsonl", "srv.log", ".env", "agent.log", "boundary.json", "seed.jsonl"):
                 (source / name).write_text("must not be collected")
-            (source / "repair.out").symlink_to(source / ".env")
+            (source / "removed.out").symlink_to(source / ".env")
             entries = diagnostics.collect(source, output)
-            self.assertEqual([entry["file"] for entry in entries], ["doctor-after.json", "pub-git-evidence.out"])
-            self.assertEqual((output / "doctor-after.json").read_bytes(), (source / "doctor-after.json").read_bytes())
-            self.assertEqual((output / "pub-git-evidence.out").read_bytes(), (source / "pub-git-evidence.out").read_bytes())
-            self.assertEqual({p.name for p in output.iterdir()}, {"doctor-after.json", "pub-git-evidence.out", "index.json"})
+            self.assertEqual([entry["file"] for entry in entries], ["setup.out", "earlier-branch.out"])
+            self.assertEqual((output / "setup.out").read_bytes(), (source / "setup.out").read_bytes())
+            self.assertEqual((output / "earlier-branch.out").read_bytes(), (source / "earlier-branch.out").read_bytes())
+            self.assertEqual({p.name for p in output.iterdir()}, {"setup.out", "earlier-branch.out", "index.json"})
 
     def test_oversized_output_is_bounded_and_explicitly_truncated(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "fixture"
             source.mkdir()
-            (source / "doctor-after.json").write_bytes(b"prefix" + b"x" * diagnostics.MAX_BYTES)
+            (source / "setup.out").write_bytes(b"prefix" + b"x" * diagnostics.MAX_BYTES)
             entries = diagnostics.collect(source, root / "output")
-            self.assertEqual(entries, [{"file": "doctor-after.json.tail", "bytes": diagnostics.MAX_BYTES, "truncated": True}])
-            self.assertFalse((root / "output/doctor-after.json").exists())
+            self.assertEqual(entries, [{"file": "setup.out.tail", "bytes": diagnostics.MAX_BYTES, "truncated": True}])
+            self.assertFalse((root / "output/setup.out").exists())
 
     def test_output_cannot_be_removed_with_fixture_cleanup(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,8 +49,8 @@ class DiagnosticsTest(unittest.TestCase):
             source.mkdir()
             output.mkdir()
             unrelated.write_text("preserve")
-            (source / "doctor-before.json").write_text("new result")
-            for name in ("doctor-before.json", "index.json"):
+            (source / "setup2.out").write_text("new result")
+            for name in ("setup2.out", "index.json"):
                 (output / name).symlink_to(unrelated)
             (output / "stale-private.txt").write_text("must not upload")
             with self.assertRaises(FileExistsError):
@@ -68,7 +68,7 @@ class DiagnosticsTest(unittest.TestCase):
             source.mkdir()
             secret = root / "credential-marker"
             secret.write_text("must not collect")
-            os.link(secret, source / "repair.out")
+            os.link(secret, source / "removed.out")
             self.assertEqual(diagnostics.collect(source, root / "output"), [])
 
 

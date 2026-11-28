@@ -175,11 +175,6 @@ func rootRetentionLifecyclePG(test *testing.T, duringPreparation bool) {
 			assertRangeSpoolsRemoved(test, directory)
 			assertRootRetentionSiblingDeletedPG(test, storage, ctx, job.RepoID, siblingRepo, document.Hash)
 			assertRootRetentionDependenciesPG(test, storage, ctx, job, fixture, sources)
-			assertRootSourceWitnessPublishedPG(test, storage, ctx, job, fixture)
-			ready, err := storage.HasDocRangeIndex(ctx, job.RepoID, job.DocHash)
-			if err != nil || !ready {
-				test.Fatal("completed root has no current source-bound range generation", ready, err)
-			}
 			var receipts int
 			if err := storage.db(ctx).QueryRow(ctx, `SELECT count(*) FROM doc_finalization_jobs WHERE repo_id=$1`, job.RepoID).Scan(&receipts); err != nil || receipts != 1 {
 				test.Fatal("sibling lifecycle did not leave exactly one root publication receipt", receipts, err)

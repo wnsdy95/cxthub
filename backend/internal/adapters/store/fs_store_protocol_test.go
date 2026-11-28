@@ -10,105 +10,47 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-func contextWriteFS(t *testing.T) (*FSStore, domain.Ref) {
-	t.Helper()
-	s := NewFSStore(t.TempDir())
-	repo := domain.HashContent([]byte(t.Name()))
-	if _, err := s.PutRepo(context.Background(), domain.Repo{ID: repo}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.EnableContextProtocol(context.Background(), repo); err != nil {
-		t.Fatal(err)
-	}
-	return s, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", BranchID: "identity", Target: domain.HashContent([]byte("target"))}
-}
-
-func TestFSContextWriteSkipsUnusedState(t *testing.T) {
-	for _, failedRead := range []string{"history", "current-ref"} {
-		t.Run(failedRead, func(t *testing.T) {
-			s, branch := contextWriteFS(t)
-			ctx := context.Background()
-			if failedRead == "history" {
-				// A file where ReadDir expects a directory fails independently of
-				// permissions (including when tests run as root).
-				if err := os.WriteFile(filepath.Join(s.repoDir(branch.RepoID), "history"), []byte("unreadable history"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			for _, kind := range []domain.RefKind{domain.RefTag, domain.RefSession, domain.RefHead, domain.RefBranch} {
-				ref := branch
-				ref.Kind = kind
-				if kind == domain.RefHead {
-					ref.Name = domain.HeadRefName
-				}
-				if failedRead == "current-ref" {
-					if err := os.MkdirAll(s.refFile(ref.RepoID, ref.Kind, ref.Name), 0700); err != nil {
-						t.Fatal(err)
-					}
-				}
-				err := s.validateContextWrite(ctx, ref.RepoID, ref)
-				if kind == domain.RefBranch {
-					var pathErr *os.PathError
-					if !errors.As(err, &pathErr) {
-						t.Fatalf("branch must still read %s: %v", failedRead, err)
-					}
-				} else if err != nil {
-					t.Fatalf("%s read unused %s: %v", kind, failedRead, err)
-				}
-			}
-			branch.BranchID = ""
-			if err := s.validateContextWrite(ctx, branch.RepoID, branch); !errors.Is(err, domain.ErrConflict) {
-				t.Fatal("missing identity must fail before reads", err)
-			}
-			// Even nonbranches must read and reject an invalid protocol marker.
-			if err := os.WriteFile(filepath.Join(s.repoDir(branch.RepoID), "context-protocol"), []byte("2\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			branch.Kind = domain.RefTag
-			if err := s.validateContextWrite(ctx, branch.RepoID, branch); !errors.Is(err, domain.ErrIntegrity) {
-				t.Fatal("invalid protocol marker ignored", err)
-			}
-		})
-	}
-}
-
-func TestFSContextWriteCASAndRecovery(t *testing.T) {
-	s, tag := contextWriteFS(t)
+// A data directory written by an earlier version can hold a repository's
+// context protocol in a file of its own. Nothing writes that file any more;
+// what is there is still read with the repository, and a file that says
+// anything but the one protocol there ever was is not trusted.
+func TestFSRepositoryIsReadWithTheProtocolAnEarlierVersionLeft(t *testing.T) {
 	ctx := context.Background()
-	tag.Kind, tag.BranchID = domain.RefTag, ""
-	history := filepath.Join(s.repoDir(tag.RepoID), "history")
-	if err := os.WriteFile(history, []byte("unreadable history"), 0600); err != nil {
+	storage := NewFSStore(t.TempDir())
+	repo := domain.HashContent([]byte(t.Name()))
+	// A client cannot set it: what is stored and answered carries none.
+	if stored, err := storage.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", ContextProtocol: 1}); err != nil || stored.ContextProtocol != 0 {
+		t.Fatalf("storing a repository with a protocol set by the caller: %+v %v", stored, err)
+	}
+	// Without the file there is none.
+	if got, err := storage.GetRepo(ctx, repo); err != nil || got.ContextProtocol != 0 || got.DefaultBranch != "main" {
+		t.Fatalf("a repository without the file: %+v %v", got, err)
+	}
+	file := filepath.Join(storage.repoDir(repo), "context-protocol")
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("1\n")
+	if got, err := storage.GetRepo(ctx, repo); err != nil || got.ContextProtocol != 1 {
+		t.Fatalf("the file an earlier version left: %+v %v", got, err)
+	}
+	for _, content := range []string{"", "1", "2\n", "1\n\n", " 1\n", "one\n"} {
+		write(content)
+		if got, err := storage.GetRepo(ctx, repo); !errors.Is(err, domain.ErrIntegrity) || got.ID != "" {
+			t.Errorf("a file that says %q: %+v %v", content, got, err)
+		}
+	}
+	// A file that cannot be read is an error, not a repository without one.
+	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompareAndSwapRef(ctx, tag.RepoID, tag, ""); err != nil {
-		t.Fatal("nonbranch CAS loaded history", err)
-	}
-	if err := s.CompareAndSwapRef(ctx, tag.RepoID, tag, ""); !errors.Is(err, domain.ErrRefConflict) {
-		t.Fatal("create CAS lost", err)
-	}
-	next := tag
-	next.Target = domain.HashContent([]byte("next target"))
-	if err := s.CompareAndSwapRef(ctx, tag.RepoID, next, next.Target); !errors.Is(err, domain.ErrRefConflict) {
-		t.Fatal("update CAS lost", err)
-	}
-	// Recovery remains ahead of the preflight in the actual mutation path.
-	if err := os.WriteFile(s.historyJournal(tag.RepoID), []byte("invalid journal"), 0600); err != nil {
+	if err := os.Mkdir(file, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompareAndSwapRef(ctx, tag.RepoID, next, tag.Target); err == nil {
-		t.Fatal("history recovery bypassed")
-	}
-	if err := os.Remove(s.historyJournal(tag.RepoID)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(s.joinJournalPath(tag.RepoID), []byte("pending join"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CompareAndSwapRef(ctx, tag.RepoID, next, tag.Target); !errors.Is(err, domain.ErrConflict) {
-		t.Fatal("join recovery guard bypassed", err)
-	}
-	got, err := s.GetRef(ctx, tag.RepoID, tag.Kind, tag.Name)
-	if err != nil || got.Target != tag.Target {
-		t.Fatalf("failed write changed ref: %+v %v", got, err)
+	if got, err := storage.GetRepo(ctx, repo); err == nil || errors.Is(err, domain.ErrIntegrity) || got.ID != "" {
+		t.Fatalf("a file that cannot be read: %+v %v", got, err)
 	}
 }

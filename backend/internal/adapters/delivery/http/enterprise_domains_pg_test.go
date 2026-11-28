@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -46,7 +45,7 @@ func TestPGEnterpriseDomainHTTPVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewServer(app.NewService(st, st, nil, gitengine.NewEngine(st), st), ids).Handler()
+	handler := NewServer(app.NewService(st, st, st), ids).Handler()
 	post := func(suffix string, body any, contentType string) (int, app.EnterpriseDomainView) {
 		t.Helper()
 		raw, _ := json.Marshal(body)

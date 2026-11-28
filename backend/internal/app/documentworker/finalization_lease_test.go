@@ -180,27 +180,3 @@ func TestFinalizationOwnerWorkLimitRemainsIndependentOfRenewal(test *testing.T) 
 		}
 	})
 }
-
-func TestFinalizationSharedLeaseReturnsWorkOutcomeAfterJoiningRenewal(test *testing.T) {
-	for _, runFailure := range []error{nil, errors.New("work failed")} {
-		synctest.Test(test, func(test *testing.T) {
-			var workContext, renewalContext context.Context
-			ctx := context.WithValue(context.Background(), finalizationCallerKey{}, "caller")
-			err := documentworker.WithLease(ctx, documentworker.Lease, func(renew context.Context) error {
-				renewalContext = renew
-				assertFinalizationDeadline(test, renew, 5*time.Second)
-				return domain.ErrConflict
-			}, func(work context.Context) error {
-				workContext = work
-				if deadline, bounded := work.Deadline(); !bounded || !deadline.Equal(time.Now().Add(documentworker.WorkLimit)) || work.Value(finalizationCallerKey{}) != "caller" {
-					test.Error("shared lease changed work deadline or context values")
-				}
-				<-work.Done()
-				return runFailure
-			})
-			if err != runFailure || workContext == nil || !errors.Is(workContext.Err(), context.Canceled) || renewalContext == nil || !errors.Is(renewalContext.Err(), context.Canceled) {
-				test.Fatal("shared lease changed the work result or failed to cancel renewal", err, runFailure, workContext, renewalContext)
-			}
-		})
-	}
-}
