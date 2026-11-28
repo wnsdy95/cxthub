@@ -125,10 +125,12 @@ func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameScopeAndFallback(t
 	if _, _, err := worker.EvidenceInstallation(ctx, "/repos/acme/api/git/commits/AbC"); !errors.Is(err, domain.ErrForbidden) {
 		test.Fatal("unscoped evidence access accepted", err)
 	}
+	// A repository no installation was told to read is not read, also where
+	// its owner has no connection: no credential of the server stands in.
 	storage.connectionError = domain.ErrNotFound
 	path := "/repos/operator/private/git/commits/AbC"
-	if installation, rewritten, err := worker.EvidenceInstallation(scoped, path); err != nil || installation != 0 || rewritten != path {
-		test.Fatal("operator fallback changed the requested path", installation, rewritten, err)
+	if installation, rewritten, err := worker.EvidenceInstallation(scoped, path); !errors.Is(err, domain.ErrForbidden) || installation != 0 || rewritten != "" {
+		test.Fatal("a repository nobody was told to read is read", installation, rewritten, err)
 	}
 	storage.connectionError = nil
 	connection.Enabled = false

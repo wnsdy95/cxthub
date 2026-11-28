@@ -103,15 +103,15 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 
-	gitReader := gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") })
+	// Without a GitHub App the server reads public repositories without a
+	// credential. With one, it reads a repository only through the
+	// installation that was told to read it.
+	gitReader := gitevidence.NewGitHub(nil)
 	if githubConnections != nil {
 		gitReader = gitevidence.NewAuthenticated(func(ctx context.Context, path string) (string, string, string, error) {
 			id, resolved, e := githubConnections.EvidenceInstallation(ctx, path)
 			if e != nil {
 				return "", "", "", e
-			}
-			if id == 0 {
-				return os.Getenv("CXT_GITHUB_TOKEN"), "operator", resolved, nil
 			}
 			token, e := githubClient.InstallationToken(ctx, id)
 			return token, fmt.Sprintf("installation:%d", id), resolved, e

@@ -93,12 +93,12 @@ func TestGitHubMaintainerBindsARepositoryOfAnotherOwnerSpace(t *testing.T) {
 			t.Fatalf("with the role %q the repository was bound: %v", as, err)
 		}
 	}
-	// While nobody was told to read it and its owner has no installation, the
-	// server reads it as it reads a repository without the App.
+	// While nobody was told to read it, the server does not read it, also
+	// where its owner has no installation.
 	if connected, err := g.RepositoryConnection(ctx, stored.ID); err != nil || connected {
 		t.Fatalf("before the binding: %v %v", connected, err)
 	}
-	if installation, rewritten, err := g.EvidenceInstallation(scoped, path); err != nil || installation != 0 || rewritten != path {
+	if installation, rewritten, err := g.EvidenceInstallation(scoped, path); !errors.Is(err, domain.ErrForbidden) || installation != 0 || rewritten != "" {
 		t.Fatalf("before the binding the reader of GitHub is given %d %q %v", installation, rewritten, err)
 	}
 
