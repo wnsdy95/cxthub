@@ -13,8 +13,10 @@ import (
 type argumentError struct{ error }
 
 // CommandFailure is the versioned automation boundary. It does not infer a
-// completed/rolled-back mutation from a human error message. Durable operations
-// expose their exact state and ID through status/capture/commit receipts.
+// completed/rolled-back mutation from a human error message: mutation_state is
+// "unchanged" only for arguments rejected before anything ran. Otherwise it is
+// "inspect_receipts", and what a command did is read from what it records, such
+// as the runs cxt segments log shows.
 type CommandFailure struct {
 	Version   int    `json:"version"`
 	Code      string `json:"code"`
@@ -41,46 +43,25 @@ func ClassifyCommandFailure(err error) CommandFailure {
 	case errors.Is(err, context.DeadlineExceeded):
 		out.Code = "timeout"
 		out.Retryable = true
-	case errors.Is(err, domain.ErrIndexChanged):
-		out.Code = "index_changed"
-		out.ExitCode = 3
-	case errors.Is(err, domain.ErrCodePositionMismatch):
-		out.Code = "code_position_mismatch"
-		out.ExitCode = 3
-		out.Retryable = true
 	case errors.Is(err, domain.ErrSelectionChanged):
 		out.Code = "position_changed"
 		out.ExitCode = 3
 		out.Retryable = true
-	case errors.Is(err, domain.ErrSyncConflict), errors.Is(err, domain.ErrMemoryContention):
+	case errors.Is(err, domain.ErrSyncConflict):
 		out.Code = "conflict"
 		out.ExitCode = 3
 	case errors.Is(err, domain.ErrHashMismatch), errors.Is(err, domain.ErrInvalidCIR):
 		out.Code = "source_corrupt"
 		out.ExitCode = 5
-	case errors.Is(err, domain.ErrProviderCapabilityUnknown):
-		out.Code = "provider_capability_unknown"
-		out.Phase = "prepare"
-		out.ExitCode = 6
-	case errors.Is(err, domain.ErrContextBudgetExceeded):
-		out.Code = "context_budget_exceeded"
-		out.Phase = "prepare"
-		out.ExitCode = 6
-	case errors.Is(err, domain.ErrStagingVersion), errors.Is(err, domain.ErrUnsupportedCIRVersion):
+	case errors.Is(err, domain.ErrUnsupportedCIRVersion):
 		out.Code = "unsupported_version"
 		out.ExitCode = 5
-	case errors.Is(err, domain.ErrEmptyIndex):
-		out.Code = "empty_index"
-		out.ExitCode = 3
 	case errors.Is(err, domain.ErrInvalidRef):
 		out.Code = "invalid_ref"
 		out.ExitCode = 2
 	case errors.Is(err, domain.ErrNotFound):
 		out.Code = "not_found"
 		out.ExitCode = 1
-	case errors.Is(err, domain.ErrDeliveryFailed):
-		out.Code = "delivery_failed"
-		out.Phase = "delivery"
 	case errors.As(err, &status):
 		switch status.StatusCode() {
 		case 401, 403:

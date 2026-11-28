@@ -7,8 +7,8 @@
 //   - Only import domain + ports (inbound implementation, outbound calls).
 //   - Do not import adapters/* packages.
 //
-// Codec/Capture Registry:
+// Provider registries:
 //
-// ProviderCodec and CaptureSource have N implementations per provider, so they are stored in a registry of type map[domain.ProviderKind]outbound.ProviderCodec.
-// The registry is passed to the constructor in cmd/cxt (composition root) via dependency injection.
+// ProviderCodec, SessionMaterializer and SessionContentSource have one implementation per provider, so they are passed as maps keyed by domain.ProviderKind
+// (for example map[domain.ProviderKind]outbound.ProviderCodec) to the constructors in cmd/cxt (composition root) via dependency injection.
 package app

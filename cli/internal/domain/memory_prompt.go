@@ -3,56 +3,22 @@ package domain
 import "strings"
 
 // PromptStructuredProjection returns the provider-visible structured state of
-// a memory digest without mutating its immutable archival representation.
+// a memory digest without mutating it.
 //
-// Summaries remain lossless and provenance fragments remain addressable. Facts
-// are filtered to project knowledge, while tasks are emitted only from a
-// provider-attested structured extraction. Extractive/legacy task lists are
-// retained in storage for inspection but cannot become instructions in a
-// future load, branch seed, managed memory file, or carried generation.
+// The summary stays lossless apart from task sections. Facts are filtered to
+// project knowledge, while tasks are emitted only from a provider-attested
+// structured extraction. Other task lists, and the task sections of the
+// summary narrative, cannot become instructions in a branch summary or a fork
+// seed.
 func PromptStructuredProjection(d MemoryDigest) MemoryDigest {
 	out := d
-	if len(d.Fragments) == 0 {
-		out.KeyFacts = PromptWorthyMemoryFacts(d.KeyFacts)
-		if d.TasksAuthoritative {
-			out.OpenTasks = promptWorthyMemoryTasks(d.OpenTasks, memoryItemSet(out.KeyFacts))
-		} else {
-			out.Summary = withoutStructuredTaskNarrative(out.Summary)
-			out.OpenTasks = nil
-		}
-		return out
+	out.KeyFacts = PromptWorthyMemoryFacts(d.KeyFacts)
+	if d.TasksAuthoritative {
+		out.OpenTasks = promptWorthyMemoryTasks(d.OpenTasks, memoryItemSet(out.KeyFacts))
+	} else {
+		out.Summary = withoutStructuredTaskNarrative(out.Summary)
+		out.OpenTasks = nil
 	}
-
-	out.Fragments = make([]MemoryFragment, len(d.Fragments))
-	out.TasksAuthoritative = false
-	latestTaskAuthority := -1
-	for i, source := range d.Fragments {
-		if source.TasksAuthoritative {
-			latestTaskAuthority = i
-		}
-	}
-	factSet := make(map[string]struct{})
-	for i, source := range d.Fragments {
-		fragment := source
-		fragment.Summary = LatestProviderCompactionGeneration(source.Summary)
-		if i != latestTaskAuthority {
-			fragment.Summary = withoutStructuredTaskNarrative(fragment.Summary)
-		}
-		fragment.KeyFacts = PromptWorthyMemoryFacts(source.KeyFacts)
-		fragment.OpenTasks = nil
-		out.Fragments[i] = fragment
-		for key := range memoryItemSet(fragment.KeyFacts) {
-			factSet[key] = struct{}{}
-		}
-	}
-	for i, source := range d.Fragments {
-		if source.TasksAuthoritative {
-			out.TasksAuthoritative = true
-			out.Fragments[i].OpenTasks = promptWorthyMemoryTasks(source.OpenTasks, factSet)
-		}
-	}
-	dropByteContainedProviderSummaries(out.Fragments)
-	renderMemoryFragments(&out)
 	return out
 }
 
@@ -158,39 +124,6 @@ func isTaskSectionTitle(title string) bool {
 		strings.HasPrefix(title, "pending tasks ") || strings.HasPrefix(title, "open tasks ")
 }
 
-// dropByteContainedProviderSummaries removes only canonical provider
-// continuation summaries whose complete bytes are represented by another
-// fragment. Unique sibling summaries remain independent; equal copies prefer
-// the later fragment for deterministic recency.
-func dropByteContainedProviderSummaries(fragments []MemoryFragment) {
-	for i := range fragments {
-		candidate := strings.TrimSpace(fragments[i].Summary)
-		if candidate == "" || !isCanonicalProviderContinuation(candidate) {
-			continue
-		}
-		for j := range fragments {
-			if i == j {
-				continue
-			}
-			other := strings.TrimSpace(fragments[j].Summary)
-			if len(other) < len(candidate) || !isCanonicalProviderContinuation(other) {
-				continue
-			}
-			if strings.Contains(other, candidate) && (len(other) > len(candidate) || j > i) {
-				fragments[i].Summary = ""
-				break
-			}
-		}
-	}
-}
-
-func isCanonicalProviderContinuation(summary string) bool {
-	if end := strings.IndexByte(summary, '\n'); end >= 0 {
-		summary = summary[:end]
-	}
-	return isProviderContinuationHeader(strings.TrimSpace(summary))
-}
-
 // PromptWorthyMemoryFacts is the shared filter for structured project facts
 // rendered into provider-controlled context. Older distillers stored tool
 // tokens and source-provenance labels alongside facts; those remain in the
@@ -289,15 +222,10 @@ func WithoutCodeAssessment(text string) string {
 	return text
 }
 
-// HistoricalPromptProjection replaces obsolete code assessments only when
-// preparing inherited history. Memory sinks can render a newly prepared prompt
-// without stripping the current assessment a second time.
+// HistoricalPromptProjection removes obsolete code assessments, then applies
+// PromptStructuredProjection, when inherited history is prepared for a tool.
 func HistoricalPromptProjection(d MemoryDigest) MemoryDigest {
 	out := d
 	out.Summary = WithoutCodeAssessment(d.Summary)
-	out.Fragments = append([]MemoryFragment(nil), d.Fragments...)
-	for i := range out.Fragments {
-		out.Fragments[i].Summary = WithoutCodeAssessment(out.Fragments[i].Summary)
-	}
 	return PromptStructuredProjection(out)
 }

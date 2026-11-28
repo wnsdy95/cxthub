@@ -63,7 +63,7 @@ func TestRootCaptureCapabilityConfirmation(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Error(err)
 				}
-				if len(request.DocHaves)+len(request.SnapshotHaves)+len(request.ChunkHaves) != 0 {
+				if len(request.DocHaves)+len(request.ChunkHaves) != 0 {
 					t.Error("probe offered objects")
 				}
 				view["async_docs_supported"] = mode != "no-async"
@@ -85,7 +85,7 @@ func TestRootCaptureCapabilityConfirmation(t *testing.T) {
 				json.NewEncoder(w).Encode(view)
 			}))
 			defer server.Close()
-			c := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+			c := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 			err := c.ConfirmRootCapture(context.Background(), repo)
 			if mode == "valid" {
 				if err != nil || calls != 2 {

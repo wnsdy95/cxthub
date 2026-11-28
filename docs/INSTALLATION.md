@@ -381,7 +381,6 @@ The CLI recognizes these environment variables:
 |---|---|
 | `CXT_REMOTE` | API base fallback when no repository `origin` is configured |
 | `CXT_TOKEN` | Non-interactive authentication token; takes precedence over stored credentials |
-| `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Identity overrides sent with requests |
 | `CXT_NO_BROWSER=1` | Do not attempt to open a browser during device login |
 | `CXT_SECRETS_PASSPHRASE` | Passphrase fallback for `cxt secrets push|pull` |
 

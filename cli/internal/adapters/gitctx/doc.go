@@ -2,7 +2,7 @@
 //
 // It traverses up from cwd to find the current code repo/branch by searching for the .git directory.
 // Codex records do not contain a direct gitBranch field, making this port the
-// authoritative branch source for Codex capture.
+// authoritative branch source for Codex sessions.
 //
 // Implementation approach (pending, backend architecture Open Questions):
 //

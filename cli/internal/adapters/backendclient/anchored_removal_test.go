@@ -22,7 +22,7 @@ func TestRemovalsAreListedMadeAndTakenBack(t *testing.T) {
 		_, _ = w.Write([]byte(answer))
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	ctx := context.Background()
 
 	// The caller's own removals.
@@ -98,7 +98,7 @@ func TestTheServerIsReadAndAskedForTheDiagnosisAndItsFixes(t *testing.T) {
 		_, _ = w.Write([]byte(answer))
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	ctx := context.Background()
 
 	answer = `[{"provider":"claude","session_id":"session-1","revision":3,"body_hash":"sha256:b","records":7,"segments":2,"content":true,"uploader":"account","updated_at":"2031-01-02T03:04:05Z","archived_at":"2031-01-03T03:04:05Z","commits":[{"sha":"` + sha + `","segment_no":1,"rule":"printed-number","on_remote":true},{"sha":"` + sha + `","segment_no":2,"rule":"printed-number","copies":["` + sha + `"]}]},{"provider":"codex","session_id":"thread-1","revision":1,"body_hash":"sha256:c","records":1,"segments":0,"shared":true,"commits":[]}]`
@@ -163,7 +163,7 @@ func TestAConversationIsReadFromTheServerToContinueIt(t *testing.T) {
 		_, _ = w.Write([]byte(answer))
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	ctx := context.Background()
 
 	answer = `{"repo_id":"` + repo + `","provider":"claude","session_id":"session-1","revision":2,"body":{"rule_version":1,"scope":"working-folder","records":4,"content":{"doc":"sha256:doc","events":6},"segments":[{"first":"m1","last":"m4","first_ordinal":0,"last_ordinal":3,"first_event":0,"events":4,"commits":[{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rule":"printed-number"}]}]}}`

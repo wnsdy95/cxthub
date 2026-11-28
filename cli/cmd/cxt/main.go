@@ -18,10 +18,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"slices"
-	"strings"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
@@ -142,16 +140,11 @@ type config struct {
 	// RepoRoot is the shared context root. Linked app worktrees resolve to the
 	// primary working tree while their original cwd remains available to Git and
 	// provider session discovery.
-	RepoRoot  string
-	GitDir    string
-	GitBranch string
-	GitCommit string
+	RepoRoot string
 	// RemoteEndpoint is the REST base URL of the central server (e.g., https://cxthub.example.com/api/v1).
 	RemoteEndpoint string
 	// RemoteToken is the team bearer token (Authorization: Bearer cxt_team_<opaque>).
 	RemoteToken string
-	// Identity is the user identifier used in X-Cxt-Identity.
-	Identity domain.TeamIdentity
 }
 
 // loadConfig loads the configuration.
@@ -159,7 +152,6 @@ type config struct {
 //
 //	CXT_REMOTE    Central server REST base (e.g., http://127.0.0.1:8080/api/v1)
 //	CXT_TOKEN     Team bearer token (e.g., cxt_team_<opaque>)
-//	CXT_NAME / CXT_EMAIL / CXT_TEAM   User identifier
 func loadConfig() config {
 	cwd, _ := os.Getwd()
 	// .cxt is repository-wide. Desktop agents commonly create linked worktrees,
@@ -169,44 +161,11 @@ func loadConfig() config {
 	if roots, err := gitctx.ResolveRepositoryRoots(context.Background(), cwd); err == nil {
 		repoRoot = roots.SharedRoot
 	}
-	// User identifier: CXT_NAME/EMAIL takes precedence, otherwise git config user.* (git is the source of truth —
-	// code commits and context commits are attributed to the same author).
-	gitCfg := func(key string) string {
-		out, err := exec.Command("git", "-C", repoRoot, "config", "--get", key).Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(out))
-	}
-	name := os.Getenv("CXT_NAME")
-	if name == "" {
-		name = gitCfg("user.name")
-	}
-	email := os.Getenv("CXT_EMAIL")
-	if email == "" {
-		email = gitCfg("user.email")
-	}
 	return config{
 		RepoRoot:       repoRoot,
-		GitDir:         configGitValue(cwd, "rev-parse", "--absolute-git-dir"),
-		GitBranch:      configGitValue(cwd, "symbolic-ref", "--short", "HEAD"),
-		GitCommit:      configGitValue(cwd, "rev-parse", "--verify", "HEAD"),
 		RemoteEndpoint: os.Getenv("CXT_REMOTE"),
 		RemoteToken:    os.Getenv("CXT_TOKEN"),
-		Identity: domain.TeamIdentity{
-			Name:  name,
-			Email: email,
-			Team:  os.Getenv("CXT_TEAM"),
-		},
 	}
-}
-
-func configGitValue(cwd string, args ...string) string {
-	out, err := exec.Command("git", append([]string{"-C", cwd}, args...)...).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // container is the bundle of all services/handlers created in the composition root.
@@ -222,8 +181,8 @@ type container struct {
 // No registration or provider initialization occurs here.
 func buildRepositoryAdapters(cfg config) (*storage.FileStore, *backendclient.BackendClient, outbound.GitContext) {
 	// Local store: repo root .cxt/ (client-only).
-	store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
-	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
+	store := storage.NewFileStore(cfg.RepoRoot)
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) })
 	return store, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter())
 }
 
@@ -287,7 +246,7 @@ func buildContainer(cfg config) container {
 			}
 			base := binding.Endpoint
 			token := tokenForObservedDestination(cfg, base, remotes["origin"])
-			client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
+			client := backendclient.NewBackendClient(func() string { return base }, func() string { return token })
 			return resolveEndpointConnection(ctx, client, binding)
 		},
 		Init:            initSvc,

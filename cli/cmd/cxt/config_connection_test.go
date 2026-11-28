@@ -63,7 +63,7 @@ func TestConfigCoordinationFrozenHTTPDestinationAndCredentials(t *testing.T) {
 	}))
 	defer server.Close()
 	stable = server.URL + "/team/repo/context"
-	cfg := config{RepoRoot: root, GitDir: filepath.Join(root, ".git"), RemoteEndpoint: server.URL + "/api/v1", RemoteToken: "frozen-fixture"}
+	cfg := config{RepoRoot: root, RemoteEndpoint: server.URL + "/api/v1", RemoteToken: "frozen-fixture"}
 	prepared, err := prepareRemoteConnection(cfg)(context.Background(), root, server.URL+"/team/repo", "")
 	if err != nil {
 		t.Fatal(err)

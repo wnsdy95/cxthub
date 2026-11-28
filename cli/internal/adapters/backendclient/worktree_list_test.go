@@ -31,7 +31,7 @@ func TestReportWorktreesSendsNamesAndBranches(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	worktrees := []domain.WorktreeRegistration{{Name: "app", Branch: "main"}, {Name: "app-detached"}}
 	if err := client.ReportWorktrees(context.Background(), repo, "laptop", worktrees); err != nil {
 		t.Fatal(err)

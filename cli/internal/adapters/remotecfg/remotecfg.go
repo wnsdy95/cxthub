@@ -1,11 +1,11 @@
 // Package remotecfg implements git's remote concept.
 //
-// Registers a session repo URL (e.g., http://host:8907/acme/my-app) in the local `.cxt/config` under a name (e.g., origin), and push/pull operations are performed from that single URL:
+// Registers a session repo URL (e.g., http://host:8907/acme/my-app) in the local `.cxt/config` under a name (e.g., origin); sessions are uploaded to and read from that single URL:
 //
 //	RepoID  = sha256(normalize(url))      — Automatically assigns the same repo to team members with the same URL
 //	API base = scheme://host/api/v1      — Server address (like git's remote URL, which is the destination)
 //
-// Once origin is registered, the GitContext decorator reanchors the repo identity based on the URL, ensuring that save/list/push/pull operations all use the same RepoID. If not registered, it delegates to the existing behavior (code repo git origin → cwd fallback).
+// Once origin is registered, the GitContext decorator reanchors the repo identity based on the URL, so every upload and read uses the same RepoID. If not registered, it delegates to the existing behavior (code repo git origin → cwd fallback).
 package remotecfg
 
 import (
@@ -27,40 +27,23 @@ import (
 // Remotes is a mapping of name → repo URL (corresponds to git's remote list).
 type Remotes map[string]string
 
-// fileConfig is for the .cxt/config file schema.
+// fileConfig is for the .cxt/config file schema. Keys it does not name, such
+// as those older versions wrote, are kept as they are by every mutation.
 type fileConfig struct {
-	TransportEndpoints  map[string]EndpointBinding   `json:"transport_endpoints,omitempty"`
-	TransportMigrations map[string]EndpointMigration `json:"transport_migrations,omitempty"`
-	Remotes             Remotes                      `json:"remotes,omitempty"`
-	CaptureDocument     *captureDocumentBinding      `json:"capture_document,omitempty"`
-	// CheckoutMode is the context action for git checkout hooks (auto|prepare). Defaults to auto if not set.
-	CheckoutMode string `json:"checkout_mode,omitempty"`
-	// Staged is the legacy provider selector. Frozen-index commands and hooks ignore it;
-	// source content cannot be inferred from this old configuration.
-	Staged []string `json:"staged,omitempty"`
+	// TransportEndpoints and CaptureDocument are read from the raw field map;
+	// naming them here makes every read of the config check their JSON types.
+	TransportEndpoints map[string]EndpointBinding `json:"transport_endpoints,omitempty"`
+	Remotes            Remotes                    `json:"remotes,omitempty"`
+	CaptureDocument    *captureDocumentBinding    `json:"capture_document,omitempty"`
 	// SecretsRedact is a custom masking replacement phrase (defaults to capture phrase if not set).
 	SecretsRedact string `json:"secrets_redact,omitempty"`
 	// SecretsMinLen is a custom minimum length for masking (0 = default 4).
 	SecretsMinLen int `json:"secrets_minlen,omitempty"`
 	// SecretsScrub is the pattern scrub tier (off|standard|strict, default is standard).
 	SecretsScrub string `json:"secrets_scrub,omitempty"`
-	// LoadMode is the default fidelity for load/checkout/fork (full|reconstructed|memory).
-	// An absent mode uses the structured memory input policy. An explicit legacy
-	// mode selects replay fidelity; the command-line --mode takes precedence.
-	LoadMode string `json:"load_mode,omitempty"`
-	// BoundaryEnforce is the isolation session process termination policy on context switch (kill|none).
-	// Default is kill — intentional break, checkpoint precedes so no loss.
-	BoundaryEnforce string `json:"boundary_enforce,omitempty"`
-	// CaptureDebounceSec is the debounce window (seconds) for hook Stop capture (capture path).
-	// 0 (default) = 60 seconds. Negative values not allowed.
-	CaptureDebounceSec int `json:"capture_debounce_sec,omitempty"`
 	// SegmentsAuto is "off" when session reports are uploaded only on request.
 	// Absent (default) = hooks wake the collector.
 	SegmentsAuto string `json:"segments_auto,omitempty"`
-}
-
-func configPath(repoRoot string) string {
-	return filepath.Join(sharedConfigRoot(repoRoot), ".cxt", "config")
 }
 
 // sharedConfigRoot makes remotes and capture policy repository-wide even when
@@ -183,20 +166,12 @@ func Origin(repoRoot string) (string, bool) {
 	return u, ok && u != ""
 }
 
-// Validate checks the repo URL format.
-//
-// Repository URL is the repo identity:
-// <host>/<namespace>/<repository>/<repository>. Existing two-segment repository
-// URLs remain valid legacy identities because RepoID=hash(URL); silently
-// rewriting one would fork its context DAG.
-func Validate(rawURL string) error {
-	_, err := CanonicalURL(rawURL)
-	return err
-}
-
-// CanonicalURL validates and canonicalizes a repository remote. Credentials,
-// query parameters and fragments are never part of repo identity and must not
-// be persisted in the repository config.
+// CanonicalURL validates and canonicalizes a repository remote. The repository
+// URL is the repo identity: <host>/<namespace>/<repository>/<repository>.
+// Existing two-segment URLs remain valid because RepoID=hash(URL), and
+// rewriting one would change the repository its sessions belong to.
+// Credentials, query parameters and fragments are never part of repo identity
+// and must not be persisted in the repository config.
 func CanonicalURL(rawURL string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Opaque != "" {

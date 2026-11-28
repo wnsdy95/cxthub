@@ -12,7 +12,6 @@
 // Authentication (sync protocol):
 //
 //	Authorization: Bearer cxt_team_<opaque>
-//	X-Cxt-Identity: name="..."; email="..."; team="..."
 //
 // Dependency rules (domain model):
 //   - Only imports domain + ports.outbound.

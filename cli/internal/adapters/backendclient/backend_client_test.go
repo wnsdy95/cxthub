@@ -18,7 +18,7 @@ func TestOptionalAssetNoContentMapsToNotFound(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" })
 	if _, err := c.PullSettings(context.Background(), repo, "claude"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("PullSettings 204 error = %v, want ErrNotFound", err)
 	}

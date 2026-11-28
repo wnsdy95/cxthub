@@ -44,7 +44,7 @@ func docUploadFixture(t *testing.T, version string) outbound.DocumentChunks {
 // cancellation at precise boundaries, using the client's real JSON transport.
 func docUploadClient(t *testing.T, repo string, handle http.HandlerFunc) *BackendClient {
 	t.Helper()
-	c := NewBackendClient(func() string { return "https://synthetic.invalid" }, func() string { return "" }, domain.TeamIdentity{})
+	c := NewBackendClient(func() string { return "https://synthetic.invalid" }, func() string { return "" })
 	c.httpc.Transport = reviewTransferRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost && !(r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/push/doc-jobs/")) {
 			t.Fatalf("unexpected method %s %s", r.Method, r.URL.Path)

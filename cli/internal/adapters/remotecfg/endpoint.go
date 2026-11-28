@@ -118,10 +118,6 @@ func (observed Observation) CaptureIdentity() (domain.DocumentIdentity, error) {
 }
 
 func SetEndpoint(ctx context.Context, expected Observation, name string, binding EndpointBinding, rootConfirmed bool) error {
-	return SetEndpointWithPending(ctx, expected, name, binding, rootConfirmed, false)
-}
-
-func SetEndpointWithPending(ctx context.Context, expected Observation, name string, binding EndpointBinding, rootConfirmed, migratePending bool) error {
 	if !validRemoteName(name) || binding.Validate() != nil {
 		return fmt.Errorf("invalid remote endpoint binding")
 	}
@@ -147,32 +143,7 @@ func SetEndpointWithPending(ctx context.Context, expected Observation, name stri
 	if keepRoot && !rootConfirmed {
 		return fmt.Errorf("fresh root capture capability confirmation required; config unchanged")
 	}
-	return mutate(ctx, expected.root, &expected, false, func(fields map[string]json.RawMessage, _ Observation) error {
-		receipts, err := endpointMigrations(fields)
-		if err != nil {
-			return err
-		}
-		if migratePending {
-			if previous == binding {
-				found := false
-				for _, receipt := range receipts {
-					found = found || receipt.To == binding
-				}
-				if !found {
-					return fmt.Errorf("no prior transport transition to authorize; pending work retained")
-				}
-			} else {
-				receipt := EndpointMigration{Version: 1, From: previous, To: binding}
-				if err := receipt.Validate(); err != nil {
-					return err
-				}
-				receipts[receipt.ID()] = receipt
-				if len(receipts) > 64 {
-					return fmt.Errorf("pending transport migration receipt limit reached")
-				}
-				fields["transport_migrations"], _ = json.Marshal(receipts)
-			}
-		}
+	return mutate(ctx, expected.root, &expected, func(fields map[string]json.RawMessage, _ Observation) error {
 		bindings, err := endpointBindings(fields)
 		if err != nil {
 			return err

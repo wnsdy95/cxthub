@@ -26,7 +26,7 @@ func TestReadAnchoredMemoryAsksForABranchAndNamesTheFoldersNewestCommits(t *test
 			`","body_hash":"` + string(domain.HashContent([]byte("body"))) + `","body":{"summary":"Added the parser.","key_facts":["It reads TOML."],"open_tasks":[]},"segment_no":2,"uploader":"account","uploader_name":"alice"}]}`))
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 
 	memory, err := client.ReadAnchoredMemory(context.Background(), repo, "topic/parser", []string{first, second}, 5)
 	if err != nil {

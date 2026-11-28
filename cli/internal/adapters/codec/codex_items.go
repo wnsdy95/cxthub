@@ -46,18 +46,12 @@ var codexItemKnown = map[string]struct{}{
 // or which process ran it. They are left out of what is uploaded.
 var codexItemLocal = map[string]struct{}{"cwd": {}, "processId": {}, "scriptPath": {}, "savedPath": {}}
 
-// DecodeCodexItems converts items, in the order given, into events numbered
-// from start. previous is the envelope of the events already converted for
-// the same thread. An item that is not a JSON object with a type is an error:
-// that is not an item at all.
-func DecodeCodexItems(items []CodexItem, previous domain.Envelope, start int) (domain.CIRDocument, error) {
-	doc, _, err := DecodeCodexItemsCounted(items, previous, start)
-	return doc, err
-}
-
-// DecodeCodexItemsCounted is DecodeCodexItems that also says how many events
-// each item gave, in order. An item is converted on its own, so the counts
-// place every item in the events.
+// DecodeCodexItemsCounted converts items, in the order given, into events
+// numbered from start, and says how many events each item gave, in order.
+// previous is the envelope of the events already converted for the same
+// thread. An item is converted on its own, so the counts place every item in
+// the events. An item that is not a JSON object with a type is an error: that
+// is not an item at all.
 func DecodeCodexItemsCounted(items []CodexItem, previous domain.Envelope, start int) (domain.CIRDocument, []int, error) {
 	doc := domain.CIRDocument{Envelope: previous}
 	doc.Envelope.SourceModels = append([]string(nil), previous.SourceModels...)

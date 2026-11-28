@@ -46,10 +46,6 @@ func TestClaudeRecordsAreCountedAndConvertInRunsAsInOne(t *testing.T) {
 	if doc, counts, err := codec.DecodeAppendCounted(ctx, nil, domain.Envelope{}, 0); err != nil || len(counts) != 0 || len(doc.Events) != 0 {
 		t.Fatalf("no records: counts=%v events=%d %v", counts, len(doc.Events), err)
 	}
-	// The plain form gives the same document.
-	if plain, err := codec.DecodeAppend(ctx, join(claudeCountedLines), domain.Envelope{}, 0); err != nil || !reflect.DeepEqual(plain, whole) {
-		t.Fatalf("the plain form differs: %v", err)
-	}
 	for cut := 0; cut <= len(claudeCountedLines); cut++ {
 		first, firstCounts, err := codec.DecodeAppendCounted(ctx, join(claudeCountedLines[:cut]), domain.Envelope{}, 0)
 		if err != nil {

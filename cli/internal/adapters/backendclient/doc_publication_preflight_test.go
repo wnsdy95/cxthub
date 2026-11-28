@@ -42,7 +42,7 @@ func TestRootPublicationPreflightCurrentNegotiation(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					t.Error(err)
 				}
-				if len(req.DocHaves) != 1 || req.DocHaves[0] != rep.Hash || len(req.SnapshotHaves)+len(req.ChunkHaves) != 0 {
+				if len(req.DocHaves) != 1 || req.DocHaves[0] != rep.Hash || len(req.ChunkHaves) != 0 {
 					t.Error("wrong root-only inventory", req)
 				}
 				neg := p4R1Negotiation()
@@ -92,7 +92,7 @@ func TestRootPublicationPreflightCurrentNegotiation(t *testing.T) {
 				p4R1JSON(t, w, neg)
 			}))
 			defer server.Close()
-			c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+			c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 			err := c.PreflightDocumentReferences(ctx, repo, []domain.DocumentRef{rep.DocumentRef(), rep.DocumentRef()})
 			good := mode == "existing-off" || mode == "wanted-enabled"
 			if (err == nil) != good || writes.Load() != 0 {
@@ -131,7 +131,7 @@ func TestRootPublicationPreflightFreezesPeerAndSkipsLegacy(t *testing.T) {
 			return "changed"
 		}
 		return "frozen"
-	}, domain.TeamIdentity{})
+	})
 	if err := c.PreflightDocumentReferences(context.Background(), repo, []domain.DocumentRef{rep.DocumentRef()}); err != nil {
 		t.Fatal(err)
 	}

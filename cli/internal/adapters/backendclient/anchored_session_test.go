@@ -28,7 +28,7 @@ func TestPutAnchoredSessionSendsTheReportUnderItsKey(t *testing.T) {
 		_, _ = w.Write([]byte(answer))
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	upload := domain.AnchoredSessionUpload{Provider: domain.ProviderCodex, SessionID: "0199-thread.id_1", Body: domain.AnchoredSessionBody{
 		RuleVersion: domain.AnchoredSessionRuleVersion, Scope: domain.SessionScopeFolder, Records: 2,
 		Segments: []domain.AnchoredSegment{{AnchoredRange: domain.AnchoredRange{First: "t1/i1", Last: "t1/i2", LastOrdinal: 1},

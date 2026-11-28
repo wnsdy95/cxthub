@@ -3,7 +3,6 @@ package capture
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ type codexSessionCandidate struct {
 	path     string
 	header   codexSessionHeader
 	worktree string
-	excluded bool
 }
 
 func selectCodexSession(candidates []codexSessionCandidate) (string, error) {
@@ -58,7 +56,7 @@ func selectCodexSession(candidates []codexSessionCandidate) (string, error) {
 	return candidates[latest].path, nil
 }
 
-func locateCodexSession(ctx context.Context, sessionID, stateRoot string, requireEligible bool, scope func(string) (string, bool)) (string, error) {
+func locateCodexSession(ctx context.Context, sessionID string, scope func(string) (string, bool)) (string, error) {
 	if !providerfs.ValidSessionID(sessionID) {
 		return "", domain.ErrNoActiveSession
 	}
@@ -94,23 +92,9 @@ func locateCodexSession(ctx context.Context, sessionID, stateRoot string, requir
 		if !sameNativeSessionID(header.Payload.ID, sessionID) {
 			return "", fmt.Errorf("%w: Codex filename and metadata IDs disagree", ErrSessionIdentityMismatch)
 		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return "", err
-		}
-		candidates = append(candidates, codexSessionCandidate{path: path, header: header, worktree: worktree,
-			excluded: requireEligible && (strings.HasSuffix(path, ".superseded") || providerfs.CaptureExcluded(stateRoot, path, info.Size()))})
+		candidates = append(candidates, codexSessionCandidate{path: path, header: header, worktree: worktree})
 	}
-	selected, err := selectCodexSession(candidates)
-	if err != nil {
-		return "", err
-	}
-	for _, candidate := range candidates {
-		if candidate.path == selected && candidate.excluded {
-			return "", domain.ErrNoActiveSession
-		}
-	}
-	return selected, nil
+	return selectCodexSession(candidates)
 }
 
 func canonicalSessionCwd(cwd string) string {
@@ -151,7 +135,7 @@ func (c *CodexCaptureSource) ValidateCurrentSession(ctx context.Context, path st
 	}
 	wanted := codexSessionWorktree(ctx, header.Payload.Cwd)
 	owner, ownerErr := gitctx.ResolveRepositoryRoots(ctx, header.Payload.Cwd)
-	current, err := locateCodexSession(ctx, header.Payload.ID, "", false, func(nativeCwd string) (string, bool) {
+	current, err := locateCodexSession(ctx, header.Payload.ID, func(nativeCwd string) (string, bool) {
 		if ownerErr == nil {
 			roots, err := gitctx.ResolveRepositoryRoots(ctx, nativeCwd)
 			return roots.WorktreeRoot, err == nil && roots.SharedRoot == owner.SharedRoot

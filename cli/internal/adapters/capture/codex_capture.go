@@ -58,7 +58,8 @@ func rolloutCwd(path string) (string, bool) {
 	return line.Payload.Cwd, true
 }
 
-// SessionFilesForCwd returns all rollout session files in this cwd (for branch switch isolation). Unlike LocateActiveSession, it does not apply CaptureExcluded — isolation is unrelated to activity. Files already isolated are renamed with .jsonl.superseded and thus excluded.
+// SessionFilesForCwd returns all rollout session files recorded for this cwd.
+// Files that older versions renamed to .jsonl.superseded are skipped.
 func (c *CodexCaptureSource) SessionFilesForCwd(_ context.Context, cwd string) []string {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {

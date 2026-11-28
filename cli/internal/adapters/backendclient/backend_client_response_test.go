@@ -49,7 +49,7 @@ func (b *ackResponseBody) Close() error {
 
 func newACKResponseClient(t *testing.T, url string) (*BackendClient, *http.Transport) {
 	t.Helper()
-	c := NewBackendClient(func() string { return url }, func() string { return "" }, domain.TeamIdentity{})
+	c := NewBackendClient(func() string { return url }, func() string { return "" })
 	transport := &http.Transport{}
 	c.httpc.Transport = transport
 	t.Cleanup(transport.CloseIdleConnections)

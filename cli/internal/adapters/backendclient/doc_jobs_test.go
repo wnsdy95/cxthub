@@ -25,7 +25,7 @@ func TestDocumentFinalizationCancellationRetainsDurableIdentity(t *testing.T) {
 		cancel()
 	}))
 	defer server.Close()
-	c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+	c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 	err := c.finalizeDocument(ctx, string(hash), chunkedDocWire{Hash: hash})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled %v", err)
@@ -55,7 +55,7 @@ func TestDocumentFinalizationReceiptIdentityAndRejection(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(tc.reply)
 			}))
 			defer server.Close()
-			c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+			c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 			err := c.finalizeDocument(context.Background(), string(hash), chunkedDocWire{Hash: hash})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("result %v", err)
@@ -81,7 +81,7 @@ func TestDocumentFinalizationAsksSoonAndThenLessOften(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(docJobStatus{ID: id, DocHash: hash, State: state})
 	}))
 	defer server.Close()
-	c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+	c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 	began := time.Now()
 	if err := c.finalizeDocument(context.Background(), string(hash), chunkedDocWire{Hash: hash}); err != nil {
 		t.Fatal(err)

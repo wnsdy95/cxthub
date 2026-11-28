@@ -45,8 +45,6 @@ type BranchSummaryInput struct {
 type InitInput struct {
 	// Cwd is the target working directory for registration.
 	Cwd string
-	// RemoteURL is the explicit git remote URL. "" means auto-detect origin (fallback to cwd if not found).
-	RemoteURL string
 }
 
 // InitOutput is the DTO output of InitRepo.Init (compatibility rules).

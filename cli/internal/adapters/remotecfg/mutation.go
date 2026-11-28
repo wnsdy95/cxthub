@@ -16,9 +16,9 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
-// Cooperating config writers share the capture gate. Manual config edits, old
-// clients and Git-origin changes require quiesced operations: they do not honor
-// this flock, and a final reread cannot detect an external exact-byte ABA.
+// Cooperating config writers share the first-tracking flock. Manual config
+// edits, old clients and Git-origin changes require quiesced operations: they do
+// not honor this flock, and a final reread cannot detect an external exact-byte ABA.
 
 // ErrChanged means the exact observed config no longer owns this mutation.
 var ErrChanged = fmt.Errorf("repository config changed; retry from current state: %w", domain.ErrSyncConflict)
@@ -140,7 +140,7 @@ func sameObservation(a, b Observation) bool {
 
 // mutate is the only config publication path. Callbacks perform bounded local
 // validation/field edits only: no network, capture, ref or snapshot lock calls.
-func mutate(ctx context.Context, root string, expected *Observation, repair bool, edit func(map[string]json.RawMessage, Observation) error) error {
+func mutate(ctx context.Context, root string, expected *Observation, edit func(map[string]json.RawMessage, Observation) error) error {
 	if root == "" {
 		return ErrChanged
 	}
@@ -152,15 +152,11 @@ func mutate(ctx context.Context, root string, expected *Observation, repair bool
 		if expected != nil && !sameObservation(current, *expected) {
 			return ErrChanged
 		}
+		// A config that cannot be read is never replaced: keep its preferences
+		// and connection evidence intact for explicit correction.
 		fields, err := current.fields()
-		// Explicit repair may replace syntactically broken JSON after backup.
-		// A parseable object with invalid fields is not an empty config: keep
-		// its preferences and connection evidence intact for explicit correction.
-		if err != nil && (!repair || json.Valid(current.raw)) {
-			return err
-		}
 		if err != nil {
-			fields = map[string]json.RawMessage{}
+			return err
 		}
 		if err := edit(fields, current); err != nil {
 			return err
@@ -177,11 +173,7 @@ func mutate(ctx context.Context, root string, expected *Observation, repair bool
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		perm := os.FileMode(0644) // Retain existing config/repair publication modes.
-		if repair {
-			perm = 0600
-		}
-		return providerfs.WriteRepoFileDurable(root, ".cxt/config", append(data, '\n'), perm)
+		return providerfs.WriteRepoFileDurable(root, ".cxt/config", append(data, '\n'), 0644)
 	})
 	return err
 }
@@ -195,20 +187,7 @@ func setField(ctx context.Context, root, key string, value any) error {
 	if err != nil {
 		return err
 	}
-	return mutate(ctx, root, nil, false, func(fields map[string]json.RawMessage, _ Observation) error { fields[key] = raw; return nil })
-}
-
-// Replace is a whole-remotes CAS, primarily for import/fixtures. Ordinary
-// commands use Add/Remove so caller-owned stale maps never overwrite peers.
-func Replace(ctx context.Context, expected Observation, remotes Remotes) error {
-	canonical, err := canonicalRemotes(remotes)
-	if err != nil {
-		return err
-	}
-	return mutate(ctx, expected.root, &expected, false, func(fields map[string]json.RawMessage, _ Observation) error {
-		fields["remotes"], _ = json.Marshal(canonical)
-		return nil
-	})
+	return mutate(ctx, root, nil, func(fields map[string]json.RawMessage, _ Observation) error { fields[key] = raw; return nil })
 }
 
 // Add publishes only after connection work has completed. validateLocal may
@@ -218,7 +197,7 @@ func Add(ctx context.Context, expected Observation, name, url string, validateLo
 	if err != nil {
 		return err
 	}
-	return mutate(ctx, expected.root, &expected, false, func(fields map[string]json.RawMessage, _ Observation) error {
+	return mutate(ctx, expected.root, &expected, func(fields map[string]json.RawMessage, _ Observation) error {
 		remotes, err := decodeRemotes(fields)
 		if err != nil {
 			return err
@@ -241,7 +220,7 @@ func Remove(ctx context.Context, expected Observation, name string) error {
 	if !validRemoteName(name) {
 		return fmt.Errorf("invalid remote name")
 	}
-	return mutate(ctx, expected.root, &expected, false, func(fields map[string]json.RawMessage, _ Observation) error {
+	return mutate(ctx, expected.root, &expected, func(fields map[string]json.RawMessage, _ Observation) error {
 		remotes, err := decodeRemotes(fields)
 		if err != nil {
 			return err

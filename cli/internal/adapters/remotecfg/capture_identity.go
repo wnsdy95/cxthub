@@ -37,7 +37,7 @@ func SetCaptureDocumentIdentity(ctx context.Context, expected Observation, ident
 	if err := identity.Validate(); err != nil {
 		return err
 	}
-	return mutate(ctx, expected.root, &expected, false, func(fields map[string]json.RawMessage, _ Observation) error {
+	return mutate(ctx, expected.root, &expected, func(fields map[string]json.RawMessage, _ Observation) error {
 		if identity == domain.DocumentIdentityLegacy {
 			delete(fields, "capture_document")
 			return nil

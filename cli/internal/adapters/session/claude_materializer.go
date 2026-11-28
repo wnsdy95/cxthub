@@ -36,7 +36,6 @@ func (m *ClaudeMaterializer) Materialize(ctx context.Context, raw []byte, cwd st
 	if err := providerfs.WriteRegularFileAtomic(path, nativizeClaudeSession(raw, id), 0o644); err != nil {
 		return "", "", err
 	}
-	recordMaterialized(ctx, cwd, path)
 	return path, "claude --resume " + id, nil
 }
 
