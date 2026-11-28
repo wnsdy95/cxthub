@@ -622,7 +622,7 @@ components:
         authored_at: { type: string, format: date-time }
         committed_at: { type: string, format: date-time }
         subject: { type: string, maxLength: 1024, description: The first paragraph of the commit message on one line. }
-        head: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$', description: The newest commit of the push the server was reading when it first stored this commit. The commit came with that push, and `/repos/{repoID}/push-origins` says where that push came from. Absent for a commit that was not stored while reading a push the server had just seen, as every commit of the first read of a repository. }
+        head: { type: string, pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$', description: "The newest commit of the push the server was reading when it first stored this commit. The commit came with that push, and `/repos/{repoID}/push-origins` says where that push came from. Absent for a commit that was not stored while reading a push the server had just seen, as every commit of the first read of a repository." }
     RemoteGitCommits:
       type: object
       required: [commits]
@@ -1193,7 +1193,6 @@ components:
                 - bad_request
                 - unauthenticated
                 - forbidden
-                - team_mismatch
                 - not_found
                 - ref_conflict
                 - git_origin_mismatch
@@ -1201,7 +1200,6 @@ components:
                 - validation
                 - csrf_rejected
                 - integrity_violation
-                - missing_object
             message:
               type: string
             details:
@@ -5612,5 +5610,7 @@ tags:
     description: "authentication (session exchange) · account (username/nickname) · CLI token."
   - name: repositories
     description: "repository settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
+  - name: system
+    description: Process health for deployment probes.
   - name: organizations
     description: "Global Organization namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."

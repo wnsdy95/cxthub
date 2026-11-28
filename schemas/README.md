@@ -10,8 +10,6 @@ cxt keeps `cli/` and `backend/` in separate Go modules with independent domain t
 | `openapi.yaml` | OpenAPI 3.1 REST contract shared by CLI, backend, and frontend. A drift test fails when a registered route is missing from it or a path exists only in it. |
 | `db/migrations/*.sql` | Ordered PostgreSQL migrations, `0001` through `0170`. `0161` to `0168` add the tables of the session structure; `0169` drops the tables of the earlier capture approach that nothing depends on, and destroys their data; `0170` adds what collectors report about themselves and, to a stored commit, the push it came with. Runtime services verify the schema and never apply it; see [database migration ownership](../docs/DATABASE_MIGRATIONS.md). |
 | `fixtures/`, `testdata/` | Fixtures read by tests. |
-| `manifest.schema.json` | Manifest v1 of the earlier capture approach: a repository's refs and snapshot index. The current server registers no route that answers a manifest. |
-| `personal-work.schema.json` | The handoff file of the earlier `--work-state` option. No command of the current CLI reads it. |
 
 Ownership migrations and recovery guarantees are documented in
 [Repository ownership](../docs/REPOSITORY_ORGANIZATIONS.md).

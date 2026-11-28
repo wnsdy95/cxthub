@@ -1,8 +1,7 @@
 // How a session's conversation reads what its pages leave out: a record too
 // large for a page is read whole when asked for, and one too large to read
 // whole is read a part at a time. Every read goes through the session, so the
-// server holds it to what the reader may see. The CI workflow runs this file by
-// name in a step of its own, with the render window switch on.
+// server holds it to what the reader may see.
 import { expect, test } from '@playwright/test';
 import { capturePageErrors, installApiFixture } from './api-fixture';
 

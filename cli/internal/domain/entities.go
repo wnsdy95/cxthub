@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// JSON tags are in snake_case, the same as the backend(cxt-backend) domain and schemas/manifest.schema.json. Although completely separate, they must be compatible over the wire(REST/JSON), so field names are matched (.cxt local storage is in the same format).
+// JSON tags are in snake_case, the same as the backend(cxt-backend) domain. Although completely separate, they must be compatible over the wire(REST/JSON), so field names are matched (.cxt local storage is in the same format).
 
 // Repo is the root of the session storage space (domain model). One Repo per code repository.
 type Repo struct {
