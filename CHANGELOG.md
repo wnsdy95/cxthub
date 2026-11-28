@@ -7,6 +7,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-28
+
 Sessions are no longer captured by hooks at the moment something happens.
 `cxt` reads what the coding agents and Git already record, uploads it, and the
 server reads the Git host. The capture approach this replaces is removed. See
@@ -87,6 +89,12 @@ the upgrade notes before deploying.
 - Migration 0169 drops data and cannot be undone from the database. Take a
   backup first. A server of an earlier version does not start on a migrated
   database.
+- Migrations 0161 to 0170 create 17 tables that the database accounts of the
+  API, MCP and worker may not use until they are given rights on them. After
+  `migrate --apply`, run `schemas/db/runtime_rights/0161_0170.sql` as the
+  migration account; see "Rights on the tables of this release" in
+  `docs/DATABASE_MIGRATIONS.md`. Without it the Sessions tab and every upload
+  answer "internal server error".
 - Update the CLI and the web before the server: an earlier CLI or web page
   fails against a server without the capture routes.
 - With a GitHub App configured on the server, `cxt setup` ends as not complete
@@ -125,6 +133,7 @@ the upgrade notes before deploying.
 - Workspace access control, pending-session review, shared settings, and
   end-to-end encrypted secret-mask distribution.
 
-[Unreleased]: https://github.com/wnsdy95/cxthub/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/wnsdy95/cxthub/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/wnsdy95/cxthub/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/wnsdy95/cxthub/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/wnsdy95/cxthub/releases/tag/v0.1.0

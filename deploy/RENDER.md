@@ -41,8 +41,9 @@ sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
 Before starting API, MCP, or worker processes, follow the
 [explicit migration procedure](../docs/DATABASE_MIGRATIONS.md): drain the old
 release, review the backup and compatible image/schema pair, apply with the
-operator image using `--apply`, verify, then start runtime services with their
-separate DML credentials. An unprepared or mismatched schema refuses startup.
+operator image using `--apply`, give the runtime accounts their rights on the
+tables of this release (`schemas/db/runtime_rights/0161_0170.sql`), verify,
+then start runtime services with their separate DML credentials. An unprepared or mismatched schema refuses startup.
 This is a release requirement, not an automatically provisioned Render service
 or pre-deploy hook. No new resources or credential grants are activated here.
 
