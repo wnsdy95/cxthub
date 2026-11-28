@@ -13,7 +13,8 @@ func (s *Server) withCorrelation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := domain.NewID("req_")
 		w.Header().Set("X-Request-ID", id)
-		next.ServeHTTP(w, r.WithContext(inbound.WithCorrelation(r.Context(), id)))
+		named := &requestWriter{ResponseWriter: w, method: r.Method, path: r.URL.Path}
+		next.ServeHTTP(named, r.WithContext(inbound.WithCorrelation(r.Context(), id)))
 	})
 }
 func (s *Server) auditPage(r *http.Request) (domain.OrganizationAuditPage, error) {

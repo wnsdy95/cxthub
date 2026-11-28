@@ -394,6 +394,10 @@ func TestPGRepositoryMovesToTheAddressItsWorkspaceHas(t *testing.T) {
 	if err != nil || session.Body.Content == nil || session.Body.Content.Parts[0].Doc != conversation.Hash {
 		t.Fatalf("the session: %+v %v", session, err)
 	}
+	// The Sessions tab lists it.
+	if sessions, err := service.ListAnchoredSessions(actor, newID); err != nil || len(sessions) != 1 || sessions[0].SessionID != "session-1" {
+		t.Fatalf("the list of sessions: %+v %v", sessions, err)
+	}
 	if doc, err := st.GetDoc(ctx, newID, conversation.Hash); err != nil || doc.Hash != conversation.Hash || !strings.Contains(doc.CIR.Events[0].Blocks[0].Text, string(oldID)) {
 		t.Fatalf("the conversation, as it was said: %+v %v", doc, err)
 	}

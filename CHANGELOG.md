@@ -72,6 +72,9 @@ the upgrade notes before deploying.
   have not run `cxt init` or `cxt setup`.
 - Preserve and quarantine directory-only `.cxt` residue from older hooks while
   automatically registering `.cxt/` and `.cxtsecrets` in Git ignore files.
+- The server logs the cause of every error it answers with "internal server
+  error", with the method, path and `X-Request-ID` of the request. Before, an
+  operator could not see why a request failed.
 
 ### Upgrade notes
 

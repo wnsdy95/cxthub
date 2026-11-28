@@ -825,6 +825,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string)
 		}
 	}
 	if code == "internal" {
+		logInternalError(w, msg)
 		msg = "internal server error"
 	}
 	if code == "consistency_check_failed" {
