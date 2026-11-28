@@ -1,6 +1,7 @@
 # cxt CLI
 
-The `cxt` command-line client for portable coding-agent context.
+The `cxt` command-line client: your coding-agent sessions, kept with the Git
+commits they produced.
 
 This public repository, `wnsdy95/cxthub-cli`, is a **generated distribution** of
 the public [CXTHub monorepo](https://github.com/wnsdy95/cxthub). That monorepo is
