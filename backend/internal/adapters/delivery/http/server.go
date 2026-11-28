@@ -6,9 +6,6 @@ package http
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,9 +208,6 @@ func (s *Server) Handler() http.Handler {
 	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
 	// Push pending (unsync) pointer: Key = (authenticated user, branch) — write/delete only by owner.
 	// {name...}: Branch names can include slashes like in git (feature/login, etc.) — full matching of the rest.
-
-	// GitHub webhook reception (a push or a pull request asks for a read). HMAC signature verification instead of authentication — inactive (404) if secret (CXT_GITHUB_WEBHOOK_SECRET) is not set.
-	mux.HandleFunc("POST /api/v1/hooks/github", s.githubWebhook)
 
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/negotiate", s.guard(domain.RoleMember, s.pushNegotiate))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/chunks", s.guard(domain.RoleMember, s.pushChunks))
@@ -590,43 +584,6 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(raw)
-}
-
-// githubWebhook receives the webhook of one GitHub repository: a push to a
-// branch and a change of a pull request each ask for the repository to be
-// read again; any other event is ignored.
-// Signature (X-Hub-Signature-256, HMAC-SHA256) verification — secret is server environment variable
-// CXT_GITHUB_WEBHOOK_SECRET (deployment setting). If unset, 404 (feature disabled).
-func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
-	secret := os.Getenv("CXT_GITHUB_WEBHOOK_SECRET")
-	if secret == "" {
-		s.writeError(w, http.StatusNotFound, "not_found", "webhook receiver disabled (CXT_GITHUB_WEBHOOK_SECRET unset)")
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_request", "Failed to read body")
-		return
-	}
-	sig := r.Header.Get("X-Hub-Signature-256")
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	if sig == "" || !hmac.Equal([]byte(sig), []byte(want)) {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "Webhook signature mismatch")
-		return
-	}
-	ids, _ := s.documentIdentityCapabilities()
-	r = r.WithContext(outbound.WithDocumentIdentityCompatibility(inbound.WithDocumentIdentities(r.Context(), ids), ids, ids))
-	switch r.Header.Get("X-GitHub-Event") {
-	case "push":
-		s.githubPush(w, r, body)
-		return
-	case "pull_request":
-		s.githubPullRequest(w, r, body)
-		return
-	}
-	s.respond(w, map[string]string{"status": "ignored", "event": r.Header.Get("X-GitHub-Event")}, nil)
 }
 
 type negotiateBody struct {

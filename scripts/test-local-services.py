@@ -33,7 +33,7 @@ class LocalServicesTests(unittest.TestCase):
                 "CXT_AUTH": "firebase", "CXT_FIREBASE_PROJECT": "fixture-project",
                 "CXT_PUBLIC_URL": "http://localhost:5173",
                 "CXT_POSTGRES_DSN": "postgres://fixture:synthetic-secret@127.0.0.1:55484/fixture?sslmode=disable",
-                "CXT_GITHUB_TOKEN": "synthetic-api-only", "RESEND_API_KEY": "synthetic-mail-only",
+                "RESEND_API_KEY": "synthetic-mail-only",
                 "CXT_ENV_FILE": "/private/api.env",
             },
         }
@@ -50,7 +50,6 @@ class LocalServicesTests(unittest.TestCase):
         api, mcp = plists["com.cxthub.api"], plists["com.cxthub.mcp"]
         for key in module.MCP_KEYS:
             self.assertEqual(api["EnvironmentVariables"][key], mcp["EnvironmentVariables"][key])
-        self.assertNotIn("CXT_GITHUB_TOKEN", mcp["EnvironmentVariables"])
         self.assertNotIn("RESEND_API_KEY", mcp["EnvironmentVariables"])
         self.assertEqual(mcp["EnvironmentVariables"]["CXT_ENV_FILE"], "/dev/null")
         for value in plists.values():

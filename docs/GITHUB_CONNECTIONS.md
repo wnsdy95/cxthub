@@ -228,31 +228,28 @@ A server without a GitHub App says nothing in those places: it reads GitHub as
 the next section describes. A server from before this route answers 404, which
 cxt and the web read as a server that does not say.
 
-To know before an owner installs the App: from then on the server reads that
-owner's repositories only through an installation. A repository of the owner
-that no connection was told to read is no longer read with `CXT_GITHUB_TOKEN`,
-and is told as `not_connected`. A repository that was bound through the
-installation of another owner space is read through that installation.
+The server reads a repository only through the installation it is bound to.
+A repository that no connection was told to read is not read, whether or not
+its owner has installed the App, and is told as `not_connected`. A repository
+that was bound through the installation of another owner space is read
+through that installation. No operator token stands in for an installation.
 
-## Two ways GitHub tells the server
+## How GitHub tells the server
 
-There are two, and they are not the same thing.
+Only through the GitHub App: GitHub sends the events of every repository of an
+installation to `/api/v1/github/webhook`, signed with
+`CXT_GITHUB_APP_WEBHOOK_SECRET`, and the server reads the installed
+repositories with the installation's token, private ones too. An event only
+tells: what the server stores of commits, branches and pull requests it reads
+from GitHub itself.
 
-| | Repository webhook | GitHub App (the connections of this document) |
-| --- | --- | --- |
-| Set up | one webhook on one GitHub repository (`scripts/github-webhook.sh`) | one installation on an account or organization |
-| Route | `/api/v1/hooks/github`, secret `CXT_GITHUB_WEBHOOK_SECRET` | `/api/v1/github/webhook`, secret `CXT_GITHUB_APP_WEBHOOK_SECRET` |
-| Tells of | a push to a branch, a change of a pull request | the same, for every repository of the installation |
-| Lets the server read | nothing | the installed repositories, private ones too |
-
-Either one only tells: what the server stores of commits, branches and pull
-requests it reads from GitHub itself. With a repository webhook alone the
-server reads with `CXT_GITHUB_TOKEN` when that is set and without a credential
-when it is not. Without a credential GitHub answers for public repositories
-only and allows 60 requests an hour for each address the server sends from;
-the first read of a repository with a few hundred pull requests needs several
-hundred. The Terraform files of this repository set the webhook secret and no
-`CXT_GITHUB_TOKEN`.
+The repository webhook of earlier releases (`/api/v1/hooks/github`, secret
+`CXT_GITHUB_WEBHOOK_SECRET`, set up by `scripts/github-webhook.sh`) and the
+operator token `CXT_GITHUB_TOKEN` are removed. The route answers 404; delete
+such a webhook from the GitHub repository's settings. A server without a
+GitHub App reads public repositories without a credential: GitHub allows 60
+requests an hour for each address the server sends from, and the first read
+of a repository with a few hundred pull requests needs several hundred.
 
 ## Operational behavior and limits
 
@@ -294,8 +291,9 @@ hundred. The Terraform files of this repository set the webhook secret and no
   no delivery arrives and no cxt runs. No session is moved or merged by a
   delivery, and nothing is inferred from a pull request's title or a
   repository URL.
-- Server operator-token fallback (`CXT_GITHUB_TOKEN`) remains for repositories
-  whose owner has no connection.
+- No operator token: a repository is read only through the installation it is
+  bound to, and a server without a GitHub App reads public repositories
+  without a credential.
 - GitHub.com only. GHES, direct Enterprise installations/API operations, SCIM/SSO,
   automatic role mirroring, billing and provider-user-token storage are excluded.
 - Durable request/idempotency metadata has no retention sweep in this release;

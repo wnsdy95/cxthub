@@ -124,7 +124,7 @@ fi
 fixture_server=(env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
   CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN" \
   CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN" \
-  RESEND_API_KEY= CXT_GITHUB_TOKEN= \
+  RESEND_API_KEY= \
   "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data")
 "${fixture_server[@]}" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
@@ -464,7 +464,7 @@ openssl genrsa -out "$TMP/app.pem" 2048 2>/dev/null
 env CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
   CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN2" \
   CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN2" \
-  RESEND_API_KEY= CXT_GITHUB_TOKEN= \
+  RESEND_API_KEY= \
   CXT_GITHUB_APP_ID=1 CXT_GITHUB_APP_CLIENT_ID=fixture CXT_GITHUB_APP_CLIENT_SECRET=fixture \
   CXT_GITHUB_APP_SLUG=fixture CXT_GITHUB_APP_WEBHOOK_SECRET=fixture CXT_GITHUB_APP_PRIVATE_KEY="$(cat "$TMP/app.pem")" \
   "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT2 --data "$TMP/data2" >"$TMP/srv2.log" 2>&1 &

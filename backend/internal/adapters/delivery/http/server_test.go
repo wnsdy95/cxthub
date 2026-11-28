@@ -3,9 +3,6 @@ package http
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,30 +20,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
-
-type githubWebhookBackend struct {
-	Backend
-	repositories int
-	calls        []githubWebhookPush
-	// pulls are the origins a pull request delivery asked a read for.
-	pulls []string
-}
-
-func (backend *githubWebhookBackend) ObserveRemotePullRequest(_ context.Context, origin string) (int, error) {
-	backend.pulls = append(backend.pulls, origin)
-	return backend.repositories, nil
-}
-
-type githubWebhookPush struct {
-	origin, ref, before, after string
-	forced                     bool
-	delivery                   string
-}
-
-func (backend *githubWebhookBackend) ObserveRemotePush(_ context.Context, origin, ref, before, after string, forced bool, delivery string) (int, error) {
-	backend.calls = append(backend.calls, githubWebhookPush{origin, ref, before, after, forced, delivery})
-	return backend.repositories, nil
-}
 
 type policyDownIdentity struct {
 	*app.IdentityService
@@ -118,136 +91,6 @@ func repoIDForRemoteURLForTest(raw string) domain.ContentHash {
 	normalized = strings.TrimSuffix(normalized, ".git")
 	normalized = strings.TrimRight(normalized, "/")
 	return domain.HashContent([]byte(strings.ToLower(normalized)))
-}
-
-func githubWebhookRequest(t *testing.T, handler http.Handler, secret, event string, body []byte) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/github", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-GitHub-Event", event)
-	if secret != "" {
-		mac := hmac.New(sha256.New, []byte(secret))
-		_, _ = mac.Write(body)
-		req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
-	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	return rec
-}
-
-// The plain webhook is told about pushes and pull requests. A push to a
-// branch is handed on, so that the branch ledger learns it and the remote is
-// read again. A pull request delivery asks for that read only: a pull request
-// that was opened, closed or retitled moves no branch, so no push tells of it.
-func TestGitHubWebhookSecurityAndPushes(t *testing.T) {
-	const secret = "test-webhook-secret"
-	head := strings.Repeat("a", 40)
-	push := []byte(`{"ref":"refs/heads/topic","before":"` + strings.Repeat("0", 40) + `","after":"` + head + `","forced":false,
-		"repository":{"html_url":"https://github.com/acme/project","clone_url":"https://github.com/acme/project.git"}}`)
-	opened := []byte(`{"action":"opened","number":7,"pull_request":{"merged":false,"title":"never read from a delivery"},
-		"repository":{"full_name":"acme/project","html_url":"https://github.com/acme/project","clone_url":"https://github.com/acme/project.git"}}`)
-	unnamed := []byte(`{"action":"closed","number":7,"pull_request":{"merged":true},"repository":{"full_name":"acme/project"}}`)
-
-	t.Run("disabled when secret is unset", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", "")
-		backend := &githubWebhookBackend{}
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "", "push", push)
-		if rec.Code != http.StatusNotFound || len(backend.calls) != 0 {
-			t.Fatalf("status = %d, calls = %#v", rec.Code, backend.calls)
-		}
-	})
-
-	t.Run("rejects bad signature", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{}
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/github", bytes.NewReader(push))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-GitHub-Event", "push")
-		req.Header.Set("X-Hub-Signature-256", "sha256=bad")
-		rec := httptest.NewRecorder()
-		NewServer(backend, nil).Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized || len(backend.calls) != 0 {
-			t.Fatalf("status = %d, calls = %#v", rec.Code, backend.calls)
-		}
-	})
-
-	for _, event := range []struct {
-		name string
-		body []byte
-	}{{"ping", []byte(`{"zen":"safe"}`)}, {"pull_request", unnamed}, {"issues", opened}, {"", opened}} {
-		t.Run("ignores "+event.name, func(t *testing.T) {
-			t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-			backend := &githubWebhookBackend{}
-			rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, event.name, event.body)
-			var response map[string]any
-			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if rec.Code != http.StatusOK || response["status"] != "ignored" || len(backend.calls) != 0 || len(backend.pulls) != 0 {
-				t.Fatalf("status = %d, response = %#v, calls = %#v, pulls = %#v", rec.Code, response, backend.calls, backend.pulls)
-			}
-		})
-	}
-
-	t.Run("a pull request asks for a read of its repository", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{repositories: 2}
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", opened)
-		var response map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		// Only the origin is taken from the delivery, and no push is made of it.
-		if rec.Code != http.StatusOK || response["status"] != "accepted" || response["queued"] != float64(2) ||
-			!reflect.DeepEqual(backend.pulls, []string{"https://github.com/acme/project.git"}) || len(backend.calls) != 0 {
-			t.Fatalf("status = %d, response = %#v, pulls = %#v, calls = %#v", rec.Code, response, backend.pulls, backend.calls)
-		}
-		// The page address stands in when the delivery names no clone address.
-		backend = &githubWebhookBackend{}
-		paged := bytes.Replace(opened, []byte(`,"clone_url":"https://github.com/acme/project.git"`), nil, 1)
-		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", paged); rec.Code != http.StatusOK ||
-			!reflect.DeepEqual(backend.pulls, []string{"https://github.com/acme/project"}) {
-			t.Fatalf("status = %d, pulls = %#v", rec.Code, backend.pulls)
-		}
-		// A body that is no object is refused, and a wrong signature is as for a push.
-		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", []byte(`[]`)); rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("a pull request delivery that is no object: status = %d", rec.Code)
-		}
-		if rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "another secret", "pull_request", opened); rec.Code != http.StatusUnauthorized || len(backend.pulls) != 1 {
-			t.Fatalf("a pull request delivery with a wrong signature: status = %d, pulls = %#v", rec.Code, backend.pulls)
-		}
-	})
-
-	t.Run("ignores a push that is not to a branch", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{}
-		tag := bytes.Replace(push, []byte("refs/heads/topic"), []byte("refs/tags/v1"), 1)
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "push", tag)
-		if rec.Code != http.StatusOK || len(backend.calls) != 0 {
-			t.Fatalf("status = %d, calls = %#v", rec.Code, backend.calls)
-		}
-	})
-
-	t.Run("hands a push to a branch on", func(t *testing.T) {
-		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
-		backend := &githubWebhookBackend{repositories: 1}
-		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "push", push)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-		}
-		// A branch that did not exist before has no commit to come from.
-		want := githubWebhookPush{origin: "https://github.com/acme/project.git", ref: "refs/heads/topic", after: head}
-		if len(backend.calls) != 1 || backend.calls[0] != want {
-			t.Fatalf("calls = %#v, want %#v", backend.calls, want)
-		}
-		var response map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		if response["status"] != "accepted" || response["queued"] != float64(1) {
-			t.Fatalf("response = %#v, want status accepted and queued 1", response)
-		}
-	})
 }
 
 func TestHealthIsPublicAndMinimal(t *testing.T) {

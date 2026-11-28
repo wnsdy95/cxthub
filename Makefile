@@ -117,9 +117,3 @@ deploy-check-accounts: ## Legacy Cloud Run: read-only GCP/Vercel credential chec
 deploy-check-ready: ## Legacy Cloud Run: check bootstrap resources and image
 	bash scripts/deploy-preflight.sh cloudrun-ready
 
-.PHONY: webhook-check webhook-apply
-webhook-check: ## Verify the production signed GitHub PR webhook without changes
-	bash scripts/github-webhook.sh check
-
-webhook-apply: ## Create or reconcile the production signed GitHub PR webhook
-	bash scripts/github-webhook.sh apply

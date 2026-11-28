@@ -473,5 +473,3 @@ jobs:
           done
           tf validate
           tf test
-      - name: Signed GitHub webhook operator tests
-        run: bash scripts/test-github-webhook.sh

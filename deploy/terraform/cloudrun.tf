@@ -82,15 +82,6 @@ resource "google_cloud_run_v2_service" "cxtd" {
         }
       }
       env {
-        name = "CXT_GITHUB_WEBHOOK_SECRET"
-        value_source {
-          secret_key_ref {
-            secret  = data.google_secret_manager_secret.github_webhook.secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
         name  = "CXT_MIGRATIONS_DIR"
         value = "/app/migrations"
       }
@@ -168,7 +159,6 @@ resource "google_cloud_run_v2_service" "cxtd" {
 
   depends_on = [
     google_secret_manager_secret_iam_member.cxtd_postgres,
-    google_secret_manager_secret_iam_member.cxtd_github_webhook,
     google_secret_manager_secret_iam_member.cxtd_resend,
     google_secret_manager_secret_iam_member.cxtd_github_app,
   ]

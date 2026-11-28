@@ -1,5 +1,11 @@
 package app
 
+// The repository webhook that told the service of a push or of a change of a
+// pull request is gone: GitHub tells through the GitHub App, whose worker
+// records a push and asks for a read itself (GitHubWorker.applyDelivery).
+// Tests still tell the service of one the same way, with the same two steps
+// (recordBranchLedgerObservation and requestRemoteGitSync), through these.
+
 import (
 	"context"
 	"time"
