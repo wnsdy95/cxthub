@@ -416,6 +416,21 @@ func (s RemoteGitState) Ended(start time.Time, failed, remaining bool) RemoteGit
 	return s
 }
 
+// Unconnected returns the state after the pass that started at start found
+// that the server may not read the repository: no installation was told to.
+// Nothing was read, so it does not count as a read. The state lasts until a
+// maintainer connects the repository, which asks for a read, so the next pass
+// nobody asked for comes after RemoteGitSyncEvery and not after
+// RemoteGitSyncRetry. A request and a look bring it closer, as for any pass.
+func (s RemoteGitState) Unconnected(start time.Time) RemoteGitState {
+	start = start.UTC()
+	s.NextAt = start.Add(RemoteGitSyncEvery)
+	if s.RequestedAt != nil && s.RequestedAt.After(start) {
+		s.NextAt = remoteGitRequested(s.NextAt, &start, *s.RequestedAt)
+	}
+	return s
+}
+
 // Request returns the state after a fresh read was asked for at now. The next
 // pass is pulled closer, and never closer to the start of the last pass than
 // RemoteGitRequestSpacing.

@@ -66,7 +66,7 @@ workers:
 
 | Worker | Work |
 |---|---|
-| Remote Git | Reads commits, branch heads and pull requests from the hosting provider for every repository that has an origin, and then runs the rule that opens sessions |
+| Remote Git | Reads commits, branch heads and pull requests from the hosting provider for every repository that has an origin it may read (with a GitHub App, those connected through an installation; without one, public GitHub repositories), and then runs the rule that opens sessions |
 | GitHub | GitHub App work, such as applying deliveries; started only where a GitHub App is configured |
 | Document finalization | Verifies an uploaded document and publishes it |
 | Notifications | Delivers queued webhook notifications |

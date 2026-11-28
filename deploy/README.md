@@ -16,7 +16,6 @@ Create these Google Secret Manager secrets before applying Terraform:
 | Default secret ID | Runtime environment variable | Value |
 |---|---|---|
 | `cxt-postgres-dsn` | `CXT_POSTGRES_DSN` | PostgreSQL connection string |
-| `cxt-github-webhook-secret` | `CXT_GITHUB_WEBHOOK_SECRET` | Random GitHub webhook HMAC secret |
 
 The [collaboration transaction contract](../docs/COLLABORATION_TRANSACTIONS.md)
 defines atomic writes, retry behavior and failover limits.
@@ -36,8 +35,7 @@ protected-resource origin for the remote read-only MCP connector.
 Secret versions are intentionally managed outside Terraform so their plaintext
 does not enter Terraform state. The Terraform stack looks up only secret
 metadata, grants the Cloud Run service account access, and injects `latest`.
-Use `postgres_secret_id` or `github_webhook_secret_id` to override the default
-IDs.
+Use `postgres_secret_id` to override the default ID.
 
 ## Remote MCP routing
 
@@ -73,7 +71,7 @@ Run the read-only readiness check before applying:
 scripts/deploy-preflight.sh cloudrun-ready
 ```
 
-It fails closed when either secret is absent or has no enabled version.
+It fails closed when the PostgreSQL secret is absent or has no enabled version.
 
 ## GitHub App connections
 
@@ -82,46 +80,6 @@ The normal account/organization installation flow is documented in
 webhook at `/api/v1/github/webhook` and installation-scoped credentials. Enable
 Terraform's optional `github_app` input with existing Secret Manager IDs after
 registering the App. Firebase GitHub sign-in is configured separately.
-
-## Plain GitHub push webhook
-
-For deployments without App connections, each GitHub repository can use one
-operator-managed repository webhook:
-
-- Payload URL: `https://<domain>/api/v1/hooks/github`
-- Content type: `application/json`
-- Secret: the exact value stored in `cxt-github-webhook-secret`
-- Events: **Pushes** and **Pull requests** (what the operator script below sets)
-- Active: enabled
-
-After the API deployment and same-origin `/api` rewrite are live, reconcile the
-hook without exposing its secret on the command line:
-
-```bash
-scripts/github-webhook.sh apply
-```
-
-The command fails before changing GitHub when the public health endpoint or
-Secret Manager version is unavailable. It then creates or reconciles exactly
-one hook and requires a successful signed GitHub ping. Use `check` for a
-read-only drift check. `TF_VAR_gcp_project` and `TF_VAR_domain` are required;
-`CXT_GITHUB_REPOSITORY=owner/repo` overrides the current `gh` repository.
-
-On this webhook `cxtd` acts on branch pushes only. A push of a branch records
-in the branch ledger that the branch name is alive, or gone when the push
-deleted it, and asks for a read of the remote, so that the sessions the pushed
-commits explain open without waiting for the next scheduled read. Every other
-event, including pull-request events, is acknowledged and ignored here; pull
-requests are read from the provider by the remote Git worker. No session is
-moved, merged or rewritten by a delivery.
-
-If webhook delivery is unavailable, nothing is lost: the remote Git worker
-reads every repository that has an origin on its own schedule, and a member
-can ask for a read with `cxt refresh`.
-
-The receiver returns `404` when `CXT_GITHUB_WEBHOOK_SECRET` is absent and
-`401` when `X-Hub-Signature-256` does not match. Never configure a webhook
-without the shared secret.
 
 ## Storage metering and plan provisioning
 
@@ -215,20 +173,14 @@ this read, never from what a CLI says. One pass makes at most 40 provider
 requests, so a first read of a large repository takes several passes, and
 provider rate limits can delay completion.
 
-A repository bound to a GitHub App connection is read with that installation's
-token. Otherwise configure `CXT_GITHUB_TOKEN` on the server for private
-repositories and authenticated API limits: a token that can read the
-repository's commits and pull requests. Without it, public GitHub reads use
-the anonymous limit. Server workers do not read a developer's `gh` keychain. HTTP redirects
-are not followed. Only GitHub.com origins are read; another host is an
-explicit validation failure.
-
-For the macOS dogfood LaunchAgent, provide `CXT_GITHUB_TOKEN` when running
-`scripts/dogfood-daemon.sh install` or `restart`. The script stores it in the
-owner-only (0600) LaunchAgent configuration and preserves it across ordinary
-restarts. Set `CXT_GITHUB_TOKEN=''` explicitly to remove it. The token is never
-placed in process arguments or diagnostic output; the operator supplies it,
-and the daemon does not discover a local `gh` login automatically.
+With a GitHub App configured, a repository is read only with the token of the
+installation it is bound to; a repository that no installation was told to
+read is not read, and `cxt setup`, `cxt doctor` and the Sessions tab say where
+a maintainer connects it. A server without a GitHub App reads public GitHub
+repositories without a credential, at GitHub's anonymous limit. No operator
+token stands in for an installation. Server workers do not read a developer's
+`gh` keychain. HTTP redirects are not followed. Only GitHub.com origins are
+read; another host is an explicit validation failure.
 
 The cache this worker fills holds commit numbers, parents, subjects, author
 data, branch heads and pull-request metadata. It holds no source file

@@ -374,6 +374,11 @@ func (g *GitHubConnections) Edit(ctx context.Context, actor, ns string, generati
 			}
 			binding.GitOrigin = repo.GitRemoteURL
 			c.Bindings = append(c.Bindings, binding)
+			// The server did not read the repository before it was bound: its
+			// first read through the installation starts when this is committed.
+			if e := requestRemoteGitSync(tx, g.core.meta, binding.ContextRepoID, time.Now().UTC()); e != nil {
+				return e
+			}
 		case "unbind":
 			next := []domain.GitHubBinding{}
 			for _, b := range c.Bindings {

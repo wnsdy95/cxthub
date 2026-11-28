@@ -72,7 +72,8 @@ func applicationWorkerEnvironmentFromEnvironment() (applicationWorkerEnvironment
 
 func (environment applicationWorkerEnvironment) sources(storage store.Store) (serverruntime.ApplicationWorkerConfig, error) {
 	configuration := environment.configuration
-	configuration.GitReader = gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") })
+	// Without a GitHub App public repositories are read without a credential.
+	configuration.GitReader = gitevidence.NewGitHub(nil)
 	if environment.github == nil {
 		return configuration, nil
 	}
@@ -94,9 +95,6 @@ func (environment applicationWorkerEnvironment) sources(storage store.Store) (se
 		installation, resolved, err := worker.EvidenceInstallation(ctx, path)
 		if err != nil {
 			return "", "", "", err
-		}
-		if installation == 0 {
-			return os.Getenv("CXT_GITHUB_TOKEN"), "operator", resolved, nil
 		}
 		token, err := environment.github.InstallationToken(ctx, installation)
 		return token, fmt.Sprintf("installation:%d", installation), resolved, err

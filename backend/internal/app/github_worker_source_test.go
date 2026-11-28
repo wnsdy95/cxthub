@@ -99,7 +99,7 @@ func wave48GitHubSourceFixture(test *testing.T) (*GitHubWorker, *wave48GitHubSou
 	return worker, storage, repo, local, connection
 }
 
-func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameScopeAndFallback(test *testing.T) {
+func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameAndScopeAndReadsNothingUnbound(test *testing.T) {
 	worker, storage, repo, _, connection := wave48GitHubSourceFixture(test)
 	ctx := context.Background()
 	connection.Repositories[0].FullName = "acme/Renamed"
@@ -125,15 +125,17 @@ func TestWave48GitHubWorkerEvidenceInstallationPreservesRenameScopeAndFallback(t
 	if _, _, err := worker.EvidenceInstallation(ctx, "/repos/acme/api/git/commits/AbC"); !errors.Is(err, domain.ErrForbidden) {
 		test.Fatal("unscoped evidence access accepted", err)
 	}
+	// A repository no installation was told to read is not read, also where
+	// its owner has no connection: no credential of the server stands in.
 	storage.connectionError = domain.ErrNotFound
 	path := "/repos/operator/private/git/commits/AbC"
-	if installation, rewritten, err := worker.EvidenceInstallation(scoped, path); err != nil || installation != 0 || rewritten != path {
-		test.Fatal("operator fallback changed the requested path", installation, rewritten, err)
+	if installation, rewritten, err := worker.EvidenceInstallation(scoped, path); !errors.Is(err, domain.ErrForbidden) || !errors.Is(err, outbound.ErrGitRepositoryNotConnected) || installation != 0 || rewritten != "" {
+		test.Fatal("a repository nobody was told to read is read, or is not said to be unconnected", installation, rewritten, err)
 	}
 	storage.connectionError = nil
 	connection.Enabled = false
 	storage.connection = &connection
 	if _, _, err := worker.EvidenceInstallation(scoped, "/repos/acme/api/git/commits/AbC"); !errors.Is(err, domain.ErrForbidden) {
-		test.Fatal("disabled binding fell back to operator credentials", err)
+		test.Fatal("a disabled binding was read", err)
 	}
 }

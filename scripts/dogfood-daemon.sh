@@ -95,10 +95,10 @@ validate_auth() {
 
 write_plist() {
   mkdir -p "$LOGDIR" "$(dirname "$PLIST")"
-  # launchd does not inherit the caller's environment. Preserve an explicitly
-  # configured GitHub credential across restarts, unless explicitly cleared.
-  # plistlib escapes paths/values; atomic private output keeps credentials out
-  # of argv, logs, and world-readable launch-agent files.
+  # launchd does not inherit the caller's environment; the agent gets only what
+  # is written here. No GitHub credential is kept: the server reads GitHub
+  # through GitHub App installations only. plistlib escapes paths/values;
+  # atomic private output keeps the file out of reach of other users.
   python3 - "$PLIST" "$LABEL" "$BIN" "$ADDR" "$DATA" "$ROOT" "$LOGDIR" "$AUTH" "$FIREBASE" <<'PYPLIST'
 import os
 import plistlib
@@ -107,17 +107,6 @@ import tempfile
 
 path, label, binary, addr, data, root, logs, auth, firebase = sys.argv[1:]
 environment = {"CXT_AUTH": auth, "CXT_FIREBASE_PROJECT": firebase}
-if "CXT_GITHUB_TOKEN" in os.environ:
-    token = os.environ["CXT_GITHUB_TOKEN"]
-else:
-    token = ""
-    try:
-        with open(path, "rb") as source:
-            token = plistlib.load(source).get("EnvironmentVariables", {}).get("CXT_GITHUB_TOKEN", "")
-    except FileNotFoundError:
-        pass
-if token:
-    environment["CXT_GITHUB_TOKEN"] = token
 config = {
     "Label": label,
     "ProgramArguments": [binary, "serve", "--addr", addr, "--data", data],

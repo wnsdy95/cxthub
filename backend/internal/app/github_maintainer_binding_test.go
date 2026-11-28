@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -93,12 +94,12 @@ func TestGitHubMaintainerBindsARepositoryOfAnotherOwnerSpace(t *testing.T) {
 			t.Fatalf("with the role %q the repository was bound: %v", as, err)
 		}
 	}
-	// While nobody was told to read it and its owner has no installation, the
-	// server reads it as it reads a repository without the App.
+	// While nobody was told to read it, the server does not read it, also
+	// where its owner has no installation.
 	if connected, err := g.RepositoryConnection(ctx, stored.ID); err != nil || connected {
 		t.Fatalf("before the binding: %v %v", connected, err)
 	}
-	if installation, rewritten, err := g.EvidenceInstallation(scoped, path); err != nil || installation != 0 || rewritten != path {
+	if installation, rewritten, err := g.EvidenceInstallation(scoped, path); !errors.Is(err, domain.ErrForbidden) || installation != 0 || rewritten != "" {
 		t.Fatalf("before the binding the reader of GitHub is given %d %q %v", installation, rewritten, err)
 	}
 
@@ -108,8 +109,24 @@ func TestGitHubMaintainerBindsARepositoryOfAnotherOwnerSpace(t *testing.T) {
 	if repositories, stores, bindings := listed(f.owner.ID); repositories != 1 || stores != 1 || bindings != 0 {
 		t.Fatalf("a maintainer is offered: %d %d %d", repositories, stores, bindings)
 	}
+	// Binding asks for the first read through the installation: the reader
+	// that listens to the store is told of the repository.
+	asked := make(chan domain.ContentHash, 4)
+	stop, err := st.ListenRemoteGitRequests(func(repo domain.ContentHash) { asked <- repo })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
 	if err := bind(f.owner.ID, "bind"); err != nil {
 		t.Fatalf("a maintainer binds the repository: %v", err)
+	}
+	select {
+	case repo := <-asked:
+		if repo != stored.ID {
+			t.Fatalf("binding asked for a read of %s", repo)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("binding the repository asked for no read")
 	}
 	if _, _, bindings := listed(f.owner.ID); bindings != 1 {
 		t.Fatalf("the maintainer sees %d bindings of it", bindings)

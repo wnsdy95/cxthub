@@ -720,10 +720,12 @@ It differs from `cxt segments push` in two ways only:
   registered again when the branches on origin or their IDs changed.
 
 **After a push.** The server opens a part of a session to others once it has
-seen the part's commit on the Git host. It learns of a push from the host's
-own notification where a GitHub App or webhook is connected. Without one it
+seen the part's commit on the Git host. On a server with a GitHub App it
+reads only a repository connected through the App, and learns of a push from
+the App's own notification. A server without a GitHub App reads public GitHub
+repositories without a credential and has no notification. Either server also
 reads the host when somebody opens the Sessions tab and its last read started
-five minutes ago or more, and without being asked only every six hours. So a
+five minutes ago or more, and without being asked every six hours. So a
 run also asks
 the server to read the host when origin's branches, as this clone holds them,
 are not what they were when it last asked: after this computer pushed or

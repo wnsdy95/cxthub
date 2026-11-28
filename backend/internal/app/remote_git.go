@@ -284,13 +284,17 @@ func (worker *RemoteGitSync) SyncRemoteGit(ctx context.Context, repo domain.Cont
 	work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, repo), remoteGitPassTimeout)
 	failure := pass.run(work)
 	cancel()
-	if failure != nil {
+	// A repository the server may not read is not a failure to log: it lasts
+	// until a maintainer connects it, and the Sessions tab, cxt setup and cxt
+	// doctor already say so.
+	unconnected := errors.Is(failure, outbound.ErrGitRepositoryNotConnected)
+	if failure != nil && !unconnected {
 		// The class comes from a fixed vocabulary: provider errors can carry URLs.
 		log.Printf("Remote Git read %s deferred: class=%s", repo, gitObservationFailureClass(failure))
 	}
 	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	if err := worker.finish(finish, pass, failure != nil); err != nil || failure != nil {
+	if err := worker.finish(finish, pass, failure != nil, unconnected); err != nil || failure != nil {
 		return errors.Join(failure, err)
 	}
 	if err := worker.openSessions(ctx, repo); err != nil {
@@ -302,8 +306,9 @@ func (worker *RemoteGitSync) SyncRemoteGit(ctx context.Context, repo domain.Cont
 // finish stores how the pass ended and releases its claim. A pass that no
 // longer holds the claim stores nothing: its lease ended and another pass
 // started, or the cache was started over. A read asked for while the pass ran
-// is carried over from what the store holds.
-func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, failed bool) error {
+// is carried over from what the store holds. A pass that found the
+// repository unconnected waits as long as one that read everything.
+func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, failed, unconnected bool) error {
 	return repositoryWriteErrorWithWork(ctx, worker.work, pass.repo, func(tx context.Context) error {
 		stored, err := worker.store.GetRemoteGitState(tx, pass.repo)
 		if err != nil {
@@ -314,6 +319,9 @@ func (worker *RemoteGitSync) finish(ctx context.Context, pass *remoteGitPass, fa
 		}
 		next := pass.state
 		next.RequestedAt = stored.RequestedAt
+		if unconnected {
+			return worker.store.FinishRemoteGitSync(tx, next.Unconnected(*pass.state.AttemptedAt))
+		}
 		return worker.store.FinishRemoteGitSync(tx, next.Ended(*pass.state.AttemptedAt, failed, pass.cut))
 	})
 }

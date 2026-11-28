@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // remoteGitAskedFixture is a repository whose first read started ago before
@@ -279,6 +281,37 @@ func TestRemoteGitReaderAnswersAtOnceAndComesBackForWhatCameTooSoon(t *testing.T
 		}
 		if len(*timers) != 0 || len(fixture.told()) != 0 {
 			t.Fatalf("after a failed pass: %d timers", len(*timers))
+		}
+	})
+
+	t.Run("a repository the server may not read", func(t *testing.T) {
+		// No installation was told to read it: that lasts until a maintainer
+		// connects it, so the next pass nobody asked for comes after the
+		// fallback time, not two minutes later, and nothing counts as read.
+		fixture, timers := prepare(t, 10*time.Minute)
+		if err := fixture.service.RequestRemoteGitRefresh(member, fixture.repo); err != nil {
+			t.Fatal(err)
+		}
+		before := fixture.state(t)
+		fixture.provider.failures["default"] = fmt.Errorf("%w: %w", outbound.ErrGitRepositoryNotConnected, domain.ErrForbidden)
+		fixture.clock = time.Now().UTC().Add(time.Second)
+		if requests := answer(fixture); !reflect.DeepEqual(requests, []string{"default"}) {
+			t.Fatalf("the answer asked the provider %v", requests)
+		}
+		state := fixture.state(t)
+		if !state.NextAt.Equal(fixture.clock.Add(domain.RemoteGitSyncEvery)) || !reflect.DeepEqual(state.SyncedAt, before.SyncedAt) {
+			t.Fatalf("state after a pass the server may not make: %+v, before %+v", state, before)
+		}
+		if len(*timers) != 0 || len(fixture.told()) != 0 {
+			t.Fatalf("after a pass the server may not make: %d timers", len(*timers))
+		}
+		// Asking again still brings the pass closer, as for any repository.
+		fixture.clock = fixture.clock.Add(time.Minute)
+		if err := fixture.service.RequestRemoteGitRefresh(member, fixture.repo); err != nil {
+			t.Fatal(err)
+		}
+		if state := fixture.state(t); !state.NextAt.Before(fixture.clock.Add(time.Minute)) {
+			t.Fatalf("a request after an unconnected pass did not bring it closer: %+v", state)
 		}
 	})
 
