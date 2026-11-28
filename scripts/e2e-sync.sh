@@ -5,12 +5,12 @@
 # records of the agent tools and Git and uploads what changed. This suite runs
 # that whole chain, and nothing in it calls the collector directly:
 #
-#   A. cxt setup            → the mark, five Git hooks, agent hooks, a registered repository
+#   A. cxt setup            → the mark, five Git hooks, agent hooks, a registered repository, automatic upload said on
 #   B. git commit           → post-commit hook → collector → the session is on the server
 #   C. a session goes on    → an agent hook wakes the collector → the report grows
 #   D. a linked worktree    → its commit is collected through the shared hooks
 #   E. hooks of an earlier version → replaced the first time one runs; Git is never stopped
-#   F. segments.auto off    → nothing is sent, and cxt doctor says why
+#   F. segments.auto off    → nothing is sent, cxt doctor says why, and setup says it is off
 #   G. a folder not set up  → hooks leave it alone
 #   H. removed commands     → unknown commands, not silent successes
 #   I. a server with a GitHub App → setup and cxt doctor say that the repository is not connected
@@ -228,6 +228,7 @@ expect "setup installs no reference-transaction hook" "$([ ! -e .git/hooks/refer
 expect "setup keeps the user's own hook for chaining" "$(grep -c user-hook-ran .git/hooks/post-commit.pre-cxt)" 1
 expect "setup merges the Claude hooks" "$(grep -c 'cxt hook --provider claude --event UserPromptSubmit' .claude/settings.json 2>/dev/null)" 1
 expect "setup merges the Codex hooks and keeps the user's" "$(grep -c 'cxt hook --provider codex --event Stop' "$HOME/.codex/hooks.json") $(grep -c 'my-custom-hook' "$HOME/.codex/hooks.json")" "1 1"
+expect "setup says that automatic upload is on, and how to stop it" "$(grep -cF '✓ automatic upload on: ' "$TMP/setup.out") $(grep -cF '(to stop it: cxt config segments.auto off)' "$TMP/setup.out")" "1 1"
 RID="$(curl -fsSb "$J" "$B/repos?repository=$(curl -fsSb "$J" "$B/repositories" | jget "[0]['id']")" | jget "[0]['id']")"
 expect "the repository is registered on the server" "$([ -n "$RID" ] && echo yes)" yes
 expect "setup uploads nothing by itself" "$(curl -fsSb "$J" "$B/repos/$RID/anchored-sessions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin) or []))')" 0
@@ -423,6 +424,8 @@ sleep 2
 expect "turned off, a commit starts no collector and uploads nothing" "$(collector_idle && revision sync-one)" 2
 expect "the diagnosis names the collector that is off and the session the server is behind on" "$(cxt doctor --json | python3 -c 'import json,sys;c=sorted({f["code"] for f in json.load(sys.stdin)["findings"]});print(" ".join(c))')" "collector-off server-behind"
 expect "asked for, the upload still works" "$(cxt push claude sync-one --json | python3 -c 'import json,sys;r=json.load(sys.stdin);print(r["stored"])') $(revision sync-one)" "1 3"
+cxt setup --no-login >"$TMP/setup-off.out" 2>&1
+expect "setup again says that automatic upload is off here, and leaves it off" "$(grep -cF '⚠ automatic upload off in this repository: ' "$TMP/setup-off.out") $(cxt config segments.auto)" "1 segments.auto = off"
 cxt config segments.auto on >/dev/null 2>&1
 
 echo "── G. a folder that was not set up is left alone"

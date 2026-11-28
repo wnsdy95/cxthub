@@ -55,8 +55,10 @@ Runs the complete, idempotent onboarding sequence:
 3. register the connection with the server;
 4. install the managed Git hooks;
 5. merge the Claude Code and Codex hooks into their settings;
-6. ask the server whether the repository is connected to GitHub; and
-7. pull team settings when logged in.
+6. say whether automatic upload is on in the repository, and how to turn it
+   off or on;
+7. ask the server whether the repository is connected to GitHub; and
+8. pull team settings when logged in.
 
 Example:
 
@@ -88,7 +90,9 @@ it is connected. A server without a GitHub App is not asked for more; see
 
 Nothing is uploaded by setup itself. From then on the hooks wake the collector
 described under [Automatic upload](#automatic-upload); `cxt doctor` says whether
-it runs and what, if anything, does not fit.
+it runs and what, if anything, does not fit. Automatic upload is on unless
+`cxt config segments.auto off` turned it off in the repository, and setup says
+which. Sessions that ended before the collector first ran go with `cxt push`.
 
 The agent hooks also cover Codex app/IDE sessions and Claude Desktop's **Code**
 tab. Codex's hook is registered for every folder, but cxt acts only where

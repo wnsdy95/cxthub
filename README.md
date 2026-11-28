@@ -122,7 +122,8 @@ registers the repository connection, installs the Git hooks, merges the Claude
 Code and Codex hooks into their settings, and pulls team settings. It is safe
 to rerun: completed steps are reported and left as they are. Setup uploads
 nothing itself. From then on the hooks wake a collector that uploads the
-sessions recorded in this repository since it first ran. `cxt doctor` says
+sessions recorded in this repository since it first ran: automatic upload is
+on by default, and setup says so. `cxt doctor` says
 whether the collector runs and what, if anything, does not fit. See the
 [setup reference](docs/CLI.md#cxt-setup) for each step.
 
