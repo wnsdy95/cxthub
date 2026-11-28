@@ -4,7 +4,7 @@
 // All requests include 'credentials: 'include' to automatically send cookies to the browser.
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
-import type { StorageUsageReport, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, SettingsUpload, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
+import type { StorageUsageReport, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, SettingsUpload, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, OrganizationRole } from './types';
 import type { DocFragmentPage, GitHubRepositoryConnection, PushOriginView } from './types';
 import { DOCUMENT_DETAIL_BYTES, DOCUMENT_FRAGMENT_BYTES, DOCUMENT_FRAGMENT_RESPONSE_BYTES, DOCUMENT_PAGE_BYTES, readDocumentResponse, scheduleDocumentRead } from './documentReads';
 import { DOCUMENT_VISIBLE_MESSAGES, validateAnchoredEventPage, validateDocFragment, type AnchoredEventPage } from './documentPaging';
@@ -157,8 +157,6 @@ export const api = {
     call<import('./types').ReportedWorktree[]>('GET', `/repos/${encodeURIComponent(repoId)}/worktrees`, undefined, undefined, signal),
   remoteGit: (repoId: string, before: string, signal?: AbortSignal) =>
     call<import('./types').RemoteGitView>('GET', `/repos/${encodeURIComponent(repoId)}/remote-git${before ? `?before=${encodeURIComponent(before)}` : ''}`, undefined, undefined, signal),
-  refreshRemoteGit: (repoId: string) =>
-    call<{ requested: boolean }>('POST', `/repos/${encodeURIComponent(repoId)}/remote-git/refresh`, {}),
   /** The mark that is another one after anything the Sessions tab shows was stored. */
   viewRevision: (repoId: string, signal?: AbortSignal) =>
     call<{ revision: string }>('GET', `/repos/${encodeURIComponent(repoId)}/revision`, undefined, undefined, signal),
@@ -223,7 +221,7 @@ export const api = {
   listEnterpriseAudit: (id: string) => call<import('./types').EnterpriseAuditEvent[]>('GET', `/enterprises/${encodeURIComponent(id)}/audit`),
   // Repository · Member · Invite
   listRepositories: () => call<Repository[]>('GET', '/repositories'),
-  updateMe: (patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string; locale?: string }) =>
+  updateMe: (patch: { username?: string; nickname?: string; avatar?: string; locale?: string }) =>
     call<User>('PATCH', '/me', patch),
   createCliToken: () => call<{ token: string; expires_at: string }>('POST', '/me/cli-tokens'),
   listSessions: () =>
@@ -287,16 +285,8 @@ export const api = {
     call<Repository>('POST', `/organizations/${encodeURIComponent(organizationId)}/repositories`, { name }),
   organizationAuditPage: (organizationId: string, cursor = '') =>
     call<{ events: OrganizationAuditEvent[]; next_cursor?: string }>('GET', `/organizations/${encodeURIComponent(organizationId)}/audit/page?limit=100&cursor=${encodeURIComponent(cursor)}`),
-  listOrganizationAudit: (organizationId: string) =>
-    call<OrganizationAuditEvent[]>('GET', `/organizations/${encodeURIComponent(organizationId)}/audit`),
-  createBreakGlassGrant: (organizationId: string, repositoryId: string, reason: string, minutes: number) =>
-    call<BreakGlassGrant>('POST', `/organizations/${encodeURIComponent(organizationId)}/break-glass`, {
-      repository_id: repositoryId,
-      reason,
-      minutes,
-    }),
 
-  // Session Browser — repo branch/commit log/context body
+  // The Git remotes connected to a repository, their About fields, team settings and secrets.
   listRepos: (repositoryId: string) => call<Repo[]>('GET', `/repos?repository=${encodeURIComponent(repositoryId)}`),
   updateAbout: (
     repoId: string,

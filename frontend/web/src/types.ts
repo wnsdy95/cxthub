@@ -8,8 +8,6 @@ export interface User {
   username: string;
 /** Display alias — URL agnostic, free to change */
   nickname?: string;
-/** Context load default fidelity (account global personal settings) — CLI consumes at point of use */
-  load_mode?: string;
 /** Profile picture data URL (data:image/…;base64,…). Fallback to initials if none */
   avatar?: string;
 /** UI display language personal setting (ko|en). Fallback to client browser detection if none */
@@ -122,16 +120,6 @@ export interface OrganizationAuditEvent {
   created_at: string;
 }
 
-export interface BreakGlassGrant {
-  id: string;
-  organization_id: string;
-  repository_id: string;
-  user_id: string;
-  reason: string;
-  created_at: string;
-  expires_at: string;
-}
-
 /** Update repository settings (owner only) */
 export interface RepositoryPatch {
   visibility?: 'private' | 'public';
@@ -163,7 +151,7 @@ export interface Invite {
 export interface Repo {
   id: string;
   remote_url: string;
-/** Code repo git origin (GitHub etc.) — Linked tab link */
+/** Git remote of the code (GitHub or another host), linked from the Connected tab */
   git_remote_url?: string;
   description?: string;
   website?: string;
@@ -173,32 +161,6 @@ export interface Repo {
 /** Team default settings bundle upload payload */
 export interface SettingsUpload {
   files: { path: string; content_b64: string }[];
-}
-
-/** Branch/tag/HEAD pointer */
-export interface Ref {
-  branch_id?: string;
-  kind: string;
-  name: string;
-  repo_id: string;
-  target: string;
-  symbolic?: string;
-}
-
-/** Uncommitted context pointer for each session — latest captured snapshot outside branch refs. This is durable capture state, not proof that a provider process is currently alive. */
-export interface Pending {
-  repo_id: string;
-  session_id: string;
-  branch: string;
-  provider: string;
-/** Hash of the latest hook capture snapshot (= doc hash, content-addressed). */
-  target: string;
-  author?: { name: string; email: string; team: string };
-  updated_at: string;
-  /** Actual transcript activity, not the time this pointer was synchronized. */
-  activity_at?: string;
-/** Session hidden in the user's uncommitted list (data not deleted, sticky) — true to exclude from list. */
-  dismissed?: boolean;
 }
 
 /** CIR event block (text / tool_use / tool_result / thinking, etc.) */
@@ -252,33 +214,6 @@ export interface CIREvent {
   replacement_complete?: boolean;
 /** reasoning/compaction provider-locked opaque state */
   locked?: { provider?: string; scheme?: string; blob?: string };
-}
-
-/** Compressed memory distilled from snapshot */
-export interface MemoryDigest {
-  claims_version?: 1;
-  snapshot_id: string;
-  previous_memory_hash?: string;
-  summary: string;
-  key_facts: string[] | null;
-  open_tasks: string[] | null;
-  provider: string;
-  fragments?: Array<{
-    source_snapshot: string;
-    summary?: string;
-    key_facts?: string[];
-    open_tasks?: string[];
-    tasks_authoritative?: boolean;
-    claims?: Array<{ kind: 'code' | 'decision' | 'rationale'; text: string; code?: { commit: string; parent?: string; paths: string[] } }>;
-  }>;
-  graft_coverage?: {
-    projection_version: number;
-    projection_complete: boolean;
-    lineage_fingerprint?: string;
-    graft_seq: number;
-    graft_parents?: string[];
-    pinned_sources?: string[];
-  };
 }
 
 export interface StorageUsageReport {

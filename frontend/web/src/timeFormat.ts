@@ -1,7 +1,4 @@
-export function short(hash: string): string {
-  return hash.replace(/^sha256:/, '').slice(0, 10);
-}
-
+/** A recorded time in local time as `YYYY-MM-DD HH:MM`, or `MM-DD HH:MM` when compact; empty for a missing or zero time. */
 export function when(iso?: string, compact = false): string {
   if (!iso || iso === '0001-01-01T00:00:00Z') return '';
   const date = new Date(iso);

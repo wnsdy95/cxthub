@@ -20,7 +20,7 @@ import {
 } from '../anchoredSessions';
 import { layoutGitGraph, type GitRow } from '../anchoredGraph';
 import { commitOrigin, ownFailingCollectors, pushOriginsByHead, type CommitOrigin } from '../pushOrigins';
-import { when } from '../snapshotFormat';
+import { when } from '../timeFormat';
 import { useT } from '../i18n';
 import { AppLink } from './AppLink';
 import { AnchoredSessionView } from './AnchoredSessionView';

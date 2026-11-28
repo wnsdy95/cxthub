@@ -70,12 +70,10 @@ button.create-menu-trigger:hover, button.create-menu-trigger[aria-expanded="true
 .account-field { min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
 .account-field label, .account-field-label { color: var(--text); font-size: 0.82rem; font-weight: 500; }
 .account-field > .hint { margin: 0; font-size: 0.76rem; }
-.account-field input, .account-field select, .account-preference-row select { width: 100%; min-width: 0; min-height: 40px; background: #fff; color: var(--text); border: 1px solid #dce0e6; border-radius: 7px; padding: 9px 12px; font: 0.85rem var(--sans); }
-.account-field input:focus, .account-field select:focus-visible, .account-preference-row select:focus-visible { border-color: #747e8c; outline: 3px solid #e9ecf1; outline-offset: 1px; }
-.account-preference-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 20px; }
+.account-field input, .account-preference-row select { width: 100%; min-width: 0; min-height: 40px; background: #fff; color: var(--text); border: 1px solid #dce0e6; border-radius: 7px; padding: 9px 12px; font: 0.85rem var(--sans); }
+.account-field input:focus, .account-preference-row select:focus-visible { border-color: #747e8c; outline: 3px solid #e9ecf1; outline-offset: 1px; }
+.account-preference-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .account-preference-row select { width: 160px; flex: none; }
-.account-context-help summary { color: #667085; font-size: 0.76rem; cursor: pointer; }
-.account-context-help[open] { margin-top: 5px; }
 .account-savebar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2px; }
 .account-savebar .hint { margin: 0; }
 .account-savebar .ok-msg { font-size: 0.8rem; }

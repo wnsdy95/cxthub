@@ -124,26 +124,11 @@ export function useCreateOrganizationRepository() {
     },
   });
 }
-export function useOrganizationAudit(organizationId: string | null, enabled: boolean) {
-  return useQuery({
-    queryKey: ['organization-audit', organizationId],
-    queryFn: () => api.listOrganizationAudit(organizationId as string),
-    enabled: enabled && Boolean(organizationId),
-  });
-}
-export function useCreateBreakGlassGrant() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { organizationId: string; repositoryId: string; reason: string; minutes: number }) =>
-      api.createBreakGlassGrant(v.organizationId, v.repositoryId, v.reason, v.minutes),
-    onSuccess: (_grant, v) => void qc.invalidateQueries({ queryKey: ['organization-audit', v.organizationId] }),
-  });
-}
 // Account settings: nickname is lightweight, while username changes URLs and repository paths.
 export function useUpdateMe() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string; locale?: string }) =>
+    mutationFn: (patch: { username?: string; nickname?: string; avatar?: string; locale?: string }) =>
       api.updateMe(patch),
     onSuccess: (u) => {
       qc.setQueryData(['me'], u);
@@ -352,10 +337,6 @@ export function useAnchoredSession(repoId: string | null, provider: string | nul
     placeholderData: keepPreviousData,
   });
 }
-/**
- * Reads a session's conversation from one event onward, a page at a time. The
- * document is not named by any snapshot, so it is read with the plain pager.
- */
 /**
  * A session's conversation from `start`, read by the session. What another
  * member reads can have gaps where parts are not open: a page ends at a gap,

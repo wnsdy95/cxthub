@@ -228,11 +228,9 @@ for (const width of [1280, 390]) {
       await expect(page.locator('.settings-slot')).toHaveCount(2);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       expect(await page.locator('.account-field-grid').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(width > 700 ? 2 : 1);
-      const help = page.locator('.account-context-help');
-      await expect(help).not.toHaveAttribute('open');
-      await help.locator('summary').click();
-      await expect(help.locator('p')).toContainText('cxt config load.mode');
-      await help.locator('summary').click();
+      // Language is the only preference: it applies at once, and saving is for the profile alone.
+      await expect(page.locator('section[aria-labelledby="account-preferences-title"] select')).toHaveCount(1);
+      await expect(page.locator('.account-savebar [role="status"]')).toHaveText(locale === 'en' ? 'Save to apply profile changes.' : ko.accountUI.saveHint);
       expect(fixture.reads.some((url) => url.includes('/storage'))).toBe(false);
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({ path: testInfo.outputPath(`account-polished-${locale}-${width}.png`), fullPage: true });
