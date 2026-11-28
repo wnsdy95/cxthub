@@ -16,8 +16,8 @@ func rootSourceFunctionDefinitionsPG() map[string]string {
 		"cxt_advance_doc_range_source_version": "bc2e3079d076794550de5983f8a8daae659c149011a2b2a549e60abaea69bad8",
 		"cxt_assign_blob_incarnation":          "50dc341b9a190f43f8a43be1ddaaace338855be38a3ce453a0d25cf390a64431",
 		"cxt_preserve_blob_incarnation":        "0b08f8b8736dfd21e394e6242fd5666ace199372317d86ade1b1a7e2e3cbc2bd",
-		"cxt_initialize_blob_incarnation":      "f9b7a23c1f758c646574669e85cc6cbb87bb6b246cf049784be3d8fd247a00f1",
-		"cxt_capture_catalog":                  "ee492eecd49cbe654e623ec09d187e3097711462ae66301ff0af80b0af6542a6",
+		"cxt_initialize_blob_incarnation":      "1021c9f4c8601ee40d619e6aef949c8276a20b055337a0914a094451d2159b12",
+		"cxt_capture_catalog":                  "b176c9f5120bfd5030dd03f69eab81b7806fcff5a90bcc01e0fe5e774f7c00c9",
 	}
 }
 

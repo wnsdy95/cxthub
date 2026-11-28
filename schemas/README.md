@@ -8,7 +8,7 @@ cxt keeps `cli/` and `backend/` in separate Go modules with independent domain t
 |---|---|
 | `cir.schema.json` | CIR v1/v2, the provider-independent format that a Claude Code or Codex conversation is converted to before it is uploaded as a session's conversation document. v2 adds explicit compaction replay state, multi-agent messages, and bounded provider replay metadata. Changes require compatibility review. |
 | `openapi.yaml` | OpenAPI 3.1 REST contract shared by CLI, backend, and frontend. A drift test fails when a registered route is missing from it or a path exists only in it. |
-| `db/migrations/*.sql` | Ordered PostgreSQL migrations, `0001` through `0170`. `0161` to `0168` add the tables of the session structure; `0169` drops the tables of the earlier capture approach that nothing depends on, and destroys their data; `0170` adds what collectors report about themselves and, to a stored commit, the push it came with. Runtime services verify the schema and never apply it; see [database migration ownership](../docs/DATABASE_MIGRATIONS.md). |
+| `db/migrations/*.sql` | Ordered PostgreSQL migrations, `0001` through `0171`. `0161` to `0168` add the tables of the session structure; `0169` drops the tables of the earlier capture approach that nothing depends on, and destroys their data; `0170` adds what collectors report about themselves and, to a stored commit, the push it came with; `0171` drops the capture tables that 0169 had to leave, with what still named them, and destroys their data. Runtime services verify the schema and never apply it; see [database migration ownership](../docs/DATABASE_MIGRATIONS.md). |
 | `fixtures/` | Fixtures read by tests. |
 
 Ownership migrations and recovery guarantees are documented in
@@ -216,9 +216,9 @@ erDiagram
 A session's report is the `body` of its `anchored_sessions` row. Its
 conversation is a document stored as blobs; the report names it.
 
-Earlier migrations also create the tables of the removed capture approach, for
-example `snapshots`, `refs` and `pending_contexts`. No migration in this
-catalog drops them, and captures are no longer reachable through the server.
+Earlier migrations also created the tables of the removed capture approach, for
+example `snapshots`, `refs` and `pending_contexts`. Migrations 0169 and 0171
+drop them, and captures are no longer reachable through the server.
 
 ## Usage Principles
 

@@ -279,8 +279,6 @@ func TestPGGitHubWorkerDeliveryLeaseAndBodyFences(test *testing.T) {
 			if err != nil || current.Done || !slices.Equal(current.Body, delivery.Body) || (scenario == "body_integrity" && !reflect.DeepEqual(current, delivery)) || (scenario == "lease_reclaimed" && !reflect.DeepEqual(current, replacement)) {
 				test.Fatal("rejected delivery overwrote durable winner", current, err)
 			}
-			// A delivery asks for the remote to be read again; it stores no observation of its own.
-			fixture.count(test, "git_ref_observations", 0)
 		})
 	}
 }
@@ -337,7 +335,6 @@ func TestPGGitHubWorkerCurrentDocumentPolicyAtClaimAndFinish(test *testing.T) {
 			if !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) || (strings.HasPrefix(scenario, "finish") && !upgraded) {
 				test.Fatal("public owner missed current source policy boundary", upgraded, err)
 			}
-			fixture.count(test, "git_ref_observations", 0)
 			after, err := fixture.peer.RepositoryRevision(fixture.ctx, fixture.repo.ID)
 			if err != nil || before != after {
 				test.Fatal("source policy rejection published state", before, after, err)

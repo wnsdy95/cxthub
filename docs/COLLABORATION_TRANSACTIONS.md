@@ -171,10 +171,11 @@ Use only disposable PostgreSQL 16 databases. Do not point fixtures at production
   backs up and restores into an explicitly empty target, then compares every
   public table's row count and sorted row-content digests. After equality is
   verified, it calls `cxt_reset_catalog` for every restored repository in ID
-  order within one transaction. Before committing, it checks that every epoch
-  differs from the source and every repository has a complete generation-zero
-  baseline. It then verifies that the source is unchanged and that all restored
-  tables except the two catalog tables still match. It refuses a nonempty target;
+  order within one transaction. Before committing, it checks that every
+  repository has a catalog state row whose epoch differs from the source, whose
+  head and floor are zero and which has no writer. It then verifies that the
+  source is unchanged and that all restored tables except
+  `repository_catalog_state` still match. It refuses a nonempty target;
   temporary dumps are permission-restricted and removed afterwards.
 
 Keep source writers stopped on both validation databases

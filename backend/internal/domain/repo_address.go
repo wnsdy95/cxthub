@@ -38,8 +38,7 @@ type RepoAddressMove struct {
 	// RemovedJobs counts the finished document jobs that were removed: a
 	// job's own identifier is computed from the repository's.
 	RemovedJobs int64 `json:"removed_document_jobs"`
-	// Kept are columns that record what happened, or content addressed by
-	// its own hash, that still name the old identifier. They are left as
-	// they are.
+	// Kept are columns that record what happened and still name the old
+	// identifier. They are left as they are.
 	Kept []RepoAddressColumn `json:"kept"`
 }

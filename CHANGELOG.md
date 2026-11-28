@@ -66,6 +66,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Upgrade notes
 
+- Migration 0171 drops the 34 tables of the capture approach that 0169 had to
+  leave (captures, their refs, history and settings objects, the Git evidence
+  and pull request tables, the journals and wakes triggers kept for them, and
+  the legacy normalization checkpoints) and cannot be undone from the database.
+  Take a backup first. The previous release does not start on the migrated
+  database and this release does not start without it: stop the API, MCP and
+  worker, apply with this release's operator image (`migrate --apply`), then
+  start this release. Workspace storage usage drops by the size of the settings
+  objects of captures. See "Upgrading to 0171" in
+  `docs/DATABASE_MIGRATIONS.md`.
 - Terraform no longer has the input `github_webhook_secret_id` or the outputs
   `github_webhook_secret` and `github_webhook_url`: remove the input from a
   tfvars file that sets it. Terraform never managed the secret

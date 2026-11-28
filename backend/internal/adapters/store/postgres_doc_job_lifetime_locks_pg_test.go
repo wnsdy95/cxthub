@@ -75,50 +75,6 @@ func docJobLifetimeLocksImagePG(test *testing.T, ctx context.Context, database p
 	return image.String()
 }
 
-func TestPGDocJobLifetimeCatalogCounterProgress(test *testing.T) {
-	fixture, storage := authorityScopePG(test)
-	ctx := rootPublicationContext(fixture.ctx)
-	repo, namespace := rootPGRepo(test, ctx, storage)
-	root := uniqueRootPublicationFixturePG(test, "catalog counter progress while a job lifetime is retained")
-	claim, _ := rootPublicationClaimPG(test, storage, ctx, root, repo)
-	holder := authorityScopePeerPG(test, storage, "", nil)
-	writer := authorityScopePeerPG(test, storage, "", nil)
-	outer, holderPID := docJobLifetimeLocksHoldPG(test, ctx, holder, claim)
-	writerPID := authorityScopePIDPG(test, ctx, writer)
-	if holderPID == writerPID || holderPID == fixture.observer.PgConn().PID() || writerPID == fixture.observer.PgConn().PID() {
-		test.Fatal("holder, counter writer, and observer must use independent PostgreSQL backends")
-	}
-	before := rootPGImage(test, ctx, storage, repo, namespace)
-	var head int64
-	var epoch string
-	if err := fixture.observer.QueryRow(ctx, `SELECT head_seq,epoch::text FROM repository_catalog_state WHERE repo_id=$1`, repo).Scan(&head, &epoch); err != nil {
-		test.Fatal(err)
-	}
-	var nextHead int64
-	var nextEpoch string
-	if err := writer.pool.QueryRow(ctx, `SELECT seq,epoch::text FROM cxt_catalog_generation($1)`, repo).Scan(&nextHead, &nextEpoch); err != nil {
-		test.Fatal("ordinary catalog allocation must commit while the helper's outer transaction is still open", err)
-	}
-	if nextHead != head+1 || nextEpoch != epoch || epoch != claim.RepositoryEpoch {
-		test.Fatal("counter allocation changed the retained lifetime or failed to advance exactly once", head, nextHead, epoch, nextEpoch)
-	}
-	var committedHead int64
-	var committedEpoch string
-	if err := fixture.observer.QueryRow(ctx, `SELECT head_seq,epoch::text FROM repository_catalog_state WHERE repo_id=$1`, repo).Scan(&committedHead, &committedEpoch); err != nil {
-		test.Fatal(err)
-	}
-	if committedHead != nextHead || committedEpoch != epoch {
-		test.Fatal("independent observer could not see counter progress before holder commit", committedHead, committedEpoch)
-	}
-	if after := rootPGImage(test, ctx, storage, repo, namespace); after != before {
-		test.Fatal("lifetime retention or catalog allocation changed archive, ownership, accounting, or job receipt")
-	}
-	if err := outer.Commit(ctx); err != nil {
-		test.Fatal("commit retained lifetime after independently committed counter progress", err)
-	}
-	assertRootStreamingUnpublishedPG(test, storage, ctx, claim)
-}
-
 func TestPGDocJobLifetimeDeletesWaitForOuterCommit(test *testing.T) {
 	for _, target := range []struct {
 		name      string

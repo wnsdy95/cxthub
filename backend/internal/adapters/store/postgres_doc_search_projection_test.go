@@ -58,8 +58,7 @@ func docSearchStageFixturePG(test *testing.T, items int) docSearchStageCasePG {
 			}
 		}
 		if _, err := storage.pool.Exec(cleanup, `DELETE FROM blobs b WHERE hash=ANY($1::text[])
- AND NOT EXISTS(SELECT 1 FROM repo_blobs rb WHERE rb.hash=b.hash)
- AND NOT EXISTS(SELECT 1 FROM snapshots s WHERE s.doc_hash=b.hash OR s.memory_hash=b.hash)`, hashes); err != nil {
+ AND NOT EXISTS(SELECT 1 FROM repo_blobs rb WHERE rb.hash=b.hash)`, hashes); err != nil {
 			test.Error(err)
 		}
 	})

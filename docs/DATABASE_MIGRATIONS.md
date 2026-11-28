@@ -55,10 +55,10 @@ and offline tooling; production roots do not receive its apply capability.
 
 ## Current release catalog
 
-This source release requires the complete 170-file SQL bundle, from
-`0001_init.sql` through `0170_collector_reports.sql`. Its catalog
+This source release requires the complete 171-file SQL bundle, from
+`0001_init.sql` through `0171_drop_capture_leftovers.sql`. Its catalog
 digest is
-`966ebba5097862a68be384da53dee4071a26665fcceb58b15fa5d7f21305f004`, matching
+`beabb7d608a577b1482c317f95971671b2c732c2e2e5a5781eb877683508422b`, matching
 `releasedMigrationCatalogSHA256` in
 `backend/internal/adapters/store/migration_manifest.go`. Ship that exact bundle
 with the corresponding API, MCP, worker and operator artifacts. The current
@@ -77,14 +77,53 @@ pending projections, prepared memory, Git scans, PR promotion jobs). It cannot
 be undone from the database. Before applying it, run `cxt push` on every
 computer whose sessions should be on the server, and take the backup the
 sequence below requires. The captures themselves (`snapshots`, `refs`,
-`context_history` and the tables around them) stay: functions that stay still
-name them. Nothing is dropped with `CASCADE`, so the migration fails instead of
-removing an object that something which stays still depends on.
+`context_history` and the tables around them) stayed: functions that stayed
+still named them. 0171 drops them. Nothing is dropped with `CASCADE`, so the
+migration fails instead of removing an object that something which stays still
+depends on.
+
+**`0171_drop_capture_leftovers.sql` destroys data.** It drops the 34 tables
+that 0169 had to leave although no server source reads or writes them: the
+captures (`snapshots`, `refs`, `context_history`, `pending_contexts`,
+`unsync_contexts`, `session_archives`, `reflog`, `settings_objects`), the Git
+evidence and pull request tables of captures, the change journals and wakes
+the triggers kept for them, and the checkpoints of the legacy document
+normalization. With them go two views over the journals, 58 functions that no
+trigger, function or server source calls any more, ten triggers whose only work
+was for these tables, four sequences, and the foreign key
+`legacy_checkpoint_current_root`. What stays keeps its live work, rewritten
+without the part that named the dropped tables:
+
+- The trigger `catalog_protocol` on `repos` still creates the
+  `repository_catalog_state` row of a new repository, whose epoch fences the
+  repository's document jobs. It no longer writes a change journal.
+- `cxt_reset_catalog(repo)` still rotates a repository's epoch, under a lock on
+  `repos`, as a restore needs. It no longer reseeds journals.
+  `cxt_prune_catalog` is gone: there is no journal left to prune.
+- A new blob still gets its source incarnation; `TRUNCATE` stays refused on
+  `repos`, `repo_blobs` and `repository_revisions`.
+- Storage accounting no longer counts settings objects. The migration deletes
+  them first, so their bytes are released through the accounting trigger: a
+  workspace's usage drops by the size of the settings objects its captures
+  held, and the ledger records each as `payload.delete`.
+- The legacy byte stages lose their checkpoint roots, and the checkpoint
+  objects are deleted through their own guard and accounting triggers, so that
+  `doc_legacy_byte_usage_v1` no longer counts them.
+
+Two groups that no server source names stay, because something live reads
+them: `storage_usage_objects` (storage accounting) and `doc_read_events_v2`
+with `doc_read_indexes_v2` (the views `doc_read_index_current` and
+`doc_read_event_locations_current` still read them for documents indexed
+before 0066). 0171 creates no table, so it needs no new runtime rights; the
+rights the runtime principals had on the dropped tables go with the tables.
+
+0171 cannot be undone from the database. Follow
+[Upgrading to 0171](#upgrading-to-0171) below.
 
 There is no automatic destructive schema downgrade. Do not remove Codex
 settings, edit migration receipts, rewrite historical SQL, or point an old
 binary at a substitute bundle to force startup. Recovery requires an artifact
-compatible with the actual database catalog (169 after this release's upgrade),
+compatible with the actual database catalog (171 after this release's upgrade),
 or a separately verified pre-upgrade backup recovery that explicitly accounts
 for writes after the backup. Local fixture tests are not evidence that a
 production backup or recovery has been tested.
@@ -102,7 +141,7 @@ leave the previous constraint intact.
 The historical 152-file catalog digest was
 `42c721b3d691c2ff3f2b6d717da9a879246fe031ae464885a317c3ec14937f5b`.
 That bundle belongs only to the corresponding historical artifacts, not the
-current 169-file release. Current verify-only startup still checks the public
+current 171-file release. Current verify-only startup still checks the public
 table and its validated, local, exact kind constraint. A receipt without the
 expected DDL, a missing or unvalidated constraint, or an expanded unknown kind
 is not a compatible schema. Verification does not repair these conditions.
@@ -209,7 +248,8 @@ the server deletes from: `anchored_sessions`, `anchored_session_commits`,
 `remote_git_pushes`. Nothing else is granted: no ownership, no DDL. A `NOTICE`
 line names each principal and what it may now do. The script grants nothing and
 stops when the tables are missing or when no principal but the owner has rights
-on `repos`. Running it again changes nothing.
+on `repos`. Running it again changes nothing. Migration 0171 creates no table
+and needs no rights of its own.
 
 ## Operator image and invocation
 
@@ -295,6 +335,69 @@ Uncontrolled old binaries continuing to run against the migrated database remain
 unproven. A successful new startup check does not validate old-process behavior,
 rolling upgrades, or arbitrary mixed-version operation.
 
+### Upgrading to 0171
+
+A database that already holds 0170 needs only 0171, but 0171 destroys data
+(see [Current release catalog](#current-release-catalog)) and the two releases
+do not share a database:
+
+- A server of the previous release does not start on a database with 0171.
+  Its startup check says `database contains migration
+  "0171_drop_capture_leftovers.sql" absent from this image`. One that is still
+  running when 0171 is applied keeps serving only until it restarts, and a free
+  Render instance restarts after 15 minutes without traffic.
+- A server of this release does not start before 0171 is applied. Its startup
+  check says `migration "0171_drop_capture_leftovers.sql" is not applied`.
+- The operator image of the previous release cannot apply 0171: its compiled
+  catalog refuses the 171-file bundle. Use the operator image of this release.
+
+So the only order is: stop the previous release, take a backup, apply 0171,
+then start this release. There is no rolling upgrade. In the sequence above:
+
+1. Build the operator image of this release and the API and MCP images of this
+   release before the window.
+2. Stop the API, MCP and worker of the previous release and keep them stopped.
+3. Take a backup of the whole database, with its owners and rights, for
+   example `pg_dump --format=custom --file=before-0171.dump "$CXT_POSTGRES_DSN"`,
+   and check that it reads back (`pg_restore --list before-0171.dump`).
+4. Apply with the operator image of this release:
+   `docker run --rm --read-only --env CXT_POSTGRES_DSN "$CXT_MIGRATE_IMAGE" --apply`
+   prints `{"mode":"apply","applied":1,"verified":true}`. 0171 creates no table:
+   there are no new runtime rights to give.
+5. Check without `--apply`, as the operator and as each runtime principal; it
+   prints `{"mode":"check","applied":0,"verified":true}`.
+6. Start the API, MCP and worker of this release. Each logs `schema: verified`.
+
+To see that it worked, as the operator:
+
+```sql
+SELECT version FROM schema_migrations WHERE version = '0171_drop_capture_leftovers.sql';
+SELECT to_regclass('public.snapshots'), to_regclass('public.settings_objects'),
+       to_regclass('public.repository_catalog_changes');   -- all three are NULL
+SELECT count(*) FROM storage_usage_objects WHERE object_key LIKE 'settings:%';  -- 0
+```
+
+Then open the Sessions tab of a repository and read a session: what the server
+serves comes from tables that stay.
+
+0171 cannot be undone from the database: the dropped rows are not kept
+anywhere else. To go back, stop this release, restore the backup of step 3
+into an empty database, keeping its owners and rights (a restore with
+`--no-acl` loses the revoked rights of the accounting functions, and startup
+verification then refuses the database), and rotate the epoch of every
+restored repository before anything serves it, as
+[catalog restore](CATALOG_SYNC.md#maintenance-and-restore) requires. As the
+operator, in one transaction:
+
+```sql
+BEGIN;
+SELECT cxt_reset_catalog(id) FROM repos ORDER BY id;
+COMMIT;
+```
+
+Then point the previous release at it and start it. What was written after the
+backup is lost.
+
 ## Moving a repository to another address
 
 A repository is stored under the hash of the address it was first connected
@@ -327,8 +430,8 @@ The operator image runs `migrate` by default; name the executable instead:
   left may name the old identifier at the end. Storage is counted by owner and
   content hash, which a move does not change.
 - Left as they are: conversation content (what was said, addressed by its
-  hash), settings objects addressed by their hash, and what records what
-  happened (migration, ownership, storage ledger and audit records).
+  hash) and what records what happened (migration, ownership, storage ledger
+  and audit records).
 - A document of the repository that is still being finished stops the move;
   finished document jobs are removed, since their identifiers are computed from
   the repository's.

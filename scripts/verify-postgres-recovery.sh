@@ -19,7 +19,7 @@ cat > "$validation_dir/check.sql" <<'SQL'
 SET TIME ZONE 'UTC';
 SELECT format('SELECT %L, count(*), md5(COALESCE(string_agg(row_hash, %L ORDER BY row_hash), %L)) FROM (SELECT md5(row_to_json(t)::text) AS row_hash FROM %I.%I t) rows', tablename, '', '', schemaname, tablename)
 FROM pg_tables WHERE schemaname='public'
-  AND (:'include_catalog'::boolean OR tablename NOT IN ('repository_catalog_state','repository_catalog_changes'))
+  AND (:'include_catalog'::boolean OR tablename <> 'repository_catalog_state')
 ORDER BY tablename
 \gexec
 SQL
@@ -39,8 +39,7 @@ cat > "$validation_dir/rotate-catalog.sql" <<'SQL'
 BEGIN;
 SET LOCAL TIME ZONE 'UTC';
 SET LOCAL search_path=public,pg_temp;
-LOCK TABLE repos, snapshots, refs, context_history IN SHARE ROW EXCLUSIVE MODE;
-LOCK TABLE repository_catalog_state, repository_catalog_changes IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE repos, repository_catalog_state IN SHARE ROW EXCLUSIVE MODE;
 -- The all-table digest comparison proved these restored epochs equal the source
 -- epochs. Save them before reset so every repository must receive a new epoch.
 CREATE TEMP TABLE recovery_catalog_epochs ON COMMIT DROP AS
@@ -62,36 +61,6 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'catalog recovery failed: missing state, reused epoch or nonzero generation';
     END IF;
-
-    IF EXISTS (
-        SELECT 1 FROM repository_catalog_changes c
-        LEFT JOIN repository_catalog_state st ON st.repo_id=c.repo_id
-        WHERE c.epoch IS DISTINCT FROM st.epoch OR c.seq<>0 OR c.deleted
-    ) THEN
-        RAISE EXCEPTION 'catalog recovery failed: stale or non-baseline journal rows';
-    END IF;
-
-    IF EXISTS (
-        WITH source_rows AS (
-            SELECT id AS repo_id,'protocol' AS kind,to_jsonb(r) AS row FROM repos r
-            UNION ALL SELECT repo_id,'snapshot',to_jsonb(s) FROM snapshots s
-            UNION ALL SELECT repo_id,'ref',to_jsonb(r) FROM refs r
-            UNION ALL SELECT repo_id,'history',to_jsonb(h) FROM context_history h
-        ), expected AS (
-            SELECT repo_id,kind,cxt_catalog_key(kind,row) AS key,cxt_catalog_image(kind,row) AS image
-            FROM source_rows
-        ), actual AS (
-            SELECT repo_id,entity_kind AS kind,entity_key AS key,after_image AS image
-            FROM repository_catalog_changes
-        )
-        SELECT 1 FROM (
-            (SELECT * FROM expected EXCEPT SELECT * FROM actual)
-            UNION ALL
-            (SELECT * FROM actual EXCEPT SELECT * FROM expected)
-        ) mismatches
-    ) THEN
-        RAISE EXCEPTION 'catalog recovery failed: incomplete or incorrect baseline images';
-    END IF;
 END
 $$;
 COMMIT;
@@ -102,7 +71,7 @@ rotated_repositories="$(psql "$CXT_RECOVERY_RESTORE_DSN" -XqAt -v ON_ERROR_STOP=
 # Verify the source stayed frozen and reset changed only the restored catalog.
 psql "$CXT_RECOVERY_DSN" -XqAt -v ON_ERROR_STOP=1 -v include_catalog=true -f "$validation_dir/check.sql" > "$validation_dir/source-after"
 diff -u "$validation_dir/source" "$validation_dir/source-after"
-awk -F '|' '$1 != "repository_catalog_state" && $1 != "repository_catalog_changes"' "$validation_dir/source" > "$validation_dir/source-rows"
+awk -F '|' '$1 != "repository_catalog_state"' "$validation_dir/source" > "$validation_dir/source-rows"
 psql "$CXT_RECOVERY_RESTORE_DSN" -XqAt -v ON_ERROR_STOP=1 -v include_catalog=false -f "$validation_dir/check.sql" > "$validation_dir/restore-after"
 diff -u "$validation_dir/source-rows" "$validation_dir/restore-after"
-printf 'Backup/restore verified: %s tables matched before rotation; %s repository epochs rotated with complete generation-zero baselines; source rows unchanged.\n' "$table_count" "$rotated_repositories"
+printf 'Backup/restore verified: %s tables matched before rotation; %s repository epochs rotated; source rows unchanged.\n' "$table_count" "$rotated_repositories"
