@@ -1,5 +1,7 @@
+import { useMemo, useState } from 'react';
 import type { CIREvent, DocViewEvent } from '../types';
 import { useT } from '../i18n';
+import { conversationAnswers, conversationTurns, type ConversationAnswer, type ConversationMode, type ConversationTurn } from '../conversationView';
 import { Markdown } from './Markdown';
 import { useDocEvent, useDocEventFragment } from '../hooks';
 import { ApiError } from '../api';
@@ -9,18 +11,76 @@ import { documentEventIsSummary, documentSeedPrefixes } from '../documentEventCl
 
 type DisplayEvent = DocViewEvent & { seed_summary?: boolean; empty_reasoning?: boolean };
 
-export function EventStream({ events, inherited = 0, repoId = '', hash = '' }: {
-  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string;
+type RowsProps = { inherited: number; repoId: string; hash: string };
+
+export function EventStream({ events, inherited = 0, repoId = '', hash = '', mode = 'all' }: {
+  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string; mode?: ConversationMode;
 }) {
-  return events.map(event => <DocumentEventRow key={event.event_index} event={event} index={event.event_index!}
-    inherited={inherited} repoId={repoId} hash={hash} />);
+  const props = { inherited, repoId, hash };
+  if (mode === 'all') return <EventRows events={events} {...props} />;
+  return conversationTurns(events).map(turn => (
+    <ConversationTurnView key={(turn.prompt ?? turn.rest[0]).event_index} turn={turn} mode={mode} {...props} />
+  ));
+}
+
+function EventRows({ events, ...props }: RowsProps & { events: DisplayEvent[] }) {
+  return events.map(event => <DocumentEventRow key={event.event_index} event={event} index={event.event_index!} {...props} />);
+}
+
+// A prompt and what followed it. With only the prompts shown, the prompt opens
+// its turn; with the conversation shown, each answer opens the work before it.
+function ConversationTurnView({ turn, mode, ...props }: RowsProps & { turn: ConversationTurn<DisplayEvent>; mode: Exclude<ConversationMode, 'all'> }) {
+  const translate = useT();
+  const [open, setOpen] = useState(false);
+  const answers = useMemo(() => (mode === 'chat' ? conversationAnswers(turn.rest) : []), [mode, turn.rest]);
+  const toggle = () => setOpen(value => !value);
+  return (
+    <div className={`turn${open ? ' open' : ''}`}>
+      {mode === 'prompts' && turn.prompt && (
+        <div className={`turn-head${turn.rest.length ? ' has-more' : ''}`} role={turn.rest.length ? 'button' : undefined}
+          tabIndex={turn.rest.length ? 0 : undefined} aria-expanded={turn.rest.length ? open : undefined}
+          onClick={turn.rest.length ? toggle : undefined}
+          onKeyDown={event => {
+            if (event.target === event.currentTarget && turn.rest.length && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggle(); }
+          }}>
+          <EventRows events={[turn.prompt]} {...props} />
+          {turn.rest.length > 0 && <span className="turn-count">{open ? '▾' : '▸'} {translate('anchored.turnEvents', { count: turn.rest.length })}</span>}
+        </div>
+      )}
+      {mode === 'prompts' && !turn.prompt && (
+        <button type="button" className="turn-lead" aria-expanded={open} onClick={toggle}>
+          {open ? '▾' : '▸'} {translate('anchored.leadingEvents', { count: turn.rest.length })}
+        </button>
+      )}
+      {mode === 'prompts' && open && <EventRows events={turn.rest} {...props} />}
+      {mode === 'chat' && turn.prompt && <EventRows events={[turn.prompt]} {...props} />}
+      {mode === 'chat' && answers.map(answer => (
+        <ConversationAnswerView key={(answer.work[0] ?? answer.answer!).event_index} answer={answer} {...props} />
+      ))}
+    </div>
+  );
+}
+
+// An answer, with the work that led to it folded above it.
+function ConversationAnswerView({ answer, ...props }: RowsProps & { answer: ConversationAnswer<DisplayEvent> }) {
+  const translate = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="turn-answer">
+      {answer.work.length > 0 && (
+        <button type="button" className="turn-lead" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+          {open ? '▾' : '▸'} {translate('anchored.answerWork', { count: answer.work.length })}
+        </button>
+      )}
+      {open && <div className="asst-work"><EventRows events={answer.work} {...props} /></div>}
+      {answer.answer && <EventRows events={[answer.answer]} {...props} />}
+    </div>
+  );
 }
 
 type DeferredEventProps = { event: DisplayEvent; repoId: string; hash: string; index: number };
 
-function DocumentEventRow({ event, index, inherited, repoId, hash }: {
-  event: DisplayEvent; index: number; inherited: number; repoId: string; hash: string;
-}) {
+function DocumentEventRow({ event, index, inherited, repoId, hash }: RowsProps & { event: DisplayEvent; index: number }) {
   if (event.empty_reasoning) return null;
   return <DocumentEventIdentity index={index}><div data-event-index={index} className={index < inherited ? 'doc-inherited' : undefined}>
     {event.deferred && event.kind !== 'compaction'

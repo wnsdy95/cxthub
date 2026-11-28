@@ -301,6 +301,21 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 /* Show prompt only — keep user prompt, click to open AI event for that turn. */
 .dl-btn.on { color: var(--ink); border-color: var(--ink); background: var(--hover); }
 .turn + .turn { border-top: 1px solid var(--line); }
+.turn-head { position: relative; }
+.turn-head.has-more { cursor: pointer; }
+.turn-head.has-more:hover { background: var(--hover); }
+.turn-count { position: absolute; top: 12px; right: 14px; font-family: var(--mono); font-size: 0.66rem;
+  color: var(--faint); pointer-events: none; }
+.turn-head.has-more:hover .turn-count, .turn.open .turn-count { color: var(--ink); }
+.turn-lead { display: block; width: 100%; text-align: left; padding: 6px 14px; border: 0;
+  background: var(--hover); cursor: pointer; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
+.turn-lead:hover { color: var(--ink); }
+/* The work before an answer: tools and reasoning, indented under a guide in a light tone of the provider's ink. */
+.asst-work { margin-left: 12px; padding-left: 14px;
+  border-left: 2px solid color-mix(in srgb, var(--assistant-ink, var(--faint)) 38%, transparent); }
+.view-mode { font-family: var(--mono); font-size: 0.72rem; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--muted); padding: 3px 6px; }
+.view-mode:hover { border-color: var(--faint); color: var(--text); }
 
 .graph-archive-list { list-style: none; margin: 0; padding: 0; max-height: 156px; overflow-y: auto; }
 .graph-archive-list li + li { border-top: 1px solid var(--line); }
@@ -967,6 +982,8 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .anchor-partners { display: flex; flex-wrap: wrap; gap: 6px; }
 .anchor-call-list li { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 0.78rem; }
 .anchor-conversation { margin-top: 14px; padding: 8px 0; }
+.anchor-conversation-head { display: flex; align-items: center; gap: 12px; }
+.anchor-conversation-head .view-mode { margin-left: auto; }
 .anchor-divider { margin: 10px 0; }
 @media (max-width: 1000px) {
   .anchor, .anchor-split { grid-template-columns: minmax(0, 1fr); }
