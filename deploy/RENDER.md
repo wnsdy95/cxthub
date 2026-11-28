@@ -51,11 +51,42 @@ lines, then delete the job. An unprepared or mismatched schema refuses startup.
 This is a release requirement, not an automatically provisioned Render service
 or pre-deploy hook. No new resources or credential grants are activated here.
 
-Use the complete **169-migration** bundle and digest in the
+Use the complete **171-migration** bundle and digest in the
 [current release catalog](../docs/DATABASE_MIGRATIONS.md#current-release-catalog).
 Bounded API, MCP, and worker roles use process admission **protocol 7**. The
 historical schema-152 and protocol-v2/v3 qualifications are not current release
 identities or evidence of production compatibility.
+
+### Upgrading a 0170 database to 0171
+
+Migration 0171 drops the tables of the capture approach and destroys their data
+(see the [current release catalog](../docs/DATABASE_MIGRATIONS.md#current-release-catalog)).
+The deployed release does not start on a database with 0171, and this release
+does not start without it, so the services are stopped for the window:
+
+1. Before the window, build the operator image of this release
+   (`deploy/Dockerfile.migrate`), and turn off automatic deploys of
+   `cxthub-api` and `cxthub-mcp` so that this release is not deployed before
+   0171 is applied.
+2. Suspend `cxthub-api` and `cxthub-mcp` and keep them suspended. A free
+   instance that is only asleep wakes on the next request and would start the
+   previous release.
+3. Take a backup. Allow external access to the database from the operator's IP
+   only, run `pg_dump --format=custom --file=before-0171.dump` with the
+   operator connection string, and check it with `pg_restore --list`. Keep the
+   file until this release has run well.
+4. From the same machine, run the operator image of this release with
+   `--apply`; it prints `{"mode":"apply","applied":1,"verified":true}`. Then
+   run it without arguments; it prints `"verified":true`. 0171 needs no new
+   runtime rights, so the rights job need not run again.
+5. Restore `ipAllowList: []`.
+6. Deploy this release to both services and resume them. Each log shows
+   `schema: verified`; then open a repository's Sessions tab.
+
+0171 cannot be undone from the database. To go back, suspend both services,
+restore `before-0171.dump` into a new, empty database with its owners and
+rights (not with `--no-acl`), and deploy the previous release against it. What
+was written after the backup is lost.
 
 ## Provision
 
