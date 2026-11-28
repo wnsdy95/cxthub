@@ -1564,7 +1564,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
     Forbidden:
-      description: "Outside team visibility or team_mismatch (forbidden)."
+      description: "The caller is not allowed to do this (forbidden)."
       content:
         application/json:
           schema:
@@ -3067,9 +3067,9 @@ paths:
               additionalProperties: false
               properties:
                 snapshot_haves:
-                  type: array
+                  type: [array, "null"]
                   deprecated: true
-                  description: "Ignored. Older clients still send an empty array; the server no longer stores captures."
+                  description: "Ignored. Older clients still send it, as null or an empty array; the server no longer stores captures."
                   items:
                     $ref: "#/components/schemas/ContentHash"
                 doc_haves:
@@ -3224,13 +3224,13 @@ paths:
               additionalProperties: false
               properties:
                 snapshots:
-                  type: array
+                  type: [array, "null"]
                   deprecated: true
                   maxItems: 0
-                  description: "Captures are no longer stored. Older clients send an empty array; a batch with any capture is refused whole with 422 validation (this server stores sessions, not captures)."
+                  description: "Captures are no longer stored. Older clients send null or an empty array; a batch with any capture is refused whole with 422 validation (this server stores sessions, not captures)."
                   items: {}
                 docs:
-                  type: array
+                  type: [array, "null"]
                   items:
                     $ref: "#/components/schemas/SessionDoc"
                 chunked_docs:

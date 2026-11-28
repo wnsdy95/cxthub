@@ -597,7 +597,7 @@ export const en: Messages = {
     usernameTaken: 'That username is already taken',
     archive: 'Archive (read-only)',
     archivedDesc: 'Archived — all writes (push, settings, secrets) are blocked; view only.',
-    archiveDesc: 'Archiving makes the repository read-only: pushing and changing settings or secrets are blocked, and everything in it stays readable. A repository cannot be deleted, so archive one you no longer use. You can unarchive it at any time.',
+    archiveDesc: 'Archiving makes the repository read-only. Uploading sessions, writing notes and changing settings or secrets are blocked, and so is downloading the team settings and secrets, both on the web and with `cxt settings pull` and `cxt secrets pull`. Sessions and notes stay readable. A repository cannot be deleted, so archive one you no longer use. You can unarchive it at any time.',
     unarchive: 'Unarchive',
     doArchive: 'Archive',
     slugChange: 'Change URL (slug)',

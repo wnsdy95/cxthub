@@ -1031,9 +1031,12 @@ reads the tools' own records. What that changes on your computer:
 - The Git hooks are replaced by ones that only wake the collector, as described
   under `cxt hooks`. Nothing of cxt can stop a branch from being created any
   more.
-- The files an earlier version kept under `.cxt` (objects, refs, journals) are
-  not read and not changed. `.cxt/sessions`, the remote configuration and the
-  mark `.cxt/HEAD` are what this version uses. The rest can be deleted.
+- The capture files an earlier version kept under `.cxt` (`objects/` other
+  than `objects/settingsobjs/`, `refs/`, journals) are not read and not
+  changed, and can be deleted. Keep `.cxt/sessions`, the remote configuration
+  `.cxt/config`, the mark `.cxt/HEAD`, the settings backups
+  (`.cxt/settings-backups.json` and `.cxt/objects/settingsobjs/`),
+  `.cxt/secrets-baseline.json` and `.cxt/locks/`: this version uses them.
 - Before the server stops keeping captures, run `cxt push` once on every
   computer you worked on, so that the sessions recorded there are on the
   server in the new form.

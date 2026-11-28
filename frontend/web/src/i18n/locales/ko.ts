@@ -600,7 +600,7 @@ export const ko = {
     usernameTaken: '이미 사용 중인 username 입니다',
     archive: '보관 (읽기 전용)',
     archivedDesc: '보관됨 — 모든 쓰기(push·설정·시크릿)가 차단되고 열람만 가능합니다.',
-    archiveDesc: '보관하면 레포지토리가 읽기 전용이 됩니다. push와 설정·시크릿 변경이 막히고, 안에 있는 내용은 계속 볼 수 있습니다. 레포지토리는 지울 수 없으니 더 쓰지 않는 레포지토리는 보관하세요. 언제든 보관을 해제할 수 있습니다.',
+    archiveDesc: '보관하면 레포지토리가 읽기 전용이 됩니다. 세션 올리기, 메모 쓰기, 설정·시크릿 변경이 막히고, 웹과 `cxt settings pull`·`cxt secrets pull`로 팀 설정과 시크릿을 받는 것도 막힙니다. 세션과 메모는 계속 볼 수 있습니다. 레포지토리는 지울 수 없으니 더 쓰지 않는 레포지토리는 보관하세요. 언제든 보관을 해제할 수 있습니다.',
     unarchive: '보관 해제',
     doArchive: '보관하기',
     slugChange: 'URL 변경 (slug)',

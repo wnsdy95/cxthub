@@ -30,6 +30,39 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `scripts/github-webhook.sh`, `make webhook-check` and `make webhook-apply`)
   is removed: GitHub tells the server through the App's webhook. Delete such a
   webhook from the GitHub repository's settings.
+- The account setting "Context for new sessions", which no longer changed
+  anything: `GET /api/v1/me` no longer returns `load_mode`, and
+  `PATCH /api/v1/me` ignores it.
+- `PATCH /api/v1/repos/{repoID}/about` no longer changes the default branch or
+  branch protection: `default_branch` and `protect_default` are accepted and
+  ignored. `GET /api/v1/repos/{repoID}` no longer returns `context_protocol` or
+  `protect_default`. The OpenAPI contract no longer lists `catalog_version`,
+  `catalog_merkle_version`, `branch_pull_version`, `initial_anchor_available`
+  or the `initial_branch` query, which the server did not set or read.
+  `POST /push/negotiate` no longer returns `snapshot_wants`, and the result of
+  `POST /push/objects` no longer has `StoredSnapshots` or `DedupedSnapshots`.
+- The CLI no longer reads `CXT_NAME`, `CXT_EMAIL` and `CXT_TEAM`, no longer
+  runs Git five times on every command to fill them, and no longer sends
+  `X-Cxt-Identity`, which the server never read. The server no longer allows
+  that header in CORS.
+- `cxt fork` no longer writes `.cxt/session-ledger.json`; an existing one can
+  be deleted.
+- The `--json` failure codes `index_changed`, `code_position_mismatch`,
+  `provider_capability_unknown`, `context_budget_exceeded`, `empty_index` and
+  `delivery_failed`, and exit status 6, which no command produced since 0.2.0.
+- The CLI module has no third-party dependency any more: the zstd codec and
+  the token counter it no longer used are gone.
+- `schemas/manifest.schema.json`, `schemas/personal-work.schema.json` and
+  `schemas/testdata/`; the cxthub-cli export no longer carries
+  `schemas/testdata/`.
+
+### Fixed
+
+- Repository settings say that the notification webhook is called when the
+  team secrets change and when someone joins through an invitation link, not on
+  push or branch creation. The texts on storage, MCP consent and archiving say
+  what they do now; an archived repository also refuses downloading the team
+  settings and secrets.
 
 ### Upgrade notes
 

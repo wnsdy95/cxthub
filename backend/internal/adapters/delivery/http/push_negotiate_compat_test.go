@@ -30,15 +30,18 @@ func TestPushNegotiateIgnoresAnOlderClientsSnapshotHaves(t *testing.T) {
 		t.Fatalf("repo create code %d", code)
 	}
 	missing := domain.ContentHash("sha256:" + strings.Repeat("e", 64))
-	body := map[string]any{"snapshot_haves": []domain.ContentHash{missing}, "doc_haves": []domain.ContentHash{missing}}
-	var answer map[string]any
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos/"+url.PathEscape(string(rid))+"/push/negotiate", body, &answer); code != http.StatusOK {
-		t.Fatalf("negotiation with snapshot_haves answered %d", code)
-	}
-	if _, present := answer["snapshot_wants"]; present {
-		t.Fatalf("negotiation still answers snapshot_wants: %+v", answer)
-	}
-	if wants, ok := answer["doc_wants"].([]any); !ok || len(wants) != 1 || wants[0] != string(missing) {
-		t.Fatalf("negotiation lost the documents it wants: %+v", answer)
+	// v0.2.0 sends null on its main upload path and an empty or filled array elsewhere.
+	for label, haves := range map[string]any{"null": nil, "a filled array": []domain.ContentHash{missing}} {
+		body := map[string]any{"snapshot_haves": haves, "doc_haves": []domain.ContentHash{missing}}
+		var answer map[string]any
+		if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos/"+url.PathEscape(string(rid))+"/push/negotiate", body, &answer); code != http.StatusOK {
+			t.Fatalf("negotiation with snapshot_haves as %s answered %d", label, code)
+		}
+		if _, present := answer["snapshot_wants"]; present {
+			t.Fatalf("negotiation with snapshot_haves as %s still answers snapshot_wants: %+v", label, answer)
+		}
+		if wants, ok := answer["doc_wants"].([]any); !ok || len(wants) != 1 || wants[0] != string(missing) {
+			t.Fatalf("negotiation with snapshot_haves as %s lost the documents it wants: %+v", label, answer)
+		}
 	}
 }
