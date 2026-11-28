@@ -291,11 +291,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .compaction-divider::before, .compaction-divider::after { content: ''; flex: 1; border-top: 1px dashed rgba(137, 87, 229, 0.5); }
 .dl-btn.danger:hover { color: #c0392b; border-color: #c0392b; }
 
-.doc-inherited .msg { opacity: 0.45; }
-.doc-inherited .msg:hover { opacity: 0.8; }
-[data-document-target] { outline: 1px solid var(--muted); outline-offset: -1px; background: var(--hover); scroll-margin-top: 12px; }
-.doc-inherited[data-document-target] .msg { opacity: 1; }
-
 .hit-truncated { margin: 0; padding: 8px 12px; font-size: 0.74rem; color: var(--muted); background: var(--hover); }
 
 /* Show prompt only — keep user prompt, click to open AI event for that turn. */
