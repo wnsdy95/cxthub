@@ -166,7 +166,13 @@ export function buildAnchoredIndex(
   for (const pull of pulls) {
     for (const sha of pull.commits) commitBySha.get(sha)?.pulls.push(pull.number);
     const merged = pull.merge_sha ? commitBySha.get(pull.merge_sha) : undefined;
-    if (merged) merged.merged = pull.number;
+    if (merged) {
+      merged.merged = pull.number;
+      // A squash or rebase leaves the branch out of the commit's parents: the graph joins them with a dotted line.
+      if (pull.state === 'merged' && !pull.fork && pull.head_sha && pull.head_sha !== merged.sha && !merged.parents.includes(pull.head_sha)) {
+        (merged.joined ??= []).push(pull.head_sha);
+      }
+    }
   }
   const commits = [...commitBySha.values()].sort((a, b) => newestFirst(a.at, b.at) || a.sha.localeCompare(b.sha));
 

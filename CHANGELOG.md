@@ -7,6 +7,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The graph of the Sessions tab joins a pull request merged by squash or
+  rebase to the newest commit of its branch with a dotted line, so it shows
+  when a branch went into main. A merge commit keeps its solid line.
+
 ### Changed
 
 - A session's conversation opens with only what was said: the user's prompts

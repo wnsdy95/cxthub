@@ -229,20 +229,37 @@ export function AnchoredView({ repo, member = true, manage = false, selection, h
 const laneX = (lane: number) => lane * LANE + LANE / 2;
 const laneColor = (lane: number) => LANE_COLORS[lane % LANE_COLORS.length];
 
-/** The lanes of one row: the lines passing by, those meeting at the commit, and those leaving it. */
+/** The dash of a line that only joins a squash or rebase merge to the branch it came from. */
+const JOINED_DASH = '4 3';
+const dash = (soft: boolean | undefined) => (soft ? JOINED_DASH : undefined);
+
+/**
+ * The lanes of one row: the lines passing by, those meeting at the commit, and
+ * those leaving it. A dotted line is no Git parent: it leads from a commit a
+ * pull request was merged as to the newest commit of the branch it came from.
+ */
 function Lanes({ row, width, missing }: { row: GitRow<AnchoredCommitRow>; width: number; missing: boolean }) {
   const mid = ROW / 2, x = laneX(row.lane);
   const lines: ReactNode[] = [];
   row.incoming.forEach((waiting, lane) => {
     if (waiting === null) return;
-    if (waiting !== row.node.sha) lines.push(<line key={`pass${lane}`} x1={laneX(lane)} y1={0} x2={laneX(lane)} y2={ROW} stroke={laneColor(lane)} />);
-    else if (lane === row.lane) lines.push(<line key="in" x1={x} y1={0} x2={x} y2={mid} stroke={laneColor(lane)} />);
-    else lines.push(<path key={`join${lane}`} d={`M ${laneX(lane)} 0 C ${laneX(lane)} ${mid} ${x} ${mid * 0.4} ${x} ${mid}`} stroke={laneColor(lane)} fill="none" />);
+    const top = row.incomingSoft[lane];
+    if (waiting !== row.node.sha) {
+      // A line passing by can turn solid here, where a commit of this row reaches the same commit by a parent of its own.
+      const bottom = row.outgoingSoft[lane] ?? top;
+      if (top === bottom) lines.push(<line key={`pass${lane}`} x1={laneX(lane)} y1={0} x2={laneX(lane)} y2={ROW} stroke={laneColor(lane)} strokeDasharray={dash(top)} />);
+      else {
+        lines.push(<line key={`pass${lane}`} x1={laneX(lane)} y1={0} x2={laneX(lane)} y2={mid} stroke={laneColor(lane)} strokeDasharray={dash(top)} />);
+        lines.push(<line key={`pass${lane}b`} x1={laneX(lane)} y1={mid} x2={laneX(lane)} y2={ROW} stroke={laneColor(lane)} strokeDasharray={dash(bottom)} />);
+      }
+    } else if (lane === row.lane) lines.push(<line key="in" x1={x} y1={0} x2={x} y2={mid} stroke={laneColor(lane)} strokeDasharray={dash(top)} />);
+    else lines.push(<path key={`join${lane}`} d={`M ${laneX(lane)} 0 C ${laneX(lane)} ${mid} ${x} ${mid * 0.4} ${x} ${mid}`} stroke={laneColor(lane)} fill="none" strokeDasharray={dash(top)} />);
   });
-  if (row.outgoing[row.lane] != null) lines.push(<line key="out" x1={x} y1={mid} x2={x} y2={ROW} stroke={laneColor(row.lane)} />);
+  if (row.outgoing[row.lane] != null) lines.push(<line key="out" x1={x} y1={mid} x2={x} y2={ROW} stroke={laneColor(row.lane)} strokeDasharray={dash(row.outgoingSoft[row.lane])} />);
   else if (row.cut) lines.push(<line key="cut" x1={x} y1={mid} x2={x} y2={ROW} stroke={laneColor(row.lane)} strokeDasharray="2 3" />);
   for (const lane of row.branchesOut) {
-    lines.push(<path key={`fork${lane}`} d={`M ${x} ${mid} C ${laneX(lane)} ${mid * 1.6} ${laneX(lane)} ${mid} ${laneX(lane)} ${ROW}`} stroke={laneColor(lane)} fill="none" />);
+    lines.push(<path key={`fork${lane}`} d={`M ${x} ${mid} C ${laneX(lane)} ${mid * 1.6} ${laneX(lane)} ${mid} ${laneX(lane)} ${ROW}`} stroke={laneColor(lane)} fill="none"
+      strokeDasharray={dash(row.softOut.includes(lane))} data-joined={row.softOut.includes(lane) || undefined} />);
   }
   return (
     <svg className="anchor-lanes" width={width} height={ROW} aria-hidden="true">

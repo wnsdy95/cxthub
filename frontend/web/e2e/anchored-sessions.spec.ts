@@ -406,6 +406,34 @@ test('the graph holds commits no session made, and a note can be written where n
   expect(unexpected).toEqual([]);
 });
 
+test('a pull request merged by squash is joined to its branch by a dotted line; a merge commit keeps its own line', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const base = fixture('member', [], true);
+  // Pull request 8 of the branch quiet (d) was merged by squash as f, on top of e.
+  const first = remotePages[''] as { branches: unknown[]; pulls: unknown[]; commits: unknown[] };
+  const squashed = { ...first,
+    branches: [{ name: 'main', sha: sha('f') }, ...first.branches.slice(1)],
+    pulls: [{ number: 8, title: 'Quiet change', state: 'merged', head_ref: 'quiet', head_sha: sha('d'), base_ref: 'main', merge_sha: sha('f'), commits: [sha('d')], updated_at: at(58) }, ...first.pulls],
+    commits: [remoteCommit('f', 45, 'Quiet change (#8)', 'e'), ...first.commits] };
+  const unexpected = await installApiFixture(page, request => (
+    !request.searchParams.has('before') && decodeURIComponent(request.pathname) === '/api/v1/repos/repo/remote-git' ? { body: squashed } : base(request)));
+
+  await page.goto('/alice/app?tab=sessions');
+  const squash = page.locator(`[data-commit="${sha('f')}"]`);
+  await expect(squash).toContainText('#8');
+  await expect(squash.locator('path[data-joined]')).toHaveCount(1);
+  await expect(squash.locator('path[data-joined]')).toHaveAttribute('stroke-dasharray', '4 3');
+  // The dotted line runs past e down to d, the newest commit of the branch, where it ends.
+  await expect(page.locator(`[data-commit="${sha('e')}"] line[stroke-dasharray="4 3"]`)).toHaveCount(1);
+  await expect(page.locator(`[data-commit="${sha('d')}"] line[stroke-dasharray="4 3"]`)).toHaveCount(1);
+  await expect(page.locator(`[data-commit="${sha('c')}"] [stroke-dasharray="4 3"]`)).toHaveCount(0);
+  // Pull request 7 was merged by a merge commit: its line is a Git parent, drawn solid.
+  await expect(page.locator(`[data-commit="${sha('e')}"] path[data-joined]`)).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('a member archives a session, finds it only among the archived sessions, and restores it', async ({ page }) => {
   const errors = capturePageErrors(page);
   const reads: string[] = [];
