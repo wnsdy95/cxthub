@@ -186,6 +186,27 @@ legacy-byte usage accounting or bypass its trusted trigger path. This separation
 does not change limits, authentication/authorization, hashes, leases, current
 authority, accounting semantics, or other existing security rules.
 
+### Rights on the tables of this release
+
+Migrations 0161 to 0170 create 17 tables. The principal that applies them owns
+them, and the runtime principals may not use them until they are given rights
+on them. Without those rights the Sessions tab, session uploads, notes and the
+reading of the Git host fail: the API answers "internal server error", and its
+log says `permission denied for table anchored_sessions` and the like. After
+`--apply`, and before the runtime services start, run as the migration
+principal:
+
+```sh
+psql "$CXT_POSTGRES_DSN" -v ON_ERROR_STOP=1 -f schemas/db/runtime_rights/0161_0170.sql
+```
+
+Each runtime principal gets, on each of those tables, the rights it already has
+on `public.repos`, of `SELECT`, `INSERT`, `UPDATE` and `DELETE`, and nothing
+else: no ownership, no DDL. A principal that only reads `repos` only reads the
+new tables. A `NOTICE` line names each principal and its rights. The script
+grants nothing and stops when the tables are missing or when no principal but
+the owner has rights on `repos`. Running it again changes nothing.
+
 ## Operator image and invocation
 
 `deploy/Dockerfile.migrate` builds only the PostgreSQL-tagged `cxt-admin` executable
@@ -251,6 +272,10 @@ does not provision a database, database roles, a cloud service, or a deployment.
    and retain its outcome without credentials. Stop on any error or uncertain
    outcome; do not start services or rewrite history to force progress. Existing
    per-migration transactions do not make the entire bundle one atomic operation.
+   Then, with the same principal, give the runtime principals their rights on
+   the tables this release creates, as
+   [Rights on the tables of this release](#rights-on-the-tables-of-this-release)
+   describes.
 5. Run the same image without arguments to check the complete result, including
    the ownership receipt and accounting boundary. Then check with the intended
    runtime DML principal(s) to confirm they can verify without owner privileges.
