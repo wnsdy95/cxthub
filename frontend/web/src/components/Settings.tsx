@@ -213,7 +213,7 @@ export function AccountSettings({ user }: { user: User }) {
   );
 }
 
-// ArchiveSection — Archive toggle (read-only). Deletion in P1 is not possible, so archiving is the endpoint.
+// ArchiveSection is the archive toggle (read-only). A repository cannot be deleted, so archiving is how one is retired.
 function ArchiveSection({ repositoryMetadata }: { repositoryMetadata: Repository }) {
   const t = useT();
   const save = useUpdateRepository();
