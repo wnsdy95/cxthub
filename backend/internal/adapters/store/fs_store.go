@@ -216,7 +216,7 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 	if err := validateHash(id); err != nil {
 		return err
 	}
-	lock := s.refLock(id, domain.RefBranch, "")
+	lock := s.repoLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 	r, err := s.GetRepo(ctx, id)
@@ -316,17 +316,17 @@ func regularObjectExists(path string) (bool, error) {
 	return true, nil
 }
 
-// --- Ref / manifest ---
+// --- Repository lock ---
 
-var fsRefLocks sync.Map
+var fsRepoLocks sync.Map
 
-func (s *FSStore) refLock(repoID domain.ContentHash, _ domain.RefKind, _ string) *sync.Mutex {
+// repoLock serializes every read-modify-write of one repository's metadata
+// files, whichever store value in this process opened the data directory.
+func (s *FSStore) repoLock(repoID domain.ContentHash) *sync.Mutex {
 	key := s.dataDir + "\x00" + string(repoID)
-	lock, _ := fsRefLocks.LoadOrStore(key, &sync.Mutex{})
+	lock, _ := fsRepoLocks.LoadOrStore(key, &sync.Mutex{})
 	return lock.(*sync.Mutex)
 }
-
-// --- Memory Meta ---
 
 // --- BlobStore ---
 
@@ -446,7 +446,7 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			return domain.Repo{}, err
 		}
 	}
-	lock := s.refLock(repo.ID, domain.RefBranch, "")
+	lock := s.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
 	if err := validateHash(repo.ID); err != nil {

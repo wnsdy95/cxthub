@@ -138,7 +138,7 @@ func TestViewRevisionMovesWithEverythingTheSessionsTabShows(t *testing.T) {
 
 	// A push the Git host delivered: the branch ledger learns of it at once.
 	moves("a push the Git host delivered", func() error {
-		_, err := service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", "", strings.Repeat("1", 40), false, "delivery-1")
+		_, err := service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", strings.Repeat("1", 40), "delivery-1")
 		return err
 	})
 	// The read it asked for moves the mark when it has ended.

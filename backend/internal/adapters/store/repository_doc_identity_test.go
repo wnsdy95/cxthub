@@ -75,7 +75,7 @@ func TestP6FSAboutSharesRequirementLock(t *testing.T) {
 	if err = st.RequireDocumentIdentity(ctx, id, domain.DocumentIdentityRootV1); err != nil {
 		t.Fatal(err)
 	}
-	lock := st.refLock(id, domain.RefBranch, "")
+	lock := st.repoLock(id)
 	lock.Lock()
 	done := make(chan error, 1)
 	started := make(chan struct{})

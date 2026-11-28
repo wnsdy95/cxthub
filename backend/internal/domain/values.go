@@ -66,25 +66,12 @@ const (
 //	reconstructed = cross-provider reconstruction with reasoning disabled or summarized
 //	memory        = distilled summary only; transcript is not restored
 //
-// The backend does not derive this tier (loading belongs to the CLI); it stores the frozen value in Snapshot metadata.
+// The backend does not derive this tier (loading belongs to the CLI); it keeps the value the document carries.
 type FidelityTier string
 
 const (
 	// FidelityFull is a lossless original.
 	FidelityFull FidelityTier = "full"
-)
-
-// RefKind identifies a ref type (schemas/manifest.schema.json $defs/refKind).
-//
-//	head    = current-checkout symbolic ref (one per repo, name fixed at "HEAD" — invariant REF3)
-//	branch = context-tip pointer for a real Git branch
-//	session = preservation pointer for a session fork within the same Git branch (internal join use)
-//	tag     = immutable label (REF2: target never changes after creation)
-type RefKind string
-
-const (
-	// RefBranch is a branch tip.
-	RefBranch RefKind = "branch"
 )
 
 // ValidateBranchName permits only safe ref paths for branch, session, and tag names.

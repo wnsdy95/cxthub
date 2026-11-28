@@ -22,16 +22,13 @@ import (
 )
 
 type Runtime struct {
-	Store                  store.Store
-	Context                *app.Service
-	DocumentQueries        inbound.DocumentQueries
-	DocumentQueryProfile   inbound.DocumentQueryProfile
-	DocumentIdentities     []domain.DocumentIdentity
-	RepositoryAssets       inbound.RepositoryAssetCommands
-	DocumentPublications   inbound.DocumentPublicationCommands
-	RepositoryStateProfile inbound.RepositoryStateQueryProfile
-	RepositoryGraphProfile inbound.RepositoryGraphQueryProfile
-	ContextQueryProfile    inbound.ContextQueryProfile
+	Store                store.Store
+	Context              *app.Service
+	DocumentQueries      inbound.DocumentQueries
+	DocumentQueryProfile inbound.DocumentQueryProfile
+	DocumentIdentities   []domain.DocumentIdentity
+	RepositoryAssets     inbound.RepositoryAssetCommands
+	DocumentPublications inbound.DocumentPublicationCommands
 	// Anchored is the read side of the session structure, for the tool server.
 	Anchored       inbound.AnchoredQueries
 	Identity       *app.IdentityService
