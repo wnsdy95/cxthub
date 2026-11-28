@@ -71,7 +71,7 @@ Run the read-only readiness check before applying:
 scripts/deploy-preflight.sh cloudrun-ready
 ```
 
-It fails closed when either secret is absent or has no enabled version.
+It fails closed when the PostgreSQL secret is absent or has no enabled version.
 
 ## GitHub App connections
 
