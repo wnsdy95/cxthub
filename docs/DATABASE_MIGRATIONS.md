@@ -200,12 +200,16 @@ principal:
 psql "$CXT_POSTGRES_DSN" -v ON_ERROR_STOP=1 -f schemas/db/runtime_rights/0161_0170.sql
 ```
 
-Each runtime principal gets, on each of those tables, the rights it already has
-on `public.repos`, of `SELECT`, `INSERT`, `UPDATE` and `DELETE`, and nothing
-else: no ownership, no DDL. A principal that only reads `repos` only reads the
-new tables. A `NOTICE` line names each principal and its rights. The script
-grants nothing and stops when the tables are missing or when no principal but
-the owner has rights on `repos`. Running it again changes nothing.
+The rights follow what each runtime principal may do on `public.repos`. A
+principal that reads `repos` reads the new tables. A principal that writes
+`repos` (`INSERT`) inserts and updates rows in them, and deletes from the nine
+the server deletes from: `anchored_sessions`, `anchored_session_commits`,
+`anchored_notes`, `anchored_session_removals`, and `remote_git_commits`,
+`remote_git_branches`, `remote_git_pulls`, `remote_git_pull_commits` and
+`remote_git_pushes`. Nothing else is granted: no ownership, no DDL. A `NOTICE`
+line names each principal and what it may now do. The script grants nothing and
+stops when the tables are missing or when no principal but the owner has rights
+on `repos`. Running it again changes nothing.
 
 ## Operator image and invocation
 
