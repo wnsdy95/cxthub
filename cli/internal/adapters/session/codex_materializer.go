@@ -36,7 +36,6 @@ func (m *CodexMaterializer) Materialize(ctx context.Context, raw []byte, cwd str
 	if err := providerfs.WriteRegularFileAtomic(path, rewriteCodexSessionID(raw, id), 0o644); err != nil {
 		return "", "", err
 	}
-	recordMaterialized(ctx, cwd, path)
 	return path, "codex resume " + id, nil
 }
 

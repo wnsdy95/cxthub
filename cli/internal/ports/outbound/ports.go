@@ -54,13 +54,11 @@ type MemoryDistiller interface {
 }
 
 // SessionMaterializer is a port that records session bytes (encoded in the target provider format) to a native session file,
-// enabling resume (CIR→Provider Byte Encoding is the responsibility of ProviderCodec.Encode, and the materializer is a pure writer that receives the raw result and writes to the file system [Hexagonal Architecture: Adapter→Adapter Dependency Avoidance]). The LoadSession use-case orchestrates codec.Encode → materializer.Materialize.
+// enabling resume (CIR→Provider Byte Encoding is the responsibility of ProviderCodec.Encode, and the materializer is a pure writer that receives the raw result and writes to the file system [Hexagonal Architecture: Adapter→Adapter Dependency Avoidance]). The session fork use case (`cxt fork`) orchestrates codec.Encode → materializer.Materialize.
 //
 // claude writes to ~/.claude/projects/<cwd-encoded>/<newid>.jsonl and returns resumeCmd="claude --resume <id>", while codex writes to ~/.codex/sessions/.../rollout-*.jsonl and returns "codex resume <id>".
 type SessionMaterializer interface {
 
-	// Implementations also record the native capture baseline so generated replay
-	// is excluded until real conversation grows, independent of the caller.
 	// Materialize records the encoded session bytes (raw) to a native session file based on the cwd. It returns the sessionPath (record path) and resumeCmd (native resume command).
 	Materialize(ctx context.Context, raw []byte, cwd string) (sessionPath string, resumeCmd string, err error)
 }
