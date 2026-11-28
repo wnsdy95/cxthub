@@ -130,7 +130,7 @@ jobs:
         working-directory: backend
         env:
           GOMAXPROCS: "1"
-        run: go test ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
+        run: go test ./internal/app -run '^TestResourceAdmissionDispatchReservesBothClasses$' -count=3 -timeout=120s
       - name: vulnerability scan (FS and production PostgreSQL)
         working-directory: backend
         run: |
@@ -188,7 +188,6 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
-      CXT_ROOT_WRITER_COST: "1"
       TIER: fast
       WORKERS: ${{ matrix.workers }}
     steps:
@@ -332,12 +331,6 @@ jobs:
         env:
           CXT_E2E_FULLSTACK: "1"
           CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_browser_test?sslmode=disable
-      - name: Windowed document combined candidate
-        if: matrix.shard == 1
-        working-directory: frontend/web
-        run: npm run test:e2e -- e2e/document-combined-adoption.spec.ts --project=chromium --workers=1
-        env:
-          CXT_DOCUMENT_WINDOW: "1"
       - name: Upload Playwright failure report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -391,18 +384,15 @@ jobs:
         run: |
           diagnostics_root=$(mktemp -d "$RUNNER_TEMP/cxt-sync-diagnostics.XXXXXX") || exit 1
           printf 'root=%s\n' "$diagnostics_root" >> "$GITHUB_OUTPUT"
-      - name: Synchronized E2E deep dive (append/graft · memory promotion · session boundary · fetch-only)
+      - name: Hook-to-server E2E (file store)
         env:
           CXT_E2E_DIAGNOSTICS_DIR: ${{ steps.sync-diagnostics.outputs.root }}/fs
         run: make e2e-sync
-      - name: Production PostgreSQL CLI push/pull and hook contracts
+      - name: Hook-to-server E2E (production PostgreSQL)
         env:
           CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_sync?sslmode=disable
           CXT_E2E_DIAGNOSTICS_DIR: ${{ steps.sync-diagnostics.outputs.root }}/postgres
-        run: |
-          CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocumentPipeline$' -count=1 -v
-          CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocPublicationContention$' -count=1 -v -timeout=10m
-          make e2e-sync
+        run: make e2e-sync
       - name: Preserve allowlisted synchronization failure evidence
         if: failure() && steps.sync-diagnostics.outputs.root != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

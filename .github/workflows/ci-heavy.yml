@@ -56,7 +56,6 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
-      CXT_ROOT_WRITER_COST: "1"
       TIER: heavy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
