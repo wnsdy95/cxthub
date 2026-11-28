@@ -93,17 +93,17 @@ func TestSaveRefusesSymlinkedCxtDirectory(t *testing.T) {
 	}
 }
 
-func TestValidate(t *testing.T) {
+func TestCanonicalURLValidates(t *testing.T) {
 	// New repositories use <host>/<namespace>/<repository>/<repository>.
 	// Existing two-segment remotes remain valid because RepoID is derived from
-	// the URL and rewriting one would fork its existing context DAG.
+	// the URL and rewriting one would change the repository it names.
 	valid := []string{
 		"http://127.0.0.1:8907/acme/demo",
 		"https://cxthub.example.com/alice/platform/backend",
 	}
 	for _, u := range valid {
-		if err := Validate(u); err != nil {
-			t.Errorf("Validate(%q) failed: %v", u, err)
+		if _, err := CanonicalURL(u); err != nil {
+			t.Errorf("CanonicalURL(%q) failed: %v", u, err)
 		}
 	}
 	// Reject missing, over-deep, and malformed identities.
@@ -114,8 +114,8 @@ func TestValidate(t *testing.T) {
 		"https://host/a/../b",
 	}
 	for _, u := range invalid {
-		if err := Validate(u); err == nil {
-			t.Errorf("Validate(%q) should not pass", u)
+		if _, err := CanonicalURL(u); err == nil {
+			t.Errorf("CanonicalURL(%q) should not pass", u)
 		}
 	}
 }
