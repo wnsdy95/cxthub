@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
@@ -31,5 +33,22 @@ func TestSetupGitHubLine(t *testing.T) {
 	}
 	if setupMissing != "✗" {
 		t.Fatalf("the mark of what is missing is %q", setupMissing)
+	}
+}
+
+// What cxt setup says of automatic upload, in a repository as it is after a
+// fresh setup and in one where it was turned off: the line says which, and
+// how to change it.
+func TestSetupAutomaticUploadLine(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if mark, line := setupAutomaticUploadLine(remotecfg.SegmentsAuto(root)); mark != "✓" || line != "automatic upload on: your Claude Code and Codex sessions in this repository go to the server on their own as you work; sessions that ended before it began go with cxt push (to stop it: cxt config segments.auto off)" {
+		t.Fatalf("a fresh setup: %q %q", mark, line)
+	}
+	if err := remotecfg.SetSegmentsAuto(ctx, root, "off"); err != nil {
+		t.Fatal(err)
+	}
+	if mark, line := setupAutomaticUploadLine(remotecfg.SegmentsAuto(root)); mark != "⚠" || line != "automatic upload off in this repository: sessions go to the server only with cxt push (to turn it on: cxt config segments.auto on)" {
+		t.Fatalf("turned off: %q %q", mark, line)
 	}
 }

@@ -264,6 +264,11 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
+	// Automatic upload is on unless someone turned it off in this repository.
+	// Whoever sets up is told which, and how to change it.
+	mark, line := setupAutomaticUploadLine(remotecfg.SegmentsAuto(cxtRepoRoot(ctx, cwd)))
+	fmt.Printf("  %s %s\n", mark, line)
+
 	// 6) Team default settings pull(.claude/.agents/.codex) — only when login and origin exist.
 	connectGitHubAt, githubMissing := "", false
 	if hasOrigin && authTokenPresent(cwd) {
@@ -329,6 +334,16 @@ func setupGitHubLine(connection domain.GitHubRepositoryConnection, err error) (s
 		return setupMissing, "GitHub is not connected — a maintainer of the repository connects it at " + connection.ConnectURL
 	}
 	return "", ""
+}
+
+// setupAutomaticUploadLine is what cxt setup says of automatic upload. It is
+// on by default: the hooks set up above wake the collector, which uploads the
+// sessions recorded from then on. Off is a choice made in this repository.
+func setupAutomaticUploadLine(on bool) (string, string) {
+	if on {
+		return setupDone, "automatic upload on: your Claude Code and Codex sessions in this repository go to the server on their own as you work; sessions that ended before it began go with cxt push (to stop it: cxt config segments.auto off)"
+	}
+	return setupToKnow, "automatic upload off in this repository: sessions go to the server only with cxt push (to turn it on: cxt config segments.auto on)"
 }
 
 func setupRemoteMatches(ctx context.Context, c *Container, existing, requested string) (bool, error) {
