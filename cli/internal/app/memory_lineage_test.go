@@ -40,27 +40,6 @@ func TestBoundCarriedDigestKeepsNewestTail(t *testing.T) {
 	}
 }
 
-func TestBoundCarriedDigestCapsFragmentProjection(t *testing.T) {
-	var fragments []domain.MemoryFragment
-	for i := 0; i < 8; i++ {
-		fragments = append(fragments, domain.MemoryFragment{
-			SourceSnapshot: domain.ContentHash("sha256:" + strings.Repeat(string(rune('a'+i)), 64)),
-			Summary:        strings.Repeat(string(rune('A'+i)), 80<<10),
-		})
-	}
-	got := boundCarriedDigest(domain.MemoryDigest{Fragments: fragments})
-	total := 0
-	for _, fragment := range got.Fragments {
-		total += len(fragment.Summary)
-	}
-	if total > memoryCarryBudgetBytes {
-		t.Fatalf("fragment projection = %d bytes, want <= %d", total, memoryCarryBudgetBytes)
-	}
-	if len(got.Fragments) == 0 || !strings.Contains(got.Fragments[len(got.Fragments)-1].Summary, "H") {
-		t.Fatal("fragment projection did not retain newest contribution")
-	}
-}
-
 func TestBoundCarriedDigestBoundsStructuredListsFromNewestTail(t *testing.T) {
 	d := domain.MemoryDigest{
 		KeyFacts:           []string{"old fact remains", strings.Repeat("oversized fact ", memoryCarryListBudgetBytes), "new fact remains"},

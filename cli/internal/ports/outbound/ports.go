@@ -45,8 +45,7 @@ type MemorySource interface {
 // MemoryDistiller is a port that generates MemoryDigest (summary memory) (compatibility rules).
 //
 // Native-first + fallback: Absorb if native exists (non-nil), otherwise self-distill from CIR.
-// For memory-form load (CLAUDE.md/AGENTS.md injection). Uses redacted_summary for reasoning.
-// The returned MemoryDigest.SnapshotID is empty and is post-injected by the app layer.
+// Its digests are the summaries uploaded for a session's commits. Uses redacted_summary for reasoning.
 type MemoryDistiller interface {
 	// Distill extracts summaries/key facts/unresolved tasks from native (if available) and CIR.
 	// If native==nil, self-distill from CIR (fallback). Deterministic.

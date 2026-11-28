@@ -32,7 +32,6 @@ func NewRuleDistiller() *RuleDistiller { return &RuleDistiller{} }
 // appended after the latest valid compaction summary, or after native memory
 // when no valid provider summary exists.
 func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, native *domain.NativeMemory) (domain.MemoryDigest, error) {
-	prov := cir.Envelope.SourceProvider
 	compactSummary := ""
 	compactSummaryAt := -1
 	var userMsgs, asstMsgs int
@@ -92,7 +91,6 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 			// When structure extraction succeeds, this list becomes the merge authority (parent completion not inherited).
 			OpenTasks:          tasks,
 			TasksAuthoritative: structured,
-			Provider:           prov,
 		}, nil
 	}
 	if native != nil {
@@ -100,8 +98,7 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 		// the current session after that memory was produced. Scope is consumed by
 		// the app layer; the immutable digest keeps the baseline for portability.
 		return domain.MemoryDigest{
-			Summary:  domain.AppendExtractiveConversationDelta(native.Text, extractiveConversationDigest(cir.Events)),
-			Provider: prov,
+			Summary: domain.AppendExtractiveConversationDelta(native.Text, extractiveConversationDigest(cir.Events)),
 		}, nil
 	}
 	// Codex compaction bodies can be provider-encrypted while payload.message is
@@ -117,8 +114,7 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 			cir.Envelope.GitBranch, userMsgs, asstMsgs, tools, truncate(firstUser, 120))
 	}
 	return domain.MemoryDigest{
-		Summary:  summary,
-		Provider: prov,
+		Summary: summary,
 	}, nil
 }
 

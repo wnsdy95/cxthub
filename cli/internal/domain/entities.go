@@ -38,101 +38,18 @@ type SessionDoc struct {
 	CIR CIRDocument `json:"cir"`
 }
 
-// MemoryDigest is the distilled memory (memory-form load, domain model).
+// MemoryDigest is the distilled memory of a session up to one point (domain model).
 type MemoryDigest struct {
-	// SnapshotID is the ContentHash of the target snapshot.
-	SnapshotID ContentHash `json:"snapshot_id"`
-	// PreviousMemoryHash is the causal parent of this attachment for the same
-	// snapshot. Empty means a legacy/initial root. It turns the mutable
-	// Snapshot.MemoryHash pointer into a fast-forward-only content-addressed ref.
-	PreviousMemoryHash ContentHash `json:"previous_memory_hash,omitempty"`
-	// Summary is a human-readable summary body for CLAUDE.md/AGENTS.md injection.
+	// Summary is the human-readable summary body.
 	Summary string `json:"summary"`
 	// KeyFacts is a flattened list of core decisions/restrictions/file context.
 	KeyFacts []string `json:"key_facts"`
 	// OpenTasks is a list of unresolved/next tasks.
 	OpenTasks []string `json:"open_tasks"`
-	// TasksAuthoritative means OpenTasks is the latest compressed summary structure extraction.
-	// (Inheritance signal — storage/wiring excluded). true means merge from fresh is authoritative: does not inherit from ancestor OpenTasks (blocks permanent accumulation of completed tasks — real review P1).
+	// TasksAuthoritative means OpenTasks is the tool's own structured list,
+	// extracted from its latest compaction summary. Only then are the tasks
+	// given to a tool as open tasks.
 	TasksAuthoritative bool `json:"-"`
-	// Provider is the injection target provider format hint.
-	Provider ProviderKind `json:"provider"`
-	// Fragments retain provenance for branch-wide memory projection. Summary,
-	// KeyFacts, and OpenTasks remain the rendered compatibility view. Older
-	// digests without fragments are promoted as one immutable legacy fragment.
-	Fragments []MemoryFragment `json:"fragments,omitempty"`
-	// GraftCoverage records the exact mutable graft register observed when this
-	// digest was attached. Natural parents are immutable and need no coverage
-	// marker, but a nil value is legacy/unknown and cannot prove that the
-	// corrected transitive frontier algorithm covered grafts hidden below them.
-	GraftCoverage *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
-	ClaimsVersion uint32               `json:"claims_version,omitempty"`
-}
-
-// MemoryGraftCoverage describes which transitive lineage a MemoryDigest tried
-// to project. ProjectionComplete=true makes the Merkle fingerprint a trusted
-// proof; false retains pinned/partial data but can never stop traversal. The
-// fingerprint covers natural/graft topology, every reachable graft register,
-// and ancestor memory pointers. The root register remains inline for a cheap
-// rejection before recomputing it.
-type MemoryGraftCoverage struct {
-	ProjectionVersion  uint32        `json:"projection_version"`
-	ProjectionComplete bool          `json:"projection_complete"`
-	LineageFingerprint ContentHash   `json:"lineage_fingerprint,omitempty"`
-	GraftSeq           uint64        `json:"graft_seq"`
-	GraftParents       []ContentHash `json:"graft_parents,omitempty"`
-	PinnedSources      []ContentHash `json:"pinned_sources,omitempty"`
-}
-
-// MemoryFragment is one snapshot's independently distilled contribution.
-// SourceSnapshot plus fragment content is the stable dedup key across natural
-// and graft lineages.
-type MemoryFragment struct {
-	SourceSnapshot     ContentHash   `json:"source_snapshot"`
-	Summary            string        `json:"summary,omitempty"`
-	KeyFacts           []string      `json:"key_facts,omitempty"`
-	OpenTasks          []string      `json:"open_tasks,omitempty"`
-	TasksAuthoritative bool          `json:"tasks_authoritative,omitempty"`
-	Claims             []MemoryClaim `json:"claims,omitempty"`
-}
-
-func renderMemoryFragments(out *MemoryDigest) {
-	var summaries []string
-	fallbackInsertAt := -1
-	var fallbackUsers, fallbackAssistants []string
-	var facts, tasks []string
-	for _, fragment := range out.Fragments {
-		if summary := strings.TrimSpace(fragment.Summary); summary != "" {
-			baseline, users, assistants, hasFallback := splitExtractiveFallbackSummary(summary)
-			if baseline != "" && !containsString(summaries, baseline) {
-				summaries = append(summaries, baseline)
-			}
-			if hasFallback {
-				// Keep the combined projection at the position of the newest
-				// fallback fragment. renderSeedDigest retains the newest tail, so
-				// placing it at the first fallback could evict newer unique items.
-				fallbackInsertAt = len(summaries)
-				fallbackUsers = dedupStrings(fallbackUsers, users)
-				fallbackAssistants = dedupStrings(fallbackAssistants, assistants)
-			} else if baseline == "" && !containsString(summaries, summary) {
-				summaries = append(summaries, summary)
-			}
-		}
-		facts = dedupStrings(facts, fragment.KeyFacts)
-		if fragment.TasksAuthoritative {
-			tasks = dedupStrings(fragment.OpenTasks)
-		} else {
-			tasks = dedupStrings(tasks, fragment.OpenTasks)
-		}
-	}
-	if fallbackInsertAt >= 0 {
-		summaries = append(summaries, "")
-		copy(summaries[fallbackInsertAt+1:], summaries[fallbackInsertAt:])
-		summaries[fallbackInsertAt] = RenderExtractiveFallbackSummary(fallbackUsers, fallbackAssistants)
-	}
-	out.Summary = strings.Join(summaries, "\n\n")
-	out.KeyFacts = facts
-	out.OpenTasks = tasks
 }
 
 // IsNativeMemoryProvenanceFact recognizes source labels emitted by older cxt
@@ -183,8 +100,7 @@ func NormalizeExtractiveConversationItem(text string) string {
 
 // RenderExtractiveFallbackSummary is the canonical text representation of the
 // deterministic conversation fallback. Keeping the format in the domain lets
-// provenance rendering recognize and combine exact items without fuzzy or
-// model-dependent comparison.
+// prompt projection recognize its header exactly.
 func RenderExtractiveFallbackSummary(users, assistants []string) string {
 	var b strings.Builder
 	b.WriteString(extractiveFallbackHeader)
@@ -210,97 +126,6 @@ func writeExtractiveFallbackSection(b *strings.Builder, header string, items []s
 			b.WriteByte('\n')
 		}
 	}
-}
-
-// parseExtractiveFallbackSummary accepts only the exact deterministic format
-// emitted by RenderExtractiveFallbackSummary. Any unexpected prose or section
-// order is classified as an unstructured/agent-written summary and remains
-// byte-for-byte on the legacy rendering path.
-func parseExtractiveFallbackSummary(summary string) (users, assistants []string, ok bool) {
-	lines := strings.Split(strings.TrimSpace(summary), "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != extractiveFallbackHeader {
-		return nil, nil, false
-	}
-	section := 0
-	seenUsers, seenAssistants := false, false
-	for _, raw := range lines[1:] {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		switch line {
-		case extractiveFallbackUsersHeader:
-			if seenUsers || seenAssistants {
-				return nil, nil, false
-			}
-			seenUsers, section = true, 1
-		case extractiveFallbackAssistantsHeader:
-			if seenAssistants {
-				return nil, nil, false
-			}
-			seenAssistants, section = true, 2
-		default:
-			if section == 0 || !strings.HasPrefix(line, "- ") {
-				return nil, nil, false
-			}
-			item := strings.TrimSpace(strings.TrimPrefix(line, "- "))
-			if item == "" {
-				return nil, nil, false
-			}
-			if section == 1 {
-				users = append(users, item)
-			} else {
-				assistants = append(assistants, item)
-			}
-		}
-	}
-	if len(users) == 0 && len(assistants) == 0 {
-		return nil, nil, false
-	}
-	return users, assistants, true
-}
-
-// splitExtractiveFallbackSummary recognizes both a standalone deterministic
-// fallback and the canonical "provider/native baseline + fallback" shape.
-// Strict parsing keeps arbitrary provider-authored prose byte-for-byte.
-func splitExtractiveFallbackSummary(summary string) (baseline string, users, assistants []string, ok bool) {
-	summary = strings.TrimSpace(summary)
-	if users, assistants, ok = parseExtractiveFallbackSummary(summary); ok {
-		return "", users, assistants, true
-	}
-	marker := "\n\n" + extractiveFallbackDeltaMarker + "\n"
-	if at := strings.LastIndex(summary, marker); at >= 0 {
-		candidate := summary[at+len(marker):]
-		if users, assistants, ok = parseExtractiveFallbackSummary(candidate); ok {
-			return strings.TrimSpace(summary[:at]), users, assistants, true
-		}
-	}
-	return summary, nil, nil, false
-}
-
-func containsString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
-
-// dedupStrings merges multiple lists while preserving order (prior list first) and removing duplicates.
-func dedupStrings(lists ...[]string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, l := range lists {
-		for _, s := range l {
-			if s == "" || seen[s] {
-				continue
-			}
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // NativeMemoryScope describes whether provider-owned memory follows a working
