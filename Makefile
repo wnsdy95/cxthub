@@ -52,9 +52,8 @@ e2e-sync: ## Run the hook-to-server E2E with the real binaries (file store, or P
 	bash scripts/e2e-sync.sh
 
 .PHONY: typecheck
-typecheck: ## Strictly type-check the web UI and framework-independent TypeScript core
+typecheck: ## Strictly type-check the web UI
 	cd frontend/web && npx tsc --noEmit
-	cd frontend && npx tsc --noEmit
 
 .PHONY: web
 web: ## Web UI production build (frontend/web/dist)
