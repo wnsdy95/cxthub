@@ -22,8 +22,7 @@ func TestP6PGRequirementPersistenceAndGuard(t *testing.T) {
 	if err := s.RequireDocumentIdentity(ctx, repo, domain.DocumentIdentity("future")); err == nil {
 		t.Fatal("unknown accepted")
 	}
-	branch := "other"
-	if err := s.UpdateRepoConfig(ctx, repo, &branch, nil); err != nil {
+	if err := s.UpdateRepoAbout(ctx, repo, "other", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {

@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestEndpointTransportResolvesCredentialAndDestinationTogether(t *testing.T) {
@@ -19,7 +17,7 @@ func TestEndpointTransportResolvesCredentialAndDestinationTogether(t *testing.T)
 			return "https://first.test/api/v1", "first-synthetic-secret", nil
 		}
 		return "https://second.test/api/v1", "second-synthetic-secret", nil
-	}, domain.TeamIdentity{})
+	})
 	client.httpc.Transport = reviewTransferRoundTripper(func(request *http.Request) (*http.Response, error) {
 		requests++
 		host, token := "first.test", "first-synthetic-secret"
@@ -43,7 +41,7 @@ func TestEndpointResolutionErrorDoesNotReachTransport(t *testing.T) {
 	expected := errors.New("invalid local binding")
 	client := NewResolvedBackendClient(func() (string, string, error) {
 		return "", "", expected
-	}, domain.TeamIdentity{})
+	})
 	client.httpc.Transport = reviewTransferRoundTripper(func(*http.Request) (*http.Response, error) {
 		t.Fatal("failed endpoint resolution reached network")
 		return nil, nil

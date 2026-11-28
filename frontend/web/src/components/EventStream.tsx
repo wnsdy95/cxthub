@@ -6,22 +6,21 @@ import { Markdown } from './Markdown';
 import { useDocEvent, useDocEventFragment } from '../hooks';
 import { ApiError } from '../api';
 import { DOCUMENT_RAW_EVENT_BYTES, DocumentReadLimitError } from '../documentReads';
-import { DocumentDisclosure, DocumentEventIdentity, DocumentScrollText, useDocumentPresentation, useDocumentDisclosureState } from './DocumentPresentation';
 import { documentEventIsSummary, documentSeedPrefixes } from '../documentEventClassification';
 
 type DisplayEvent = DocViewEvent & { seed_summary?: boolean; empty_reasoning?: boolean };
 
-type RowsProps = { inherited: number; repoId: string; hash: string };
+type RowsProps = { repoId: string; hash: string };
 
 /**
  * The events of a conversation, as the mode shows them. `continues` says that
  * the events do not start at the beginning of the conversation, so those
  * before their first prompt are the rest of a turn begun above.
  */
-export function EventStream({ events, inherited = 0, repoId = '', hash = '', mode = 'all', continues = false }: {
-  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string; mode?: ConversationMode; continues?: boolean;
+export function EventStream({ events, repoId = '', hash = '', mode = 'all', continues = false }: {
+  events: DisplayEvent[]; repoId?: string; hash?: string; mode?: ConversationMode; continues?: boolean;
 }) {
-  const props = { inherited, repoId, hash };
+  const props = { repoId, hash };
   if (mode === 'all') return <EventRows events={events} {...props} />;
   return conversationTurns(events).map(turn => (
     <ConversationTurnView key={(turn.prompt ?? turn.rest[0]).event_index} turn={turn} mode={mode} continues={continues} {...props} />
@@ -87,18 +86,18 @@ function ConversationAnswerView({ answer, ...props }: RowsProps & { answer: Conv
 
 type DeferredEventProps = { event: DisplayEvent; repoId: string; hash: string; index: number };
 
-function DocumentEventRow({ event, index, inherited, repoId, hash }: RowsProps & { event: DisplayEvent; index: number }) {
+function DocumentEventRow({ event, index, repoId, hash }: RowsProps & { event: DisplayEvent; index: number }) {
   if (event.empty_reasoning) return null;
-  return <DocumentEventIdentity index={index}><div data-event-index={index} className={index < inherited ? 'doc-inherited' : undefined}>
+  return <div data-event-index={index}>
     {event.deferred && event.kind !== 'compaction'
       ? <DeferredEventRow event={event} index={index} repoId={repoId} hash={hash} />
       : <EventRow ev={event} />}
-  </div></DocumentEventIdentity>;
+  </div>;
 }
 
 function DeferredEventRow({ event, repoId, hash, index }: DeferredEventProps) {
   const translate = useT();
-  const [expanded, setExpanded] = useDocumentDisclosureState('deferred');
+  const [expanded, setExpanded] = useState(false);
   const label = event.seed_summary ? translate('context.cxtSeedSummary') : event.compact_summary ? translate('context.compactSummary')
     : event.provider_tool_name || event.tool_name || event.role || event.kind;
   return <div className={`msg ${event.role ?? 'tool'}`}>
@@ -132,14 +131,15 @@ function RawEventContent(props: DeferredEventProps) {
 
 function FragmentEventContent({ repoId, hash, index }: DeferredEventProps) {
   const translate = useT();
-  const [navigation, setNavigation] = useDocumentPresentation('fragment', { offsets: [0], position: 0 });
+  const [navigation, setNavigation] = useState({ offsets: [0], position: 0 });
   const offset = navigation.offsets[navigation.position];
   const query = useDocEventFragment(repoId, hash, index, offset);
   const fragment = query.data;
   return <div className="event-fragment" data-fragment-offset={offset}>
     {fragment && <>
       <p role="status">{translate('context.eventFragment', { start: fragment.byte_offset, end: fragment.next < 0 ? fragment.total_bytes : fragment.next, total: fragment.total_bytes })}</p>
-      <DocumentScrollText name={`fragment-scroll:${offset}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '60vh', overflow: 'auto' }}>{fragment.json_fragment}</DocumentScrollText>
+      {/* An element of its own for each fragment, so each opens scrolled to its top. */}
+      <pre key={offset} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '60vh', overflow: 'auto' }}>{fragment.json_fragment}</pre>
     </>}
     {query.isFetching && <span role="status">{translate('context.loadingEvents')}</span>}
     {query.isError && <div role="alert" className="err">{query.error.message} <button onClick={() => void query.refetch()}>{translate('context.retryRead')}</button></div>}
@@ -246,10 +246,10 @@ function ToolCallRow({ ev }: { ev: CIREvent }) {
     body = <pre className="tool-cmd">$ {str(input.command)}</pre>;
   } else if (Object.keys(input).length > 0) {
     body = (
-      <DocumentDisclosure name="input" className="tool-more">
+      <details className="tool-more">
         <summary>{t('context.viewInput')}</summary>
         <pre>{JSON.stringify(input, null, 2).slice(0, 4000)}</pre>
-      </DocumentDisclosure>
+      </details>
     );
   }
 
@@ -276,13 +276,13 @@ function ToolResultRow({ ev }: { ev: CIREvent }) {
     <div className="msg tool">
       <span className="msg-role" />
       <div className="msg-body">
-        <DocumentDisclosure name="result" className="tool-more">
+        <details className="tool-more">
           <summary>
             ↳ <code>{firstLine}</code>
             {out.length > firstLine.length && ' …'}
           </summary>
           <pre>{out.slice(0, 8000)}</pre>
-        </DocumentDisclosure>
+        </details>
       </div>
     </div>
   );
@@ -297,11 +297,11 @@ function ReasoningRow({ ev }: { ev: CIREvent }) {
     <div className="msg meta">
       <span className="msg-role" />
       <div className="msg-body">
-        <DocumentDisclosure name="reasoning" className="tool-more reasoning">
+        <details className="tool-more reasoning">
           <summary>reasoning — {summary.split('\n')[0].slice(0, 80)}…</summary>
           {/* Reasoning summary also markdown text — rendered like chat body */}
           <Markdown text={mdSlice(summary, 8000)} />
-        </DocumentDisclosure>
+        </details>
       </div>
     </div>
   );
@@ -317,12 +317,12 @@ function CompactSummaryRow({ ev }: { ev: DisplayEvent }) {
     <div className="msg meta compact-summary">
       <span className="msg-role" />
       <div className="msg-body">
-        <DocumentDisclosure name="summary" className="tool-more">
+        <details className="tool-more">
           <summary>
             ◈ {t(isSeed ? 'context.cxtSeedSummary' : 'context.compactSummary')} — <code>{text.slice(0, 72)}…</code>
           </summary>
           <Markdown text={mdSlice(text, 16000)} />
-        </DocumentDisclosure>
+        </details>
       </div>
     </div>
   );

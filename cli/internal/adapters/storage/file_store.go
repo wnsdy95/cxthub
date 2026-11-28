@@ -13,39 +13,21 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
-// FileStore is a content-addressed local file store located in the .cxt/ directory of the repo root and implements the SessionStore outbound port (client-only; no SQL).
+// FileStore keeps the repository's local files in the .cxt/ directory of the
+// repo root (client-only; no SQL):
 //
-// It corresponds to a self-contained object DB for the .git directory (USER DECISION 2, compatibility rules). It adopts git's mental model of content-addressing: same bytes ⇒ same sha256 ⇒ automatic dedup.
+//	repoRoot/.cxt/objects/settingsobjs/<hex>  a settings bundle, named by its content hash
+//	repoRoot/.cxt/locks/<namespace>/<key>.lock a lock shared by local cxt processes
 //
-// Disk layout (repoRoot = root of the repo working tree):
-//
-//	repoRoot/.cxt/objects/docs/<hex>       SessionDoc(CIR canonical bytes). Filename = sha256(canonical CIR).
-//	repoRoot/.cxt/objects/snapshots/<hex>  Snapshot metadata JSON. hex = snapshot.ID(=DocHash) in hex.
-//	repoRoot/.cxt/objects/memories/<hex>   MemoryDigest JSON.
-//	repoRoot/.cxt/refs/heads/<branch>      branch ref with stable identity (JSON; legacy hash text supported).
-//	repoRoot/.cxt/refs/sessions/<name>     partial join remaining session pointers.
-//	repoRoot/.cxt/refs/tags/<name>         tag ref → target Snapshot.ID text.
-//	repoRoot/.cxt/HEAD                      symbolic ref (e.g., "ref: refs/heads/main") or direct hash.
-//
-// Note: docs and snapshots use the same hex (Snapshot.ID == DocHash), so they are separated into type-specific subdirectories.
-// The native .claude/·AGENTS.md directory is not hijacked (only written to by MemorySink at load time).
-//
-// Write: Immutable objects are written using write-temp + atomic-rename. Mutable refs/HEADs are also atomic-rename.
+// Files are written with write-temp and atomic rename.
 type FileStore struct {
 	// repoRoot is the root of the repo working tree where .cxt/ is located (store = repoRoot/.cxt).
-	repoRoot        string
-	worktreeID      string
-	gitBranch       string
-	gitCommit       string
-	docProofKeyPath string // optional, outside the replica; configured before concurrent use
-	// Pointer because worktree views copy FileStore while sharing immutable
-	// event proofs. Current repository bytes are still read on every validation.
-	docVerifier *domain.StoredDocumentVerifier
+	repoRoot string
 }
 
 // NewFileStore creates a FileStore.
 func NewFileStore(repoRoot string) *FileStore {
-	return &FileStore{repoRoot: repoRoot, docVerifier: &domain.StoredDocumentVerifier{}}
+	return &FileStore{repoRoot: repoRoot}
 }
 
 func (s *FileStore) storeDir() string { return filepath.Join(s.repoRoot, ".cxt") }
@@ -202,10 +184,6 @@ func (s *FileStore) withLegacyMutationLock(ctx context.Context, namespace, key s
 		}
 	}
 }
-
-// --- stash stack (git stash handling, .cxt/stash.json — newest at front) ---
-
-// --- uncommitted capture pointer (.cxt/pending/<sessionID>.json — session-specific upsert) ---
 
 // --- Configuration folder snapshot object (content-addressed) ---
 

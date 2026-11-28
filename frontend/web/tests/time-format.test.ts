@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { when } from '../src/snapshotFormat';
+import { when } from '../src/timeFormat';
 
 for (const value of [undefined, '', '0001-01-01T00:00:00Z', 'not a timestamp']) {
   assert.equal(when(value), '');

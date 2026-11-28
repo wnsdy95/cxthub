@@ -50,7 +50,7 @@ func (c *BackendClient) ConfirmRootCapture(ctx context.Context, repo string) err
 		DocWants      []domain.ContentHash      `json:"doc_wants"`
 		ChunkWants    []domain.ContentHash      `json:"chunk_wants"`
 	}
-	empty := negotiateReq{SnapshotHaves: []domain.ContentHash{}, DocHaves: []domain.ContentHash{}}
+	empty := negotiateReq{DocHaves: []domain.ContentHash{}}
 	if err := peer.doLimited(ctx, http.MethodPost, peer.reposPath(repo)+"/push/negotiate", empty, &negotiated, 1<<20); err != nil {
 		return err
 	}

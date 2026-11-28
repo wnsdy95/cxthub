@@ -4,7 +4,6 @@ import "strings"
 
 type UserPreferencesPatch struct {
 	Nickname *string
-	LoadMode *string
 	Avatar   *string
 	Locale   *string
 }
@@ -18,13 +17,6 @@ func ApplyUserPreferences(user User, patch UserPreferencesPatch) (User, error) {
 		if err := ValidateAvatarDataURL(user.Avatar); err != nil {
 			return User{}, err
 		}
-	}
-	if patch.LoadMode != nil {
-		loadMode := strings.TrimSpace(*patch.LoadMode)
-		if loadMode != "" && loadMode != "full" && loadMode != "reconstructed" && loadMode != "memory" {
-			return User{}, ErrValidation
-		}
-		user.LoadMode = loadMode
 	}
 	if patch.Locale != nil {
 		locale := strings.TrimSpace(*patch.Locale)

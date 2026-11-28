@@ -1061,7 +1061,7 @@ func TestRemoteGitReadIsAskedForByPushObservations(t *testing.T) {
 	if state := fixture.state(t); state.RequestedAt != nil {
 		t.Fatalf("state before the push: %+v", state)
 	}
-	if _, err := fixture.service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", "", strings.Repeat("1", 40), false, "delivery-1"); err != nil {
+	if _, err := fixture.service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", strings.Repeat("1", 40), "delivery-1"); err != nil {
 		t.Fatal(err)
 	}
 	state := fixture.state(t)

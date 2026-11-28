@@ -1,8 +1,10 @@
 # Independent local PostgreSQL services
 
 The development runtime follows the deployment boundary: separate `cxtd` API
-and `cxt-mcp` processes share PostgreSQL. The CLI's `.cxt` remains a working
-replica. This procedure does not provision Render, Vercel or any cloud database.
+and `cxt-mcp` processes share PostgreSQL. A repository's `.cxt` folder holds the
+CLI's connection settings, the mark that cxt may act there, and copies of what
+was uploaded; it is not a source of sessions. This procedure does not provision
+Render, Vercel or any cloud database.
 
 ## Prepare persistent state
 

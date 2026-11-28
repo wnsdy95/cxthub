@@ -6,29 +6,21 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
-// memoryCarryBudgetBytes bounds the summary carried forward by a merged digest
-// (#33 — bounded carry, user-approved policy). MergeDigests concatenates
-// generations oldest-first, so the forward working set grew without bound
-// (measured 768KB in the dogfood repo). The carried copy keeps the newest
-// tail; every prior generation's full digest object stays attached to its
-// ancestor snapshot (content-addressed, never deleted), so complete history
-// remains recoverable through the parent chain.
+// memoryCarryBudgetBytes bounds the summary text carried into a tool's
+// context (#33 — bounded carry, user-approved policy). The carried copy keeps
+// the newest tail; the summary the server keeps for its commit is not changed.
 const memoryCarryBudgetBytes = 256 << 10
 const memoryCarryListBudgetBytes = 64 << 10
 
-// boundCarriedDigest caps only an inherited digest before it is merged into a
-// fresh generation. The fresh digest itself is never truncated: otherwise a
-// >256KiB native memory or newly generated summary would be lossy on its first
-// storage and there would be no full ancestor object to recover it from.
+// boundCarriedDigest caps a summary read back from the server before a tool is
+// given it, in a branch summary or a fork seed. What is uploaded is never
+// changed here; only this carried copy is bounded.
 func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
-	// A carried digest becomes future provider context. Keep immutable archive
-	// objects untouched, but do not copy legacy tool facts or unattested task
-	// unions into another active generation.
+	// A carried digest becomes provider context: legacy tool facts and
+	// unattested task lists are not given to the tool.
 	d = domain.HistoricalPromptProjection(d)
-	// Legacy memories can contain recursively materialized cxt seed summaries.
-	// They remain immutable on their ancestor snapshots, but must not be copied
-	// into the active projection again. Structured facts/tasks are retained and
-	// the fresh snapshot contributes a clean extractive/provider summary.
+	// A summary can contain a cxt seed an earlier session was given. It is not
+	// given again; structured facts and tasks are kept.
 	if hasNestedSeedSummary(d.Summary) {
 		d.Summary = ""
 	}
@@ -37,46 +29,12 @@ func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 	}
 	d.KeyFacts = boundStringListTail(d.KeyFacts, memoryCarryListBudgetBytes)
 	d.OpenTasks = boundStringListTail(d.OpenTasks, memoryCarryListBudgetBytes)
-	if len(d.Fragments) > 0 {
-		remainingSummary := memoryCarryBudgetBytes
-		remainingFacts := memoryCarryListBudgetBytes
-		remainingTasks := memoryCarryListBudgetBytes
-		kept := make([]domain.MemoryFragment, 0, len(d.Fragments))
-		for i := len(d.Fragments) - 1; i >= 0; i-- {
-			fragment := d.Fragments[i]
-			if hasNestedSeedSummary(fragment.Summary) {
-				fragment.Summary = ""
-			}
-			fragment.Summary = truncateUTF8Tail(fragment.Summary, remainingSummary)
-			fragment.KeyFacts = boundStringListTail(fragment.KeyFacts, remainingFacts)
-			fragment.OpenTasks = boundStringListTail(fragment.OpenTasks, remainingTasks)
-			if fragment.Summary == "" && len(fragment.KeyFacts) == 0 && len(fragment.OpenTasks) == 0 && !fragment.TasksAuthoritative && len(fragment.Claims) == 0 {
-				continue
-			}
-			remainingSummary -= len(fragment.Summary)
-			remainingFacts -= stringListBytes(fragment.KeyFacts)
-			remainingTasks -= stringListBytes(fragment.OpenTasks)
-			kept = append(kept, fragment)
-		}
-		for left, right := 0, len(kept)-1; left < right; left, right = left+1, right-1 {
-			kept[left], kept[right] = kept[right], kept[left]
-		}
-		d.Fragments = kept
-	}
 	return d
 }
 
 func hasNestedSeedSummary(summary string) bool {
 	return strings.Contains(summary, seedSummaryPrefix) ||
 		strings.Contains(summary, "[cxt seed] Branch-switch context:")
-}
-
-func stringListBytes(items []string) int {
-	total := 0
-	for _, item := range items {
-		total += len(item)
-	}
-	return total
 }
 
 func boundStringListTail(items []string, maxBytes int) []string {

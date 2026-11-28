@@ -10,7 +10,7 @@ import (
 // The queue lock is already held. This is the same metadata lock used by opt-in
 // and PutRepo; retain it until the queue transition finishes.
 func (s *FSStore) pinWorkerRepoPolicy(ctx context.Context, repo domain.ContentHash) (func(), error) {
-	lock := s.refLock(repo, domain.RefBranch, "")
+	lock := s.repoLock(repo)
 	lock.Lock()
 	r, err := s.GetRepo(ctx, repo)
 	// Older development fixtures/layouts have unregistered legacy queues.

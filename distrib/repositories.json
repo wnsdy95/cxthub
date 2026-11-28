@@ -19,7 +19,6 @@
         ["docs/CLI.md", "docs/CLI.md"],
         ["integrations/", "integrations/"],
         ["schemas/cir.schema.json", "schemas/cir.schema.json"],
-        ["schemas/testdata/", "schemas/testdata/"],
         ["scripts/test-go-batches.py", "scripts/test-go-batches.py"],
         ["distrib/repository-templates/cli/", ""]
       ]

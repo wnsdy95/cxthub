@@ -19,7 +19,6 @@ func accountPreferencesFSUser(test *testing.T) (*store.FSStore, domain.User) {
 		Name:      "Original Provider Name",
 		Username:  "preferences-original",
 		Nickname:  "Stored Nickname",
-		LoadMode:  "full",
 		Avatar:    "data:image/png;base64,aA==",
 		Locale:    "en",
 		CreatedAt: time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC),
@@ -45,14 +44,13 @@ func TestAccountPreferencesNicknameUpdatePreservesRenamedIdentity(test *testing.
 			current.Email = "latest@example.test"
 			current.Name = "Latest Provider Name"
 			current.Nickname = "Latest Nickname"
-			current.LoadMode = "memory"
 			current.Avatar = "data:image/png;base64,ag=="
 			current.Locale = "ko"
 			if err := storage.UpsertUser(ctx, current); err != nil {
 				test.Fatal(err)
 			}
 			nextUsername := "preferences-current"
-			renamed, err := identity.UpdateProfile(ctx, current, &nextUsername, nil, nil, nil, nil)
+			renamed, err := identity.UpdateProfile(ctx, current, &nextUsername, nil, nil, nil)
 			if err != nil {
 				test.Fatalf("rename current user: %v", err)
 			}
@@ -72,7 +70,7 @@ func TestAccountPreferencesNicknameUpdatePreservesRenamedIdentity(test *testing.
 				supplied.CreatedAt = time.Date(1999, time.January, 1, 0, 0, 0, 0, time.UTC)
 			}
 			nickname := "  Chosen Nickname  "
-			updated, err := identity.UpdateProfile(ctx, supplied, nil, &nickname, nil, nil, nil)
+			updated, err := identity.UpdateProfile(ctx, supplied, nil, &nickname, nil, nil)
 			if err != nil {
 				test.Fatalf("nickname-only update with stale caller: %v", err)
 			}

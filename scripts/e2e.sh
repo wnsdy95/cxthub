@@ -249,7 +249,6 @@ expect "correct pull recovery" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
 rm .cxtsecrets
 cxt secrets pull >/dev/null 2>&1
 expect "--remember after -p omission" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
-expect "secrets round trip does not upgrade an existing repository" "$(curl -fsSb "$JA" "$B/repos/$CLIRID" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["id"], r.get("context_protocol", 0))')" "$CLIRID 0"
 
 # segevents <provider> <session> — the events of a session's conversation, read through the session.
 segevents() {

@@ -1,6 +1,7 @@
 # cxt CLI
 
-The `cxt` command-line client for portable coding-agent context.
+The `cxt` command-line client: your coding-agent sessions, kept with the Git
+commits they produced.
 
 This public repository, `wnsdy95/cxthub-cli`, is a **generated distribution** of
 the public [CXTHub monorepo](https://github.com/wnsdy95/cxthub). That monorepo is
@@ -44,9 +45,8 @@ python3 scripts/test-go-batches.py ./internal/adapters/delivery/cli/
 
 CI runs ordinary tests for the other CLI packages and bounded serial batches
 for the delivery/CLI package. The export includes `docs/CLI.md`,
-`integrations/**` including tracked dotfiles, `schemas/cir.schema.json`,
-`schemas/testdata/**`, and `scripts/test-go-batches.py` at their root-relative
-paths. The CLI reference and integration assets are required by help and
+`integrations/**` including tracked dotfiles, `schemas/cir.schema.json` and
+`scripts/test-go-batches.py` at their root-relative paths. The CLI reference and integration assets are required by help and
 integration tests; they are not optional packaging extras.
 
 The export does not include the backend or frontend. Cross-module parity checks

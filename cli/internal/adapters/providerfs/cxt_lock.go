@@ -16,9 +16,6 @@ func WithCxtLock(ctx context.Context, repoRoot, namespace, key string, mode int,
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if namespace == "first-tracking" && key == "repo" && mode == syscall.LOCK_EX && CaptureGateHeld(ctx, repoRoot) {
-		return false, domain.ErrSyncConflict
-	}
 	dir := filepath.Join(repoRoot, ".cxt", "locks", namespace)
 	if err := ValidateCxtDir(dir); err != nil {
 		return false, err
@@ -117,21 +114,4 @@ func ValidateCxtWritePath(path string) error {
 		return err
 	}
 	return nil
-}
-
-type captureGateKey struct{}
-
-func captureRoot(root string) string {
-	if abs, err := filepath.Abs(root); err == nil {
-		root = abs
-	}
-	if real, err := filepath.EvalSymlinks(root); err == nil {
-		root = real
-	}
-	return filepath.Clean(root)
-}
-
-func CaptureGateHeld(ctx context.Context, root string) bool {
-	held, _ := ctx.Value(captureGateKey{}).(string)
-	return held != "" && held == captureRoot(root)
 }

@@ -35,7 +35,7 @@ func setCaptureIdentity(cfg config) func(context.Context, string, domain.Documen
 		}
 		endpoint := binding.Endpoint
 		token := tokenForObservedDestination(cfg, endpoint, origin)
-		remote := backendclient.NewBackendClient(func() string { return endpoint }, func() string { return token }, cfg.Identity)
+		remote := backendclient.NewBackendClient(func() string { return endpoint }, func() string { return token })
 		if err := remote.ConfirmRootCapture(ctx, remotecfg.RepoIDFor(origin)); err != nil {
 			return fmt.Errorf("root capture capability was not confirmed; preference unchanged: %w", err)
 		}

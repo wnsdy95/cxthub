@@ -118,11 +118,6 @@ export async function firebaseEmailIdToken(email: string, password: string, t: (
   }
 }
 
-// Firebase Google popup → ID token.
-export async function firebaseGoogleIdToken(t: (k: MsgKey, v?: Vars) => string): Promise<string> {
-  return firebaseSocialIdToken('google', t);
-}
-
 export async function firebaseSocialIdToken(provider: 'google' | 'github', t: (k: MsgKey, v?: Vars) => string): Promise<string> {
   if (!auth) throw new Error(t('auth.firebaseNotConfigured'));
   if (provider === 'github' && !githubLoginEnabled) throw new Error(t('auth.providerUnavailable'));

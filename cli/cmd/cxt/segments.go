@@ -50,7 +50,7 @@ func newSegmentUploader(cfg config, cache string) (*app.SegmentUploadService, er
 	if err != nil {
 		return nil, err
 	}
-	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) })
 	// The label tells the uploader's own computers apart, like a device login's.
 	machine, _ := os.Hostname()
 	service := app.NewSegmentUploadService(reports, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, machine)
@@ -144,7 +144,7 @@ func newSegmentCareWithServer(cfg config) (*app.SegmentCareService, error) {
 	if err != nil {
 		return nil, err
 	}
-	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) })
 	return newSegmentCare().WithServer(remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo, uploader, time.Now).
 		WithLocalFacts(reporter, segmentLocalFacts, gitctx.CommitsOnOrigin), nil
 }
@@ -203,7 +203,7 @@ func segmentFlagValue(args []string, name string) string {
 // continued conversation the repository's server and the writers of each
 // tool's session files.
 func newSessionFork(cfg config) *app.SessionForkService {
-	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) })
 	return app.NewSessionForkService(gitctx.NewForkBranches(), remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter()).CurrentRepo,
 		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec(), domain.ProviderCodex: codec.NewCodexCodec()},
 		map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderClaude: adaptersession.NewClaudeMaterializer(), domain.ProviderCodex: adaptersession.NewCodexMaterializer()})

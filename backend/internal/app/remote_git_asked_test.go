@@ -80,7 +80,7 @@ func TestRemoteGitReaderIsToldOfEveryReadThatIsAskedFor(t *testing.T) {
 	}
 
 	fixture = remoteGitAskedFixture(t, 10*time.Minute)
-	if n, err := fixture.service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", "", strings.Repeat("1", 40), false, "delivery-1"); err != nil || n != 1 {
+	if n, err := fixture.service.ObserveRemotePush(systemTestContext(), remoteGitTestOrigin, "refs/heads/main", strings.Repeat("1", 40), "delivery-1"); err != nil || n != 1 {
 		t.Fatalf("the delivery: %d %v", n, err)
 	}
 	only(t, fixture, "a push the host delivered")

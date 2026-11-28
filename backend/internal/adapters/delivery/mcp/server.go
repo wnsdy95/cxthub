@@ -1,7 +1,7 @@
 // Package mcp exposes CXTHub's cloud repository context as a stateless,
-// read-only Streamable HTTP MCP server. Unlike `cxt mcp --local`
-// helper, this server reads through cxtd's shared storage (PostgreSQL in
-// production) and applies the same Repository viewer boundary as the REST API.
+// read-only Streamable HTTP MCP server. It reads through cxtd's shared
+// storage (PostgreSQL in production) and applies the same Repository viewer
+// boundary as the REST API.
 package mcp
 
 import (

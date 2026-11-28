@@ -1,23 +1,23 @@
 package domain
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
 
-func gitPRObservationFixture() GitRefObservation {
-	return GitRefObservation{Delivery: "delivery", RepoID: HashContent([]byte("repo")), GitOrigin: "https://github.com/acme/api.git", Source: "github-pull-request", Ref: "refs/heads/feature", Before: strings.Repeat("a", 40), After: strings.Repeat("b", 40), PullRequest: &GitPullRequestObservation{InstallationID: 789, RepositoryID: 91, ID: 701, Number: 7, Action: "synchronize", HeadRepositoryID: 91, BaseRepositoryID: 91, BaseRef: "main"}}
+func gitPushObservationFixture() GitRefObservation {
+	return GitRefObservation{Delivery: "delivery", RepoID: HashContent([]byte("repo")), GitOrigin: "https://github.com/acme/api.git", Source: "github-push", Ref: "refs/heads/feature", After: strings.Repeat("b", 40), Provider: &GitProviderObservation{InstallationID: 789, RepositoryID: 91}}
 }
 
-func TestGitPullRequestObservationDeliveryIdentity(t *testing.T) {
-	original := gitPRObservationFixture().WithID()
-	raw, err := json.Marshal(original)
-	if err != nil || strings.Contains(string(raw), "provider_event_id") || strings.Contains(string(raw), "occurred_at") {
-		t.Fatalf("absent provenance changed webhook encoding: %s %v", raw, err)
+func TestGitPushObservationDeliveryIdentity(t *testing.T) {
+	original := gitPushObservationFixture().WithID()
+	// The identity of a qualified push stays what it was before the pull
+	// request and unqualified observations were removed.
+	if original.ID != gitEvidenceKey([]string{"qualified-git-ref-observation-v1", string(original.RepoID), original.GitOrigin, "github-push", "delivery"}) {
+		t.Fatal("the identity of a delivered push changed")
 	}
-	changed := gitPRObservationFixture()
-	changed.PullRequest.Number++
+	changed := gitPushObservationFixture()
+	changed.Ref = "refs/heads/other"
 	changed.After = strings.Repeat("c", 40)
 	if changed.WithID().ID != original.ID {
 		t.Fatal("altered duplicate can evade immutable delivery conflict")
@@ -25,5 +25,17 @@ func TestGitPullRequestObservationDeliveryIdentity(t *testing.T) {
 	changed.Delivery = "another-delivery"
 	if changed.WithID().ID == original.ID {
 		t.Fatal("independent deliveries share an identity")
+	}
+}
+
+func TestGitObservationWithoutAQualifiedPushHasNoIdentity(t *testing.T) {
+	unqualified := gitPushObservationFixture()
+	unqualified.Provider = nil
+	other := gitPushObservationFixture()
+	other.Source = "reconciliation"
+	for name, observation := range map[string]GitRefObservation{"without provider": unqualified, "another source": other} {
+		if id := observation.WithID().ID; id != "" {
+			t.Fatalf("%s received the identity %s", name, id)
+		}
 	}
 }

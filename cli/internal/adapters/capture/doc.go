@@ -1,14 +1,14 @@
-// Package capture contains the concrete implementation of the CaptureSource outbound port.
+// Package capture reads and masks what cxt takes from the agent tools' files.
 //
-// It detects active session files relative to the current working directory and receives hook events.
-// Incremental capture, debouncing, and secret scrubbing are also internal logic of this package.
+// Session content is masked here before it is uploaded: the .cxtsecrets
+// values, pattern scrubbing and the repository's masking policy. The package
+// also finds Codex rollout files for the memory readers and snapshots the
+// settings folders (.claude, .agents, .codex).
 //
 // Implementations:
-//   - ClaudeCaptureSource: Detects *.jsonl files in ~/.claude/projects/<cwd-encoded>/
-//   - CodexCaptureSource: Detects rollout-*.jsonl files in ~/.codex/sessions/YYYY/MM/DD/
-//   - CaptureCoordinator: Common adjuster for automatic/manual capture (debouncing/incremental/lock gate)
+//   - CodexCaptureSource: finds rollout-*.jsonl files in ~/.codex/sessions/YYYY/MM/DD/
+//     and checks that a file is the current generation of its session.
 //
 // Dependency rules (domain model):
-//   - Only imports domain + ports.outbound + ports.inbound (SaveSession consumer).
-//   - Does not import other adapters/* packages.
+//   - Imports domain and the providerfs and gitctx adapters.
 package capture

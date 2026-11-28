@@ -23,8 +23,8 @@ intentionally share the full backend module, whose existing module path stays
 distributions, not a new Go package split.
 
 The CLI additionally includes `docs/CLI.md`, `integrations/**` including tracked
-dotfiles, `schemas/cir.schema.json`, `schemas/testdata/**`, and
-`scripts/test-go-batches.py` at those root-relative paths. Help and integration
+dotfiles, `schemas/cir.schema.json` and `scripts/test-go-batches.py` at those
+root-relative paths. Help and integration
 tests require the CLI reference and integration assets; preserve their paths
 and dotfiles rather than copying only visible directory entries. Shared
 `LICENSE`, `NOTICE`, and third-party notices come from the source; do not

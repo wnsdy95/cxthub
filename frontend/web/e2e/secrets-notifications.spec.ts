@@ -9,9 +9,6 @@ function envelope(plain: string, revision: string) {
   const ct = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
   return { revision, version: 1, kdf: 'PBKDF2-SHA256', iterations: 600000, salt_b64: salt.toString('base64'), cipher: 'AES-256-GCM', nonce_b64: nonce.toString('base64'), ciphertext_b64: ct.toString('base64'), fingerprint: createHash('sha256').update(pbkdf2Sync(pass, `cxtsecrets-fp:v1:${repo}`, 600000, 32, 'sha256')).digest('hex').slice(0, 12) };
 }
-const head = `sha256:${'a'.repeat(64)}`;
-const snapshot = { id: head, doc_hash: head, repo_id: repo, branch: 'main', parents: [], provider: 'codex', created_at: '2026-09-18T00:00:00Z', message: 'Fixture context' };
-const refs = [{ kind: 'branch', name: 'main', repo_id: repo, target: head }];
 const repository = { id: 'repository-secrets', name: 'cxthub', slug: 'cxthub', owner_id: 'owner', effective_role: 'owner', owner_username: 'alice', visibility: 'private' };
 function base({ method, pathname }: ApiRequest): ApiResponse | undefined {
   if (method !== 'GET') return undefined;
@@ -20,14 +17,7 @@ function base({ method, pathname }: ApiRequest): ApiResponse | undefined {
   if (pathname.endsWith('/members')) return { body: [{ repository_id: repository.id, user_id: 'owner', role: 'owner' }] };
   if (pathname.endsWith('/invites')) return { body: [] };
   if (pathname === '/api/v1/repos') return { body: [{ id: repo, remote_url: 'https://cxthub.com/alice/cxthub', default_branch: 'main' }] };
-  if (pathname.endsWith('/view')) return { body: { refs, snapshots: [snapshot], history: [], pending: [], unsync: [], reflog: [] } };
-  if (pathname.endsWith('/refs')) return { body: refs };
-  if (pathname.endsWith('/snapshots')) return { body: [snapshot] };
-  if (pathname.includes('/docs/')) return { body: { hash: head, envelope: { cir_version: '2', source_provider: 'codex' }, events: [], total: 0, offset: 0, next: -1, inherited: 0 } };
-  if (pathname.includes('/memories/')) return { body: null };
-  if (/\/(refs|snapshots|pending|unsync|history|reflog)$/.test(pathname)) return { body: [] };
   if (pathname.includes('/settings/')) return { body: null };
-  if (pathname.endsWith('/prs/promotions')) return { body: [] };
   return undefined;
 }
 async function openSecrets(page: Page) {

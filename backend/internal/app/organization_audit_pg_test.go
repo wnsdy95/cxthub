@@ -26,11 +26,11 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 	svc := NewService(broken, broken, broken)
 	actor := inbound.WithCorrelation(inbound.WithRepositoryActor(context.Background(), f.owner.ID), "req_write")
 	next := "next"
-	if _, err := svc.PatchRepoProfile(actor, repo.ID, inbound.RepoProfilePatch{DefaultBranch: &next}); err == nil {
+	if _, err := svc.PatchRepoProfile(actor, repo.ID, inbound.RepoProfilePatch{Description: &next}); err == nil {
 		t.Fatal("audit failure accepted")
 	}
 	current, err := st.GetRepo(ctx, repo.ID)
-	if err != nil || current.DefaultBranch != "main" {
+	if err != nil || current.Description != "" {
 		t.Fatalf("write escaped rollback: %+v %v", current, err)
 	}
 	dest, err := f.identity.CreateOrganization(ctx, f.owner, "Other", "audit-"+domain.NewID("")[:8])
@@ -46,7 +46,7 @@ func TestPGRepositoryWriteAndNamespaceTransferRequireAudit(t *testing.T) {
 		t.Fatal("transfer escaped rollback")
 	}
 	svc = NewService(st, st, st)
-	if _, err = svc.PatchRepoProfile(actor, repo.ID, inbound.RepoProfilePatch{DefaultBranch: &next}); err != nil {
+	if _, err = svc.PatchRepoProfile(actor, repo.ID, inbound.RepoProfilePatch{Description: &next}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := st.ListOrganizationAudit(ctx, f.organization.ID, 100)

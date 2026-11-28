@@ -22,7 +22,7 @@ import (
 // origin: in every repository of that origin the branch ledger learns that the
 // branch name is alive or gone, and the remote is read again soon. It returns
 // how many repositories that were.
-func (s *Service) ObserveRemotePush(ctx context.Context, origin, ref, before, after string, forced bool, delivery string) (int, error) {
+func (s *Service) ObserveRemotePush(ctx context.Context, origin, ref, after, delivery string) (int, error) {
 	repos, err := s.meta.ListRepos(ctx, "default")
 	if err != nil {
 		return 0, err
@@ -32,7 +32,9 @@ func (s *Service) ObserveRemotePush(ctx context.Context, origin, ref, before, af
 		if origin == "" || normalizeGitURL(origin) != normalizeGitURL(r.GitRemoteURL) {
 			continue
 		}
-		observation := domain.GitRefObservation{RepoID: r.ID, GitOrigin: r.GitRemoteURL, Source: "github-push", Ref: ref, Before: before, After: after, Forced: forced, Delivery: delivery}.WithID()
+		// The push stands for one the GitHub App delivered, the only kind the
+		// ledger takes.
+		observation := domain.GitRefObservation{RepoID: r.ID, GitOrigin: r.GitRemoteURL, Source: "github-push", Ref: ref, After: after, Delivery: delivery, Provider: &domain.GitProviderObservation{}}.WithID()
 		err = repositoryWriteError(evidenceWriteContext(ctx), s, r.ID, func(tx context.Context) error {
 			current, err := s.meta.GetRepo(tx, r.ID)
 			if err != nil {

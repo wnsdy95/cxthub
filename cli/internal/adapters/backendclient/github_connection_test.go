@@ -25,7 +25,7 @@ func TestReadGitHubConnection(t *testing.T) {
 		_, _ = w.Write([]byte(answer))
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	ctx := context.Background()
 
 	answer = `{"state":"not_connected","connect_url":"https://example.test/connect/github"}`

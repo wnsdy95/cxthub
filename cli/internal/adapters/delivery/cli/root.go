@@ -166,7 +166,7 @@ func Run(c *Container, args []string) error {
 		if cmd == "repo" {
 			remote = parsed.last() // repo create <github-url>
 		}
-		out, err := c.Init.Init(ctx, inbound.InitInput{Cwd: cwd, RemoteURL: remote})
+		out, err := c.Init.Init(ctx, inbound.InitInput{Cwd: cwd})
 		if err != nil {
 			return err
 		}
@@ -176,7 +176,7 @@ func Run(c *Container, args []string) error {
 		}
 		_ = githooks.EnsureExcluded(cwd) // .git/info/exclude local augmentation (user can remove from .gitignore and it persists)
 		if n, created := capture.GenerateFromEnv(cwd); created {
-			fmt.Printf(".cxtsecrets created — %d values extracted from .env (automatically masked during context storage)\n", n)
+			fmt.Printf(".cxtsecrets created — %d values extracted from .env (masked in what is uploaded)\n", n)
 		}
 		// git hook auto-install — "using git means cxt comes with it" (--no-hooks to opt out).
 		if !parsed.has("--no-hooks") {
@@ -733,7 +733,7 @@ func positionals(args []string) []string {
 	return out
 }
 
-// firstPositional returns the first argument that is not a flag (e.g., checkout <ref>).
+// firstPositional returns the first argument that is not a flag (e.g., setup <url>).
 func firstPositional(args []string) string {
 	if pos := positionals(args); len(pos) > 0 {
 		return pos[0]

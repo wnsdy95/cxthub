@@ -12,7 +12,7 @@ import {
 } from '../anchoredSessions';
 import { DocumentReadScope } from '../documentReadScope';
 import { DocumentEventReaderContext, type DocumentEventReader } from '../documentEventReader';
-import { when } from '../snapshotFormat';
+import { when } from '../timeFormat';
 import { useT } from '../i18n';
 import { AppLink } from './AppLink';
 import { EventStream } from './EventStream';

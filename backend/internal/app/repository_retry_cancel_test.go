@@ -39,7 +39,7 @@ func TestRepositoryWorkRetryCancellationSuppressesSuccessResult(test *testing.T)
 			completed := 0
 			output, err := repositoryWriteWithWork(ctx, work, repo, func(bound context.Context) (inbound.CommitOutput, error) {
 				afterRepositoryCommit(bound, func() { completed++ })
-				return inbound.CommitOutput{StoredDocs: 1, StoredSnapshots: 1}, nil
+				return inbound.CommitOutput{StoredDocs: 1, DedupedDocs: 1}, nil
 			})
 			if !errors.Is(err, context.Canceled) || output != (inbound.CommitOutput{}) || completed != 0 || wave42Count(metadata.calls, "write") != 1 {
 				test.Fatal("cancelled retry exposed uncommitted success or ran completion/retry", output, err, completed, metadata.calls)

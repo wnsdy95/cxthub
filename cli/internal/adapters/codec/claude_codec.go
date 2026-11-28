@@ -74,16 +74,11 @@ type claudeBlock struct {
 	Content   json.RawMessage        `json:"content,omitempty"`
 }
 
-// DecodeAppend consumes complete native records, carrying only envelope state.
-// Previously normalized events are immutable and need not be decoded again.
-func (c *ClaudeCodec) DecodeAppend(ctx context.Context, raw []byte, previous domain.Envelope, start int) (domain.CIRDocument, error) {
-	doc, _, err := c.DecodeAppendCounted(ctx, raw, previous, start)
-	return doc, err
-}
-
-// DecodeAppendCounted is DecodeAppend that also says how many events each
-// record gave, in order: one count for every line that is not empty. A record
-// is converted on its own, so the counts place every record in the events.
+// DecodeAppendCounted consumes complete native records, carrying only envelope
+// state; previously normalized events are immutable and need not be decoded
+// again. It also says how many events each record gave, in order: one count
+// for every line that is not empty. A record is converted on its own, so the
+// counts place every record in the events.
 func (c *ClaudeCodec) DecodeAppendCounted(_ context.Context, raw []byte, previous domain.Envelope, start int) (domain.CIRDocument, []int, error) {
 	doc := domain.CIRDocument{Envelope: previous}
 	doc.Envelope.SourceModels = append([]string(nil), previous.SourceModels...)

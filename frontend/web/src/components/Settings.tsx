@@ -52,7 +52,6 @@ export function AccountSettings({ user }: { user: User }) {
   const t = useT();
   const [nickname, setNickname] = useState(user.nickname ?? '');
   const [username, setUsername] = useState(user.username);
-  const [loadMode, setLoadMode] = useState(user.load_mode ?? '');
   const [avatar, setAvatar] = useState(safeAvatarUrl(user.avatar));
   const [avatarErr, setAvatarErr] = useState('');
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -74,21 +73,19 @@ export function AccountSettings({ user }: { user: User }) {
   }
 
   const usernameChanged = username.trim() !== user.username;
-  const changed = usernameChanged || nickname.trim() !== (user.nickname ?? '') || loadMode !== (user.load_mode ?? '') || avatar !== safeAvatarUrl(user.avatar);
+  const changed = usernameChanged || nickname.trim() !== (user.nickname ?? '') || avatar !== safeAvatarUrl(user.avatar);
 
   function submit(e: FormEvent) {
     e.preventDefault();
     if (save.isPending || avatarBusy || !changed) return;
-    const patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string } = {};
+    const patch: { username?: string; nickname?: string; avatar?: string } = {};
     if (nickname.trim() !== (user.nickname ?? '')) patch.nickname = nickname.trim();
     if (usernameChanged) patch.username = username.trim();
-    if (loadMode !== (user.load_mode ?? '')) patch.load_mode = loadMode;
     if (avatar !== safeAvatarUrl(user.avatar)) patch.avatar = avatar;
     save.mutate(patch, {
       onSuccess: (updated) => {
         setUsername(updated.username);
         setNickname(updated.nickname ?? '');
-        setLoadMode(updated.load_mode ?? '');
         setAvatar(safeAvatarUrl(updated.avatar));
       },
     });
@@ -178,24 +175,6 @@ export function AccountSettings({ user }: { user: User }) {
             <div><span className="account-field-label">{t('common.language')}</span><p className="hint">{t('accountUI.languageHint')}</p></div>
             <LocaleSwitcher className="in-form" />
           </div>
-
-          <div className="account-field">
-          <label htmlFor="account-load-mode">
-            {t('settings.loadModeLabel')}
-          </label>
-            <select id="account-load-mode" value={loadMode} onChange={(e) => setLoadMode(e.target.value)}>
-              <option value="">{t('settings.loadDefault')}</option>
-              <option value="full">{t('settings.loadFull')}</option>
-              <option value="reconstructed">{t('settings.loadReconstructed')}</option>
-              <option value="memory">{t('settings.loadMemory')}</option>
-            </select>
-          <details className="account-context-help">
-          <summary>{t('accountUI.contextHelp')}</summary>
-          <p className="hint">
-            <Rich>{t('settings.loadModeHint')}</Rich>
-          </p>
-          </details>
-          </div>
           </section>
 
           <div className="account-savebar">
@@ -234,7 +213,7 @@ export function AccountSettings({ user }: { user: User }) {
   );
 }
 
-// ArchiveSection — Archive toggle (read-only). Deletion in P1 is not possible, so archiving is the endpoint.
+// ArchiveSection is the archive toggle (read-only). A repository cannot be deleted, so archiving is how one is retired.
 function ArchiveSection({ repositoryMetadata }: { repositoryMetadata: Repository }) {
   const t = useT();
   const save = useUpdateRepository();

@@ -161,7 +161,7 @@ func (s *Server) Handler() http.Handler {
 	// Deployment/LoadBalancer health check. A process-level probe that does not expose authentication/storage content.
 	mux.HandleFunc("GET /api/v1/health", s.health)
 
-	// 5-tier role gate (guard): viewer=Read / puller=Team asset pull / member=Context write
+	// 5-tier role gate (guard): viewer=Read / puller=Team asset pull / member=Session upload and notes
 	// / maintainer=Team asset write (+policy by action) / owner=Operations.
 	// GET at viewer level is allowed for public repositories. Detailed rules are in requireRepoRole.
 	mux.HandleFunc("GET /api/v1/repos", s.listRepos)
@@ -204,19 +204,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings/{kind}", s.requireUser(s.putSettings))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/secrets", s.requireUser(s.putSecrets))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/secrets", s.guard(domain.RolePuller, s.getSecrets))
-	// Commit attachment settings object: Write = context push part (member), Read = pull layer (puller).
-	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
-	// Push pending (unsync) pointer: Key = (authenticated user, branch) — write/delete only by owner.
-	// {name...}: Branch names can include slashes like in git (feature/login, etc.) — full matching of the rest.
 
+	// Conversation document upload (member): negotiation, chunks, durable document jobs and objects.
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/negotiate", s.guard(domain.RoleMember, s.pushNegotiate))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/chunks", s.guard(domain.RoleMember, s.pushChunks))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/doc-jobs", s.guard(domain.RoleMember, s.submitDocFinalization))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/push/doc-jobs/{jobID}", s.guard(domain.RoleMember, s.getDocFinalization))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
-
-	// Actions exposed by the server. Provider-session restoration remains a local
-	// CLI operation and is deliberately absent from the HTTP surface.
 
 	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)
@@ -489,7 +483,7 @@ func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, actio
 	return true
 }
 
-// patchAbout updates repo About (description/website/topics) + structure settings (default branch, protected branches)
+// patchAbout updates repo About (description/website/topics) and the document identity requirement
 // (route with maintainer gate).
 func (s *Server) patchAbout(w http.ResponseWriter, r *http.Request) {
 	var body inbound.RepoProfilePatch
@@ -586,10 +580,11 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
+// negotiateBody leaves out snapshot_haves, which older clients still send:
+// the decoder ignores it.
 type negotiateBody struct {
-	SnapshotHaves []domain.ContentHash `json:"snapshot_haves"`
-	DocHaves      []domain.ContentHash `json:"doc_haves"`
-	ChunkHaves    []domain.ContentHash `json:"chunk_haves"`
+	DocHaves   []domain.ContentHash `json:"doc_haves"`
+	ChunkHaves []domain.ContentHash `json:"chunk_haves"`
 }
 
 func (s *Server) pushNegotiate(w http.ResponseWriter, r *http.Request) {
@@ -597,7 +592,7 @@ func (s *Server) pushNegotiate(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Negotiate(r.Context(), inbound.PushNegotiateInput{RepoID: s.repoID(r), SnapshotHaves: body.SnapshotHaves, DocHaves: body.DocHaves, ChunkHaves: body.ChunkHaves})
+	out, err := s.b.Negotiate(r.Context(), inbound.PushNegotiateInput{RepoID: s.repoID(r), DocHaves: body.DocHaves, ChunkHaves: body.ChunkHaves})
 	s.respond(w, out, err)
 }
 
@@ -620,7 +615,9 @@ func (s *Server) pushChunks(w http.ResponseWriter, r *http.Request) {
 }
 
 type objectsBody struct {
-	Snapshots    []domain.Snapshot     `json:"snapshots"`
+	// Snapshots holds the captures an older client may still send. They are
+	// only counted, so that the batch can be refused.
+	Snapshots    []json.RawMessage     `json:"snapshots"`
 	Docs         []domain.SessionDoc   `json:"docs"`
 	ChunkedDocs  []inbound.ChunkedDoc  `json:"chunked_docs"`
 	ChunkObjects []inbound.ChunkObject `json:"chunk_objects"`
@@ -636,7 +633,7 @@ func (s *Server) pushObjects(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.documentPublications.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Snapshots: body.Snapshots, Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
+	out, err := s.documentPublications.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Captures: len(body.Snapshots), Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
 	s.respond(w, out, err)
 }
 
@@ -854,7 +851,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			h.Set("Access-Control-Expose-Headers", "Retry-After")
 			h.Add("Vary", "Origin")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cxt-CSRF, X-Cxt-Identity, X-Cxt-Doc-Identities")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cxt-CSRF, X-Cxt-Doc-Identities")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

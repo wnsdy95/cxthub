@@ -36,7 +36,7 @@ func endpointCauseClient(t *testing.T, connectionFailures int, failure func(*htt
 		}
 		return capturePushJSON(t, request, 200, map[string]any{"id": repoID, "remote_url": endpointTestIdentity, "repository_id": "repository-fixture", "default_branch": "main", "context_protocol": 1}), nil
 	})
-	client := backendclient.NewBackendClient(func() string { return endpointTestDestination }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := backendclient.NewBackendClient(func() string { return endpointTestDestination }, func() string { return "synthetic-token" })
 	return client, binding, &calls
 }
 

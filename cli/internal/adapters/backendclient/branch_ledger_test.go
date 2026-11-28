@@ -34,7 +34,7 @@ func TestRegisterBranchIDsReportsNamesAndIDs(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	results, err := client.RegisterBranchIDs(context.Background(), repo, []domain.BranchRegistration{{Name: "topic", LocalID: a}})
 	want := []domain.BranchRegistrationResult{{Name: "topic", LocalID: a, LedgerID: strings.Repeat("f", 32), Outcome: "joined"}}
 	if err != nil || !reflect.DeepEqual(results, want) {

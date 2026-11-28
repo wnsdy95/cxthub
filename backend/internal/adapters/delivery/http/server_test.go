@@ -456,7 +456,7 @@ func TestInternalErrorMessageIsRedacted(t *testing.T) {
 	}
 }
 
-// TestDocLessSnapshotRejected: If DocHash points to a doc that is not pushed and not in the store, the snapshot must be rejected (object-priority invariant S2 — prevent dangling doc reference, backlog #5).
+// TestDocLessSnapshotRejected: a capture (snapshot) an older client still sends is refused at the HTTP boundary, even when its document is missing.
 func TestDocLessSnapshotRejected(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
@@ -476,10 +476,11 @@ func TestDocLessSnapshotRejected(t *testing.T) {
 	}
 	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid))
 
-	// Don't push snapshots without the doc; push only the hash → reject (422).
+	// A capture is no longer stored: an older client that still sends one, here
+	// without its document, is refused (422).
 	missing := domain.ContentHash("sha256:" + strings.Repeat("d", 64))
-	snap := domain.Snapshot{ID: missing, RepoID: rid, Branch: "main", DocHash: missing, Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull, Message: "docless"}
-	if code := doJSON(t, "POST", base+"/push/objects", map[string]any{"snapshots": []domain.Snapshot{snap}}, nil); code != http.StatusUnprocessableEntity {
+	snap := map[string]any{"id": missing, "repo_id": rid, "branch": "main", "doc_hash": missing, "provider": "claude", "fidelity": "full", "message": "docless"}
+	if code := doJSON(t, "POST", base+"/push/objects", map[string]any{"snapshots": []any{snap}}, nil); code != http.StatusUnprocessableEntity {
 		t.Fatalf("push code for snapshot without doc %d (want 422)", code)
 	}
 }

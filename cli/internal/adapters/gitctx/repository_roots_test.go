@@ -106,8 +106,8 @@ func TestContextRootRequiresInitializedHeadInGitRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if root, ok := ExistingContextRoot(context.Background(), repo); !ok || root != canonicalRoot(repo) {
-		t.Fatalf("existing root=%q ok=%v, want residue root %q", root, ok, canonicalRoot(repo))
+	if state := InspectContextRoot(context.Background(), repo); !state.Exists || state.Root != canonicalRoot(repo) {
+		t.Fatalf("existing root=%q exists=%v, want residue root %q", state.Root, state.Exists, canonicalRoot(repo))
 	}
 	if root, ok := ContextRoot(context.Background(), repo); ok || root != "" {
 		t.Fatalf("directory-only residue enabled capture: root=%q ok=%v", root, ok)

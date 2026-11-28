@@ -1,7 +1,7 @@
 // Package store provides server-side metadata/blob storage adapters.
 //
 // The default adapter is FSStore (file-based, content-addressed), operating end-to-end without external dependencies (stdlib).
-// It enables REST server push/pull operations (demonstrable without a Postgres server).
+// It serves the whole REST server, uploads included, without a Postgres server.
 // The production target PostgreSQL adapter is gated under //go:build postgres in a separate file (pgx), and store.Open(factory) selects the appropriate implementation based on the build tag.
 package store
 
@@ -39,12 +39,11 @@ type Store interface {
 //	dataDir/repos/<repoHex>/repo.json
 //	dataDir/repos/<repoHex>/objects/docs/<docHex>          (SessionDoc.CIR JSON; key = client-provided doc.Hash)
 //	dataDir/repos/<repoHex>/objects/chunks/<chunkHex>      (compressed transcript component)
-//	dataDir/repos/<repoHex>/objects/memories/<hex>         (MemoryDigest JSON)
-//	dataDir/repos/<repoHex>/objects/memory_chunks/<hex>    (compressed memory component)
-//	dataDir/repos/<repoHex>/snapshots/<idHex>              (Snapshot metadata JSON; key = client-provided snap.ID)
-//	dataDir/repos/<repoHex>/refs/heads/<name> · refs/sessions/<name> · refs/tags/<name> · HEAD
-//	dataDir/repos/<repoHex>/memmeta/<snapHex>.json         (MemoryDigest metadata)
-//	dataDir/repos/<repoHex>/pending/<sessionID>.json       (uncommitted capture pointer)
+//	dataDir/repos/<repoHex>/settings/<kind>.json           (team default settings bundle)
+//	dataDir/repos/<repoHex>/secrets.enc.json               (secret ciphertext envelope)
+//
+// Session reports, notes, the branch ledger, the remote Git state and the
+// document read indexes keep their own files beside these.
 //
 // Content-addressing uses client-provided hash as key (server is consumer of body integrity, data model Q3).
 type FSStore struct {
@@ -205,11 +204,6 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 			return domain.Repo{}, err
 		}
 	}
-	protocol, err := s.contextProtocol(id)
-	if err != nil {
-		return domain.Repo{}, err
-	}
-	r.ContextProtocol = protocol
 	r.LocalPath = ""
 	r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 	r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
@@ -221,7 +215,7 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 	if err := validateHash(id); err != nil {
 		return err
 	}
-	lock := s.refLock(id, domain.RefBranch, "")
+	lock := s.repoLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 	r, err := s.GetRepo(ctx, id)
@@ -229,28 +223,6 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 		return err
 	}
 	r.Description, r.Website, r.Topics = description, website, topics
-	data, _ := json.Marshal(r)
-	return writeAtomic(filepath.Join(s.repoDir(id), "repo.json"), data)
-}
-
-// UpdateRepoConfig updates the default branch and protected branch settings (nil = no change).
-func (s *FSStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	if err := validateHash(id); err != nil {
-		return err
-	}
-	lock := s.refLock(id, domain.RefBranch, "")
-	lock.Lock()
-	defer lock.Unlock()
-	r, err := s.GetRepo(ctx, id)
-	if err != nil {
-		return err
-	}
-	if defaultBranch != nil && *defaultBranch != "" {
-		r.DefaultBranch = *defaultBranch
-	}
-	if protectDefault != nil {
-		r.ProtectDefault = *protectDefault
-	}
 	data, _ := json.Marshal(r)
 	return writeAtomic(filepath.Join(s.repoDir(id), "repo.json"), data)
 }
@@ -343,17 +315,17 @@ func regularObjectExists(path string) (bool, error) {
 	return true, nil
 }
 
-// --- Ref / manifest ---
+// --- Repository lock ---
 
-var fsRefLocks sync.Map
+var fsRepoLocks sync.Map
 
-func (s *FSStore) refLock(repoID domain.ContentHash, _ domain.RefKind, _ string) *sync.Mutex {
+// repoLock serializes every read-modify-write of one repository's metadata
+// files, whichever store value in this process opened the data directory.
+func (s *FSStore) repoLock(repoID domain.ContentHash) *sync.Mutex {
 	key := s.dataDir + "\x00" + string(repoID)
-	lock, _ := fsRefLocks.LoadOrStore(key, &sync.Mutex{})
+	lock, _ := fsRepoLocks.LoadOrStore(key, &sync.Mutex{})
 	return lock.(*sync.Mutex)
 }
-
-// --- Memory Meta ---
 
 // --- BlobStore ---
 
@@ -473,7 +445,7 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			return domain.Repo{}, err
 		}
 	}
-	lock := s.refLock(repo.ID, domain.RefBranch, "")
+	lock := s.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
 	if err := validateHash(repo.ID); err != nil {
@@ -484,7 +456,6 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			return domain.Repo{}, err
 		}
 	}
-	repo.ContextProtocol = 0
 	repo.LocalPath = ""
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
 	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)
@@ -497,8 +468,8 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			existing.RepositoryID = repo.RepositoryID
 			changed = true
 		}
-		// Registration may fill an unknown origin, but cannot replace established
-		// identity or reset an owner-configured default branch.
+		// Registration may fill an unknown origin or default branch, but cannot
+		// replace established identity or a default branch already set.
 		if repo.DefaultBranch != "" && existing.DefaultBranch == "" {
 			existing.DefaultBranch = repo.DefaultBranch
 			changed = true

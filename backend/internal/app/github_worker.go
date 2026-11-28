@@ -402,10 +402,8 @@ func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDeliver
 		Repository struct {
 			ID int64 `json:"id"`
 		} `json:"repository"`
-		Ref    string `json:"ref"`
-		Before string `json:"before"`
-		After  string `json:"after"`
-		Forced bool   `json:"forced"`
+		Ref   string `json:"ref"`
+		After string `json:"after"`
 	}
 	if json.Unmarshal(j.Body, &p) != nil || p.Installation.ID <= 0 || p.Repository.ID <= 0 {
 		return domain.ErrValidation
@@ -439,7 +437,7 @@ func (g *GitHubWorker) applyDelivery(ctx context.Context, j domain.GitHubDeliver
 				observed := time.Now().UTC()
 				if j.Kind == "push" {
 					identity := &domain.GitProviderObservation{InstallationID: c.Installation.ID, RepositoryID: b.ExternalID}
-					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-push", Ref: p.Ref, Before: zero(p.Before), After: zero(p.After), Forced: p.Forced, Delivery: j.ID, Provider: identity}.WithID()
+					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-push", Ref: p.Ref, After: zero(p.After), Delivery: j.ID, Provider: identity}.WithID()
 					if e := recordBranchLedgerObservation(tx, g.metadata, observation, observed); e != nil {
 						return e
 					}

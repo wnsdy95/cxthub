@@ -45,7 +45,7 @@ func TestCodexItemsBecomeEventsByTheirPublishedShape(t *testing.T) {
 		codexTestItem("t1", 1018, map[string]any{"type": "contextCompaction", "id": "x1"}),
 		codexTestItem("t1", 1019, map[string]any{"type": "agentMessage", "id": "g2", "text": "Committed the parser.", "phase": "final"}),
 	}
-	doc, err := DecodeCodexItems(items, domain.Envelope{}, 7)
+	doc, _, err := DecodeCodexItemsCounted(items, domain.Envelope{}, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestCodexItemsOfAnotherVersionAreStillRead(t *testing.T) {
 		codexTestItem("t1", 0, map[string]any{"type": "commandExecution", "id": "n4", "command": []any{"git", "status"}, "exitCode": "zero"}),
 		codexTestItem("t1", 0, map[string]any{"type": "reasoning", "id": "n5"}),
 	}
-	doc, err := DecodeCodexItems(items, domain.Envelope{SourceModel: "kept"}, 0)
+	doc, _, err := DecodeCodexItemsCounted(items, domain.Envelope{SourceModel: "kept"}, 0)
 	if err != nil || len(doc.Events) != 5 || doc.Envelope.SourceModel != "kept" {
 		t.Fatalf("events: %+v %v", doc.Events, err)
 	}
@@ -164,11 +164,11 @@ func TestCodexItemsOfAnotherVersionAreStillRead(t *testing.T) {
 
 	// What is not an item at all is refused.
 	for name, raw := range map[string]string{"not JSON": `{"type":`, "not an object": `["agentMessage"]`, "no type": `{"id":"x"}`} {
-		if _, err := DecodeCodexItems([]CodexItem{{JSON: json.RawMessage(raw)}}, domain.Envelope{}, 0); err == nil {
+		if _, _, err := DecodeCodexItemsCounted([]CodexItem{{JSON: json.RawMessage(raw)}}, domain.Envelope{}, 0); err == nil {
 			t.Fatalf("%s was converted", name)
 		}
 	}
-	if empty, err := DecodeCodexItems(nil, domain.Envelope{}, 3); err != nil || len(empty.Events) != 0 {
+	if empty, _, err := DecodeCodexItemsCounted(nil, domain.Envelope{}, 3); err != nil || len(empty.Events) != 0 {
 		t.Fatalf("no items: %+v %v", empty, err)
 	}
 }
@@ -190,9 +190,6 @@ func TestCodexItemsAreCountedAndConvertInRunsAsInOne(t *testing.T) {
 	// A command that ended is a call and its result; one still running is a call.
 	if !reflect.DeepEqual(counts, []int{1, 2, 1, 1}) || len(whole.Events) != 5 {
 		t.Fatalf("counts=%v events=%d", counts, len(whole.Events))
-	}
-	if plain, err := DecodeCodexItems(items, domain.Envelope{}, 0); err != nil || !reflect.DeepEqual(plain, whole) {
-		t.Fatalf("the plain form differs: %v", err)
 	}
 	if doc, counts, err := DecodeCodexItemsCounted(nil, domain.Envelope{}, 0); err != nil || len(counts) != 0 || len(doc.Events) != 0 {
 		t.Fatalf("no items: counts=%v events=%d %v", counts, len(doc.Events), err)

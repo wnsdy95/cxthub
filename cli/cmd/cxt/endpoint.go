@@ -33,8 +33,7 @@ func verifyEndpointRepository(ctx context.Context, client *backendclient.Backend
 
 // endpointVerificationCause keeps the classifiable cause (HTTP status/code,
 // timeout, cancellation) while dropping the request URL, whose query carries
-// the remote URL. Transient causes are retried by the client under an upload
-// policy before they reach here.
+// the remote URL.
 func endpointVerificationCause(err error) error {
 	var transport *url.Error
 	if errors.As(err, &transport) {
@@ -76,7 +75,7 @@ func setRemoteEndpoint(cfg config) func(context.Context, remotecfg.Observation, 
 		if token == "" {
 			return fmt.Errorf("destination login required: cxt login --server %s://%s; config unchanged", server.Scheme, server.Host)
 		}
-		client := backendclient.NewBackendClient(func() string { return endpoint }, func() string { return token }, domain.TeamIdentity{})
+		client := backendclient.NewBackendClient(func() string { return endpoint }, func() string { return token })
 		if err := client.ConfirmAuthenticatedConnection(ctx); err != nil {
 			return err
 		}

@@ -8,44 +8,35 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
-	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // BackendClient implements RemoteSync for synchronous REST sync with the central server (sync protocol).
 //
 // Uses net/http (stdlib). baseURL is the central server REST base (e.g., http://127.0.0.1:8080/api/v1).
-// It attaches Authorization: Bearer and X-Cxt-Identity headers to requests.
+// It attaches the Authorization: Bearer header to requests.
 type BackendClient struct {
 	// baseURL/token is resolved at request time — supports lazy evaluation for processes starting after remote add or cxt login.
 	baseURL          func() string
 	token            func() string
-	identity         domain.TeamIdentity
 	httpc            *http.Client
 	resolveTransport func() (string, string, error)
-	// chunks accesses local chunk store (optional — for pull delta, inject with SetChunkLocal).
-	chunks       ChunkLocal
-	memoryReuse  memoryReuseCache
-	metadata     outbound.MetadataCheckpointStore
-	catalogCache outbound.CatalogCacheStore
-	// pace spaces patient bulk batches after recent server backpressure.
-	pace uploadPacer
 }
 
 // NewBackendClient creates a BackendClient.
-// Timeout 30s: git hooks (pre-push/post-checkout, etc.) use this client for sync network, so infinite wait blocks git command itself (review #2 — fail-open contract hole).
-func NewBackendClient(baseURL, token func() string, identity domain.TeamIdentity) *BackendClient {
-	return &BackendClient{baseURL: baseURL, token: token, identity: identity, httpc: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+// Timeout 30s: agent tool hooks read branch summaries through this client, so an
+// infinite wait would block the agent session itself.
+func NewBackendClient(baseURL, token func() string) *BackendClient {
+	return &BackendClient{baseURL: baseURL, token: token, httpc: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
-func NewResolvedBackendClient(resolve func() (string, string, error), identity domain.TeamIdentity) *BackendClient {
-	client := NewBackendClient(func() string { endpoint, _, _ := resolve(); return endpoint }, func() string { _, token, _ := resolve(); return token }, identity)
+func NewResolvedBackendClient(resolve func() (string, string, error)) *BackendClient {
+	client := NewBackendClient(func() string { endpoint, _, _ := resolve(); return endpoint }, func() string { _, token, _ := resolve(); return token })
 	client.resolveTransport = resolve
 	return client
 }
@@ -57,32 +48,31 @@ func (c *BackendClient) transport() (string, string, error) {
 	return c.baseURL(), c.token(), nil
 }
 
-// Freeze the destination and credentials for HTTP requests without copying the
-// owning client's mutex-protected caches or local synchronization stores.
+// Freeze the destination and credentials for HTTP requests, so every request
+// of one operation goes to the same server with the same credential even when
+// the configured transport changes meanwhile.
 func (c *BackendClient) frozenRequestClient(endpoint, token string) *BackendClient {
 	return &BackendClient{
-		baseURL:  func() string { return endpoint },
-		token:    func() string { return token },
-		identity: c.identity,
-		httpc:    c.httpc,
+		baseURL: func() string { return endpoint },
+		token:   func() string { return token },
+		httpc:   c.httpc,
 	}
 }
 
 // --- wire DTO (same snake_case as backend) ---
 
 type negotiateReq struct {
-	SnapshotHaves []domain.ContentHash `json:"snapshot_haves"`
-	DocHaves      []domain.ContentHash `json:"doc_haves"`
+	DocHaves []domain.ContentHash `json:"doc_haves"`
 	// ChunkHaves is the hash of chunks to send — chunk server responds with only missing chunks.
 	ChunkHaves []domain.ContentHash `json:"chunk_haves,omitempty"`
 }
 type negotiateResp struct {
-	DocIdentitiesSupported          []domain.DocumentIdentity `json:"doc_identities_supported,omitempty"`
-	RootPublicationEnabled          bool                      `json:"root_publication_enabled,omitempty"`
-	PreparedMemoryArchivesSupported bool                      `json:"prepared_memory_archives_supported,omitempty"`
-	AsyncDocsSupported              bool                      `json:"async_docs_supported,omitempty"`
-	SnapshotWants                   []domain.ContentHash      `json:"snapshot_wants"`
-	DocWants                        []domain.ContentHash      `json:"doc_wants"`
+	DocIdentitiesSupported []domain.DocumentIdentity `json:"doc_identities_supported,omitempty"`
+	RootPublicationEnabled bool                      `json:"root_publication_enabled,omitempty"`
+	AsyncDocsSupported     bool                      `json:"async_docs_supported,omitempty"`
+	// SnapshotWants must stay empty: this client never offers snapshots.
+	SnapshotWants []domain.ContentHash `json:"snapshot_wants"`
+	DocWants      []domain.ContentHash `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support server (old servers lack field → false — blanket fallback).
 	ChunksSupported        bool                 `json:"chunks_supported,omitempty"`
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
@@ -100,9 +90,7 @@ type chunkObjWire struct {
 	Data []byte             `json:"data"`
 }
 type objectsReq struct {
-	Snapshots []domain.Snapshot   `json:"snapshots"`
-	Docs      []domain.SessionDoc `json:"docs"`
-	// Chunk wire (new type — used only when server negotiate has chunks_supported):
+	// Chunk wire (used only when server negotiate has chunks_supported):
 	// doc is the manifest, the body contains only server missing chunks (delta upload).
 	ChunkedDocs  []chunkedDocWire `json:"chunked_docs,omitempty"`
 	ChunkObjects []chunkObjWire   `json:"chunk_objects,omitempty"`
@@ -119,11 +107,6 @@ const (
 	ackDrainTimeout      = 100 * time.Millisecond
 )
 
-// ChunkLocal is local chunk store access (pull delta — does not receive existing chunks).
-// nil means receive all chunks (still maintains doc unit delta).
-type ChunkLocal interface {
-}
-
 var errBoundedResponse = errors.New("response exceeds bounded transport limit")
 
 // do sends JSON request and decodes response to out (error on non-2xx).
@@ -134,27 +117,12 @@ func (c *BackendClient) do(ctx context.Context, method, path string, body, out a
 // doLimited decodes bounded endpoint responses only below an explicit upper limit. max=0 is
 // the existing general JSON path.
 func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) error {
-	// Reads are idempotent: under an upload policy a push's preparation reads
-	// wait out the same transient failures as its uploads.
-	if policy, ok := outbound.UploadPolicyFromContext(ctx); ok && method == http.MethodGet {
-		return c.patientRetry(ctx, policy, func() error { return c.doLimitedOnce(ctx, method, path, body, out, max) })
-	}
-	return c.doLimitedOnce(ctx, method, path, body, out, max)
-}
-
-func (c *BackendClient) doLimitedOnce(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
-	ctx = outbound.NextSyncDiagnosticRequest(ctx)
-	diagnosticCtx := ctx // Best-effort ACK cleanup must not look like caller cancellation.
-	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
 	endpoint, token, err := c.transport()
 	if err != nil {
-		endToken(err)
 		return err
 	}
-	endToken(diagnosticCtx.Err())
 	var rdr io.Reader
 	if body != nil {
-		endMarshal := outbound.BeginMeasuredSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestMarshal)
 		var b []byte
 		var err error
 		if frozen, ok := body.(uploadJSON); ok {
@@ -162,7 +130,6 @@ func (c *BackendClient) doLimitedOnce(ctx context.Context, method, path string, 
 		} else {
 			b, err = json.Marshal(body)
 		}
-		endMarshal(outbound.SyncDiagnosticCounts{Bytes: len(b)}, err)
 		if err != nil {
 			return err
 		}
@@ -173,9 +140,7 @@ func (c *BackendClient) doLimitedOnce(ctx context.Context, method, path string, 
 		ctx, cancelACK = context.WithCancel(ctx)
 		defer cancelACK()
 	}
-	endSetup := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestSetup, outbound.SyncDiagnosticCounts{})
 	req, err := http.NewRequestWithContext(ctx, method, endpoint+path, rdr)
-	endSetup(err)
 	if err != nil {
 		return err
 	}
@@ -188,38 +153,17 @@ func (c *BackendClient) doLimitedOnce(ctx context.Context, method, path string, 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	if c.identity.Email != "" {
-		req.Header.Set("X-Cxt-Identity", c.identity.Email)
-	}
-	// Compose with any caller trace. Only constant milestone labels enter the
-	// optional collector; connection addresses, headers and contents never do.
-	if outbound.SyncDiagnosticsFromContext(diagnosticCtx) != nil {
-		trace := &httptrace.ClientTrace{
-			GotConn: func(httptrace.GotConnInfo) {
-				outbound.RecordSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPGotConn, outbound.SyncDiagnosticCounts{}, nil)
-			},
-			WroteRequest: func(info httptrace.WroteRequestInfo) {
-				outbound.RecordSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPWroteRequest, outbound.SyncDiagnosticCounts{}, info.Err)
-			},
-			GotFirstResponseByte: func() {
-				outbound.RecordSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPFirstByte, outbound.SyncDiagnosticCounts{}, nil)
-			},
-		}
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-	}
-	endDo := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPDo, outbound.SyncDiagnosticCounts{ClientTimeoutMillis: c.httpc.Timeout.Milliseconds()})
 	resp, err := c.httpc.Do(req)
-	endDo(err)
 	if err != nil {
 		return err
 	}
-	endBody := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPBody, outbound.SyncDiagnosticCounts{HTTPStatus: resp.StatusCode})
-	defer func() { endBody(resultErr) }()
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		b, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		rejection := newHTTPError(resp.StatusCode, method, path, b)
-		if readErr == nil && (rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" || proxyTransientStatus(rejection)) {
+		// Only the bounded uploadBatch retry reads the hint, and only for
+		// application backpressure.
+		if readErr == nil && rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" {
 			rejection.retryAfter, rejection.retryAfterValid = uploadRetryAfter(resp.Header.Values("Retry-After"), time.Now())
 		}
 		return rejection

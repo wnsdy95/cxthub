@@ -69,8 +69,7 @@ func TestCommitRefusesACapture(t *testing.T) {
 	repo := hh("capture-refused")
 	bindCommitTestRepo(t, st, repo)
 	doc := makeCommitDoc(t, "sent with a capture")
-	snap := domain.Snapshot{ID: doc.Hash, RepoID: repo, Branch: "main", DocHash: doc.Hash, Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull}
-	out, err := svc.Commit(ctx, inbound.CommitInput{RepoID: repo, Docs: []domain.SessionDoc{doc}, Snapshots: []domain.Snapshot{snap}})
+	out, err := svc.Commit(ctx, inbound.CommitInput{RepoID: repo, Docs: []domain.SessionDoc{doc}, Captures: 1})
 	if !errors.Is(err, domain.ErrValidation) || out.StoredDocs != 0 {
 		t.Fatalf("a capture: %+v %v", out, err)
 	}

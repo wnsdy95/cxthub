@@ -2,9 +2,8 @@
 //
 // In the hexagonal architecture, this is the interface that the app(use-case) calls to the infrastructure.
 //
-//   - MetadataStore: repo/branch/ref/snapshot meta/manifest metadata (PostgreSQL in production; filesystem in development).
-//   - BlobStore:     content-addressed body (CIR doc / memory; v1 Postgres BYTEA, later S3).
-//   - GitEngine:     git semantic engine (commit/branch/fork/diff/ref; CIR/hash-based, format-agnostic).
+//   - MetadataStore: repository metadata, team settings bundles and the secrets envelope (PostgreSQL in production; filesystem in development).
+//   - BlobStore:     content-addressed conversation documents and their chunks (v1 Postgres BYTEA, later S3).
 package outbound
 
 import (
@@ -14,23 +13,20 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// MetadataStore persists metadata (immutable snapshot metadata + mutable ref/manifest).
+// MetadataStore persists repository metadata.
 //
 // PostgreSQL adapters implement production persistence and transactions; the
 // filesystem adapter supports development. DDL lives in schemas/db/migrations.
 //
-// The body (CIR doc / memory) is not stored here but in BlobStore (meta/body separation, data model).
-// Mutable state (ref/manifest) is protected by manifest version-CAS boundaries (immutable invariant C1/M2).
+// The body (CIR doc) is not stored here but in BlobStore (meta/body separation, data model).
 type MetadataStore interface {
 	// Repo.
 	RepositoryReader
 	PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) // idempotent (same id returns existing)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 
-	// Ref / manifest (mutable). Progress is CAS (immutable REF4/C1). UpdateRepoAbout updates About(description/website/topics).
+	// UpdateRepoAbout updates About(description/website/topics).
 	UpdateRepoAbout(ctx context.Context, id domain.ContentHash, description, website string, topics []string) error
-	// UpdateRepoConfig updates repo structure settings (default branch, protected branch). nil = no change.
-	UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error
 	// Team default settings bundle (.claude/.agents/.codex) — kind ∈ {claude, agents, codex}.
 	PutSettingsBundle(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsBundle(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
@@ -42,16 +38,16 @@ type MetadataStore interface {
 //
 // Implementation (impl step): v1 = Postgres BYTEA — blobs(hash PK, bytes BYTEA). hash deduplication (if same hash, existing, skip re-recording = idempotent put). Later replace with S3/MinIO adapter without downtime. Current is stdlib only stub.
 //
-// Storage units: SessionDoc (CIR body) and MemoryDigest body. Both have sha256:<hex> keys. Their at-rest bodies may be storage-only chunk manifests, while Get always reconstructs and verifies the complete identity.
+// Storage unit: SessionDoc (CIR body), under a sha256:<hex> key. Its at-rest body may be a storage-only chunk manifest, while Get always reconstructs and verifies the complete identity.
 type BlobStore interface {
 	// PutDoc: Store SessionDoc body. content-hash deduplication (Stored=false means already exists).
 	PutDoc(ctx context.Context, repoID domain.ContentHash, doc domain.SessionDoc) (stored bool, err error)
 	GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error)
 	HasDocs(ctx context.Context, repoID domain.ContentHash, hashes []domain.ContentHash) (have []domain.ContentHash, err error)
-	// DeleteDoc: Remove doc body (idempotent). Hook capture leaf GC exclusive — commit doc is not target (service layer guard).
+	// DeleteDoc: Remove doc body (idempotent). Only removing a session calls it, for a document no stored session report of the repository names (service layer guard).
 	DeleteDoc(ctx context.Context, repoID, hash domain.ContentHash) error
 
-	// Chunk wire (push/pull delta transmission) — chunks are isolated by repo ownership.
+	// Chunk wire (push delta transmission) — chunks are isolated by repo ownership.
 	// PutChunks: Store validated uncompressed chunks with repo ownership and idempotently. Chunks arriving before complete doc are content-addressed staging objects and safe to remain on failure/retry.
 	// HasChunks: List of repo owned chunks (negotiate). GetChunk: Uncompressed chunk body.
 	// GetDocManifest: Chunk manifest of doc (even if stored in chunks, canonical produces same plan; plan impossible forms ErrNotFound — caller fallback on complete reply).
