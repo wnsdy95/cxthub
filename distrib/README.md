@@ -1,4 +1,4 @@
-# cxt — Git for coding-agent sessions
+# cxt — your coding-agent sessions, kept with the Git commits they produced
 
 **Commits keep the code, but the AI conversation that produced it disappears.** cxt keeps
 each coding-agent session (Claude Code · Codex) with the Git commits it produced. It reads
