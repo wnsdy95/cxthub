@@ -6,23 +6,19 @@
 #
 # Create a Blueprint from this file (it defines only this cron job and changes
 # no other resource), run the job once, read its NOTICE lines in its logs, then
-# delete the job. Running it again changes nothing. The script is fetched from
-# the release commit and checked against its SHA-256 before it runs.
+# delete the job. Running it again changes nothing. The job is built from the
+# Blueprint's own repository and branch with runtime-rights.Dockerfile, which
+# copies the script of that commit.
 services:
   - type: cron
     name: cxthub-runtime-rights
-    runtime: image
-    image:
-      url: docker.io/library/postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+    runtime: docker
+    dockerfilePath: ./deploy/runtime-rights.Dockerfile
+    dockerContext: .
     plan: starter
     region: singapore
     # Once a year at most; it is meant to be run by hand and then deleted.
     schedule: "0 0 1 1 *"
-    dockerCommand: >-
-      sh -c 'set -eu;
-      wget -qO /tmp/rights.sql https://raw.githubusercontent.com/wnsdy95/cxthub/1eac44f133b3230ecc2927a46d496edccf63e025/schemas/db/runtime_rights/0161_0170.sql;
-      echo "c84b9a9113dab049453c806a528890fe530ccbd18db8b947941d45f51eb69434  /tmp/rights.sql" | sha256sum -c -;
-      psql "$CXT_POSTGRES_DSN" -v ON_ERROR_STOP=1 -f /tmp/rights.sql'
     envVars:
       - key: CXT_POSTGRES_DSN
         fromDatabase:
