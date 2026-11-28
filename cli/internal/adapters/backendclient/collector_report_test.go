@@ -32,7 +32,7 @@ func TestReportCollectorSendsThePushesAndWhatWentWrong(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" }, domain.TeamIdentity{})
+	client := NewBackendClient(func() string { return server.URL + "/api/v1" }, func() string { return "synthetic-token" })
 	sha := strings.Repeat("a", 40)
 	report := domain.CollectorReport{Machine: "laptop", Version: "1.2.3", RunError: "the upload was refused", Pushes: []domain.RecordedPush{{Branch: "main", SHA: sha, AtSec: 1_900_000_000}}}
 	if err := client.ReportCollector(context.Background(), repo, report); err != nil {

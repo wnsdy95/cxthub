@@ -100,7 +100,7 @@ func TestP4RootUpload(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+			c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 			ok, err := c.PushDocChunks(context.Background(), repo, outbound.DocumentChunks{Representation: rep, ReadChunk: func(_ context.Context, h domain.ContentHash) ([]byte, error) { return bodies[h], nil }})
 			if !ok || err != nil || jobs != 1 {
 				t.Fatalf("upload %v %v jobs=%d", ok, err, jobs)

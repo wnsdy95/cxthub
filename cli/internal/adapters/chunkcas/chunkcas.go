@@ -22,7 +22,7 @@ import (
 const ChunkTarget = 512 << 10
 
 // MaxPortableChunkBytes is the raw body limit for one bounded HTTP batch. v2 chunks are always
-// below it; only PlanDocV1 falls back when one whole event exceeds it.
+// below it.
 const MaxPortableChunkBytes = 2 << 20
 
 const (

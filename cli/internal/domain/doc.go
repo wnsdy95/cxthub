@@ -4,8 +4,7 @@
 // It uses only the standard library (time, crypto/sha256, encoding/hex).
 //
 // Core Invariants (domain invariants):
-//   - Snapshot.ID == ContentHash(canonical_bytes(SessionDoc.CIR))
-//   - Ref.Target must be a valid Snapshot.ID
+//   - SessionDoc.Hash addresses its CIR under SessionDoc.Identity
 //   - Same ContentHash ⇒ Same content (dedup key)
 //
 // Dependency Rules (dependency boundaries):

@@ -17,8 +17,8 @@ import (
 func p4R1Negotiation() negotiateResp {
 	return negotiateResp{
 		DocIdentitiesSupported: []domain.DocumentIdentity{domain.DocumentIdentityRootV1},
-		AsyncDocsSupported:     true, PreparedMemoryArchivesSupported: true,
-		ChunksSupported: true, BoundedChunksSupported: true,
+		AsyncDocsSupported:     true,
+		ChunksSupported:        true, BoundedChunksSupported: true,
 		ChunkFormatsSupported:  []string{domain.ConversationManifestChunkFormat},
 		RootPublicationEnabled: false,
 	}
@@ -71,7 +71,7 @@ func TestP4R1UploadAdmissionOff(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				client := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+				client := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 				accepted, err := client.PushDocChunks(context.Background(), repo, outbound.DocumentChunks{Representation: rep, ReadChunk: func(_ context.Context, h domain.ContentHash) ([]byte, error) {
 					reads.Add(1)
 					return bodies[h], nil

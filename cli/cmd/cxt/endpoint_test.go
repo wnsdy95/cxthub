@@ -40,7 +40,7 @@ func newEndpointFixture(t *testing.T) *endpointFixture {
 	if err := configFixtureSave(root, remotecfg.Remotes{"origin": endpointTestIdentity, "mirror": endpointTestIdentity}); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &endpointFixture{cfg: config{RepoRoot: root, GitDir: filepath.Join(root, ".git"), GitBranch: "main", RemoteEndpoint: "http://localhost:5173/api/v1", RemoteToken: "old-host-synthetic-secret"}}
+	fixture := &endpointFixture{cfg: config{RepoRoot: root, RemoteEndpoint: "http://localhost:5173/api/v1", RemoteToken: "old-host-synthetic-secret"}}
 	if err := authcfg.Save("cxthub.io", "destination-synthetic-secret"); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func newEndpointFixture(t *testing.T) *endpointFixture {
 			return capturePushJSON(t, request, 200, map[string]any{"root_publication_enabled": true, "doc_identities_supported": []domain.DocumentIdentity{domain.DocumentIdentityRootV1}, "async_docs_supported": true, "chunks_supported": true, "bounded_chunks_supported": true, "chunk_formats_supported": []string{domain.ConversationManifestChunkFormat}}), nil
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/repos":
 			fixture.registrations++
-			return capturePushJSON(t, request, 200, domain.Repo{ID: repoID, RemoteURL: endpointTestIdentity, RepositoryID: "repository-fixture", DefaultBranch: "main", ContextProtocol: 1}), nil
+			return capturePushJSON(t, request, 200, domain.Repo{ID: repoID, RemoteURL: endpointTestIdentity, RepositoryID: "repository-fixture", DefaultBranch: "main"}), nil
 		default:
 			if fixture.mode == "repair-denied" {
 				return capturePushJSON(t, request, 403, map[string]string{"error": "synthetic repair denial"}), nil

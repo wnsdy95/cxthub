@@ -61,7 +61,7 @@ func TestP4RootReceipt(t *testing.T) {
 				w.Write(raw)
 			}))
 			defer server.Close()
-			c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+			c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 			err := c.finalizeDocument(context.Background(), string(repo), rep)
 			if (err == nil) != (mode == "good") {
 				t.Fatalf("receipt %s: %v", mode, err)
@@ -113,7 +113,7 @@ func TestP4RootPeerBeforeWrites(t *testing.T) {
 				http.Error(w, "unexpected write", 500)
 			}))
 			defer server.Close()
-			c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+			c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 			ok, err := c.PushDocChunks(context.Background(), repo, outbound.DocumentChunks{Representation: rep, ReadChunk: func(_ context.Context, h domain.ContentHash) ([]byte, error) { reads++; return bodies[h], nil }})
 			if !ok || err == nil || writes != 0 || reads != 0 {
 				t.Fatalf("old peer fallback/effects: ok=%v err=%v writes=%d reads=%d", ok, err, writes, reads)
@@ -138,7 +138,7 @@ func TestP4RootReceiptPollingDrift(t *testing.T) {
 		json.NewEncoder(w).Encode(status)
 	}))
 	defer server.Close()
-	c := NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+	c := NewBackendClient(func() string { return server.URL }, func() string { return "" })
 	if err := c.finalizeDocument(context.Background(), repo, rep); err == nil {
 		t.Fatal("poll lost exact root identity")
 	}

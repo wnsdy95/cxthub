@@ -46,7 +46,7 @@ func prepareRemoteConnection(cfg config) func(context.Context, string, string, s
 		}
 		base := binding.Endpoint
 		token := tokenForObservedDestination(cfg, base, configuredOrigin)
-		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
+		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token })
 		git := gitctx.NewGitContextAdapter()
 		before, err := git.CurrentRepo(ctx, cwd)
 		if err != nil {

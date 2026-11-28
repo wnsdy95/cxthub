@@ -1008,7 +1008,6 @@ catalog and return success.
 |---|---|
 | `CXT_REMOTE` | API base fallback when no repository remote is configured |
 | `CXT_TOKEN` | Non-interactive authentication token |
-| `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Identity overrides sent with requests |
 | `CXT_NO_BROWSER=1` | Prevent automatic browser launch during login |
 | `CXT_SECRETS_PASSPHRASE` | Passphrase fallback for encrypted secret-mask sharing |
 | `CXT_CODEX_BIN` | Path of a Codex program for the opt-in test that checks what cxt reads against what Codex writes |

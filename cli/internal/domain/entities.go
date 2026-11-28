@@ -7,20 +7,8 @@ import (
 
 // JSON tags are in snake_case, the same as the backend(cxt-backend) domain and schemas/manifest.schema.json. Although completely separate, they must be compatible over the wire(REST/JSON), so field names are matched (.cxt local storage is in the same format).
 
-// TeamIdentity is a value object that identifies the snapshot author (domain model).
-type TeamIdentity struct {
-	// Name is the human-readable author name.
-	Name string `json:"name"`
-	// Email is the author's email, used as a unique identifier within the team.
-	Email string `json:"email"`
-	// Team is the team label (matches the visibility boundary of the central server).
-	Team string `json:"team"`
-}
-
 // Repo is the root of the session storage space (domain model). One Repo per code repository.
 type Repo struct {
-	RequiredDocIdentity DocumentIdentity `json:"required_doc_identity,omitempty"`
-	ContextProtocol     int              `json:"context_protocol,omitempty"`
 	// ID is the normalized remote URL or ContentHash of cwd fallback.
 	ID string `json:"id"`
 	// RemoteURL is the git remote URL of the code repo (empty if not available).
@@ -36,63 +24,6 @@ type Repo struct {
 	// GitRemoteURL is the git origin (e.g., github.com URL) of the code repo — for web "connected" tab link.
 	// Always read from .git, separate from RemoteURL(cxt origin, integrity).
 	GitRemoteURL string `json:"git_remote_url,omitempty"`
-}
-
-// Snapshot is the state of one session at a point in time. The body addressed by ID and its natural
-// Parents are immutable; out-of-hash projections and overlays change only under their documented merge/CAS rules.
-//
-// Invariant S-ID/H1: Snapshot.ID == Snapshot.DocHash. DocIdentity selects the
-// document hash scheme; its absence retains the canonical-CIR identity.
-type Snapshot struct {
-	// ID is the immutable document identity selected by DocIdentity.
-	ID ContentHash `json:"id"`
-	// RepoID is the ID of the containing repo.
-	RepoID string `json:"repo_id"`
-	// Branch is the branch name label at creation time.
-	Branch string `json:"branch"`
-	// Parents is a list of DAG parent snapshot ContentHashes. The root is an empty slice.
-	Parents []ContentHash `json:"parents"`
-	// DocHash is the ContentHash of the SessionDoc this snapshot points to (== ID).
-	DocHash ContentHash `json:"doc_hash"`
-	// DocIdentity is omitted for legacy canonical-CIR hashes.
-	DocIdentity DocumentIdentity `json:"doc_identity,omitempty"`
-	// MemoryHash is the ContentHash of the MemoryDigest attached to this snapshot (optional, can be "").
-	MemoryHash ContentHash `json:"memory_hash,omitempty"`
-	// ClaudeSettings/AgentsSettings/CodexSettings is the commit-time .claude/.agents/.codex folder snapshot (content-addressed SettingsBundle object) hash. Pushes and pulls with the commit.
-	ClaudeSettings ContentHash `json:"claude_settings,omitempty"`
-	AgentsSettings ContentHash `json:"agents_settings,omitempty"`
-	CodexSettings  ContentHash `json:"codex_settings,omitempty"`
-	// Provider is the original capture provider (claude|codex).
-	Provider ProviderKind `json:"provider"`
-	// Fidelity is the fidelity tier of this snapshot.
-	Fidelity FidelityTier `json:"fidelity"`
-	// Message is a human-readable snapshot description (commit message meaning).
-	Message string `json:"message"`
-	// Author is the identifier of the snapshot author.
-	Author TeamIdentity `json:"author"`
-	// CreatedAt is the snapshot creation timestamp.
-	CreatedAt time.Time `json:"created_at"`
-	// Grafted indicates that this snapshot has a graft (diverged append) overlay edge attached
-	// (server records, pull propagated — ID calculation excluded derivative metadata).
-	Grafted bool `json:"grafted,omitempty"`
-	// GraftParents are the reachability overlay parents during diverged append (Parents invariant).
-	// Local Save applies optimistically with the ordered graft queue and commits to the server via CAS
-	// (ID calculation excluded).
-	GraftParents []ContentHash `json:"graft_parents,omitempty"`
-	// GraftSeq is the version in the (GraftParents, GraftSeq) version register (hash-free metadata).
-	// Graft is a replaceable overlay: it should supersede auto-graft (additive alone would create circular recombination on the same branch merge).
-	// Replication convergence: high seq replaces the entire set, and seq=0 allows legacy union.
-	// seq>0 version conflicts are adjusted to the server projection as the source of truth — Lamport-style max+1 increment.
-	GraftSeq uint64 `json:"graft_seq,omitempty"`
-	// SessionID is the original agent session identifier (CIREnvelope.SessionOriginID promotion —
-	// UI does not need to open doc to draw session boundaries for list/graph metadata).
-	SessionID string `json:"session_id,omitempty"`
-	// Models is the list of models that appeared in this snapshot session (Envelope.SourceModels promotion —
-	// list metadata for drawing overlapping icons for participating AI without doc fetch).
-	Models []string `json:"models,omitempty"`
-	// CompactionCount is the context compaction count for this snapshot session (Envelope.CompactionCount promotion).
-	// Compaction does not change sessionId, so SessionID alone does not show it — the graph draws compression markers (◈) on snapshots with larger CompactionCount than parent (for drawing without doc fetch).
-	CompactionCount int `json:"compaction_count,omitempty"`
 }
 
 // SessionDoc is a CIR container (regular conversation body, immutable, domain model).
