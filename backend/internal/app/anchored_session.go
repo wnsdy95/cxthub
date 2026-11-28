@@ -443,8 +443,7 @@ func (s *Service) SetAnchoredSessionArchived(ctx context.Context, repo domain.Co
 }
 
 // dropAnchoredContent deletes a conversation document that no stored report
-// of the repository names and no snapshot holds. A document still in use is
-// left as it is.
+// of the repository names. A document still in use is left as it is.
 func (s *Service) dropAnchoredContent(ctx context.Context, store outbound.AnchoredSessionStore, repo, doc domain.ContentHash) error {
 	if doc == "" {
 		return nil

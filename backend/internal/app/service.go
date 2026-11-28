@@ -57,7 +57,7 @@ func validateHashes(hashes ...domain.ContentHash) error {
 	return nil
 }
 
-// --- push/pull use-cases ---
+// --- push use-cases ---
 
 // Negotiate: want (server missing parts) = client haves \ server has (sync protocol step A).
 func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) (inbound.PushNegotiateOutput, error) {

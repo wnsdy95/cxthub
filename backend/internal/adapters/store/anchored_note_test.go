@@ -22,7 +22,7 @@ func anchoredNoteStoreNote(repo domain.ContentHash, letter, author string, minut
 // checkAnchoredNotePersistence is the contract both stores keep.
 func checkAnchoredNotePersistence(t *testing.T, ctx context.Context, storage outbound.AnchoredNoteStore, repo domain.ContentHash) {
 	t.Helper()
-	if listed, err := storage.ListAnchoredNotes(ctx, repo, "member-a"); err != nil || listed == nil || len(listed) != 0 {
+	if listed, err := storage.ListRepositoryAnchoredNotes(ctx, repo); err != nil || listed == nil || len(listed) != 0 {
 		t.Fatalf("no notes yet: %#v %v", listed, err)
 	}
 	commit := anchoredNoteStoreNote(repo, "b", "member-a", 2, domain.AnchoredNoteTarget{Kind: domain.AnchoredNoteCommit, Commit: strings.Repeat("a", 40)})
@@ -32,10 +32,6 @@ func checkAnchoredNotePersistence(t *testing.T, ctx context.Context, storage out
 		if err := storage.PutAnchoredNote(ctx, note); err != nil {
 			t.Fatal(err)
 		}
-	}
-	// One author's notes, oldest first; another author's are not among them.
-	if listed, err := storage.ListAnchoredNotes(ctx, repo, "member-a"); err != nil || !reflect.DeepEqual(listed, []domain.AnchoredNote{commit, branch}) {
-		t.Fatalf("member-a's notes:\n got %+v\nwant %+v\n%v", listed, []domain.AnchoredNote{commit, branch}, err)
 	}
 	if got, err := storage.GetAnchoredNote(ctx, repo, worktree.ID); err != nil || !reflect.DeepEqual(got, worktree) {
 		t.Fatalf("one note: %+v %v", got, err)
@@ -55,7 +51,7 @@ func checkAnchoredNotePersistence(t *testing.T, ctx context.Context, storage out
 	if got, err := storage.GetAnchoredNote(ctx, repo, commit.ID); err != nil || !reflect.DeepEqual(got, commit) {
 		t.Fatalf("a rewritten note: %+v %v", got, err)
 	}
-	if listed, _ := storage.ListAnchoredNotes(ctx, repo, "member-a"); len(listed) != 2 {
+	if listed, _ := storage.ListRepositoryAnchoredNotes(ctx, repo); len(listed) != 3 {
 		t.Fatalf("rewriting added a note: %+v", listed)
 	}
 	// A malformed note is refused and changes nothing.
@@ -73,7 +69,7 @@ func checkAnchoredNotePersistence(t *testing.T, ctx context.Context, storage out
 	if _, err := storage.GetAnchoredNote(ctx, repo, branch.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a deleted note: %v", err)
 	}
-	if listed, err := storage.ListAnchoredNotes(ctx, repo, "member-a"); err != nil || len(listed) != 1 || listed[0].Body != "rewritten" {
+	if listed, err := storage.ListRepositoryAnchoredNotes(ctx, repo); err != nil || !reflect.DeepEqual(listed, []domain.AnchoredNote{worktree, commit}) {
 		t.Fatalf("after deleting: %+v %v", listed, err)
 	}
 }
@@ -143,7 +139,7 @@ func TestFSAnchoredNotePersistence(t *testing.T) {
 	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := storage.ListAnchoredNotes(context.Background(), repo, "member-a"); !errors.Is(err, domain.ErrIntegrity) {
+	if _, err := storage.ListRepositoryAnchoredNotes(context.Background(), repo); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("a malformed note on disk: %v", err)
 	}
 }

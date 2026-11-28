@@ -131,23 +131,6 @@ func (s *FSStore) GetAnchoredNote(ctx context.Context, repo domain.ContentHash, 
 	return domain.AnchoredNote{}, domain.ErrNotFound
 }
 
-func (s *FSStore) ListAnchoredNotes(ctx context.Context, repo domain.ContentHash, author string) ([]domain.AnchoredNote, error) {
-	lock := s.anchoredNoteLock(repo)
-	lock.Lock()
-	defer lock.Unlock()
-	notes, err := s.readAnchoredNotes(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	own := []domain.AnchoredNote{}
-	for _, note := range notes {
-		if note.Author == author {
-			own = append(own, note)
-		}
-	}
-	return own, nil
-}
-
 func (s *FSStore) ListRepositoryAnchoredNotes(ctx context.Context, repo domain.ContentHash) ([]domain.AnchoredNote, error) {
 	lock := s.anchoredNoteLock(repo)
 	lock.Lock()

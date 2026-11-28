@@ -12,8 +12,6 @@ type AnchoredNoteStore interface {
 	PutAnchoredNote(context.Context, domain.AnchoredNote) error
 	// GetAnchoredNote answers ErrNotFound for an identifier nothing is stored under.
 	GetAnchoredNote(context.Context, domain.ContentHash, string) (domain.AnchoredNote, error)
-	// ListAnchoredNotes lists one author's notes, oldest first.
-	ListAnchoredNotes(context.Context, domain.ContentHash, string) ([]domain.AnchoredNote, error)
 	// ListRepositoryAnchoredNotes lists every author's notes, oldest first.
 	ListRepositoryAnchoredNotes(context.Context, domain.ContentHash) ([]domain.AnchoredNote, error)
 	// DeleteAnchoredNote answers ErrNotFound for an identifier nothing is stored under.

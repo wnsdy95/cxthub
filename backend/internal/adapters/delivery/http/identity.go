@@ -28,7 +28,7 @@ type IdentityBackend interface {
 	Logout(ctx context.Context, sessionToken string) error
 	ResolveUser(ctx context.Context, bearer string) (domain.User, error)
 
-	UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error)
+	UpdateProfile(ctx context.Context, u domain.User, username, nickname, avatar, locale *string) (domain.User, error)
 	CreateCLIToken(ctx context.Context, userID, label string) (domain.Session, error)
 	CreateRepository(ctx context.Context, owner domain.User, name string) (domain.Repository, error)
 	UpdateRepositorySettings(ctx context.Context, userID, repositoryID string, p app.RepositoryPatch) (domain.Repository, error)
@@ -370,11 +370,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 
 // updateMe updates account settings. nil fields are unchanged (partial PATCH).
 // username is a heavy change that alters the URL (422 format error / 409 conflict), nickname is free.
+// An older web client may still send load_mode, the removed load preference: the decoder ignores it.
 func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username *string `json:"username"`
 		Nickname *string `json:"nickname"`
-		LoadMode *string `json:"load_mode"`
 		Avatar   *string `json:"avatar"`
 		Locale   *string `json:"locale"`
 	}
@@ -382,7 +382,7 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	out, err := s.id.UpdateProfile(r.Context(), u, body.Username, body.Nickname, body.LoadMode, body.Avatar, body.Locale)
+	out, err := s.id.UpdateProfile(r.Context(), u, body.Username, body.Nickname, body.Avatar, body.Locale)
 	s.respond(w, out, err)
 }
 

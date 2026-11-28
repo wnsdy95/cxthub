@@ -50,8 +50,8 @@ func repositoryRoleFor(ctx context.Context, repositories outbound.RepositoryStor
 	return sources.roleFor(ctx, repository, actor)
 }
 
-func (service *IdentityService) UpdateProfile(ctx context.Context, user domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
-	patch := domain.UserPreferencesPatch{Nickname: nickname, LoadMode: loadMode, Avatar: avatar, Locale: locale}
+func (service *IdentityService) UpdateProfile(ctx context.Context, user domain.User, username, nickname, avatar, locale *string) (domain.User, error) {
+	patch := domain.UserPreferencesPatch{Nickname: nickname, Avatar: avatar, Locale: locale}
 	if username == nil && service.userPreferences != nil && service.transactionalPreferences {
 		return service.userPreferences.UpdateUserPreferences(ctx, user.ID, patch)
 	}
@@ -59,7 +59,7 @@ func (service *IdentityService) UpdateProfile(ctx context.Context, user domain.U
 		if username == nil && service.userPreferences != nil {
 			return service.userPreferences.UpdateUserPreferences(ctx, user.ID, patch)
 		}
-		return service.mutateUpdateProfile(ctx, user, username, nickname, loadMode, avatar, locale)
+		return service.mutateUpdateProfile(ctx, user, username, nickname, avatar, locale)
 	})
 }
 

@@ -13,7 +13,7 @@ func (s *FSStore) CompareAndSwapSecrets(ctx context.Context, repo domain.Content
 	if err := validateHash(repo); err != nil {
 		return err
 	}
-	lock := s.refLock(repo, domain.RefBranch, "")
+	lock := s.repoLock(repo)
 	lock.Lock()
 	defer lock.Unlock()
 	old, err := s.GetSecretsEnvelope(ctx, repo)

@@ -1,5 +1,6 @@
-// Package gitevidence reads immutable Git objects; application/domain code owns
-// reversal policy. It never trusts commit titles as evidence of cancellation.
+// Package gitevidence reads a repository's Git state from GitHub (branch heads,
+// commits, pull requests and the default branch) for the remote Git reader.
+// Application code decides what that state means.
 package gitevidence
 
 import (

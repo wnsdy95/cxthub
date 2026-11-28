@@ -1,8 +1,8 @@
 // Package domain contains the cxt server's domain types.
 //
 // Under the complete-separation rule (the module boundary), the backend shares no Go code
-// with the CLI. Wire/JSON shapes derive from schemas/cir.schema.json, schemas/manifest.schema.json,
-// the data model, and the OpenAPI contract.
+// with the CLI. Wire/JSON shapes derive from schemas/cir.schema.json, the data model, and the
+// OpenAPI contract (schemas/openapi.yaml).
 //
 // The backend does not understand provider-native Claude/Codex formats. It accepts only provider-neutral CIR.
 //
@@ -17,7 +17,7 @@ import (
 // ContentHash is a value object representing a content address hash.
 //
 // Format: "sha256:<hex>" (lowercase hex 64 characters). Pattern ^sha256:[0-9a-f]{64}$
-// (the data model, schemas/manifest.schema.json $defs/contentHash).
+// (the data model, schemas/openapi.yaml components/schemas/ContentHash).
 //
 // Determinism requires identical logical content to produce identical hex. Canonical serialization
 // (canonical_bytes) before hashing provides that property (data model, RFC 8785 JCS-oriented).
@@ -50,7 +50,7 @@ func ValidateOptionalContentHash(h ContentHash) error {
 
 // ProviderKind is the type of the original/target provider (schemas/cir.schema.json $defs/providerKind).
 //
-// The backend does not interpret provider raw formats but stores and projects the provider type as is in the CIR envelope and Snapshot metadata.
+// The backend does not interpret provider raw formats but keeps the provider type as is in the CIR envelope.
 type ProviderKind string
 
 const (
@@ -66,25 +66,12 @@ const (
 //	reconstructed = cross-provider reconstruction with reasoning disabled or summarized
 //	memory        = distilled summary only; transcript is not restored
 //
-// The backend does not derive this tier (loading belongs to the CLI); it stores the frozen value in Snapshot metadata.
+// The backend does not derive this tier (loading belongs to the CLI); it keeps the value the document carries.
 type FidelityTier string
 
 const (
 	// FidelityFull is a lossless original.
 	FidelityFull FidelityTier = "full"
-)
-
-// RefKind identifies a ref type (schemas/manifest.schema.json $defs/refKind).
-//
-//	head    = current-checkout symbolic ref (one per repo, name fixed at "HEAD" — invariant REF3)
-//	branch = context-tip pointer for a real Git branch
-//	session = preservation pointer for a session fork within the same Git branch (internal join use)
-//	tag     = immutable label (REF2: target never changes after creation)
-type RefKind string
-
-const (
-	// RefBranch is a branch tip.
-	RefBranch RefKind = "branch"
 )
 
 // ValidateBranchName permits only safe ref paths for branch, session, and tag names.
@@ -115,14 +102,4 @@ func ValidateBranchName(name string) error {
 		}
 	}
 	return nil
-}
-
-// TeamIdentity identifies a snapshot author (data model table, sync protocol).
-//
-// Unlike Git's separate author and committer, cxt records a single Author (OQ-7).
-// It is for attribution and auditing, not access control (sync protocol).
-type TeamIdentity struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Team  string `json:"team"`
 }

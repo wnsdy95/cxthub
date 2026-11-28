@@ -27,7 +27,7 @@ func TestPGAccountPreferencesStaleSnapshotPreservesCurrentIdentity(test *testing
 		test.Fatal(err)
 	}
 	username := "renamed-" + domain.NewID("")[:12]
-	renamed, err := fixture.identity.UpdateProfile(ctx, stale, &username, nil, nil, nil, nil)
+	renamed, err := fixture.identity.UpdateProfile(ctx, stale, &username, nil, nil, nil)
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestPGAccountPreferencesStaleSnapshotPreservesCurrentIdentity(test *testing
 		test.Fatal("authentication restored an obsolete username")
 	}
 	nickname := "Fresh preference"
-	updated, err := fixture.identity.UpdateProfile(ctx, stale, nil, &nickname, nil, nil, nil)
+	updated, err := fixture.identity.UpdateProfile(ctx, stale, nil, &nickname, nil, nil)
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -111,9 +111,9 @@ func TestPGAccountPreferencesLoginPreservesConcurrentPreferences(test *testing.T
 		done <- loginErr
 	}()
 	authorityScopeAwait(test, ctx, provider.ready, done)
-	nickname, loadMode := "Preferred alias", "memory"
+	nickname := "Preferred alias"
 	avatar, locale := "data:image/png;base64,aA==", "ko"
-	preferences, err := fixture.identity.UpdateProfile(ctx, stale, nil, &nickname, &loadMode, &avatar, &locale)
+	preferences, err := fixture.identity.UpdateProfile(ctx, stale, nil, &nickname, &avatar, &locale)
 	if err != nil {
 		test.Fatalf("provider verification blocked a preference write: %v", err)
 	}
@@ -144,16 +144,14 @@ func TestPGAccountPreferencesInvalidAndCanceledUpdatesReturnZero(test *testing.T
 	if err != nil {
 		test.Fatal(err)
 	}
-	for _, field := range []string{"load-mode", "avatar", "locale", "username", "user-id", "missing-user", "canceled"} {
+	for _, field := range []string{"avatar", "locale", "username", "user-id", "missing-user", "canceled"} {
 		test.Run(field, func(test *testing.T) {
 			user := before
 			nickname, invalid := "Must not be stored", "invalid"
-			var username, loadMode, avatar, locale *string
+			var username, avatar, locale *string
 			work := ctx
 			want := domain.ErrValidation
 			switch field {
-			case "load-mode":
-				loadMode = &invalid
 			case "avatar":
 				avatar = &invalid
 			case "locale":
@@ -171,7 +169,7 @@ func TestPGAccountPreferencesInvalidAndCanceledUpdatesReturnZero(test *testing.T
 				stop()
 				work, want = canceled, context.Canceled
 			}
-			updated, err := fixture.identity.UpdateProfile(work, user, username, &nickname, loadMode, avatar, locale)
+			updated, err := fixture.identity.UpdateProfile(work, user, username, &nickname, avatar, locale)
 			if !errors.Is(err, want) || !reflect.DeepEqual(updated, domain.User{}) {
 				test.Fatalf("failed profile update exposed a result: %+v %v, want zero and %v", updated, err, want)
 			}

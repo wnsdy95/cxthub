@@ -17,7 +17,7 @@ func (s *FSStore) RequireDocumentIdentity(ctx context.Context, repo domain.Conte
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	lock := s.refLock(repo, domain.RefBranch, "")
+	lock := s.repoLock(repo)
 	lock.Lock()
 	defer lock.Unlock()
 	r, err := s.GetRepo(ctx, repo)

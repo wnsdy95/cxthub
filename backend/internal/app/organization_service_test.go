@@ -86,7 +86,7 @@ func TestOrganizationOwnerAccessAndExplicitBreakGlassAudit(t *testing.T) {
 		t.Fatalf("organization owner missing inherited repository role: role=%q ok=%v", role, ok)
 	}
 	renamedAdmin := "renamed-admin"
-	if _, err := svc.UpdateProfile(ctx, admin, &renamedAdmin, nil, nil, nil, nil); err != nil {
+	if _, err := svc.UpdateProfile(ctx, admin, &renamedAdmin, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	stableRepository, err := st.GetRepository(ctx, repository.ID)
@@ -240,7 +240,7 @@ func TestOrganizationSlugCannotClaimPersonalNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := "renamed"
-	if _, err := svc.UpdateProfile(ctx, claimed, &next, nil, nil, nil, nil); err != nil {
+	if _, err := svc.UpdateProfile(ctx, claimed, &next, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	oldAlias, err := st.GetNamespaceBySlug(ctx, "acme")

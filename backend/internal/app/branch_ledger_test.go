@@ -120,7 +120,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 	}
 
 	// A name nobody registered: the server makes the ID when it first sees it.
-	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", "", one, false, "delivery-1"); err != nil {
+	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", one, "delivery-1"); err != nil {
 		t.Fatal(err)
 	}
 	seen := lifetimes("from-the-web")
@@ -128,7 +128,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 		t.Fatalf("first sight: %+v", seen)
 	}
 	// Later pushes to the name, forced or not, keep its ID.
-	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", one, two, true, "delivery-2"); err != nil {
+	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", two, "delivery-2"); err != nil {
 		t.Fatal(err)
 	}
 	if again := lifetimes("from-the-web"); len(again) != 1 || again[0].LedgerID != seen[0].LedgerID {
@@ -140,7 +140,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 		t.Fatalf("registering after the server: %+v %v", results, err)
 	}
 	// The push that leaves the name without a commit closes the lifetime.
-	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", two, gone, false, "delivery-3"); err != nil {
+	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", gone, "delivery-3"); err != nil {
 		t.Fatal(err)
 	}
 	closed := lifetimes("from-the-web")
@@ -148,7 +148,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 		t.Fatalf("after the deletion: %+v", closed)
 	}
 	// The same name again is another lifetime.
-	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", "", one, false, "delivery-4"); err != nil {
+	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", one, "delivery-4"); err != nil {
 		t.Fatal(err)
 	}
 	reused := lifetimes("from-the-web")
@@ -156,7 +156,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 		t.Fatalf("a reused name: %+v", reused)
 	}
 	// The deletion delivered again does not close the new lifetime.
-	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", two, gone, false, "delivery-3"); err != nil {
+	if _, err := service.ObserveRemotePush(ctx, origin, "refs/heads/from-the-web", gone, "delivery-3"); err != nil {
 		t.Fatal(err)
 	}
 	if after := lifetimes("from-the-web"); len(after) != 2 || !after[1].Alive() {
@@ -165,7 +165,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 	// An observation of something that is not a branch, and of a name the
 	// ledger cannot hold, leave the ledger as it was.
 	for _, ref := range []string{"refs/tags/v1", "refs/heads/" + strings.Repeat("n", 300)} {
-		observation := domain.GitRefObservation{RepoID: repo, GitOrigin: origin, Source: "github-push", Ref: ref, After: one, Delivery: "delivery-5"}.WithID()
+		observation := domain.GitRefObservation{RepoID: repo, GitOrigin: origin, Source: "github-push", Ref: ref, After: one, Delivery: "delivery-5", Provider: &domain.GitProviderObservation{}}.WithID()
 		if err := recordBranchLedgerObservation(ctx, storage, observation, time.Now().UTC()); err != nil {
 			t.Fatalf("%s: %v", ref[:16], err)
 		}
@@ -185,7 +185,7 @@ func TestBranchLedgerFollowsPushObservations(t *testing.T) {
 }
 
 func TestBranchLedgerObservationWithoutALedgerStoreIsSkipped(t *testing.T) {
-	observation := domain.GitRefObservation{RepoID: hh(t.Name()), Ref: "refs/heads/main", After: strings.Repeat("1", 40)}.WithID()
+	observation := domain.GitRefObservation{RepoID: hh(t.Name()), Source: "github-push", Ref: "refs/heads/main", After: strings.Repeat("1", 40), Delivery: "delivery", Provider: &domain.GitProviderObservation{}}.WithID()
 	if err := recordBranchLedgerObservation(context.Background(), struct{}{}, observation, time.Now()); err != nil {
 		t.Fatalf("a store without a ledger: %v", err)
 	}

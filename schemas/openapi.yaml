@@ -8,7 +8,7 @@ info:
     This file is the common wire contract for the CLI, backend, and frontend.
     The CLI and backend do not share a Go module, so this schema defines their
     interoperable HTTP surface.
-    CIR object schema: schemas/cir.schema.json. Manifest schema: schemas/manifest.schema.json.
+    CIR object schema: schemas/cir.schema.json.
   contact:
     name: cxthub maintainers
     url: https://github.com/wnsdy95/cxthub
@@ -30,11 +30,11 @@ security:
 
 # Permission model (5-step role ladder — serial AND gates):
 #   Authentication → repository membership → role (viewer→puller→member→maintainer→owner) → action-specific policies.
-#   viewer     read-only (web context·graph)          — GET repos/snapshots/docs/memories/diff
-#   puller     +local synchronization of team assets  — GET settings/secrets/settings-objects, pull/objects
-#   member     +Context write (default)               — push/*, PUT refs/memories/settings-objects, fork
-#   maintainer +Team asset write·invite creation          — PUT settings/secrets, PATCH about, POST invites
-#   owner      +Operations                              — PATCH repository, member management, transfer(creator)
+#   viewer     read-only (web sessions·graph)         — GET repos, anchored-sessions, anchored-notes, worktrees, remote-git
+#   puller     +team assets                           — GET settings/secrets
+#   member     +session upload and notes (default)    — push/*, PUT anchored-sessions/summaries/branch-ids/worktrees, anchored-notes writes
+#   maintainer +Team asset write·invite creation      — PUT settings/secrets, PATCH about, POST invites
+#   owner      +Operations                            — PATCH repository, member management, transfer(creator)
 # viewer level GET is allowed for anonymous if public repository. Policy(secrets/settings_policy) is
 # maintainer gate can narrow down to 'owner only'.
 components:
@@ -978,20 +978,6 @@ components:
       pattern: "^sha256:[0-9a-f]{64}$"
       example: "sha256:9f1c0000000000000000000000000000000000000000000000000000000000ab"
 
-    Author:
-      type: object
-      description: "Snapshot author. domain.TeamIdentity projection."
-      required: [name, email, team]
-      additionalProperties: false
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-          format: email
-        team:
-          type: string
-
     StoragePolicy:
       type: object
       properties:
@@ -1032,87 +1018,6 @@ components:
         Missing or empty means the existing canonical-CIR SHA-256 identity.
         The manifest-root value is staged metadata; current publication paths
         reject it until dual readers and peer negotiation are enabled.
-
-    Snapshot:
-      type: object
-      description: |
-        Snapshot metadata. ID points to the body and natural parents are immutable.
-        Branches and graft overlay fields are outside the content hash and use
-        explicit merge or compare-and-swap rules. The body is a separate
-        docs/{hash} resource.
-      required: [id, repo_id, branch, parents, doc_hash, provider, fidelity, message, author, created_at]
-      additionalProperties: false
-      properties:
-        id:
-          $ref: "#/components/schemas/ContentHash"
-        repo_id:
-          $ref: "#/components/schemas/ContentHash"
-        branch:
-          type: string
-        parents:
-          type: array
-          items:
-            $ref: "#/components/schemas/ContentHash"
-          description: "List of parent snapshot IDs. DAG root is an empty array."
-        doc_hash:
-          $ref: "#/components/schemas/ContentHash"
-        doc_identity:
-          $ref: "#/components/schemas/DocumentIdentity"
-        provider:
-          type: string
-          enum: [claude, codex, unknown]
-        fidelity:
-          type: string
-          enum: [full, reconstructed, memory]
-        message:
-          type: string
-        author:
-          $ref: "#/components/schemas/Author"
-        created_at:
-          type: string
-          format: date-time
-        memory_hash:
-          $ref: "#/components/schemas/ContentHash"
-          description: "Optional MemoryDigest pointer attached to the raw document."
-        claude_settings:
-          $ref: "#/components/schemas/ContentHash"
-          description: "Commit point .claude folder snapshot hash (content-addressed, optional)."
-        agents_settings:
-          $ref: "#/components/schemas/ContentHash"
-          description: "Commit snapshot hash of .agents folder (optional)."
-        codex_settings:
-          $ref: "#/components/schemas/ContentHash"
-          description: "Commit point .codex folder snapshot hash (optional)."
-        grafted:
-          type: boolean
-          description: "graft(diverged append) overlay edge attached (UI merge indicator). ID calculation excluded."
-        graft_parents:
-          type: array
-          items:
-            $ref: "#/components/schemas/ContentHash"
-          description: "The server appends to diverged branches, and the reachability overlay parent (Parents remain unchanged). Reachability = Parents ∪ GraftParents. ID calculation excluded."
-        graft_seq:
-          type: integer
-          format: int64
-          minimum: 0
-          maximum: 9223372036854775807
-          description: "graft (set, seq) version register — join reordering support for supersede (edge removal). High seq replaces the entire set, while seq=0 allows legacy union of sets. seq>0 version conflicts are resolved by adjusting the server projection to the base. ID calculation excluded."
-        branches:
-          type: array
-          readOnly: true
-          items: { type: string }
-          description: "branch reflog projection of git branch membership. branch is the initial capture compatible field, and content dedup snapshot can belong to multiple branches."
-        session_id:
-          type: string
-          description: "Original agent session identifier (meta for session boundary). ID calculation excluded."
-        models:
-          type: array
-          items:
-            type: string
-          description: "List of models that appeared in the session (for AI icon participation). ID calculation excluded."
-        compaction_count:
-          type: integer
-          description: "Number of context compression (compact_boundary) times for the session. If greater than parent, it includes a compression marker (◈). ID calculation excluded."
 
     SessionDoc:
       type: object
@@ -1243,26 +1148,6 @@ components:
           type: boolean
           readOnly: true
           description: "Deployment policy permitting new root jobs and authorized opt-in; false does not erase an existing requirement."
-        initial_anchor_available:
-          type: boolean
-          readOnly: true
-          description: "GET Repo with initial_branch only: matching protected creation receipt and branch-local availability in one coherent read. Omitted/false without the query. Prior publication of other branches is allowed. Not authority or a gate for modern member publication. Never persisted from client registration input; FS omits/returns false."
-        branch_pull_version:
-          type: integer
-          enum: [0, 1]
-          readOnly: true
-          description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Absent/zero means legacy full transfer. One requires repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol. After a one response, errors are failures, never fallback permission."
-        catalog_merkle_version:
-          type: integer
-          enum: [0, 1]
-          readOnly: true
-          description: "Optional runtime Merkle capability. With catalog_version 1, an expired checkpoint can reconcile mismatched metadata buckets. Absent/zero retains full-baseline reset. Unknown versions and advertised-endpoint failures must fail. Not persisted configuration or object integrity proof."
-        catalog_version:
-          type: integer
-          enum: [0, 1]
-          readOnly: true
-          description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Only absent/zero permits legacy full-manifest fallback. One requires a catalog store and repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol and branch_pull_version. Unknown versions must fail. After a one response, catalog endpoint errors are failures, never fallback permission."
-        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Version 1 requires explicit legacy upgrade or atomic new-repository initialization; existing repositories are never silently upgraded." }
         id:
           $ref: "#/components/schemas/ContentHash"
         remote_url:
@@ -1290,9 +1175,6 @@ components:
           type: array
           items:
             type: string
-        protect_default:
-          type: boolean
-          description: "If set, rejects --force ref move of default branch (protected branch)."
 
     ErrorResponse:
       type: object
@@ -1353,10 +1235,6 @@ components:
         name: { type: string }
         username: { type: string }
         nickname: { type: string }
-        load_mode:
-          type: string
-          description: "Personal load default mode (web settings, CLI consumption). Empty value = unset (falls back to full)."
-          enum: ["", full, reconstructed, memory]
         avatar: { type: string, description: "Profile picture data URL (data:image/…;base64,…). '' = unset." }
         locale:
           type: string
@@ -2133,12 +2011,6 @@ paths:
       - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getRepo
-      parameters:
-        - name: initial_branch
-          in: query
-          required: false
-          description: Canonical branch name for legacy observation availability; absent means false. Empty, repeated or invalid names are rejected.
-          schema: { type: string, minLength: 1, maxLength: 1024 }
       summary: Single repo retrieval
       tags: [repos]
       responses:
@@ -2156,7 +2028,7 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   # =========================================================================
-  # Manifest
+  # Sessions · Branch ledger · Notes · Worktrees · Remote Git · Upload
   # =========================================================================
   /repos/{repoID}/anchored-sessions:
     parameters:
@@ -2251,8 +2123,8 @@ paths:
         Member required, rechecked inside the repository transaction. The account the session belongs to may
         remove it, and so may a maintainer of the repository; any other member is refused, in the same way for a
         session that exists and for one that does not. The session's report goes with its commit links, its
-        summaries and its open ranges, and its conversation document is deleted when no other report and no
-        snapshot of the repository uses it. The sessions it spawned, as far as they belong to the same account,
+        summaries and its open ranges, and its conversation document is deleted when no other report of the
+        repository uses it. The sessions it spawned, as far as they belong to the same account,
         are removed with it. A removal is remembered for every removed session: no report is taken for it again
         until the removal is taken back. Removing a session that is already removed changes nothing and answers
         the removal that stands. Manual notes are not touched.
@@ -2799,7 +2671,7 @@ paths:
       summary: List the manual notes the caller may read
       description: >-
         Readable by whoever may view the repository, which is a viewer and, in a public repository, a visitor who is not signed in. A manual note is what a person wrote about a commit, a branch or a worktree; it is
-        kept apart from captured sessions. Returns the notes the signed-in account wrote, and other accounts'
+        kept apart from the sessions read from the agents' records. Returns the notes the signed-in account wrote, and other accounts'
         notes about something that is open to the team: a commit the remote holds, or a lifetime of a branch
         name in the ledger. A note about a worktree, or about a branch named without a lifetime, is its
         author's alone. Oldest first.
@@ -2819,7 +2691,7 @@ paths:
     post:
       operationId: createAnchoredNote
       summary: Write a manual note about a commit, a branch or a worktree
-      description: Member required, rechecked inside the repository transaction. The author is the signed-in account. Known secret formats in the text are masked before it is stored, with the patterns the CLI applies to a captured session; the literal values of a repository's own secrets file never reach the server and cannot be applied. A note names a lifetime of a branch name only when the ledger holds that lifetime under that name. Writing a note does not advance the repository revision.
+      description: Member required, rechecked inside the repository transaction. The author is the signed-in account. Known secret formats in the text are masked before it is stored, with the patterns the CLI applies to an uploaded session; the literal values of a repository's own secrets file never reach the server and cannot be applied. A note names a lifetime of a branch name only when the ledger holds that lifetime under that name. Writing a note does not advance the repository revision.
       tags: [anchored-notes]
       requestBody:
         required: true
@@ -3183,7 +3055,7 @@ paths:
       operationId: pushNegotiate
       summary: Push Negotiation — Server returns list of needed objects (Step A)
       description: |
-        If the client presents snapshot/doc hashes it can send,
+        If the client presents the doc and chunk hashes it can send,
         the server returns only the ones it does not have. Have/Want negotiation.
         This is step A of push negotiation.
       tags: [push]
@@ -3193,11 +3065,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [snapshot_haves, doc_haves]
+              required: [doc_haves]
               additionalProperties: false
               properties:
                 snapshot_haves:
                   type: array
+                  deprecated: true
+                  description: "Ignored. Older clients still send an empty array; the server no longer stores captures."
                   items:
                     $ref: "#/components/schemas/ContentHash"
                 doc_haves:
@@ -3216,13 +3090,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [snapshot_wants, doc_wants]
+                required: [doc_wants]
                 additionalProperties: false
                 properties:
-                  snapshot_wants:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ContentHash"
                   doc_wants:
                     type: array
                     items:
@@ -3240,10 +3110,11 @@ paths:
                     description: "Durable document acceptance at POST /push/doc-jobs. Caller cancellation does not cancel accepted work."
                   prepared_memory_archives_supported:
                     type: boolean
-                    description: "Memory archive publication accepts an omitted body after durable document preparation; current owned content is reverified transactionally."
+                    deprecated: true
+                    description: "Kept for older clients, which no longer act on it. True when the server has both durable document jobs and stored document verification."
                   bounded_chunks_supported:
                     type: boolean
-                    description: "If true, chunk bodies are sent to /push/chunks and /pull/chunks paths."
+                    description: "If true, chunk bodies are sent to /push/chunks."
                   chunk_formats_supported:
                     type: array
                     description: "Manifest formats accepted by this server. Absence means a pre-v2 server."
@@ -3279,7 +3150,7 @@ paths:
         Requires member access and repository-owned chunks already staged via /push/chunks.
         At most 2048 chunks, 256 KiB manifest and 512 MiB assembled document.
         At most 32 pending jobs per repository. Same repo/hash/manifest replays the same job.
-        Acceptance never moves refs or creates snapshots. Poll until completed before publishing metadata.
+        Acceptance makes nothing visible by itself. Poll until completed before referring to the document.
         Integrity failure rejects the job; temporary storage failures retry durably.
       requestBody:
         required: true
@@ -3341,16 +3212,11 @@ paths:
       operationId: pushObjects
       summary: Object batch upload (Step B)
       description: |
-        Uploads a batch of missing snapshots and docs.
+        Uploads a batch of missing docs.
         The server recalculates each object hash for integrity verification.
         A transaction with no partial failures. Rejects the entire batch on validation failure with 422 integrity_violation.
         This is step B of push negotiation.
       tags: [push]
-      parameters:
-        - name: X-Cxt-Identity
-          in: header
-          schema:
-            type: string
       requestBody:
         required: true
         content:
@@ -3361,8 +3227,10 @@ paths:
               properties:
                 snapshots:
                   type: array
-                  items:
-                    $ref: "#/components/schemas/Snapshot"
+                  deprecated: true
+                  maxItems: 0
+                  description: "Captures are no longer stored. Older clients send an empty array; a batch with any capture is refused whole with 422 validation (this server stores sessions, not captures)."
+                  items: {}
                 docs:
                   type: array
                   items:
@@ -3380,24 +3248,18 @@ paths:
                     $ref: "#/components/schemas/ChunkObject"
       responses:
         "200":
-          description: OK — Storage/dedup statistics.
+          description: OK — Storage/dedup statistics. The keys keep the server's field names, not snake_case.
           content:
             application/json:
               schema:
                 type: object
-                required: [stored_snapshots, stored_docs, deduped_snapshots, deduped_docs]
+                required: [StoredDocs, DedupedDocs]
                 additionalProperties: false
                 properties:
-                  stored_snapshots:
+                  StoredDocs:
                     type: integer
                     minimum: 0
-                  stored_docs:
-                    type: integer
-                    minimum: 0
-                  deduped_snapshots:
-                    type: integer
-                    minimum: 0
-                  deduped_docs:
+                  DedupedDocs:
                     type: integer
                     minimum: 0
         "401":
@@ -3411,7 +3273,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
-          description: "Hash mismatch (integrity_violation) or object precedence violation (missing_object)."
+          description: "Hash mismatch (integrity_violation), or an invalid batch, including one that carries a capture (validation)."
           content:
             application/json:
               schema:
@@ -3478,7 +3340,7 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
   # =========================================================================
-  # Pull Negotiation
+  # Team assets
   # =========================================================================
   /repos/{repoID}/about:
     parameters:
@@ -3494,12 +3356,11 @@ paths:
           application/json:
             schema:
               type: object
+              description: "Absent fields are left as they are. Older clients may also send default_branch and protect_default; both are ignored."
               properties:
                 description: { type: string }
                 website: { type: string }
                 topics: { type: array, items: { type: string } }
-                default_branch: { type: string }
-                protect_default: { type: boolean, description: "Default branch --force move forbidden (protected branch)" }
                 required_doc_identity:
                   $ref: "#/components/schemas/DocumentIdentity"
                   description: "Explicit monotonic opt-in. Requires manage permission, compatible peer/binary, publication enabled and transactional storage. Unknown/null or downgrade is rejected; omission preserves the requirement."
@@ -3855,8 +3716,8 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     patch:
       operationId: updateMe
-      summary: Account Settings — nickname (free) / username (heavy, URL change) / load_mode
-      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated repository is synchronized. load_mode is the default CLI load mode."
+      summary: Account Settings — nickname (free) / username (heavy, URL change) / avatar / locale
+      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated repository is synchronized. Older clients may also send load_mode, the removed load preference; it is ignored."
       tags: [identity]
       requestBody:
         required: true
@@ -3867,7 +3728,6 @@ paths:
               properties:
                 username: { type: string }
                 nickname: { type: string }
-                load_mode: { type: string, enum: ["", full, reconstructed, memory] }
                 avatar: { type: string, description: "Profile picture data URL (empty value = remove)" }
                 locale: { type: string, enum: ["", ko, en], description: "UI display language (empty value = unset)" }
       responses:
@@ -5734,14 +5594,8 @@ paths:
 tags:
   - name: repos
     description: Repo registration and retrieval.
-  - name: manifest
-    description: "Manifest for push/pull negotiation (have/want 1st step)."
-  - name: branches
-    description: Convenience branch retrieval.
-  - name: snapshots
-    description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
   - name: anchored-sessions
-    description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. Readable only by the uploading account until a published-by-push rule exists."
+    description: "Reports a CLI computes for coding-agent sessions from the records the agents and Git left behind: where each session is cut at the commits it made. The uploading account reads its own reports; whoever may view the repository reads the parts that opened when what they explain was pushed."
   - name: branch-ledger
     description: One permanent record for each lifetime of a branch name on the remote, and the IDs joined to it.
   - name: anchored-notes
@@ -5750,20 +5604,10 @@ tags:
     description: The working folders of the repository on a member's machines, by name. Readable only by the member who reported them.
   - name: remote-git
     description: The commits, branch heads and pull requests of a repository as the server itself read them from its Git hosting provider.
-  - name: docs
-    description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
-  - name: refs
-    description: "HEAD/branch/session pointers and immutable tags. Ref movement uses CAS; cxt/branch-state/v1 tags carry branch lifecycle events."
-  - name: memories
-    description: "snapshot attachment MemoryDigest."
   - name: push
-    description: "Push negotiation in three stages (negotiate → objects → bounded ref batch, with single-ref fallback for older servers)."
-  - name: pull
-    description: "Pull negotiation (manifest GET → pull/objects → local ref merge)."
-  - name: actions
-    description: "common use-case actions for web UI / CLI (diff / fork / load)."
+    description: "Conversation document upload: negotiate, then send chunks and a durable document job, or objects on the older path."
   - name: assets
-    description: "repo team assets — About / team settings bundle / E2E secret envelope / commit attachment settings object."
+    description: "repo team assets — About / team settings bundle / E2E secret envelope."
   - name: identity
     description: "authentication (session exchange) · account (username/nickname) · CLI token."
   - name: repositories

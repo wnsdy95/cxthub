@@ -42,9 +42,9 @@ func (s *PostgresStore) UpsertUser(ctx context.Context, u domain.User) error {
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO users (id, email, name, username, nickname, load_mode, avatar, locale) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		 ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email, name=EXCLUDED.name, username=EXCLUDED.username, nickname=EXCLUDED.nickname, load_mode=EXCLUDED.load_mode, avatar=EXCLUDED.avatar, locale=EXCLUDED.locale`,
-		u.ID, u.Email, u.Name, u.Username, u.Nickname, u.LoadMode, u.Avatar, u.Locale)
+		`INSERT INTO users (id, email, name, username, nickname, avatar, locale) VALUES ($1,$2,$3,$4,$5,$6,$7)
+		 ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email, name=EXCLUDED.name, username=EXCLUDED.username, nickname=EXCLUDED.nickname, avatar=EXCLUDED.avatar, locale=EXCLUDED.locale`,
+		u.ID, u.Email, u.Name, u.Username, u.Nickname, u.Avatar, u.Locale)
 	return mapPGConstraint(err)
 }
 
@@ -53,8 +53,8 @@ func (s *PostgresStore) GetUser(ctx context.Context, id string) (domain.User, er
 		return domain.User{}, err
 	}
 	var u domain.User
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, email, name, COALESCE(username,''), COALESCE(nickname,''), COALESCE(load_mode,''), COALESCE(avatar,''), COALESCE(locale,''), created_at FROM users WHERE id=$1`, id).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Username, &u.Nickname, &u.LoadMode, &u.Avatar, &u.Locale, &u.CreatedAt)
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, email, name, COALESCE(username,''), COALESCE(nickname,''), COALESCE(avatar,''), COALESCE(locale,''), created_at FROM users WHERE id=$1`, id).
+		Scan(&u.ID, &u.Email, &u.Name, &u.Username, &u.Nickname, &u.Avatar, &u.Locale, &u.CreatedAt)
 	if err != nil {
 		return domain.User{}, mapNoRows(err)
 	}
@@ -70,8 +70,8 @@ func (s *PostgresStore) GetUser(ctx context.Context, id string) (domain.User, er
 // GetUserByUsername finds a user by handle (target column of partial unique index).
 func (s *PostgresStore) GetUserByUsername(ctx context.Context, username string) (domain.User, error) {
 	var u domain.User
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, email, name, COALESCE(username,''), COALESCE(nickname,''), COALESCE(load_mode,''), COALESCE(avatar,''), COALESCE(locale,''), created_at FROM users WHERE username=$1`, username).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Username, &u.Nickname, &u.LoadMode, &u.Avatar, &u.Locale, &u.CreatedAt)
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, email, name, COALESCE(username,''), COALESCE(nickname,''), COALESCE(avatar,''), COALESCE(locale,''), created_at FROM users WHERE username=$1`, username).
+		Scan(&u.ID, &u.Email, &u.Name, &u.Username, &u.Nickname, &u.Avatar, &u.Locale, &u.CreatedAt)
 	if err != nil {
 		return domain.User{}, mapNoRows(err)
 	}

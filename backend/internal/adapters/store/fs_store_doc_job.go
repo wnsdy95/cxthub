@@ -301,7 +301,7 @@ func (s *FSStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJo
 		defer retention.Unlock()
 	}
 	// Serialize requirement changes through publication and the job receipt.
-	metadata := s.refLock(j.RepoID, domain.RefBranch, "")
+	metadata := s.repoLock(j.RepoID)
 	metadata.Lock()
 	defer metadata.Unlock()
 	repo, err := s.GetRepo(ctx, j.RepoID)

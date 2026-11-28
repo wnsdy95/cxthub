@@ -55,7 +55,7 @@ func userPreferencesUserPG(test *testing.T, ctx context.Context, storage *Postgr
 	test.Helper()
 	user := domain.User{
 		ID: domain.NewID("user_"), Email: "stored@example.test", Name: "Stored identity name",
-		Username: domain.NewID("preferences"), Nickname: "Stored alias", LoadMode: "reconstructed",
+		Username: domain.NewID("preferences"), Nickname: "Stored alias",
 		Avatar: "data:image/png;base64,AQID", Locale: "en",
 	}
 	if err := storage.UpsertUser(ctx, user); err != nil {
@@ -95,7 +95,7 @@ func userPreferencesPausedPG(test *testing.T, ctx context.Context, pause *userPr
 
 func TestPGUserPreferencesPartialFieldsPreserveStoredIdentity(test *testing.T) {
 	fixture, storage := authorityScopePG(test)
-	for _, field := range []string{"nickname", "load-mode", "avatar", "locale", "clear-nickname", "clear-load-mode", "clear-avatar", "clear-locale", "unchanged"} {
+	for _, field := range []string{"nickname", "avatar", "locale", "clear-nickname", "clear-avatar", "clear-locale", "unchanged"} {
 		test.Run(field, func(test *testing.T) {
 			before := userPreferencesUserPG(test, fixture.ctx, storage)
 			expected := before
@@ -104,9 +104,6 @@ func TestPGUserPreferencesPartialFieldsPreserveStoredIdentity(test *testing.T) {
 			case "nickname":
 				patch.Nickname = userPreferencesStringPG("  New display alias  ")
 				expected.Nickname = "New display alias"
-			case "load-mode":
-				patch.LoadMode = userPreferencesStringPG("  memory  ")
-				expected.LoadMode = "memory"
 			case "avatar":
 				patch.Avatar = userPreferencesStringPG("data:image/webp;base64,BAUG")
 				expected.Avatar = "data:image/webp;base64,BAUG"
@@ -116,9 +113,6 @@ func TestPGUserPreferencesPartialFieldsPreserveStoredIdentity(test *testing.T) {
 			case "clear-nickname":
 				patch.Nickname = userPreferencesStringPG("")
 				expected.Nickname = ""
-			case "clear-load-mode":
-				patch.LoadMode = userPreferencesStringPG("")
-				expected.LoadMode = ""
 			case "clear-avatar":
 				patch.Avatar = userPreferencesStringPG("")
 				expected.Avatar = ""
@@ -174,10 +168,10 @@ func TestPGUserPreferencesConcurrentPartialWritesAndNonKeyLock(test *testing.T) 
 	}
 	work, _, secondDone, secondUsers := userPreferencesRunPG(test, fixture.ctx, second, before.ID, domain.UserPreferencesPatch{Locale: userPreferencesStringPG("ko")})
 	authorityScopeWaitPG(test, work, fixture.observer, firstPID, secondPID, "users", secondDone)
-	otherWork, _, otherDone, otherUsers := userPreferencesRunPG(test, fixture.ctx, unrelated, other.ID, domain.UserPreferencesPatch{LoadMode: userPreferencesStringPG("full")})
+	otherWork, _, otherDone, otherUsers := userPreferencesRunPG(test, fixture.ctx, unrelated, other.ID, domain.UserPreferencesPatch{Nickname: userPreferencesStringPG("Unrelated alias")})
 	authorityScopeDonePG(test, otherWork, otherDone)
 	otherExpected := other
-	otherExpected.LoadMode = "full"
+	otherExpected.Nickname = "Unrelated alias"
 	if updated := <-otherUsers; !reflect.DeepEqual(updated, otherExpected) {
 		test.Fatal("unrelated user preferences did not progress independently", updated, otherExpected)
 	}
@@ -242,7 +236,7 @@ func TestPGUserPreferencesWaitsForWideIdentityAndKeepsLatestIdentity(test *testi
 	latest.Name = "Latest authenticated name"
 	latest.Email = "latest@example.test"
 	latest.Username = domain.NewID("renamed")
-	latest.LoadMode = "full"
+	latest.Locale = "ko"
 	held, _, holderDone := authorityScopeRunPG(test, fixture.ctx, func(ctx context.Context) error {
 		return holder.WithinIdentity(ctx, func(bound context.Context) error {
 			if err := holder.UpsertUser(bound, latest); err != nil {
@@ -324,7 +318,6 @@ func TestPGUserPreferencesInvalidDomainDataReturnsZeroWithoutWrites(test *testin
 		{name: "control-id", id: "invalid\x00user", want: domain.ErrValidation},
 		{name: "oversized-id", id: strings.Repeat("user", 129), want: domain.ErrValidation},
 		{name: "missing-user", id: domain.NewID("user_"), want: domain.ErrNotFound},
-		{name: "unknown-load-mode", id: before.ID, patch: domain.UserPreferencesPatch{LoadMode: userPreferencesStringPG("unsupported")}, want: domain.ErrValidation},
 		{name: "unknown-locale", id: before.ID, patch: domain.UserPreferencesPatch{Locale: userPreferencesStringPG("unsupported")}, want: domain.ErrValidation},
 		{name: "remote-avatar", id: before.ID, patch: domain.UserPreferencesPatch{Avatar: userPreferencesStringPG("https://example.test/tracking.png")}, want: domain.ErrValidation},
 		{name: "active-avatar", id: before.ID, patch: domain.UserPreferencesPatch{Avatar: userPreferencesStringPG("data:image/svg+xml;base64,PHN2Zy8+")}, want: domain.ErrValidation},

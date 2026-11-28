@@ -7,15 +7,16 @@ import (
 	"strings"
 )
 
-// RepoProfilePatch preserves absent fields and applies configuration and about
-// metadata together in one application transaction.
+// RepoProfilePatch preserves absent fields and applies the document identity
+// requirement and about metadata together in one application transaction.
+// An older client may still send default_branch and protect_default: they are
+// ignored, since the default branch is set at registration and branch
+// protection is gone.
 type RepoProfilePatch struct {
 	RequiredDocIdentity *domain.DocumentIdentity `json:"required_doc_identity"`
 	Description         *string                  `json:"description"`
 	Website             *string                  `json:"website"`
 	Topics              []string                 `json:"topics"`
-	DefaultBranch       *string                  `json:"default_branch"`
-	ProtectDefault      *bool                    `json:"protect_default"`
 }
 
 // Keep the established decoding of legacy profile fields. The new requirement

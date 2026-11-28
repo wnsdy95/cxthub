@@ -143,12 +143,12 @@ func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) (st
 //   - nickname: display alias — free change (empty string = remove).
 //   - username: personal Namespace first segment. The previous slug is retained
 //     as an alias so existing URL-derived RepoIDs and CLI remotes keep working.
-func (service *IdentityService) mutateUpdateProfile(ctx context.Context, user domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
+func (service *IdentityService) mutateUpdateProfile(ctx context.Context, user domain.User, username, nickname, avatar, locale *string) (domain.User, error) {
 	original, err := service.repositories.GetUser(ctx, user.ID)
 	if err != nil {
 		return domain.User{}, err
 	}
-	user, err = domain.ApplyUserPreferences(original, domain.UserPreferencesPatch{Nickname: nickname, LoadMode: loadMode, Avatar: avatar, Locale: locale})
+	user, err = domain.ApplyUserPreferences(original, domain.UserPreferencesPatch{Nickname: nickname, Avatar: avatar, Locale: locale})
 	if err != nil {
 		return domain.User{}, err
 	}

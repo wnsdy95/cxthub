@@ -43,8 +43,8 @@ func (storage *PostgresStore) UpdateUserPreferences(ctx context.Context, userID 
 
 func (storage *PostgresStore) updateUserPreferences(ctx context.Context, userID string, patch domain.UserPreferencesPatch) (domain.User, error) {
 	var user domain.User
-	err := storage.db(ctx).QueryRow(ctx, `SELECT id, email, name, COALESCE(username,''), COALESCE(nickname,''), COALESCE(load_mode,''), COALESCE(avatar,''), COALESCE(locale,''), created_at FROM users WHERE id=$1 FOR NO KEY UPDATE`, userID).
-		Scan(&user.ID, &user.Email, &user.Name, &user.Username, &user.Nickname, &user.LoadMode, &user.Avatar, &user.Locale, &user.CreatedAt)
+	err := storage.db(ctx).QueryRow(ctx, `SELECT id, email, name, COALESCE(username,''), COALESCE(nickname,''), COALESCE(avatar,''), COALESCE(locale,''), created_at FROM users WHERE id=$1 FOR NO KEY UPDATE`, userID).
+		Scan(&user.ID, &user.Email, &user.Name, &user.Username, &user.Nickname, &user.Avatar, &user.Locale, &user.CreatedAt)
 	if err != nil {
 		return domain.User{}, mapNoRows(err)
 	}
@@ -58,7 +58,7 @@ func (storage *PostgresStore) updateUserPreferences(ctx context.Context, userID 
 	if err != nil {
 		return domain.User{}, err
 	}
-	result, err := storage.db(ctx).Exec(ctx, `UPDATE users SET nickname=$2, load_mode=$3, avatar=$4, locale=$5 WHERE id=$1`, userID, updated.Nickname, updated.LoadMode, updated.Avatar, updated.Locale)
+	result, err := storage.db(ctx).Exec(ctx, `UPDATE users SET nickname=$2, avatar=$3, locale=$4 WHERE id=$1`, userID, updated.Nickname, updated.Avatar, updated.Locale)
 	if err != nil {
 		return domain.User{}, mapPGConstraint(err)
 	}

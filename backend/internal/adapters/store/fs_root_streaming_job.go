@@ -59,7 +59,7 @@ func (publication *fsStreamingRootPublication) Complete(ctx context.Context, job
 	retention := store.oauthLock()
 	retention.Lock()
 	defer retention.Unlock()
-	metadata := store.refLock(job.RepoID, domain.RefBranch, "")
+	metadata := store.repoLock(job.RepoID)
 	metadata.Lock()
 	defer metadata.Unlock()
 	repo, err := store.GetRepo(ctx, job.RepoID)

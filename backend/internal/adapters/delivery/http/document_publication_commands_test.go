@@ -79,7 +79,7 @@ func newWave58DocumentPublicationHTTPFixture(test *testing.T) wave58DocumentPubl
 	}}
 	identity := &repositoryAssetHTTPIdentity{repository: domain.Repository{ID: backend.repository.RepositoryID}, role: domain.RoleMember}
 	commands := &wave58DocumentPublicationHTTPCommands{
-		commitResult: inbound.CommitOutput{StoredSnapshots: 2, StoredDocs: 3, DedupedSnapshots: 5, DedupedDocs: 7},
+		commitResult: inbound.CommitOutput{StoredDocs: 3, DedupedDocs: 7},
 		chunksResult: inbound.StoreChunksOutput{Stored: 11, Deduped: 13},
 	}
 	server := NewServer(backend, identity)
@@ -103,13 +103,9 @@ func wave58DocumentPublicationHTTPRequests(test *testing.T) []wave58DocumentPubl
 	document := identityIngressDoc(test, "publication transport retains the exact CIR")
 	chunk := inbound.ChunkObject{Hash: domain.HashContent([]byte("publication chunk")), Data: []byte("publication chunk")}
 	objects := objectsBody{
-		Snapshots: []domain.Snapshot{{
-			ID: document.Hash, RepoID: domain.HashContent([]byte("client supplied repository")), DocHash: document.Hash,
-			Branch: "publication-branch", Parents: []domain.ContentHash{domain.HashContent([]byte("publication parent"))},
-			Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, Message: "retain wire metadata",
-			CreatedAt: time.Date(2026, time.October, 28, 1, 2, 3, 0, time.UTC),
-		}},
-		Docs: []domain.SessionDoc{document},
+		// An older client's capture is only counted, so that the command can refuse it.
+		Snapshots: []json.RawMessage{json.RawMessage(`{"id":"` + string(document.Hash) + `","message":"an older client's capture"}`)},
+		Docs:      []domain.SessionDoc{document},
 		ChunkedDocs: []inbound.ChunkedDoc{{
 			Hash: domain.HashContent([]byte("chunked document")), Format: domain.ChunkFormatV1,
 			Envelope: json.RawMessage(`{"cir_version":"1","source_provider":"codex"}`), Chunks: []domain.ContentHash{chunk.Hash},
@@ -128,8 +124,8 @@ func wave58DocumentPublicationHTTPRequests(test *testing.T) []wave58DocumentPubl
 	return []wave58DocumentPublicationHTTPRequest{
 		{
 			name: "objects", body: string(objectsJSON),
-			commit:   inbound.CommitInput{RepoID: repo, Snapshots: objects.Snapshots, Docs: objects.Docs, ChunkedDocs: objects.ChunkedDocs, ChunkObjects: objects.ChunkObjects},
-			response: `{"StoredSnapshots":2,"StoredDocs":3,"DedupedSnapshots":5,"DedupedDocs":7}`,
+			commit:   inbound.CommitInput{RepoID: repo, Captures: 1, Docs: objects.Docs, ChunkedDocs: objects.ChunkedDocs, ChunkObjects: objects.ChunkObjects},
+			response: `{"StoredDocs":3,"DedupedDocs":7}`,
 		},
 		{
 			name: "chunks", body: string(chunksJSON), chunks: inbound.StoreChunksInput{RepoID: repo, Chunks: chunks.Chunks},

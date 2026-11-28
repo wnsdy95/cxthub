@@ -351,7 +351,7 @@ func TestStreamingRootFSLeaseExpiresWaitingForLocks(t *testing.T) {
 			}
 			lock := storage.oauthLock()
 			if mode == "metadata" {
-				lock = storage.refLock(job.RepoID, domain.RefBranch, "")
+				lock = storage.repoLock(job.RepoID)
 			}
 			lock.Lock()
 			done := make(chan error, 1)

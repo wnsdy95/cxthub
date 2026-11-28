@@ -96,7 +96,7 @@ func TestPGDocumentPublicationHTTPUsesActualCompleteOwner(test *testing.T) {
 		stored    string
 		duplicate string
 	}{
-		{name: "objects", stored: `{"StoredSnapshots":0,"StoredDocs":1,"DedupedSnapshots":0,"DedupedDocs":0}`, duplicate: `{"StoredSnapshots":0,"StoredDocs":0,"DedupedSnapshots":0,"DedupedDocs":1}`},
+		{name: "objects", stored: `{"StoredDocs":1,"DedupedDocs":0}`, duplicate: `{"StoredDocs":0,"DedupedDocs":1}`},
 		{name: "chunks", stored: `{"stored":1,"deduped":0}`, duplicate: `{"stored":0,"deduped":1}`},
 	} {
 		test.Run(route.name, func(test *testing.T) {
