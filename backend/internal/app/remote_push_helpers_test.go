@@ -3,12 +3,13 @@ package app
 // The repository webhook that told the service of a push or of a change of a
 // pull request is gone: GitHub tells through the GitHub App, whose worker
 // records a push and asks for a read itself (GitHubWorker.applyDelivery).
-// Tests still tell the service of one through these, with the same two steps
-// (recordBranchLedgerObservation and requestRemoteGitSync). They are not the
-// App's path: they choose repositories by origin, where the worker goes by
-// binding, and they do not move the view revision, where the worker's write
-// does. A test of what a delivery does goes through GitHubConnections.Receive
-// and the worker, as TestBranchLedgerFollowsQualifiedPushDeliveries does.
+// Tests still tell the service of a push through ObserveRemotePush, with the
+// same two steps (recordBranchLedgerObservation and requestRemoteGitSync) and,
+// like the worker, as a write of evidence. It is not the App's path: it chooses
+// repositories by origin, where the worker goes by binding. A test of what a
+// delivery does goes through GitHubConnections.Receive and the worker, as
+// TestBranchLedgerFollowsQualifiedPushDeliveries and, for a pull request,
+// TestRemoteGitReaderIsToldOfADeliveredPullRequest do.
 
 import (
 	"context"
@@ -45,38 +46,6 @@ func (s *Service) ObserveRemotePush(ctx context.Context, origin, ref, before, af
 				return err
 			}
 			return requestRemoteGitSync(tx, s.meta, r.ID, observed)
-		})
-		if err != nil {
-			return n, err
-		}
-		n++
-	}
-	return n, nil
-}
-
-// ObserveRemotePullRequest acts on a change of a pull request that the
-// hosting service reported for a Git origin: every repository of that origin
-// is read again. A pull request that was opened, closed or retitled moves no
-// branch, so no push tells of it. It returns how many repositories that were.
-func (s *Service) ObserveRemotePullRequest(ctx context.Context, origin string) (int, error) {
-	repos, err := s.meta.ListRepos(ctx, "default")
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, r := range repos {
-		if origin == "" || normalizeGitURL(origin) != normalizeGitURL(r.GitRemoteURL) {
-			continue
-		}
-		err = repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), s, r.ID, func(tx context.Context) error {
-			current, err := s.meta.GetRepo(tx, r.ID)
-			if err != nil {
-				return err
-			}
-			if current.GitRemoteURL != r.GitRemoteURL {
-				return domain.ErrConflict
-			}
-			return requestRemoteGitSync(tx, s.meta, r.ID, time.Now().UTC())
 		})
 		if err != nil {
 			return n, err

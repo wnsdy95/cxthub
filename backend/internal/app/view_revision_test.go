@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -144,12 +145,10 @@ func TestViewRevisionMovesWithEverythingTheSessionsTabShows(t *testing.T) {
 	fixture.clock = fixture.clock.Add(domain.RemoteGitRequestSpacing)
 	moves("the read a delivery asked for", func() error { _, err := fixture.pass(t); return err })
 
-	// What changes nothing a page shows leaves the mark.
+	// What changes nothing a page shows leaves the mark. A pull request the
+	// Git host delivered is not among them:
+	// TestViewRevisionMovesWithADeliveredPullRequest follows it.
 	stays("a request for a read", func() error { return service.RequestRemoteGitRefresh(alice, repo) })
-	stays("a pull request the Git host delivered", func() error {
-		_, err := service.ObserveRemotePullRequest(systemTestContext(), remoteGitTestOrigin)
-		return err
-	})
 	stays("reading the lists", func() error {
 		if _, err := service.ListAnchoredSessions(viewer, repo); err != nil {
 			return err
@@ -171,6 +170,55 @@ func TestViewRevisionMovesWithEverythingTheSessionsTabShows(t *testing.T) {
 	// What is no repository identifier is refused as such, not looked for.
 	if _, err := service.ViewRevision(viewer, "not a repository"); !errors.Is(err, domain.ErrIntegrity) || errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("the mark of what is no repository: %v", err)
+	}
+}
+
+// A pull request the Git host delivered moves no branch, and what it asks for,
+// a read of the bound repository, by itself changes nothing a page shows. The
+// mark moves all the same, once, when the GitHub worker applies the delivery,
+// and that is right: the worker writes every delivery it applies as evidence,
+// a push with the observation of its branch and a pull request with only its
+// request for a read, and a write of evidence moves the evidence counter in
+// the transaction that stores it. An open page reads its lists once more for
+// that, and again when the read has ended. Nothing moves when the delivery is
+// only received, and a delivery that was applied is not applied again.
+func TestViewRevisionMovesWithADeliveredPullRequest(t *testing.T) {
+	connections, storage, repo := githubPRObservationFixture(t)
+	ctx := context.Background()
+	service := NewService(storage, storage, storage)
+	mark := func() string {
+		t.Helper()
+		revision, err := service.ViewRevision(systemTestContext(), repo.ID)
+		if err != nil || revision == "" {
+			t.Fatalf("the mark: %q %v", revision, err)
+		}
+		return revision
+	}
+	counters := func() domain.RepositoryRevision {
+		t.Helper()
+		revision, err := storage.RepositoryRevision(ctx, repo.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return revision
+	}
+	before, first := counters(), mark()
+	if err := connections.Receive(ctx, "view-revision-pull-request", "pull_request", githubPRObservationBody("opened", strings.Repeat("a", 40), strings.Repeat("b", 40))); err != nil {
+		t.Fatal(err)
+	}
+	if received := mark(); received != first {
+		t.Fatalf("a delivery that was only received moved the mark from %q to %q", first, received)
+	}
+	for range 2 {
+		if err := githubWorkerOf(connections).deliver(ctx, githubHash("view-revision-pull-request")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after := counters(); after.Evidence != before.Evidence+1 || after.Graph != before.Graph || after.Pending != before.Pending {
+		t.Fatalf("a delivered pull request moved the counters from %+v to %+v", before, after)
+	}
+	if applied := mark(); applied == first {
+		t.Fatalf("a delivered pull request left the mark at %q", first)
 	}
 }
 

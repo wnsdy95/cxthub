@@ -441,33 +441,76 @@ func TestRemoteGitLookForDueRepositoriesComesBackLikeAnAnswer(t *testing.T) {
 	}
 }
 
-// A pull request the Git host delivered moves no branch. It asks for a read
-// of every repository of its origin, which the reader is told of like a push.
+// A pull request the Git host delivered moves no branch. When the GitHub
+// worker applies it, it asks for a read of the repository it is bound to,
+// which the reader is told of like a push. The worker goes by binding, not by
+// origin: a repository of the same origin that no binding names is not read,
+// and neither is any repository for a pull request of a GitHub repository
+// that is not bound.
 func TestRemoteGitReaderIsToldOfADeliveredPullRequest(t *testing.T) {
-	fixture := remoteGitAskedFixture(t, 10*time.Minute)
-	for _, origin := range []string{remoteGitTestOrigin, remoteGitTestOrigin + ".git", "git@github.com:example/project.git"} {
-		before := fixture.state(t)
-		if n, err := fixture.service.ObserveRemotePullRequest(systemTestContext(), origin); err != nil || n != 1 {
-			t.Fatalf("a pull request of %s: %d repositories, %v", origin, n, err)
+	connections, storage, repo := githubPRObservationFixture(t)
+	ctx := context.Background()
+	// Another repository of this server has the same origin.
+	another := domain.Repository{ID: domain.NewID("ws_"), Name: "another", OwnerID: "owner", Visibility: domain.VisibilityPrivate, CreatedAt: time.Now().UTC()}
+	if err := storage.CreateRepository(systemTestContext(), another); err != nil {
+		t.Fatal(err)
+	}
+	unbound := domain.Repo{ID: hh(t.Name() + " not bound"), RepositoryID: another.ID, DefaultBranch: "main", GitRemoteURL: repo.GitRemoteURL}
+	if _, err := storage.PutRepo(systemTestContext(), unbound); err != nil {
+		t.Fatal(err)
+	}
+	// Both repositories were read an hour ago, so a request for either one
+	// is stored.
+	started := time.Now().UTC().Add(-time.Hour)
+	for _, read := range []domain.Repo{repo, unbound} {
+		claimed, err := storage.ClaimRemoteGitSync(ctx, read.ID, read.GitRemoteURL, started, remoteGitLease)
+		if err != nil {
+			t.Fatal(err)
 		}
-		state := fixture.state(t)
-		if told := fixture.told(); !reflect.DeepEqual(told, []domain.ContentHash{fixture.repo}) || state.RequestedAt == nil || (before.RequestedAt != nil && !state.RequestedAt.After(*before.RequestedAt)) {
-			t.Fatalf("a pull request of %s: the reader was told of %v; state %+v", origin, told, state)
+		if err := storage.FinishRemoteGitSync(ctx, claimed.Ended(started, false, false)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	// Another origin, and none, are no repository of this server.
-	asked := fixture.state(t)
-	for _, origin := range []string{"https://github.com/example/another", ""} {
-		if n, err := fixture.service.ObserveRemotePullRequest(systemTestContext(), origin); err != nil || n != 0 {
-			t.Fatalf("a pull request of %q: %d repositories, %v", origin, n, err)
+	var told []domain.ContentHash
+	stop, err := storage.ListenRemoteGitRequests(func(asked domain.ContentHash) { told = append(told, asked) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	deliver := func(delivery string, body []byte) []domain.ContentHash {
+		t.Helper()
+		told = nil
+		if err := connections.Receive(ctx, delivery, "pull_request", body); err != nil {
+			t.Fatal(err)
+		}
+		if len(told) != 0 {
+			t.Fatalf("%s: the reader was told of %v when the delivery was only received", delivery, told)
+		}
+		if err := githubWorkerOf(connections).deliver(ctx, githubHash(delivery)); err != nil {
+			t.Fatal(err)
+		}
+		return told
+	}
+	for _, action := range []string{"opened", "edited", "closed"} {
+		body := githubPRObservationBody(action, strings.Repeat("a", 40), strings.Repeat("b", 40))
+		if told := deliver("pull-request-"+action, body); !reflect.DeepEqual(told, []domain.ContentHash{repo.ID}) {
+			t.Fatalf("a pull request that was %s: the reader was told of %v", action, told)
 		}
 	}
-	if told := fixture.told(); len(told) != 0 || !reflect.DeepEqual(fixture.state(t), asked) {
-		t.Fatalf("a pull request of another origin: the reader was told of %v", told)
+	for _, read := range []struct {
+		repo   domain.Repo
+		asked  bool
+		reason string
+	}{{repo, true, "the bound repository"}, {unbound, false, "the repository that is not bound"}} {
+		state, err := storage.GetRemoteGitState(ctx, read.repo.ID)
+		if err != nil || (state.RequestedAt != nil) != read.asked {
+			t.Fatalf("%s after the pull requests: %+v %v", read.reason, state, err)
+		}
 	}
-	// A repository whose origin changed since the list was read is left alone.
-	fixture.setOrigin("https://github.com/example/moved")
-	if n, err := fixture.service.ObserveRemotePullRequest(systemTestContext(), remoteGitTestOrigin); err != nil || n != 0 || len(fixture.told()) != 0 {
-		t.Fatalf("a pull request of an origin the repository no longer has: %d repositories, %v", n, err)
+	// A pull request of a GitHub repository that no binding names asks for
+	// no read at all.
+	elsewhere := []byte(strings.Replace(string(githubPRObservationBody("opened", strings.Repeat("a", 40), strings.Repeat("b", 40))), `"repository":{"id":91}`, `"repository":{"id":92}`, 1))
+	if told := deliver("pull-request-elsewhere", elsewhere); len(told) != 0 {
+		t.Fatalf("a pull request of a GitHub repository that is not bound: the reader was told of %v", told)
 	}
 }
