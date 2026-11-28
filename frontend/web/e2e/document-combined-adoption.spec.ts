@@ -76,6 +76,11 @@ test('a large record of a session conversation is read whole or in parts, always
   await expect(conversation.getByText('The build log is above.', { exact: true })).toBeVisible();
   // Nothing of a record that the page left out is read before it is asked for.
   expect(reads).toEqual(['events?offset=0&limit=20']);
+  // The records are the agent's work before its answer: they show when that work is opened.
+  await expect(conversation.locator('[data-deferred-event]')).toHaveCount(0);
+  await conversation.getByRole('button', { name: '▸ 2 details' }).click();
+  await expect(conversation.locator('[data-deferred-event]')).toHaveCount(2);
+  expect(reads).toEqual(['events?offset=0&limit=20']);
 
   // A record small enough is read whole. A failure says so and is read again only when asked.
   const whole = conversation.locator('[data-deferred-event="1"]');
