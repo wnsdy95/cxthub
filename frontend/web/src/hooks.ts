@@ -124,21 +124,6 @@ export function useCreateOrganizationRepository() {
     },
   });
 }
-export function useOrganizationAudit(organizationId: string | null, enabled: boolean) {
-  return useQuery({
-    queryKey: ['organization-audit', organizationId],
-    queryFn: () => api.listOrganizationAudit(organizationId as string),
-    enabled: enabled && Boolean(organizationId),
-  });
-}
-export function useCreateBreakGlassGrant() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { organizationId: string; repositoryId: string; reason: string; minutes: number }) =>
-      api.createBreakGlassGrant(v.organizationId, v.repositoryId, v.reason, v.minutes),
-    onSuccess: (_grant, v) => void qc.invalidateQueries({ queryKey: ['organization-audit', v.organizationId] }),
-  });
-}
 // Account settings: nickname is lightweight, while username changes URLs and repository paths.
 export function useUpdateMe() {
   const qc = useQueryClient();
