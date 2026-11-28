@@ -338,10 +338,6 @@ export function useAnchoredSession(repoId: string | null, provider: string | nul
   });
 }
 /**
- * Reads a session's conversation from one event onward, a page at a time. The
- * document is not named by any snapshot, so it is read with the plain pager.
- */
-/**
  * A session's conversation from `start`, read by the session. What another
  * member reads can have gaps where parts are not open: a page ends at a gap,
  * and reading goes on at the next open part, among `starts`.

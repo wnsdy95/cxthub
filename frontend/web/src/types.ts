@@ -151,7 +151,7 @@ export interface Invite {
 export interface Repo {
   id: string;
   remote_url: string;
-/** Code repo git origin (GitHub etc.) — Linked tab link */
+/** Git remote of the code (GitHub or another host), linked from the Connected tab */
   git_remote_url?: string;
   description?: string;
   website?: string;

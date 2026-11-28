@@ -178,12 +178,10 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .repo-row:hover { background: var(--hover); opacity: 1; }
 .repo-row.on code { color: var(--ink); font-weight: 600; }
 
-/* Context Browser — Branch dropdown · Commit log · Body viewer */
+/* The connected remote next to a repository panel's heading. */
 .repo-tag { font-size: 0.85em; text-transform: none; letter-spacing: 0; color: var(--muted); }
 
-.commits { list-style: none; margin: 0 0 14px; padding: 0; }
-
-/* Viewer uses the context pane scrollport on wide screens. */
+/* The conversation of a session. */
 .viewer { border: 1px solid var(--line); border-radius: 8px; }
 
 .msg { display: flex; gap: 12px; padding: 12px 14px; }
@@ -247,19 +245,14 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   .members em { display: none; }
 }
 
-/* Commit row ref badge — branch head/tag display (GitHub label) */
+/* Small rounded badges: branches, roles, states and pull request numbers. */
 .ref-badge { font-family: var(--mono); font-size: 0.66rem; flex: none; padding: 1px 7px;
   border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .ref-badge.branch { color: var(--ok); border-color: rgba(46, 125, 91, 0.35); }
-.ref-badge.tag { color: var(--ink); border-color: var(--faint); }
 .ref-badge.joined { color: #b77700; border-color: rgba(210, 153, 34, 0.45); border-style: dashed; }
 .ref-badge.archived { color: var(--faint); border-color: var(--faint); border-style: dashed; }
-/* Current branch tip — branch name is already provided in the dropdown (fill style = current position). */
-.ref-badge.head { background: var(--ok); border-color: var(--ok); color: #fff; }
-/* Pending — session continues even after commits (yellow = progress/change semantic). */
+/* Pending — something not settled yet, such as a part that is not open (yellow = progress/change semantic). */
 .ref-badge.pending { color: #d29922; border-color: rgba(210, 153, 34, 0.45); }
-.ref-badge.pending.link { cursor: pointer; }
-.ref-badge.pending.link:hover { background: rgba(210, 153, 34, 0.12); }
 
 /* Connected tab — code repository (GitHub) link */
 .gh-link { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); flex: none;
@@ -267,7 +260,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .gh-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
 .repos li { gap: 10px; }
 
-/* MemoryDigest — viewer top summary box */
+/* The summary a session wrote at a commit. */
 .memory-box { border-bottom: 1px solid var(--line); padding: 12px 14px; background: var(--hover); font-size: 0.84rem; }
 .memory-box .label { display: block; margin-bottom: 4px; }
 .memory-box p { margin: 0 0 6px; white-space: pre-wrap; }
@@ -289,9 +282,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .compaction-divider { display: flex; align-items: center; gap: 8px; padding: 2px 12px; font-family: var(--mono);
   font-size: 0.64rem; letter-spacing: 0.04em; color: #8957e5; }
 .compaction-divider::before, .compaction-divider::after { content: ''; flex: 1; border-top: 1px dashed rgba(137, 87, 229, 0.5); }
-.dl-btn.danger:hover { color: #c0392b; border-color: #c0392b; }
-
-.hit-truncated { margin: 0; padding: 8px 12px; font-size: 0.74rem; color: var(--muted); background: var(--hover); }
 
 /* Show prompt only — keep user prompt, click to open AI event for that turn. */
 .dl-btn.on { color: var(--ink); border-color: var(--ink); background: var(--hover); }
@@ -305,18 +295,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .view-mode { font-family: var(--mono); font-size: 0.72rem; border: 1px solid var(--line); border-radius: 6px;
   background: transparent; color: var(--muted); padding: 3px 6px; }
 .view-mode:hover { border-color: var(--faint); color: var(--text); }
-
-.graph-archive-list { list-style: none; margin: 0; padding: 0; max-height: 156px; overflow-y: auto; }
-.graph-archive-list li + li { border-top: 1px solid var(--line); }
-
-.graph-history-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
-.graph-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 7px; }
-.graph-history-list li + li { border-top: 1px solid var(--line); }
-
-.graph-history-list time { grid-column: 2; grid-row: 1; color: var(--faint); }
-
-.graph { list-style: none; margin: 0; padding: 0; }
-.graph li { position: relative; }
 
 .viewer { scroll-margin-top: 68px; }
 
@@ -490,7 +468,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 
 @media (max-width: 900px) {
   .profile-grid { grid-template-columns: 1fr; }
-  .repository-cards, .organization-list { grid-template-columns: 1fr; }
+  .repository-cards { grid-template-columns: 1fr; }
   .organization-inline-form { align-items: stretch; flex-direction: column; }
   .organization-inline-form > * { width: 100%; }
   .organization-member-row { align-items: flex-start; flex-direction: column; }
@@ -770,24 +748,16 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   .role-ladder { white-space: normal; text-align: right; }
 }
 
-/* memory badge — digest holding commit marker (◆). */
-.ref-badge.memory { color: #8957e5; border-color: rgba(137, 87, 229, 0.45); }
-/* reflog collapse panel — side rail. */
-.reflog { margin: 10px 0 0; }
-.reflog summary { cursor: pointer; }
-.reflog-list { list-style: none; margin: 6px 0 0; padding: 0; font-family: var(--mono); font-size: 0.68rem;
-  display: grid; gap: 3px; max-height: 220px; overflow-y: auto; }
-.reflog-list em { color: var(--faint); font-style: normal; margin-right: 4px; }
 /* compression summary block — ◈ purple variant (same series as compression marker). */
 .compact-summary .tool-more summary { color: #8957e5; }
 
-/* Saved memory opens with the selected context and remains collapsible. */
+/* A session's summary at a commit stays collapsible. */
 details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: revert; }
 
 /* Assistant body — provider main color (viewer container's --assistant-ink). */
 .msg.assistant .msg-body p { color: var(--assistant-ink, var(--text)); }
 
-/* Mini Markdown (compressed memory·compressed summary) — small typo in the panel. */
+/* Markdown in conversations and summaries — small type in the panel. */
 .md { font-size: 0.84rem; line-height: 1.6; }
 .md h4, .md h5, .md h6 { margin: 10px 0 4px; font-size: 0.86rem; color: var(--ink); }
 .md h4 { font-size: 0.92rem; }
@@ -820,8 +790,6 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .notification-entry p { margin: 5px 0; }
 .notification-entry code { display: block; font-size: 11px; }
 .notification-entry button { margin-top: 8px; }
-
-.ref-badge.live { color: var(--green, #23845b); border-color: currentColor; flex: none; }
 
 /* Organization and enterprise administration share compact, responsive forms. */
 .management-grid{display:grid;grid-template-columns:minmax(130px,220px) minmax(0,1fr);gap:24px;margin-top:24px}

@@ -1,4 +1,4 @@
-// Home (Landing) — product narrative, installation, and captured product views.
+// Home (Landing) — product narrative, installation, and product screenshots.
 import { useEffect, useState } from 'react';
 import { useMe } from '../hooks';
 import { useT, Rich } from '../i18n';

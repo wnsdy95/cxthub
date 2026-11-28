@@ -286,7 +286,7 @@ export const api = {
   organizationAuditPage: (organizationId: string, cursor = '') =>
     call<{ events: OrganizationAuditEvent[]; next_cursor?: string }>('GET', `/organizations/${encodeURIComponent(organizationId)}/audit/page?limit=100&cursor=${encodeURIComponent(cursor)}`),
 
-  // Session Browser — repo branch/commit log/context body
+  // The Git remotes connected to a repository, their About fields, team settings and secrets.
   listRepos: (repositoryId: string) => call<Repo[]>('GET', `/repos?repository=${encodeURIComponent(repositoryId)}`),
   updateAbout: (
     repoId: string,

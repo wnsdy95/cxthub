@@ -99,7 +99,6 @@ export function About({ repo, canEdit }: { repo: Repo; canEdit: boolean }) {
     setTopics((repo.topics ?? []).join(' '));
   }, [repo.id, repo.description, repo.website, repo.topics]);
 
-  // Default branch protection is managed by RepoBranchSettings on the Repository Settings tab.
   function submit(e: FormEvent) {
     e.preventDefault();
     const normalizedWebsite = normalizeWebsiteInput(website);
