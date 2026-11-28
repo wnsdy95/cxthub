@@ -301,12 +301,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 /* Show prompt only — keep user prompt, click to open AI event for that turn. */
 .dl-btn.on { color: var(--ink); border-color: var(--ink); background: var(--hover); }
 .turn + .turn { border-top: 1px solid var(--line); }
-.turn-head { position: relative; }
-.turn-head.has-more { cursor: pointer; }
-.turn-head.has-more:hover { background: var(--hover); }
-.turn-count { position: absolute; top: 12px; right: 14px; font-family: var(--mono); font-size: 0.66rem;
-  color: var(--faint); pointer-events: none; }
-.turn-head.has-more:hover .turn-count, .turn.open .turn-count { color: var(--ink); }
 .turn-lead { display: block; width: 100%; text-align: left; padding: 6px 14px; border: 0;
   background: var(--hover); cursor: pointer; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
 .turn-lead:hover { color: var(--ink); }

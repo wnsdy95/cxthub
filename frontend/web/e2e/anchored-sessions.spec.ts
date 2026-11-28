@@ -145,16 +145,20 @@ test('the sessions tab shows a member their sessions by commit, branch and workt
   await expect(shows).toHaveValue('chat');
   await expect(conversation.getByText('conversation 23', { exact: true })).toBeVisible();
   await expect(conversation.getByText('(parser.go)')).toHaveCount(0);
-  const work = conversation.getByRole('button', { name: '▸ 1 detail' });
+  const work = conversation.getByRole('button', { name: '1 detail', exact: true });
   await work.click();
   await expect(conversation.getByText('(parser.go)')).toBeVisible();
-  await expect(conversation.getByRole('button', { name: '▾ 1 detail' })).toHaveAttribute('aria-expanded', 'true');
-  await conversation.getByRole('button', { name: '▾ 1 detail' }).click();
+  await expect(work).toHaveAttribute('aria-expanded', 'true');
+  await work.click();
+  await expect(work).toHaveAttribute('aria-expanded', 'false');
   await expect(conversation.getByText('(parser.go)')).toHaveCount(0);
-  // Only the prompts: a prompt opens its turn.
+  // Only the prompts: the button under a prompt opens its turn. The part after
+  // the last commit begins with the answer to the last prompt of segment 2.
   await shows.selectOption('prompts');
   await expect(conversation.getByText('conversation 21', { exact: true })).toHaveCount(0);
-  await conversation.getByRole('button', { name: /conversation 20/ }).click();
+  await expect(conversation.getByRole('button', { name: '1 event of the turn above', exact: true })).toBeVisible();
+  await expect(conversation.getByRole('button', { name: /before the first prompt/ })).toHaveCount(0);
+  await conversation.getByRole('button', { name: '3 more', exact: true }).click();
   await expect(conversation.getByText('conversation 21', { exact: true })).toBeVisible();
   await expect(conversation.getByText('(parser.go)')).toBeVisible();
   // Everything: every event as it was recorded, with no button in between.

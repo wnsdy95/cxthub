@@ -28,7 +28,9 @@ test('reasoning without a readable summary draws nothing and is not counted', ()
   assert.equal(conversationEventIsShown(event({ kind: 'reasoning' })), false);
   assert.equal(conversationEventIsShown(event({ kind: 'reasoning', redacted_summary: '  ' })), false);
   assert.equal(conversationEventIsShown(event({ kind: 'reasoning', redacted_summary: 'Looked at the parser' })), true);
-  assert.equal(conversationEventIsShown(event({ kind: 'reasoning', deferred: true })), true, 'a large event is read when opened');
+  assert.equal(conversationEventIsShown(event({ kind: 'reasoning', deferred: true })), true, 'a described event is read when opened');
+  assert.equal(conversationEventIsShown(event({ kind: 'reasoning', deferred: true, empty_reasoning: true })), false,
+    'the server says of a described reasoning event that it has no summary');
   assert.equal(conversationEventIsShown(event({ kind: 'tool_call', empty_reasoning: true })), false);
 });
 

@@ -13,13 +13,18 @@ type DisplayEvent = DocViewEvent & { seed_summary?: boolean; empty_reasoning?: b
 
 type RowsProps = { inherited: number; repoId: string; hash: string };
 
-export function EventStream({ events, inherited = 0, repoId = '', hash = '', mode = 'all' }: {
-  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string; mode?: ConversationMode;
+/**
+ * The events of a conversation, as the mode shows them. `continues` says that
+ * the events do not start at the beginning of the conversation, so those
+ * before their first prompt are the rest of a turn begun above.
+ */
+export function EventStream({ events, inherited = 0, repoId = '', hash = '', mode = 'all', continues = false }: {
+  events: DisplayEvent[]; inherited?: number; repoId?: string; hash?: string; mode?: ConversationMode; continues?: boolean;
 }) {
   const props = { inherited, repoId, hash };
   if (mode === 'all') return <EventRows events={events} {...props} />;
   return conversationTurns(events).map(turn => (
-    <ConversationTurnView key={(turn.prompt ?? turn.rest[0]).event_index} turn={turn} mode={mode} {...props} />
+    <ConversationTurnView key={(turn.prompt ?? turn.rest[0]).event_index} turn={turn} mode={mode} continues={continues} {...props} />
   ));
 }
 
@@ -27,33 +32,35 @@ function EventRows({ events, ...props }: RowsProps & { events: DisplayEvent[] })
   return events.map(event => <DocumentEventRow key={event.event_index} event={event} index={event.event_index!} {...props} />);
 }
 
-// A prompt and what followed it. With only the prompts shown, the prompt opens
-// its turn; with the conversation shown, each answer opens the work before it.
-function ConversationTurnView({ turn, mode, ...props }: RowsProps & { turn: ConversationTurn<DisplayEvent>; mode: Exclude<ConversationMode, 'all'> }) {
+/** A button that opens and closes what it names; the arrow is drawn, not read. */
+function FoldButton({ open, toggle, children }: { open: boolean; toggle: () => void; children: string }) {
+  return (
+    <button type="button" className="turn-lead" aria-expanded={open} onClick={toggle}>
+      <span aria-hidden="true">{open ? '▾' : '▸'} </span>{children}
+    </button>
+  );
+}
+
+// A prompt and what followed it. With only the prompts shown, the button under
+// a prompt opens its turn; with the conversation shown, each answer opens the
+// work before it.
+function ConversationTurnView({ turn, mode, continues, ...props }: RowsProps & {
+  turn: ConversationTurn<DisplayEvent>; mode: Exclude<ConversationMode, 'all'>; continues: boolean;
+}) {
   const translate = useT();
   const [open, setOpen] = useState(false);
   const answers = useMemo(() => (mode === 'chat' ? conversationAnswers(turn.rest) : []), [mode, turn.rest]);
   const toggle = () => setOpen(value => !value);
+  const count = turn.rest.length;
   return (
     <div className={`turn${open ? ' open' : ''}`}>
-      {mode === 'prompts' && turn.prompt && (
-        <div className={`turn-head${turn.rest.length ? ' has-more' : ''}`} role={turn.rest.length ? 'button' : undefined}
-          tabIndex={turn.rest.length ? 0 : undefined} aria-expanded={turn.rest.length ? open : undefined}
-          onClick={turn.rest.length ? toggle : undefined}
-          onKeyDown={event => {
-            if (event.target === event.currentTarget && turn.rest.length && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggle(); }
-          }}>
-          <EventRows events={[turn.prompt]} {...props} />
-          {turn.rest.length > 0 && <span className="turn-count">{open ? '▾' : '▸'} {translate('anchored.turnEvents', { count: turn.rest.length })}</span>}
-        </div>
-      )}
-      {mode === 'prompts' && !turn.prompt && (
-        <button type="button" className="turn-lead" aria-expanded={open} onClick={toggle}>
-          {open ? '▾' : '▸'} {translate('anchored.leadingEvents', { count: turn.rest.length })}
-        </button>
+      {turn.prompt && <EventRows events={[turn.prompt]} {...props} />}
+      {mode === 'prompts' && count > 0 && (
+        <FoldButton open={open} toggle={toggle}>
+          {translate(turn.prompt ? 'anchored.turnEvents' : continues ? 'anchored.continuedEvents' : 'anchored.leadingEvents', { count })}
+        </FoldButton>
       )}
       {mode === 'prompts' && open && <EventRows events={turn.rest} {...props} />}
-      {mode === 'chat' && turn.prompt && <EventRows events={[turn.prompt]} {...props} />}
       {mode === 'chat' && answers.map(answer => (
         <ConversationAnswerView key={(answer.work[0] ?? answer.answer!).event_index} answer={answer} {...props} />
       ))}
@@ -68,9 +75,9 @@ function ConversationAnswerView({ answer, ...props }: RowsProps & { answer: Conv
   return (
     <div className="turn-answer">
       {answer.work.length > 0 && (
-        <button type="button" className="turn-lead" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-          {open ? '▾' : '▸'} {translate('anchored.answerWork', { count: answer.work.length })}
-        </button>
+        <FoldButton open={open} toggle={() => setOpen(value => !value)}>
+          {translate('anchored.answerWork', { count: answer.work.length })}
+        </FoldButton>
       )}
       {open && <div className="asst-work"><EventRows events={answer.work} {...props} /></div>}
       {answer.answer && <EventRows events={[answer.answer]} {...props} />}

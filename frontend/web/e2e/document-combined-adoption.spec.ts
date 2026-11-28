@@ -78,7 +78,7 @@ test('a large record of a session conversation is read whole or in parts, always
   expect(reads).toEqual(['events?offset=0&limit=20']);
   // The records are the agent's work before its answer: they show when that work is opened.
   await expect(conversation.locator('[data-deferred-event]')).toHaveCount(0);
-  await conversation.getByRole('button', { name: '▸ 2 details' }).click();
+  await conversation.getByRole('button', { name: '2 details', exact: true }).click();
   await expect(conversation.locator('[data-deferred-event]')).toHaveCount(2);
   expect(reads).toEqual(['events?offset=0&limit=20']);
 
