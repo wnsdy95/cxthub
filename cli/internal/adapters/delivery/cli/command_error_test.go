@@ -18,7 +18,7 @@ func TestMachineCommandFailureIsStable(t *testing.T) {
 	}{
 		{fmt.Errorf("wrapped: %w", domain.ErrSelectionChanged), "position_changed", 3},
 		{domain.ErrHashMismatch, "source_corrupt", 5},
-		{domain.ErrProviderCapabilityUnknown, "provider_capability_unknown", 6},
+		{domain.ErrUnsupportedCIRVersion, "unsupported_version", 5},
 		{context.Canceled, "cancelled", 130},
 	} {
 		var b bytes.Buffer
