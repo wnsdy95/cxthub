@@ -76,11 +76,10 @@ func assertRootRetentionSiblingDeletedPG(test *testing.T, storage *PostgresStore
 	if _, err := storage.GetDoc(ctx, siblingRepo, hash); !errors.Is(err, domain.ErrNotFound) {
 		test.Fatal("deleted sibling document remains publicly readable", err)
 	}
-	var otherGrants, snapshots int
-	if err := storage.db(ctx).QueryRow(ctx, `SELECT
- (SELECT count(*) FROM repo_blobs WHERE hash=$1 AND NOT (repo_id=$2 AND kind='chunk')),
- (SELECT count(*) FROM snapshots WHERE doc_hash=$1 OR memory_hash=$1)`, hash, rootRepo).Scan(&otherGrants, &snapshots); err != nil || otherGrants != 0 || snapshots != 0 {
-		test.Fatal("retention was masked by another owner or snapshot instead of the root chunk grant", otherGrants, snapshots, err)
+	var otherGrants int
+	if err := storage.db(ctx).QueryRow(ctx, `SELECT count(*) FROM repo_blobs WHERE hash=$1 AND NOT (repo_id=$2 AND kind='chunk')`,
+		hash, rootRepo).Scan(&otherGrants); err != nil || otherGrants != 0 {
+		test.Fatal("retention was masked by another owner instead of the root chunk grant", otherGrants, err)
 	}
 }
 

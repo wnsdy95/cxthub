@@ -188,24 +188,16 @@ func TestPGRepositoryMovesToTheAddressItsWorkspaceHas(t *testing.T) {
 	if err := st.PutGitHubConnection(ctx, connection); err != nil {
 		t.Fatal(err)
 	}
-	// Records of the capture approach, which reference each other by the
-	// repository, and what records what happened.
+	// An earlier path of the repository, and what records what happened.
 	organization, err := NewIdentityService(nil, st).CreateOrganization(ctx, owner, "Acme", "acme-"+suffix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := string(domain.HashContent([]byte("snapshot " + suffix)))
 	for _, statement := range []struct {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO snapshots (id, repo_id, branch, doc_hash, provider, fidelity) VALUES ($2, $1, 'main', $3, 'claude', 'full')`, []any{string(oldID), snapshot, string(conversation.Hash)}},
-		{`INSERT INTO refs (repo_id, kind, name, target) VALUES ($1, 'branch', 'main', $2)`, []any{string(oldID), snapshot}},
-		{`INSERT INTO session_archives (repo_id, key, snapshot_id, provider, session_id, archived_at, archived_by) VALUES ($1, $2, $2, 'claude', 'old', now(), 'someone')`, []any{string(oldID), snapshot}},
-		{`INSERT INTO context_history (repo_id, id, event) VALUES ($1, $2, jsonb_build_object('repo', $1::text))`, []any{string(oldID), domain.NewID("")}},
 		{`INSERT INTO repository_path_aliases (namespace_key, owner_handle, path, repository_id, context_repo_id) VALUES ($3, $3, 'app', $2, $1)`, []any{string(oldID), workspace.ID, "old-" + suffix}},
-		{`INSERT INTO memory_read_object_wakes (hash, after_repo, through_repo) VALUES ($2, $1, $1)`, []any{string(oldID), string(conversation.Hash)}},
-		{`INSERT INTO settings_objects (repo_id, hash, data) VALUES ($1, $2, jsonb_build_object('quoted', $1::text))`, []any{string(oldID), snapshot}},
 		{`INSERT INTO organization_audit_events (id, organization_id, actor_id, action, target_id) VALUES ($2, $3, $4, 'repository.moved', $1)`, []any{string(oldID), domain.NewID("aud_"), organization.ID, owner.ID}},
 	} {
 		if _, err := db.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -288,17 +280,18 @@ func TestPGRepositoryMovesToTheAddressItsWorkspaceHas(t *testing.T) {
 	}
 	// The identifier in a column that cannot be rewritten, a list of names or
 	// bytes, stops the move and says where it is.
-	if _, err := db.Exec(ctx, `UPDATE snapshots SET models = ARRAY['model ' || $2] WHERE id = $1`, snapshot, string(oldID)); err != nil {
+	client := "quoting-" + suffix
+	if _, err := db.Exec(ctx, `INSERT INTO oauth_clients (client_id, client_name, redirect_uris) VALUES ($1, 'Quoting', ARRAY['https://client.example/' || $2])`, client, string(oldID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `INSERT INTO doc_finalization_jobs (repo_id, id, payload, state, created_at, next_attempt, lease_until) VALUES ($1, $2, convert_to($3, 'UTF8'), 'completed', now(), now(), now())`,
 		string(thirdID), "quoting-"+suffix, `{"quoted":"`+string(oldID)+`"}`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.MoveRepoAddress(ctx, oldURL, newURL, false); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "snapshots.models (ARRAY, 1 rows)") || !strings.Contains(err.Error(), "doc_finalization_jobs.payload (bytea, 1 rows)") {
+	if _, err := service.MoveRepoAddress(ctx, oldURL, newURL, false); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "oauth_clients.redirect_uris (ARRAY, 1 rows)") || !strings.Contains(err.Error(), "doc_finalization_jobs.payload (bytea, 1 rows)") {
 		t.Fatalf("the identifier in columns that cannot be rewritten: %v", err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE snapshots SET models = '{}' WHERE id = $1`, snapshot); err != nil {
+	if _, err := db.Exec(ctx, `DELETE FROM oauth_clients WHERE client_id = $1`, client); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `DELETE FROM doc_finalization_jobs WHERE repo_id = $1`, string(thirdID)); err != nil {
@@ -331,9 +324,8 @@ func TestPGRepositoryMovesToTheAddressItsWorkspaceHas(t *testing.T) {
 		changed[column.Table+"."+column.Column] = column.Rows > 0
 	}
 	for _, column := range []string{"anchored_sessions.repo_id", "anchored_session_summaries.repo_id", "anchored_notes.repo_id", "branch_lifetimes.repo_id", "repo_blobs.repo_id",
-		"repo_settings.repo_id", "repo_secrets.repo_id", "remote_git_state.repo_id", "github_connections.body", "snapshots.repo_id", "refs.repo_id", "session_archives.repo_id",
-		"context_history.repo_id", "context_history.event", "repository_path_aliases.context_repo_id", "memory_read_object_wakes.after_repo", "memory_read_object_wakes.through_repo",
-		"settings_objects.repo_id", "reported_collectors.repo_id", "reported_worktrees.repo_id"} {
+		"repo_settings.repo_id", "repo_secrets.repo_id", "remote_git_state.repo_id", "github_connections.body",
+		"repository_path_aliases.context_repo_id", "reported_collectors.repo_id", "reported_worktrees.repo_id"} {
 		if !changed[column] {
 			t.Errorf("the preview does not change %s", column)
 		}
@@ -342,7 +334,7 @@ func TestPGRepositoryMovesToTheAddressItsWorkspaceHas(t *testing.T) {
 	for _, column := range preview.Kept {
 		kept[column.Table+"."+column.Column] = true
 	}
-	if !kept["settings_objects.data"] || !kept["organization_audit_events.target_id"] || changed["settings_objects.data"] || changed["organization_audit_events.target_id"] {
+	if !kept["organization_audit_events.target_id"] || changed["organization_audit_events.target_id"] {
 		t.Fatalf("what the preview keeps: %+v", preview.Kept)
 	}
 	if after := repoAddressHolders(t, db, oldID); !reflect.DeepEqual(after, before) {
@@ -371,7 +363,7 @@ func TestPGRepositoryMovesToTheAddressItsWorkspaceHas(t *testing.T) {
 			t.Errorf("%s holds %d rows after the move and %d before", table, rows, counted[table])
 		}
 	}
-	if left := repoAddressHolders(t, db, oldID); !reflect.DeepEqual(left, []string{"settings_objects.data"}) {
+	if left := repoAddressHolders(t, db, oldID); len(left) != 0 {
 		t.Fatalf("the old identifier is still in %v", left)
 	}
 	if n := switchedOff(); n != 0 {
