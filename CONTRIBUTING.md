@@ -111,4 +111,10 @@ By submitting a contribution, you certify that you have the right to submit it
 and agree that it is licensed under the Apache License 2.0. No contributor
 license agreement is currently required.
 
+Parts of this repository are distributed under other terms; see
+[LICENSING.md](LICENSING.md). A contribution to `backend/`, `frontend/` or
+`deploy/` is still licensed by you under the Apache License 2.0. The project
+owner includes it in those parts and distributes it under their licenses,
+including commercial licenses.
+
 All contributors must follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

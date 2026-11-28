@@ -1,6 +1,6 @@
 # Trademark policy
 
-The Apache License 2.0 grant applies to source code and does not grant rights
+The licenses in this repository cover source code. They do not grant rights
 to CXTHub names, logos, domains, or other brand assets.
 
 You may:

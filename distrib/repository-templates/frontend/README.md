@@ -53,4 +53,5 @@ checkout of the exact frontend commit from a verified four-repository release
 set, after all component CI succeeds. No deployment or synchronization secret
 belongs in the export. See the source
 [distribution handoff](https://github.com/wnsdy95/cxthub/blob/main/docs/REPOSITORY_DISTRIBUTION.md).
-Shared `LICENSE`, `NOTICE`, and third-party notices come from the monorepo.
+The `LICENSE`, `LICENSING.md`, `NOTICE`, and third-party notices come from the
+monorepo.

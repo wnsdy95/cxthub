@@ -54,5 +54,6 @@ commit and their CI succeeds, deploy the exact exported API commit manually.
 Follow the source [distribution handoff](https://github.com/wnsdy95/cxthub/blob/main/docs/REPOSITORY_DISTRIBUTION.md)
 and [operations guide](https://github.com/wnsdy95/cxthub/blob/main/deploy/RENDER.md).
 Keep production secrets in the existing service configuration, never in Git or
-the export. No sync credential belongs in this repository. Shared `LICENSE`,
-`NOTICE`, and third-party notices are exported from the monorepo.
+the export. No sync credential belongs in this repository. License files,
+`NOTICE`, and third-party notices are exported from the monorepo; `LICENSING.md`
+explains which license applies to which path.

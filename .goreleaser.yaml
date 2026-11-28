@@ -21,7 +21,9 @@ archives:
     formats: [tar.gz]
     name_template: "cxt_{{ .Os }}_{{ .Arch }}"
     files:
-      - LICENSE
+      # The CLI is Apache-2.0; the repository root LICENSE is only a map.
+      - src: cli/LICENSE
+        strip_parent: true
       - NOTICE
       - THIRD_PARTY_NOTICES.md
 

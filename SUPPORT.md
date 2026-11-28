@@ -9,8 +9,9 @@ CXTHub is alpha software.
 | Vulnerability | Private process in `SECURITY.md` |
 | Hosted-service account or billing issue | Official CXTHub support channel |
 
-Self-hosting is permitted and documented, but community support is best-effort
-and has no SLA. Include versions, operating system, storage adapter, relevant
+Self-hosting is documented, and permitted under the server license described
+in [LICENSING.md](LICENSING.md). Community support is best-effort and has no
+SLA. Include versions, operating system, storage adapter, relevant
 redacted logs, and reproduction steps when asking for help. Never post access
 tokens, database DSNs, private repository URLs, or agent transcripts.
 

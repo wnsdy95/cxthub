@@ -65,7 +65,7 @@ Maintainers publish signed, immutable version tags after required checks pass.
 The project owner is the final release approver. Security releases may use a
 private fix branch and coordinated disclosure.
 
-Open-source releases and hosted-service deployments are independent. See
+Releases and hosted-service deployments are independent. See
 [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Conduct and disputes
@@ -76,6 +76,7 @@ evidence, user impact, and project invariants.
 
 ## Forks
 
-The Apache License 2.0 permits forks. Forks must follow
+Forks are permitted within the license of each part; see
+[LICENSING.md](LICENSING.md). Forks must follow
 [TRADEMARKS.md](TRADEMARKS.md) and must not imply that they are official
 CXTHub services or releases.

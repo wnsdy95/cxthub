@@ -17,7 +17,9 @@ case "$MODE" in
 esac
 
 required=(
-  LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md
+  LICENSE LICENSING.md NOTICE THIRD_PARTY_NOTICES.md README.md
+  LICENSES/Apache-2.0.txt LICENSES/PolyForm-Small-Business-1.0.0.md
+  LICENSES/PolyForm-Noncommercial-1.0.0.md
   SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md GOVERNANCE.md SUPPORT.md
   TRADEMARKS.md CHANGELOG.md docs/BRANCHING.md docs/CLI.md
   docs/INSTALLATION.md docs/RELEASING.md
@@ -30,8 +32,37 @@ for file in "${required[@]}"; do
   fi
 done
 
-if ! cmp -s LICENSE distrib/LICENSE; then
-  echo "[public-check] root LICENSE differs from distrib/LICENSE." >&2
+# The root LICENSE is a map; see LICENSING.md. Every directory that ships on
+# its own carries the full text of its license, and the copies must not drift.
+for copy in cli/LICENSE schemas/LICENSE distrib/LICENSE; do
+  if ! cmp -s LICENSES/Apache-2.0.txt "$copy"; then
+    echo "[public-check] $copy differs from LICENSES/Apache-2.0.txt." >&2
+    exit 1
+  fi
+done
+for copy in frontend/LICENSE frontend/web/LICENSE deploy/LICENSE; do
+  if ! cmp -s backend/LICENSE "$copy"; then
+    echo "[public-check] $copy differs from backend/LICENSE." >&2
+    exit 1
+  fi
+done
+if ! grep -q '^Required Notice: Copyright (c) [0-9]* wnsdy95 (https://github.com/wnsdy95/cxthub)$' backend/LICENSE; then
+  echo "[public-check] backend/LICENSE lacks the required attribution notice." >&2
+  exit 1
+fi
+if ! python3 - <<'PY'
+import pathlib, sys
+server = pathlib.Path("backend/LICENSE").read_text()
+for name in ("PolyForm-Small-Business-1.0.0.md", "PolyForm-Noncommercial-1.0.0.md"):
+    if pathlib.Path("LICENSES", name).read_text() not in server:
+        sys.exit(1)
+PY
+then
+  echo "[public-check] backend/LICENSE does not embed the PolyForm texts in LICENSES/ verbatim." >&2
+  exit 1
+fi
+if grep -q 'TERMS AND CONDITIONS' LICENSE || ! grep -q 'LICENSING.md' LICENSE; then
+  echo "[public-check] root LICENSE must stay the licensing map, not a license text." >&2
   exit 1
 fi
 

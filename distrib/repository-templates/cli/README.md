@@ -65,5 +65,5 @@ outside exported `main` and existing releases. Never move or replace a published
 tag; publish a new patch version instead. No cloud deployment runs here.
 
 See the source [distribution runbook](https://github.com/wnsdy95/cxthub/blob/main/docs/REPOSITORY_DISTRIBUTION.md)
-for provenance, synchronization, and release-set verification. Shared `LICENSE`,
-`NOTICE`, and third-party notices are exported from the monorepo.
+for provenance, synchronization, and release-set verification. The Apache-2.0
+`LICENSE`, `NOTICE`, and third-party notices are exported from the monorepo.
