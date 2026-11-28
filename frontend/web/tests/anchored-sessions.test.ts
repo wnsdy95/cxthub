@@ -310,3 +310,30 @@ test('notes are found by exactly the target they were written about', () => {
   assert.deepEqual(found({ kind: 'worktree', worktree: 'app' }), ['worktree-elsewhere']);
   assert.deepEqual(found({ kind: 'commit', commit: sha('f') }), []);
 });
+
+test('a pull request merged by squash joins its branch to the commit it became; a merge commit needs no join', () => {
+  const commit = (letter: string, minute: number, ...parents: string[]): RemoteCommit =>
+    ({ sha: sha(letter), parents: parents.map(sha), author_name: 'Dev', authored_at: at(minute), committed_at: at(minute), subject: letter });
+  const pull = (number: number, head: string, merged: string, extra: Record<string, unknown> = {}) =>
+    ({ number, title: `pull ${number}`, state: 'merged', head_ref: `b${number}`, head_sha: sha(head), base_ref: 'main', merge_sha: sha(merged), commits: [sha(head)], updated_at: at(50), ...extra });
+  const remote = {
+    default_branch: 'main', synced_at: at(58), branches: [{ name: 'main', sha: sha('m') }],
+    commits: [commit('a', 1), commit('f', 2, 'a'), commit('s', 3, 'a'), commit('g', 4, 's'), commit('m', 5, 's', 'g'), commit('h', 6, 'a'), commit('o', 7, 'a')],
+    pulls: [pull(1, 'f', 's'), pull(2, 'g', 'm'), pull(3, 'h', 'o', { fork: true }), pull(4, 'o', 'o'), pull(5, 'h', 'a', { state: 'closed' })],
+  } as unknown as AnchoredRemote;
+  const index = buildAnchoredIndex([], [], { remote });
+  const row = (letter: string) => index.commits.find(entry => entry.sha === sha(letter))!;
+  assert.deepEqual(row('s').joined, [sha('f')], 'the squash commit joins the branch it came from');
+  assert.equal(row('s').merged, 1);
+  assert.equal(row('m').joined, undefined, 'a merge commit already has the branch as a parent');
+  assert.equal(row('o').joined, undefined, 'a fork lives in another repository, and a commit does not join itself');
+  assert.equal(row('a').joined, undefined, 'only a merged pull request joins');
+
+  // A merge commit that only a session report names has no known parents yet: it is not joined.
+  const report = summary('local-merge', { segments: 1, commits: [{ sha: sha('l'), segment_no: 1, rule: 'printed-number', subject: 'Merge feature', created_at: at(9), on_remote: true }] });
+  const local = buildAnchoredIndex([report], [], { remote: { ...remote, pulls: [pull(6, 'f', 'l')] } as unknown as AnchoredRemote });
+  const merge = local.commits.find(entry => entry.sha === sha('l'))!;
+  assert.equal(merge.remote, false);
+  assert.equal(merge.merged, 6);
+  assert.equal(merge.joined, undefined, 'its parents are not known, so a join could stand where a parent is');
+});

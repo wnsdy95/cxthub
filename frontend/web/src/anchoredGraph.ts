@@ -2,19 +2,37 @@
 // lists them. The window is the newest commits by time; a parent outside it is
 // not drawn, and the row says that history goes on below what is shown.
 
-export interface GitNode { sha: string; parents: string[]; at: string }
+export interface GitNode {
+  sha: string; parents: string[]; at: string;
+  /**
+   * Commits drawn joining this one with a dotted line though they are not
+   * its parents: the newest commit of a branch whose pull request was merged
+   * as this commit by squash or rebase. Reachability ignores them.
+   */
+  joined?: string[];
+}
+
+/** The commits a node is drawn from: its parents, then the commits it joined that are not among them. */
+function edgesOf(node: GitNode, joins: boolean): { sha: string; soft: boolean }[] {
+  const parents = [...new Set(node.parents)];
+  const soft = joins ? [...new Set(node.joined ?? [])].filter(sha => sha !== node.sha && !parents.includes(sha)) : [];
+  return [...parents.map(sha => ({ sha, soft: false })), ...soft.map(sha => ({ sha, soft: true }))];
+}
 
 function time(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : -Infinity;
 }
 
-/** Children before their parents; among the commits that are ready, the newest first. */
-export function orderGitNodes<Node extends GitNode>(nodes: Node[]): Node[] {
+/**
+ * Children before their parents; among the commits that are ready, the newest
+ * first. With `joins`, a commit also comes before the commits it joined.
+ */
+export function orderGitNodes<Node extends GitNode>(nodes: Node[], joins = false): Node[] {
   const byId = new Map(nodes.map(node => [node.sha, node]));
   const waiting = new Map<string, number>(nodes.map(node => [node.sha, 0]));
   for (const node of nodes) {
-    for (const parent of new Set(node.parents)) {
+    for (const { sha: parent } of edgesOf(node, joins)) {
       if (byId.has(parent)) waiting.set(parent, waiting.get(parent)! + 1);
     }
   }
@@ -25,7 +43,7 @@ export function orderGitNodes<Node extends GitNode>(nodes: Node[]): Node[] {
     const node = ready.shift()!;
     ordered.push(node);
     let added = false;
-    for (const parent of new Set(node.parents)) {
+    for (const { sha: parent } of edgesOf(node, joins)) {
       if (!byId.has(parent)) continue;
       const left = waiting.get(parent)! - 1;
       waiting.set(parent, left);
@@ -49,51 +67,78 @@ export interface GitRow<Node> {
   mergesIn: number[];
   /** Lanes the second and later parents continue on. */
   branchesOut: number[];
+  /** Lanes in `incoming` and `outgoing` that carry only a dotted line: the way to a commit this one or one above joined. */
+  incomingSoft: boolean[];
+  outgoingSoft: boolean[];
+  /** Those of `branchesOut` that leave for a commit this one joined, drawn dotted. */
+  softOut: number[];
   /** A parent is outside the window: the history goes on below what is shown. */
   cut: boolean;
 }
 
-/** Lays commits out in lanes the way `git log --graph` does. `pin` keeps one line, usually the default branch, on the first lane. */
+/**
+ * Lays commits out in lanes the way `git log --graph` does. `pin` keeps one
+ * line, usually the default branch, on the first lane. A commit's joined
+ * commits are laid out like further parents on lanes marked soft; if they
+ * would close a loop, they are left out and the graph is the plain one.
+ */
 export function layoutGitGraph<Node extends GitNode>(nodes: Node[], pin?: string): { rows: GitRow<Node>[]; laneCount: number } {
   const available = new Set(nodes.map(node => node.sha));
+  let joins = nodes.some(node => node.joined?.length);
+  let ordered = orderGitNodes(nodes, joins);
+  if (ordered.length < nodes.length) {
+    joins = false;
+    ordered = orderGitNodes(nodes);
+  }
   const lanes: (string | null)[] = [];
-  if (pin && available.has(pin)) lanes.push(pin);
+  const soft: boolean[] = [];
+  const open = (lane: number, sha: string | null, dotted: boolean) => { lanes[lane] = sha; soft[lane] = sha !== null && dotted; };
+  if (pin && available.has(pin)) open(0, pin, false);
   const rows: GitRow<Node>[] = [];
   let laneCount = 0;
-  for (const node of orderGitNodes(nodes)) {
+  for (const node of ordered) {
     const incoming = [...lanes];
-    let lane = lanes.indexOf(node.sha);
+    const incomingSoft = lanes.map((_, lane) => soft[lane] ?? false);
+    // The commit sits on a lane that reaches it by a line of its own when there is one.
+    let lane = lanes.findIndex((waiting, index) => waiting === node.sha && !soft[index]);
+    if (lane === -1) lane = lanes.indexOf(node.sha);
     if (lane === -1) {
       lane = lanes.indexOf(null);
       if (lane === -1) lane = lanes.length;
-      lanes[lane] = node.sha;
+      open(lane, node.sha, false);
     }
     const mergesIn: number[] = [];
     for (let other = 0; other < lanes.length; other++) {
       if (other !== lane && lanes[other] === node.sha) {
         mergesIn.push(other);
-        lanes[other] = null;
+        open(other, null, false);
       }
     }
-    const parents = [...new Set(node.parents)];
-    const shown = parents.filter(parent => available.has(parent));
+    const shown = edgesOf(node, joins).filter(edge => available.has(edge.sha));
+    const real = shown.filter(edge => !edge.soft);
     const branchesOut: number[] = [];
-    if (shown.length === 0) {
-      lanes[lane] = null;
-    } else {
-      lanes[lane] = shown[0];
-      for (const parent of shown.slice(1)) {
-        let target = lanes.indexOf(parent);
-        if (target === -1) {
-          target = lanes.indexOf(null);
-          if (target === -1) target = lanes.length;
-          lanes[target] = parent;
-        }
-        branchesOut.push(target);
-      }
+    const softOut: number[] = [];
+    // The commit's own lane goes on only to its first parent. A joined commit
+    // never takes it: where no parent is shown the lane ends, and the row says
+    // that history goes on below.
+    open(lane, real[0]?.sha ?? null, false);
+    for (const parent of [...real.slice(1), ...shown.filter(edge => edge.soft)]) {
+      let target = lanes.indexOf(parent.sha);
+      if (target === -1) {
+        target = lanes.findIndex((waiting, index) => waiting === null && index !== lane);
+        if (target === -1) target = Math.max(lanes.length, lane + 1);
+        open(target, parent.sha, parent.soft);
+      } else if (!parent.soft) soft[target] = false;
+      branchesOut.push(target);
+      if (parent.soft) softOut.push(target);
     }
-    while (lanes.length > 0 && lanes[lanes.length - 1] === null) lanes.pop();
-    rows.push({ node, lane, incoming, outgoing: [...lanes], mergesIn, branchesOut, cut: shown.length < parents.length });
+    while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+      lanes.pop();
+      soft.length = lanes.length;
+    }
+    const realParents = new Set(node.parents);
+    const cut = [...realParents].some(parent => !available.has(parent));
+    rows.push({ node, lane, incoming, outgoing: [...lanes], mergesIn, branchesOut, incomingSoft, outgoingSoft: lanes.map((_, index) => soft[index] ?? false), softOut, cut });
     laneCount = Math.max(laneCount, incoming.length, lanes.length, lane + 1);
   }
   return { rows, laneCount };

@@ -16,6 +16,7 @@ import { when } from '../snapshotFormat';
 import { useT } from '../i18n';
 import { AppLink } from './AppLink';
 import { EventStream } from './EventStream';
+import { CONVERSATION_MODES, DEFAULT_CONVERSATION_MODE, type ConversationMode } from '../conversationView';
 
 type Href = (selection?: AnchoredSelection) => string;
 
@@ -29,6 +30,8 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
   const listed = index.sessions.get(anchoredKey(provider, sessionId)) ?? index.archived.get(anchoredKey(provider, sessionId));
   const archive = useSetAnchoredSessionArchived();
   const [confirming, setConfirming] = useState(false);
+  // The conversation opens with only what was said; the work behind an answer opens on demand.
+  const [mode, setMode] = useState<ConversationMode>(DEFAULT_CONVERSATION_MODE);
   const sessionQ = useAnchoredSession(repo.id, provider, sessionId, listed?.revision);
   const body = sessionQ.data?.body;
   const parts = useMemo(() => (body ? anchoredParts(body) : []), [body]);
@@ -55,6 +58,8 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
   const setArchived = (archived: boolean) => archive.mutate({ repoId: repo.id, provider, sessionId, archived }, { onSuccess: () => setConfirming(false) });
   const children = index.children.get(key) ?? [];
   const first = anchoredPartIndex(parts, segment, rest);
+  // There is a conversation to show from the first part on.
+  const readable = Boolean(body.content) && anchoredStart(parts, first) !== undefined;
   const session = (part?: AnchoredPart): AnchoredSelection => ({
     kind: 'session', provider, id: sessionId,
     ...(part?.kind === 'segment' ? { segment: part.no } : part?.kind === 'uncommitted' ? { rest: true as const } : {}),
@@ -178,14 +183,20 @@ export function AnchoredSessionView({ repo, provider, sessionId, segment, rest, 
 
       <section className="viewer anchor-conversation" aria-label={t('anchored.conversation')}
         style={{ ['--assistant-ink' as string]: ANCHORED_PROVIDERS[provider]?.ink ?? 'var(--text)' } as React.CSSProperties}>
-        {first > 0 && (
-          <p className="anchor-card-meta">
-            <AppLink href={href(session())}>{t('anchored.fromStart')}</AppLink>
+        {(first > 0 || readable) && (
+          <p className="anchor-card-meta anchor-conversation-head">
+            {first > 0 && <AppLink href={href(session())}>{t('anchored.fromStart')}</AppLink>}
+            {readable && (
+              <select className="view-mode" aria-label={t('anchored.viewMode')} title={t('anchored.viewModeHint')} value={mode}
+                onChange={event => setMode(event.target.value as ConversationMode)}>
+                {CONVERSATION_MODES.map(value => <option key={value} value={value}>{t(`anchored.viewMode_${value}`)}</option>)}
+              </select>
+            )}
           </p>
         )}
-        {body.content && anchoredStart(parts, first) !== undefined ? (
+        {readable && body.content ? (
           <AnchoredEvents key={first} repoId={repo.id} provider={provider} sessionId={sessionId} revision={listed?.revision ?? 0}
-            total={body.content.events} parts={parts} first={first} />
+            total={body.content.events} parts={parts} first={first} mode={mode} />
         ) : (
           <p className="empty-box">{t('anchored.noContent')}</p>
         )}
@@ -205,8 +216,8 @@ function PartDivider({ part }: { part: AnchoredPart }) {
   );
 }
 
-function AnchoredEvents({ repoId, provider, sessionId, revision, total, parts, first }: {
-  repoId: string; provider: AnchoredProvider; sessionId: string; revision: number; total: number; parts: AnchoredPart[]; first: number;
+function AnchoredEvents({ repoId, provider, sessionId, revision, total, parts, first, mode }: {
+  repoId: string; provider: AnchoredProvider; sessionId: string; revision: number; total: number; parts: AnchoredPart[]; first: number; mode: ConversationMode;
 }) {
   const t = useT();
   const start = anchoredStart(parts, first) ?? total;
@@ -237,7 +248,8 @@ function AnchoredEvents({ repoId, provider, sessionId, revision, total, parts, f
     <DocumentReadScope.Provider value={['anchored-events', repoId, hash, start]}>
       {anchoredStream(runs, parts, first).map(item => item.kind === 'divider'
         ? <PartDivider key={`divider:${item.part.kind}:${item.part.no}`} part={item.part} />
-        : <EventStream key={`events:${item.part.kind}:${item.part.no}`} events={item.events} repoId={repoId} hash={hash} />)}
+        : <EventStream key={`events:${item.part.kind}:${item.part.no}`} events={item.events} repoId={repoId} hash={hash} mode={mode}
+          continues={item.part.firstEvent > 0} />)}
       {isFetching && <p role="status">{t('context.loadingEvents')}</p>}
       {query.error && (
         <p role="alert" className="err">

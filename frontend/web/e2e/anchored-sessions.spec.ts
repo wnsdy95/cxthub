@@ -90,8 +90,11 @@ function fixture(role: string, reads: string[], withRemote = false) {
       const offset = Number(searchParams.get('offset'));
       const end = Math.min(45, offset + 20);
       return { body: { offset, next: end === 45 ? -1 : end,
-        events: Array.from({ length: end - offset }, (_, index) => ({ kind: 'message', role: index % 2 ? 'assistant' : 'user', seq: offset + index, event_index: offset + index,
-          blocks: [{ type: 'text', text: `conversation ${offset + index}` }] })) } };
+        // Event 22 is the agent's work before its answer 23: a tool call.
+        events: Array.from({ length: end - offset }, (_, index) => offset + index === 22
+          ? { kind: 'tool_call', role: 'assistant', tool_name: 'Read', input: { file_path: 'parser.go' }, seq: 22, event_index: 22 }
+          : ({ kind: 'message', role: index % 2 ? 'assistant' : 'user', seq: offset + index, event_index: offset + index,
+            blocks: [{ type: 'text', text: `conversation ${offset + index}` }] })) } };
     }
     return undefined;
   };
@@ -137,6 +140,32 @@ test('the sessions tab shows a member their sessions by commit, branch and workt
   await expect(conversation.getByRole('separator')).toHaveText([/^Segment 2/, 'After the last commit']);
   await expect(conversation.getByText('conversation 20', { exact: true })).toBeVisible();
   await expect(conversation.getByText('conversation 19', { exact: true })).toHaveCount(0);
+  // Only what was said shows; the work before an answer opens from the button above it.
+  const shows = conversation.getByRole('combobox', { name: 'What the conversation shows' });
+  await expect(shows).toHaveValue('chat');
+  await expect(conversation.getByText('conversation 23', { exact: true })).toBeVisible();
+  await expect(conversation.getByText('(parser.go)')).toHaveCount(0);
+  const work = conversation.getByRole('button', { name: '1 detail', exact: true });
+  await work.click();
+  await expect(conversation.getByText('(parser.go)')).toBeVisible();
+  await expect(work).toHaveAttribute('aria-expanded', 'true');
+  await work.click();
+  await expect(work).toHaveAttribute('aria-expanded', 'false');
+  await expect(conversation.getByText('(parser.go)')).toHaveCount(0);
+  // Only the prompts: the button under a prompt opens its turn. The part after
+  // the last commit begins with the answer to the last prompt of segment 2.
+  await shows.selectOption('prompts');
+  await expect(conversation.getByText('conversation 21', { exact: true })).toHaveCount(0);
+  await expect(conversation.getByRole('button', { name: '1 event of the turn above', exact: true })).toBeVisible();
+  await expect(conversation.getByRole('button', { name: /before the first prompt/ })).toHaveCount(0);
+  await conversation.getByRole('button', { name: '3 more', exact: true }).click();
+  await expect(conversation.getByText('conversation 21', { exact: true })).toBeVisible();
+  await expect(conversation.getByText('(parser.go)')).toBeVisible();
+  // Everything: every event as it was recorded, with no button in between.
+  await shows.selectOption('all');
+  await expect(conversation.getByText('(parser.go)')).toBeVisible();
+  await expect(conversation.getByRole('button', { name: /detail/ })).toHaveCount(0);
+  await shows.selectOption('chat');
   await conversation.getByRole('link', { name: 'Show from the beginning' }).click();
   await expect(page).toHaveURL(url('?tab=sessions&session=claude%3Aparent-session'));
   await expect(conversation.getByText('conversation 0', { exact: true })).toBeVisible();
@@ -376,6 +405,36 @@ test('the graph holds commits no session made, and a note can be written where n
   await expect(detail).toContainText('No context');
   await nav.getByRole('link', { name: /^app/ }).click();
   await expect(detail).toContainText('Checked out now:');
+
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('a pull request merged by squash is joined to its branch by a dotted line; a merge commit keeps its own line', async ({ page }) => {
+  const errors = capturePageErrors(page);
+  const base = fixture('member', [], true);
+  // Pull request 8 of the branch quiet (d) was merged by squash as f, on top of e.
+  const first = remotePages[''] as { branches: unknown[]; pulls: unknown[]; commits: unknown[] };
+  const squashed = { ...first,
+    branches: [{ name: 'main', sha: sha('f') }, ...first.branches.slice(1)],
+    pulls: [{ number: 8, title: 'Quiet change', state: 'merged', head_ref: 'quiet', head_sha: sha('d'), base_ref: 'main', merge_sha: sha('f'), commits: [sha('d')], updated_at: at(58) }, ...first.pulls],
+    commits: [remoteCommit('f', 45, 'Quiet change (#8)', 'e'), ...first.commits] };
+  const unexpected = await installApiFixture(page, request => (
+    !request.searchParams.has('before') && decodeURIComponent(request.pathname) === '/api/v1/repos/repo/remote-git' ? { body: squashed } : base(request)));
+
+  await page.goto('/alice/app?tab=sessions');
+  const squash = page.locator(`[data-commit="${sha('f')}"]`);
+  await expect(squash).toContainText('#8');
+  await expect(squash.locator('path[data-joined]')).toHaveCount(1);
+  await expect(squash.locator('path[data-joined]')).toHaveAttribute('stroke-dasharray', '4 3');
+  // The dotted line runs past e down to d, the newest commit of the branch, where it ends.
+  await expect(page.locator(`[data-commit="${sha('e')}"] line[stroke-dasharray="4 3"]`)).toHaveCount(1);
+  await expect(page.locator(`[data-commit="${sha('d')}"] line[stroke-dasharray="4 3"]`)).toHaveCount(1);
+  await expect(page.locator(`[data-commit="${sha('c')}"] [stroke-dasharray="4 3"]`)).toHaveCount(0);
+  // Pull request 7 was merged by a merge commit: its line is a Git parent, drawn solid.
+  await expect(page.locator(`[data-commit="${sha('e')}"] path[data-joined]`)).toHaveCount(0);
+  await expect(page.locator(`[data-commit="${sha('e')}"] path`)).toHaveCount(1);
+  await expect(page.locator(`[data-commit="${sha('e')}"] path:not([stroke-dasharray])`)).toHaveCount(1);
 
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);

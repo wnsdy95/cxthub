@@ -829,6 +829,8 @@ components:
               event_index: { type: integer, minimum: 0, description: The event's place in the session's conversation. }
               event_bytes: { type: integer, minimum: 0 }
               deferred: { type: boolean, description: Only presentation metadata is present; read the body with view=raw or by fragments. }
+              empty_reasoning: { type: boolean, description: On a deferred reasoning event, it has no readable summary and draws nothing. }
+              seed_summary: { type: boolean, description: On a deferred message, it is a summary cxt wrote to seed a session. }
               kind: { type: string }
         offset: { type: integer, minimum: 0 }
         next: { type: integer, minimum: -1, description: The next event to ask for, or -1 at the end of what is open to the caller from here. }

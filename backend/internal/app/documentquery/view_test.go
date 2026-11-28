@@ -404,3 +404,29 @@ func TestViewFragmentRefusesBytesThatAreNotTheRecord(test *testing.T) {
 		test.Fatalf("a refused read kept what it was admitted with: %+v", resources)
 	}
 }
+
+// A described event says what the reader needs to draw it without reading
+// it: reasoning that left no readable summary draws nothing, and a summary
+// cxt wrote to seed a session is labelled as one. An event sent whole says
+// so in its own content.
+func TestViewEventsSayWhetherADescribedEventDrawsAnything(test *testing.T) {
+	fixture := eventPrefixWithJSON(test, []string{
+		viewMessage("user", 10, 5),
+		`{"cross_replayable":false,"kind":"reasoning","seq":20}`,
+		"{\"cross_replayable\":false,\"kind\":\"reasoning\",\"redacted_summary\":\"Looked at it\",\"seq\":30}",
+		`{"blocks":[{"text":"[cxt seed] Branch-switch context: main","type":"text"}],"compact_summary":true,"kind":"message","role":"user","seq":40}`,
+		viewMessage("assistant", 50, 5),
+	})
+	page, err := fixture.viewQueries(&viewResources{}).ReadDocViewEvents(context.Background(), fixture.repo, fixture.document.document.Hash, 0, 20, "all")
+	if err != nil {
+		test.Fatal(err)
+	}
+	got := make([]string, 0, len(page.Events))
+	for _, event := range page.Events {
+		got = append(got, fmt.Sprintf("%d:%v:%v:%v", event.Index, event.Deferred, event.EmptyReasoning, event.SeedSummary))
+	}
+	want := []string{"0:false:false:false", "1:true:true:false", "2:true:false:false", "3:true:false:true", "4:false:false:false"}
+	if !reflect.DeepEqual(got, want) {
+		test.Fatalf("index:deferred:empty reasoning:seed summary\n got: %v\nwant: %v", got, want)
+	}
+}

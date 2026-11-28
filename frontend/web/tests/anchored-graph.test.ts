@@ -51,3 +51,69 @@ test('a branch holds the commits its base does not have yet', () => {
   const window = new Map(history.filter(entry => !['a', 'b'].includes(entry.sha)).map(entry => [entry.sha, entry]));
   assert.deepEqual(commitsNotOn(window, 'f2', 'd'), { shas: ['f2', 'f1'], complete: false });
 });
+
+test('a squash merge is joined to the branch it came from by a dotted lane, and reachability ignores it', () => {
+  // main: a - s (pull request of f1 - f2, merged by squash as s); the branch keeps f2 as its newest commit.
+  const squashed = [node('a', 1), node('f1', 2, 'a'), node('f2', 3, 'f1'), { ...node('s', 4, 'a'), joined: ['f2'] }];
+  const { rows } = layoutGitGraph(squashed, 's');
+  const shape = Object.fromEntries(rows.map(row => [row.node.sha, { lane: row.lane, out: row.branchesOut, soft: row.softOut, merges: row.mergesIn }]));
+  assert.deepEqual(shape, {
+    s: { lane: 0, out: [1], soft: [1], merges: [] },
+    f2: { lane: 1, out: [], soft: [], merges: [] },
+    f1: { lane: 1, out: [], soft: [], merges: [] },
+    a: { lane: 0, out: [], soft: [], merges: [1] },
+  });
+  const [s, f2, f1] = rows;
+  assert.deepEqual(s.outgoingSoft, [false, true], 'from the squash commit down to the branch the lane is dotted');
+  assert.deepEqual(f2.incomingSoft, [false, true]);
+  assert.deepEqual(f2.outgoingSoft, [false, false], 'below the branch its own parents are solid lines');
+  assert.deepEqual(f1.incomingSoft, [false, false]);
+  assert.equal(rows.some(row => row.cut), false);
+  const byId = new Map(squashed.map(entry => [entry.sha, entry]));
+  assert.deepEqual(commitsNotOn(byId, 'f2', 's'), { shas: ['f2', 'f1'], complete: true }, 'the squashed branch is not reachable from main');
+});
+
+test('a joined commit that a real line already reaches only adds a dotted curve', () => {
+  // c is a child of f2 above s: the lane to f2 is a line of its own, and stays solid.
+  const history = [node('a', 1), node('f2', 2, 'a'), { ...node('s', 3, 'a'), joined: ['f2'] }, node('c', 4, 'f2')];
+  const { rows } = layoutGitGraph(history, 's');
+  const s = rows.find(row => row.node.sha === 's')!;
+  assert.deepEqual(s.softOut, s.branchesOut);
+  assert.equal(s.outgoingSoft[s.branchesOut[0]], false);
+});
+
+test('joins that would close a loop are left out and the graph is the plain one', () => {
+  // s joined f2, but f2 was made on top of s: drawing the join would loop.
+  const looped = [node('a', 1), { ...node('s', 2, 'a'), joined: ['f2'] }, node('f2', 3, 's')];
+  const { rows } = layoutGitGraph(looped);
+  assert.equal(rows.length, looped.length, 'no commit is lost');
+  assert.equal(rows.some(row => row.softOut.length > 0 || row.incomingSoft.some(Boolean) || row.outgoingSoft.some(Boolean)), false);
+  assert.deepEqual(rows.map(row => row.node.sha), ['f2', 's', 'a']);
+});
+
+test('a dotted lane turns solid where a merge commit below reaches the same commit by a real parent', () => {
+  // s (newest, on main) joined f2; m, older, merged f2 for real: from m down the lane to f2 is a Git line.
+  const history = [node('a', 1), node('f2', 2, 'a'), node('x', 3, 'a'), node('m', 4, 'x', 'f2'), { ...node('s', 5, 'a'), joined: ['f2'] }];
+  const { rows } = layoutGitGraph(history, 's');
+  const s = rows.find(row => row.node.sha === 's')!;
+  const m = rows.find(row => row.node.sha === 'm')!;
+  const lane = s.softOut[0];
+  assert.equal(s.outgoingSoft[lane], true);
+  assert.deepEqual(m.branchesOut, [lane], 'the merge commit reaches f2 on the same lane');
+  assert.deepEqual(m.softOut, []);
+  assert.equal(m.incomingSoft[lane], true, 'above the merge commit the lane is still the dotted join');
+  assert.equal(m.outgoingSoft[lane], false, 'below it the lane is the merge commit\'s own line');
+});
+
+test('a joined commit never takes the lane of a commit whose parent is outside the window', () => {
+  // s squashed f1 - f2, which were made after p; the window ends before p.
+  const window = [node('f1', 2, 'z'), node('f2', 3, 'f1'), { ...node('s', 4, 'p'), joined: ['f2'] }];
+  const { rows } = layoutGitGraph(window, 's');
+  const s = rows.find(row => row.node.sha === 's')!;
+  assert.equal(s.lane, 0);
+  assert.equal(s.cut, true);
+  assert.equal(s.outgoing[0] ?? null, null, 'main\'s lane ends, so the row draws that history goes on below');
+  assert.deepEqual(s.softOut, s.branchesOut);
+  assert.notEqual(s.softOut[0], 0, 'the dotted line leaves for a lane of its own');
+  for (const sha of ['f2', 'f1']) assert.notEqual(rows.find(row => row.node.sha === sha)!.lane, 0, `${sha} is not drawn as main's own history`);
+});

@@ -59,7 +59,8 @@ func (queries *Queries) readDocViewEvents(ctx context.Context, repo, hash domain
 			event := domain.CIREvent{Kind: entry.Kind, Role: domain.Role(entry.Role), Seq: entry.Seq, ToolName: entry.ToolName, CompactSummary: entry.CompactSummary}
 			cost := entry.Length + 128
 			if deferred {
-				metadata, err := json.Marshal(domain.DocViewEvent{Event: event, Index: position, Deferred: true, Bytes: entry.Length})
+				metadata, err := json.Marshal(domain.DocViewEvent{Event: event, Index: position, Deferred: true, Bytes: entry.Length,
+					EmptyReasoning: entry.EmptyReasoning, SeedSummary: entry.SeedSummary})
 				if err != nil {
 					return out, err
 				}
@@ -78,7 +79,8 @@ func (queries *Queries) readDocViewEvents(ctx context.Context, repo, hash domain
 					return out, err
 				}
 			}
-			out.Events = append(out.Events, domain.DocViewEvent{Event: event, Index: position, Deferred: deferred, Bytes: entry.Length})
+			out.Events = append(out.Events, domain.DocViewEvent{Event: event, Index: position, Deferred: deferred, Bytes: entry.Length,
+				EmptyReasoning: deferred && entry.EmptyReasoning, SeedSummary: deferred && entry.SeedSummary})
 			bytes += cost
 			if shown {
 				visible++
