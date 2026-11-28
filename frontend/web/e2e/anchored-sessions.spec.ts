@@ -433,6 +433,8 @@ test('a pull request merged by squash is joined to its branch by a dotted line; 
   await expect(page.locator(`[data-commit="${sha('c')}"] [stroke-dasharray="4 3"]`)).toHaveCount(0);
   // Pull request 7 was merged by a merge commit: its line is a Git parent, drawn solid.
   await expect(page.locator(`[data-commit="${sha('e')}"] path[data-joined]`)).toHaveCount(0);
+  await expect(page.locator(`[data-commit="${sha('e')}"] path`)).toHaveCount(1);
+  await expect(page.locator(`[data-commit="${sha('e')}"] path:not([stroke-dasharray])`)).toHaveCount(1);
 
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);

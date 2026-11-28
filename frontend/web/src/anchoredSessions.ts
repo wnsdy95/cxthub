@@ -169,7 +169,8 @@ export function buildAnchoredIndex(
     if (merged) {
       merged.merged = pull.number;
       // A squash or rebase leaves the branch out of the commit's parents: the graph joins them with a dotted line.
-      if (pull.state === 'merged' && !pull.fork && pull.head_sha && pull.head_sha !== merged.sha && !merged.parents.includes(pull.head_sha)) {
+      // Only a commit read from the remote has its parents, so only it can be told not to have the branch among them.
+      if (pull.state === 'merged' && !pull.fork && merged.remote && pull.head_sha && pull.head_sha !== merged.sha && !merged.parents.includes(pull.head_sha)) {
         (merged.joined ??= []).push(pull.head_sha);
       }
     }

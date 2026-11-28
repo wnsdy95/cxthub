@@ -104,3 +104,16 @@ test('a dotted lane turns solid where a merge commit below reaches the same comm
   assert.equal(m.incomingSoft[lane], true, 'above the merge commit the lane is still the dotted join');
   assert.equal(m.outgoingSoft[lane], false, 'below it the lane is the merge commit\'s own line');
 });
+
+test('a joined commit never takes the lane of a commit whose parent is outside the window', () => {
+  // s squashed f1 - f2, which were made after p; the window ends before p.
+  const window = [node('f1', 2, 'z'), node('f2', 3, 'f1'), { ...node('s', 4, 'p'), joined: ['f2'] }];
+  const { rows } = layoutGitGraph(window, 's');
+  const s = rows.find(row => row.node.sha === 's')!;
+  assert.equal(s.lane, 0);
+  assert.equal(s.cut, true);
+  assert.equal(s.outgoing[0] ?? null, null, 'main\'s lane ends, so the row draws that history goes on below');
+  assert.deepEqual(s.softOut, s.branchesOut);
+  assert.notEqual(s.softOut[0], 0, 'the dotted line leaves for a lane of its own');
+  for (const sha of ['f2', 'f1']) assert.notEqual(rows.find(row => row.node.sha === sha)!.lane, 0, `${sha} is not drawn as main's own history`);
+});

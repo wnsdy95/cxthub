@@ -114,24 +114,23 @@ export function layoutGitGraph<Node extends GitNode>(nodes: Node[], pin?: string
         open(other, null, false);
       }
     }
-    const edges = edgesOf(node, joins);
-    const shown = edges.filter(edge => available.has(edge.sha));
+    const shown = edgesOf(node, joins).filter(edge => available.has(edge.sha));
+    const real = shown.filter(edge => !edge.soft);
     const branchesOut: number[] = [];
     const softOut: number[] = [];
-    if (shown.length === 0) {
-      open(lane, null, false);
-    } else {
-      open(lane, shown[0].sha, shown[0].soft);
-      for (const parent of shown.slice(1)) {
-        let target = lanes.indexOf(parent.sha);
-        if (target === -1) {
-          target = lanes.indexOf(null);
-          if (target === -1) target = lanes.length;
-          open(target, parent.sha, parent.soft);
-        } else if (!parent.soft) soft[target] = false;
-        branchesOut.push(target);
-        if (parent.soft) softOut.push(target);
-      }
+    // The commit's own lane goes on only to its first parent. A joined commit
+    // never takes it: where no parent is shown the lane ends, and the row says
+    // that history goes on below.
+    open(lane, real[0]?.sha ?? null, false);
+    for (const parent of [...real.slice(1), ...shown.filter(edge => edge.soft)]) {
+      let target = lanes.indexOf(parent.sha);
+      if (target === -1) {
+        target = lanes.findIndex((waiting, index) => waiting === null && index !== lane);
+        if (target === -1) target = Math.max(lanes.length, lane + 1);
+        open(target, parent.sha, parent.soft);
+      } else if (!parent.soft) soft[target] = false;
+      branchesOut.push(target);
+      if (parent.soft) softOut.push(target);
     }
     while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
       lanes.pop();

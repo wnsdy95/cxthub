@@ -328,4 +328,12 @@ test('a pull request merged by squash joins its branch to the commit it became; 
   assert.equal(row('m').joined, undefined, 'a merge commit already has the branch as a parent');
   assert.equal(row('o').joined, undefined, 'a fork lives in another repository, and a commit does not join itself');
   assert.equal(row('a').joined, undefined, 'only a merged pull request joins');
+
+  // A merge commit that only a session report names has no known parents yet: it is not joined.
+  const report = summary('local-merge', { segments: 1, commits: [{ sha: sha('l'), segment_no: 1, rule: 'printed-number', subject: 'Merge feature', created_at: at(9), on_remote: true }] });
+  const local = buildAnchoredIndex([report], [], { remote: { ...remote, pulls: [pull(6, 'f', 'l')] } as unknown as AnchoredRemote });
+  const merge = local.commits.find(entry => entry.sha === sha('l'))!;
+  assert.equal(merge.remote, false);
+  assert.equal(merge.merged, 6);
+  assert.equal(merge.joined, undefined, 'its parents are not known, so a join could stand where a parent is');
 });
