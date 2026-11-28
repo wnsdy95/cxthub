@@ -48,8 +48,9 @@ func (c *BackendClient) transport() (string, string, error) {
 	return c.baseURL(), c.token(), nil
 }
 
-// Freeze the destination and credentials for HTTP requests without copying the
-// owning client's mutex-protected caches or local synchronization stores.
+// Freeze the destination and credentials for HTTP requests, so every request
+// of one operation goes to the same server with the same credential even when
+// the configured transport changes meanwhile.
 func (c *BackendClient) frozenRequestClient(endpoint, token string) *BackendClient {
 	return &BackendClient{
 		baseURL: func() string { return endpoint },

@@ -18,7 +18,7 @@ func HashContent(data []byte) ContentHash {
 }
 
 // CanonicalBytes returns the deterministic normalized bytes of a CIRDocument.
-// A single source of truth for Snapshot.ID generation (domain model, data model).
+// A single source of truth for legacy SessionDoc hashes (domain model, data model).
 //
 // Normalization rules (contract, data model):
 //  1. JSON key sorting — all object keys sorted in ascending UTF-8 byte order.
