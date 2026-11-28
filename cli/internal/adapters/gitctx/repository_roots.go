@@ -117,15 +117,6 @@ func InspectContextRoot(ctx context.Context, cwd string) ContextRootState {
 	return ContextRootState{WorktreeRoot: worktree, GitRepository: gitRepo}
 }
 
-// ExistingContextRoot returns a real .cxt directory even when it is only
-// residue from an old/global hook and was never initialized. Callers use this
-// solely for safe migration tasks such as adding ignore rules; it must not be
-// used as permission to capture or mutate context state.
-func ExistingContextRoot(ctx context.Context, cwd string) (string, bool) {
-	state := InspectContextRoot(ctx, cwd)
-	return state.Root, state.Exists
-}
-
 // ContextRoot returns the real directory that owns an initialized .cxt store.
 // A directory alone is not initialization: global Codex/Claude hooks run in
 // every repository, and legacy versions could leave capture sidecars behind.

@@ -16,11 +16,6 @@ import (
 
 // Only the configured origin may inherit CXT_TOKEN. Other servers use their
 // own login credential, so adding a named remote cannot leak origin credentials.
-func tokenForSyncDestination(cfg config, target string) string {
-	origin, _ := remotecfg.Origin(cfg.RepoRoot)
-	return tokenForObservedDestination(cfg, target, origin)
-}
-
 func tokenForObservedDestination(cfg config, target, configuredOrigin string) string {
 	base := cfg.RemoteEndpoint
 	if configuredOrigin != "" {

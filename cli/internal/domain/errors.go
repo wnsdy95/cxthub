@@ -29,9 +29,8 @@ var ErrUnsupportedCIRVersion = errors.New("unsupported CIR version")
 // Occurs in SyncRepo.Pull.
 var ErrSyncConflict = errors.New("sync conflict")
 
-// ErrNoActiveSession indicates the absence of an active session file in the cwd.
-// This error occurs in CaptureSource.LocateActiveSession.
-// Auto hooks gracefully exit as no-op when encountering this error.
+// ErrNoActiveSession indicates that no session file of the provider matches.
+// Codex rollout lookups return it, and callers treat it as nothing to read.
 var ErrNoActiveSession = errors.New("no active session")
 
 // ErrNotGitRepo indicates the cwd is not part of a git worktree.
