@@ -90,10 +90,6 @@ type User struct {
 	Username string `json:"username"`
 	// Nickname is a display alias — unrelated to URL, can be freely changed at any time (light change).
 	Nickname string `json:"nickname,omitempty"`
-	// LoadMode is the account-wide personal setting for context load default fidelity
-	// (full|reconstructed|memory, "" = unset). CLI consumes this at the consumption point
-	// and applies it to the priority (flag > local config > this value > full).
-	LoadMode string `json:"load_mode,omitempty"`
 	// Avatar is the profile picture — a resized data URL (data:image/…;base64,…).
 	// Public info (visible to anyone from the profile). "" = unset (fallback to initials).
 	Avatar string `json:"avatar,omitempty"`

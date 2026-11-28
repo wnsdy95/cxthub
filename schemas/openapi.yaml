@@ -1235,10 +1235,6 @@ components:
         name: { type: string }
         username: { type: string }
         nickname: { type: string }
-        load_mode:
-          type: string
-          description: "Personal load default mode (web settings, CLI consumption). Empty value = unset (falls back to full)."
-          enum: ["", full, reconstructed, memory]
         avatar: { type: string, description: "Profile picture data URL (data:image/…;base64,…). '' = unset." }
         locale:
           type: string
@@ -3720,8 +3716,8 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     patch:
       operationId: updateMe
-      summary: Account Settings — nickname (free) / username (heavy, URL change) / load_mode
-      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated repository is synchronized. load_mode is the default CLI load mode."
+      summary: Account Settings — nickname (free) / username (heavy, URL change) / avatar / locale
+      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated repository is synchronized. Older clients may also send load_mode, the removed load preference; it is ignored."
       tags: [identity]
       requestBody:
         required: true
@@ -3732,7 +3728,6 @@ paths:
               properties:
                 username: { type: string }
                 nickname: { type: string }
-                load_mode: { type: string, enum: ["", full, reconstructed, memory] }
                 avatar: { type: string, description: "Profile picture data URL (empty value = remove)" }
                 locale: { type: string, enum: ["", ko, en], description: "UI display language (empty value = unset)" }
       responses:
