@@ -223,7 +223,7 @@ export const api = {
   listEnterpriseAudit: (id: string) => call<import('./types').EnterpriseAuditEvent[]>('GET', `/enterprises/${encodeURIComponent(id)}/audit`),
   // Repository · Member · Invite
   listRepositories: () => call<Repository[]>('GET', '/repositories'),
-  updateMe: (patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string; locale?: string }) =>
+  updateMe: (patch: { username?: string; nickname?: string; avatar?: string; locale?: string }) =>
     call<User>('PATCH', '/me', patch),
   createCliToken: () => call<{ token: string; expires_at: string }>('POST', '/me/cli-tokens'),
   listSessions: () =>

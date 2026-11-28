@@ -8,8 +8,6 @@ export interface User {
   username: string;
 /** Display alias — URL agnostic, free to change */
   nickname?: string;
-/** Context load default fidelity (account global personal settings) — CLI consumes at point of use */
-  load_mode?: string;
 /** Profile picture data URL (data:image/…;base64,…). Fallback to initials if none */
   avatar?: string;
 /** UI display language personal setting (ko|en). Fallback to client browser detection if none */

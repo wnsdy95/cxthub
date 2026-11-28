@@ -143,7 +143,7 @@ export function useCreateBreakGlassGrant() {
 export function useUpdateMe() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string; locale?: string }) =>
+    mutationFn: (patch: { username?: string; nickname?: string; avatar?: string; locale?: string }) =>
       api.updateMe(patch),
     onSuccess: (u) => {
       qc.setQueryData(['me'], u);
