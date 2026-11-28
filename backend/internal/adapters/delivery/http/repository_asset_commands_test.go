@@ -142,7 +142,9 @@ type repositoryAssetHTTPRequest struct {
 func repositoryAssetHTTPRequests(hash domain.ContentHash) []repositoryAssetHTTPRequest {
 	return []repositoryAssetHTTPRequest{
 		{name: "about", command: "profile", method: http.MethodPatch, path: "/about", body: `{"description":"retained","website":"https://about.example","topics":["context"]}`},
-		{name: "config", command: "profile", method: http.MethodPatch, path: "/about", body: `{"default_branch":"next","protect_default":false}`},
+		// An older client may still send the removed default branch and
+		// protection settings: they are accepted and ignored.
+		{name: "older settings", command: "profile", method: http.MethodPatch, path: "/about", body: `{"default_branch":"next","protect_default":false}`},
 		{name: "settings", command: "settings", method: http.MethodPut, path: "/settings/claude", body: `{"kind":"agents","files":[{"path":"AGENTS.md","content_b64":"cmV0YWluZWQ="}],"updated_by":"forged"}`, response: `{"kind":"claude","files":1}`},
 		{name: "secrets", command: "secrets", method: http.MethodPut, path: "/secrets?expected_revision=previous&rotate=true&expect=fingerprint", body: `{"version":1,"ciphertext":"retained"}`, response: `{"status":"stored","revision":"explicit-revision"}`},
 	}
@@ -223,7 +225,7 @@ func TestRepositoryAssetHTTPUsesInjectedCommands(test *testing.T) {
 				test.Fatal("request did not execute exactly one injected command", fixture.commands.calls, fixture.backend.calls)
 			}
 			switch input.name {
-			case "about", "config":
+			case "about", "older settings":
 				var expectedPatch inbound.RepoProfilePatch
 				if err := json.Unmarshal([]byte(input.body), &expectedPatch); err != nil {
 					test.Fatal(err)
@@ -355,7 +357,7 @@ func TestRepositoryAssetHTTPPreservesAtomicProfilePatch(test *testing.T) {
 	if response.Code != http.StatusOK || !reflect.DeepEqual(fixture.commands.calls, []string{"profile"}) || len(fixture.backend.calls) != 0 {
 		test.Fatal("atomic profile patch was split into asset commands or used the facade", response.Code, response.Body, fixture.commands.calls)
 	}
-	if patch.Description == nil || *patch.Description != "retained" || patch.DefaultBranch == nil || *patch.DefaultBranch != "next" || patch.ProtectDefault == nil || *patch.ProtectDefault || patch.RequiredDocIdentity == nil || *patch.RequiredDocIdentity != domain.DocumentIdentityRootV1 || patch.Website != nil || patch.Topics != nil {
-		test.Fatal("profile patch lost absent fields, false values or the document identity requirement", patch)
+	if patch.Description == nil || *patch.Description != "retained" || patch.RequiredDocIdentity == nil || *patch.RequiredDocIdentity != domain.DocumentIdentityRootV1 || patch.Website != nil || patch.Topics != nil {
+		test.Fatal("profile patch lost absent fields or the document identity requirement", patch)
 	}
 }

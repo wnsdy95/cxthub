@@ -18,11 +18,10 @@ import (
 )
 
 type wave56AssetStore struct {
-	getRepo      func(context.Context, domain.ContentHash) (domain.Repo, error)
-	updateAbout  func(context.Context, domain.ContentHash, string, string, []string) error
-	updateConfig func(context.Context, domain.ContentHash, *string, *bool) error
-	putSettings  func(context.Context, domain.ContentHash, domain.SettingsBundle) error
-	getSecrets   func(context.Context, domain.ContentHash) ([]byte, error)
+	getRepo     func(context.Context, domain.ContentHash) (domain.Repo, error)
+	updateAbout func(context.Context, domain.ContentHash, string, string, []string) error
+	putSettings func(context.Context, domain.ContentHash, domain.SettingsBundle) error
+	getSecrets  func(context.Context, domain.ContentHash) ([]byte, error)
 }
 
 func (ports *wave56AssetStore) GetRepo(ctx context.Context, repo domain.ContentHash) (domain.Repo, error) {
@@ -31,10 +30,6 @@ func (ports *wave56AssetStore) GetRepo(ctx context.Context, repo domain.ContentH
 
 func (ports *wave56AssetStore) UpdateRepoAbout(ctx context.Context, repo domain.ContentHash, description, website string, topics []string) error {
 	return ports.updateAbout(ctx, repo, description, website, topics)
-}
-
-func (ports *wave56AssetStore) UpdateRepoConfig(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
-	return ports.updateConfig(ctx, repo, branch, protected)
 }
 
 func (ports *wave56AssetStore) PutSettingsBundle(ctx context.Context, repo domain.ContentHash, bundle domain.SettingsBundle) error {
@@ -138,8 +133,6 @@ type wave56AssetFixture struct {
 	authorized     []inbound.SaveSecretsInput
 	settings       []domain.SettingsBundle
 	deliveries     []outbound.NotificationDelivery
-	branch         *string
-	protected      *bool
 	current        []byte
 	currentErr     error
 	previous       []byte
@@ -308,26 +301,6 @@ func newWave56AssetFixture(test *testing.T) *wave56AssetFixture {
 		fixture.metadata.Topics = append([]string(nil), topics...)
 		return nil
 	}
-	store.updateConfig = func(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
-		if err := fixture.observe(ctx, "update-config"); err != nil {
-			return err
-		}
-		if repo != fixture.repo {
-			test.Fatal("config write changed repositories")
-		}
-		if fixture.writeErr != nil {
-			return fixture.writeErr
-		}
-		fixture.writes++
-		fixture.branch, fixture.protected = branch, protected
-		if branch != nil {
-			fixture.metadata.DefaultBranch = *branch
-		}
-		if protected != nil {
-			fixture.metadata.ProtectDefault = *protected
-		}
-		return nil
-	}
 	store.putSettings = func(ctx context.Context, repo domain.ContentHash, bundle domain.SettingsBundle) error {
 		if err := fixture.observe(ctx, "put-settings"); err != nil {
 			return err
@@ -421,7 +394,7 @@ type wave56AssetAction struct {
 func wave56AssetActions(test *testing.T) []wave56AssetAction {
 	test.Helper()
 	bundle := wave56AssetBundle("codex")
-	branch, description := "release/topic", "updated"
+	description := "updated"
 	return []wave56AssetAction{
 		{name: "settings", operation: wave56AssetSettings, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
 			return commands.PutSettings(fixture.ctx, fixture.repo, bundle)
@@ -432,10 +405,6 @@ func wave56AssetActions(test *testing.T) []wave56AssetAction {
 		}},
 		{name: "profile", operation: wave56AssetProfile, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
 			_, err := commands.PatchRepoProfile(fixture.ctx, fixture.repo, inbound.RepoProfilePatch{Description: &description})
-			return err
-		}},
-		{name: "profile-branch", operation: wave56AssetProfile, run: func(commands *RepositoryAssetCommands, fixture *wave56AssetFixture) error {
-			_, err := commands.PatchRepoProfile(fixture.ctx, fixture.repo, inbound.RepoProfilePatch{DefaultBranch: &branch})
 			return err
 		}},
 	}
@@ -573,7 +542,7 @@ func TestWave56RepositoryAssetsNeverRetryOutsideTheScope(test *testing.T) {
 				attempts := 0
 				for _, event := range fixture.events {
 					switch event {
-					case "update-about", "update-config", "put-settings", "cas-secrets":
+					case "update-about", "put-settings", "cas-secrets":
 						attempts++
 					}
 				}
@@ -639,48 +608,13 @@ func TestWave56RepositoryAssetAboutNormalizationAndValidation(test *testing.T) {
 	}
 	// What is not a repository's name is refused before anything is written,
 	// whichever part of the profile is patched.
-	branch := "release/topic"
-	for name, patch := range map[string]inbound.RepoProfilePatch{"description": {Description: &description}, "branch": {DefaultBranch: &branch}} {
+	for name, patch := range map[string]inbound.RepoProfilePatch{"description": {Description: &description}, "topics": {Topics: []string{"topic"}}} {
 		fixture = newWave56AssetFixture(test)
 		fixture.repo = "invalid-repository"
 		fixture.metadata.ID = fixture.repo
 		if _, err := wave56AssetOwner(test, fixture.config).PatchRepoProfile(fixture.ctx, fixture.repo, patch); !errors.Is(err, domain.ErrIntegrity) || fixture.writes != 0 {
 			test.Fatalf("invalid repository reached storage (%s): %v", name, err)
 		}
-	}
-}
-
-func TestWave56RepositoryAssetConfigPreservesOptionalValues(test *testing.T) {
-	empty, branch, invalid := "", "release/topic", "../escape"
-	protected, unprotected := true, false
-	for _, scenario := range []struct {
-		name      string
-		branch    *string
-		protected *bool
-		failure   error
-	}{
-		{name: "explicit-empty-and-false", branch: &empty, protected: &unprotected},
-		{name: "branch-alone", branch: &branch},
-		{name: "protection-alone", protected: &protected},
-		{name: "branch-and-protected", branch: &branch, protected: &protected},
-		{name: "invalid-branch", branch: &invalid, failure: domain.ErrValidation},
-	} {
-		test.Run(scenario.name, func(test *testing.T) {
-			fixture := newWave56AssetFixture(test)
-			_, err := wave56AssetOwner(test, fixture.config).PatchRepoProfile(fixture.ctx, fixture.repo, inbound.RepoProfilePatch{DefaultBranch: scenario.branch, ProtectDefault: scenario.protected})
-			if !errors.Is(err, scenario.failure) {
-				test.Fatalf("error=%v, want %v", err, scenario.failure)
-			}
-			if scenario.failure != nil {
-				if fixture.writes != 0 {
-					test.Fatal("invalid branch was stored")
-				}
-				return
-			}
-			if fixture.writes != 1 || !reflect.DeepEqual(fixture.branch, scenario.branch) || !reflect.DeepEqual(fixture.protected, scenario.protected) {
-				test.Fatal("nil, empty or false configuration values changed")
-			}
-		})
 	}
 }
 
@@ -702,16 +636,17 @@ func TestWave56RepositoryAssetCommandsRejectMalformedRepositoryBeforeStoreWrites
 func TestWave56RepositoryAssetProfileUsesOneOrderedCompoundScope(test *testing.T) {
 	fixture := newWave56AssetFixture(test)
 	commands := wave56AssetOwner(test, fixture.config)
-	identity, description, website, branch, protected := domain.DocumentIdentityRootV1, "  updated description  ", "HTTPS://Example.TEST/", "release/topic", true
-	patch := inbound.RepoProfilePatch{RequiredDocIdentity: &identity, Description: &description, Website: &website, Topics: []string{"updated"}, DefaultBranch: &branch, ProtectDefault: &protected}
+	identity, description, website := domain.DocumentIdentityRootV1, "  updated description  ", "HTTPS://Example.TEST/"
+	branch := fixture.metadata.DefaultBranch
+	patch := inbound.RepoProfilePatch{RequiredDocIdentity: &identity, Description: &description, Website: &website, Topics: []string{"updated"}}
 	result, err := commands.PatchRepoProfile(fixture.ctx, fixture.repo, patch)
 	if err != nil {
 		test.Fatal(err)
 	}
-	if !reflect.DeepEqual(fixture.operations, []wave56AssetOperation{wave56AssetProfile}) || fixture.callbacks != 1 || !reflect.DeepEqual(fixture.events, []string{"get-repo", "require-identity", "update-config", "update-about", "get-repo"}) {
+	if !reflect.DeepEqual(fixture.operations, []wave56AssetOperation{wave56AssetProfile}) || fixture.callbacks != 1 || !reflect.DeepEqual(fixture.events, []string{"get-repo", "require-identity", "update-about", "get-repo"}) {
 		test.Fatalf("compound profile work was split, reordered or assigned a different audit scope: operations=%v events=%v", fixture.operations, fixture.events)
 	}
-	if !reflect.DeepEqual(result, fixture.metadata) || result.ID != fixture.repo || result.RepositoryID != fixture.record.ID || result.RemoteURL != "https://example.test/team/project" || result.DefaultBranch != branch || !result.ProtectDefault || result.RequiredDocIdentity != identity || result.Description != "updated description" || result.Website != "https://example.test" || !reflect.DeepEqual(result.Topics, patch.Topics) {
+	if !reflect.DeepEqual(result, fixture.metadata) || result.ID != fixture.repo || result.RepositoryID != fixture.record.ID || result.RemoteURL != "https://example.test/team/project" || result.DefaultBranch != branch || result.RequiredDocIdentity != identity || result.Description != "updated description" || result.Website != "https://example.test" || !reflect.DeepEqual(result.Topics, patch.Topics) {
 		test.Fatalf("compound result did not reread the stored profile: %+v", result)
 	}
 	if !reflect.DeepEqual(fixture.required, []domain.DocumentIdentity{identity}) || description != "  updated description  " || website != "HTTPS://Example.TEST/" {
@@ -741,13 +676,13 @@ func TestWave56RepositoryAssetProfilePreservesAbsentFieldsAndClearsExplicitTopic
 	}
 }
 
-func TestWave56RepositoryAssetProfileValidatesBeforeConfigAndStopsOnFailure(test *testing.T) {
+func TestWave56RepositoryAssetProfileValidatesBeforeWritingAndStopsOnFailure(test *testing.T) {
 	failure := errors.New("profile prerequisite unavailable")
-	for _, stage := range []string{"read", "identity", "branch", "website", "config"} {
+	for _, stage := range []string{"read", "identity", "website", "about"} {
 		test.Run(stage, func(test *testing.T) {
 			fixture := newWave56AssetFixture(test)
-			identity, description, website, branch := domain.DocumentIdentityRootV1, "updated", "example.test", "release/topic"
-			patch := inbound.RepoProfilePatch{Description: &description, Website: &website, DefaultBranch: &branch}
+			identity, description, website := domain.DocumentIdentityRootV1, "updated", "example.test"
+			patch := inbound.RepoProfilePatch{Description: &description, Website: &website}
 			want, wantEvents := failure, []string{"get-repo"}
 			switch stage {
 			case "read":
@@ -755,38 +690,17 @@ func TestWave56RepositoryAssetProfileValidatesBeforeConfigAndStopsOnFailure(test
 			case "identity":
 				patch.RequiredDocIdentity, fixture.requireErr = &identity, failure
 				wantEvents = append(wantEvents, "require-identity")
-			case "branch":
-				branch, want = "../escape", domain.ErrValidation
 			case "website":
 				website, want = "https://user:password@example.test", domain.ErrValidation
-			case "config":
+			case "about":
 				fixture.writeErr = failure
-				wantEvents = append(wantEvents, "update-config")
+				wantEvents = append(wantEvents, "update-about")
 			}
 			result, err := wave56AssetOwner(test, fixture.config).PatchRepoProfile(fixture.ctx, fixture.repo, patch)
 			if !errors.Is(err, want) || !reflect.DeepEqual(result, domain.Repo{}) || fixture.writes != 0 || !reflect.DeepEqual(fixture.events, wantEvents) || fixture.callbacks != 1 || !reflect.DeepEqual(fixture.operations, []wave56AssetOperation{wave56AssetProfile}) {
 				test.Fatalf("profile failure escaped its single scope: result=%+v error=%v events=%v", result, err, fixture.events)
 			}
 		})
-	}
-}
-
-func TestWave56RepositoryAssetProfileReturnsCompoundFailureToScope(test *testing.T) {
-	fixture := newWave56AssetFixture(test)
-	failure := errors.New("about write failed after configuration")
-	store := fixture.config.Store.(*wave56AssetStore)
-	updateConfig := store.updateConfig
-	store.updateConfig = func(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
-		if err := updateConfig(ctx, repo, branch, protected); err != nil {
-			return err
-		}
-		fixture.writeErr = failure
-		return nil
-	}
-	branch, description := "release/topic", "updated"
-	result, err := wave56AssetOwner(test, fixture.config).PatchRepoProfile(fixture.ctx, fixture.repo, inbound.RepoProfilePatch{DefaultBranch: &branch, Description: &description})
-	if !errors.Is(err, failure) || !reflect.DeepEqual(result, domain.Repo{}) || fixture.writes != 1 || fixture.callbacks != 1 || !reflect.DeepEqual(fixture.operations, []wave56AssetOperation{wave56AssetProfile}) || !reflect.DeepEqual(fixture.events, []string{"get-repo", "update-config", "update-about"}) {
-		test.Fatalf("compound failure was hidden, retried or reread as success: result=%+v error=%v events=%v", result, err, fixture.events)
 	}
 }
 

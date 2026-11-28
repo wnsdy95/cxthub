@@ -205,11 +205,6 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 			return domain.Repo{}, err
 		}
 	}
-	protocol, err := s.contextProtocol(id)
-	if err != nil {
-		return domain.Repo{}, err
-	}
-	r.ContextProtocol = protocol
 	r.LocalPath = ""
 	r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 	r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
@@ -229,28 +224,6 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 		return err
 	}
 	r.Description, r.Website, r.Topics = description, website, topics
-	data, _ := json.Marshal(r)
-	return writeAtomic(filepath.Join(s.repoDir(id), "repo.json"), data)
-}
-
-// UpdateRepoConfig updates the default branch and protected branch settings (nil = no change).
-func (s *FSStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	if err := validateHash(id); err != nil {
-		return err
-	}
-	lock := s.refLock(id, domain.RefBranch, "")
-	lock.Lock()
-	defer lock.Unlock()
-	r, err := s.GetRepo(ctx, id)
-	if err != nil {
-		return err
-	}
-	if defaultBranch != nil && *defaultBranch != "" {
-		r.DefaultBranch = *defaultBranch
-	}
-	if protectDefault != nil {
-		r.ProtectDefault = *protectDefault
-	}
 	data, _ := json.Marshal(r)
 	return writeAtomic(filepath.Join(s.repoDir(id), "repo.json"), data)
 }
@@ -484,7 +457,6 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			return domain.Repo{}, err
 		}
 	}
-	repo.ContextProtocol = 0
 	repo.LocalPath = ""
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
 	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)

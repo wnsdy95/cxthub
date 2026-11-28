@@ -15,7 +15,6 @@ import "time"
 // LocalPath is always an empty string on the server (local-only field, sync protocol).
 type Repo struct {
 	RequiredDocIdentity DocumentIdentity `json:"required_doc_identity,omitempty"`
-	ContextProtocol     int              `json:"context_protocol,omitempty"`
 	ID                  ContentHash      `json:"id"`
 	RemoteURL           string           `json:"remote_url"`
 	LocalPath           string           `json:"local_path"`
@@ -29,9 +28,6 @@ type Repo struct {
 	Description string   `json:"description,omitempty"`
 	Website     string   `json:"website,omitempty"`
 	Topics      []string `json:"topics,omitempty"`
-	// ProtectDefault rejects --force ref moves on the default branch. History (P1) is already
-	// immutable; this independent policy protects only the mutable pointer.
-	ProtectDefault bool `json:"protect_default,omitempty"`
 }
 
 // SettingsFile is a single file for team default settings bundle (path is relative to bundle root).

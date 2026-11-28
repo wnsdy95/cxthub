@@ -489,7 +489,7 @@ func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, actio
 	return true
 }
 
-// patchAbout updates repo About (description/website/topics) + structure settings (default branch, protected branches)
+// patchAbout updates repo About (description/website/topics) and the document identity requirement
 // (route with maintainer gate).
 func (s *Server) patchAbout(w http.ResponseWriter, r *http.Request) {
 	var body inbound.RepoProfilePatch

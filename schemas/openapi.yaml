@@ -1148,26 +1148,6 @@ components:
           type: boolean
           readOnly: true
           description: "Deployment policy permitting new root jobs and authorized opt-in; false does not erase an existing requirement."
-        initial_anchor_available:
-          type: boolean
-          readOnly: true
-          description: "GET Repo with initial_branch only: matching protected creation receipt and branch-local availability in one coherent read. Omitted/false without the query. Prior publication of other branches is allowed. Not authority or a gate for modern member publication. Never persisted from client registration input; FS omits/returns false."
-        branch_pull_version:
-          type: integer
-          enum: [0, 1]
-          readOnly: true
-          description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Absent/zero means legacy full transfer. One requires repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol. After a one response, errors are failures, never fallback permission."
-        catalog_merkle_version:
-          type: integer
-          enum: [0, 1]
-          readOnly: true
-          description: "Optional runtime Merkle capability. With catalog_version 1, an expired checkpoint can reconcile mismatched metadata buckets. Absent/zero retains full-baseline reset. Unknown versions and advertised-endpoint failures must fail. Not persisted configuration or object integrity proof."
-        catalog_version:
-          type: integer
-          enum: [0, 1]
-          readOnly: true
-          description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Only absent/zero permits legacy full-manifest fallback. One requires a catalog store and repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol and branch_pull_version. Unknown versions must fail. After a one response, catalog endpoint errors are failures, never fallback permission."
-        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Version 1 requires explicit legacy upgrade or atomic new-repository initialization; existing repositories are never silently upgraded." }
         id:
           $ref: "#/components/schemas/ContentHash"
         remote_url:
@@ -1195,9 +1175,6 @@ components:
           type: array
           items:
             type: string
-        protect_default:
-          type: boolean
-          description: "If set, rejects --force ref move of default branch (protected branch)."
 
     ErrorResponse:
       type: object
@@ -2038,12 +2015,6 @@ paths:
       - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getRepo
-      parameters:
-        - name: initial_branch
-          in: query
-          required: false
-          description: Canonical branch name for legacy observation availability; absent means false. Empty, repeated or invalid names are rejected.
-          schema: { type: string, minLength: 1, maxLength: 1024 }
       summary: Single repo retrieval
       tags: [repos]
       responses:
@@ -3389,12 +3360,11 @@ paths:
           application/json:
             schema:
               type: object
+              description: "Absent fields are left as they are. Older clients may also send default_branch and protect_default; both are ignored."
               properties:
                 description: { type: string }
                 website: { type: string }
                 topics: { type: array, items: { type: string } }
-                default_branch: { type: string }
-                protect_default: { type: boolean, description: "Default branch --force move forbidden (protected branch)" }
                 required_doc_identity:
                   $ref: "#/components/schemas/DocumentIdentity"
                   description: "Explicit monotonic opt-in. Requires manage permission, compatible peer/binary, publication enabled and transactional storage. Unknown/null or downgrade is rejected; omission preserves the requirement."

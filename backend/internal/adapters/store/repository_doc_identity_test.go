@@ -34,8 +34,7 @@ func TestP6FSRequirementMonotonic(t *testing.T) {
 	if cap.RequireDocumentIdentity(ctx, id, domain.DocumentIdentity("unknown")) == nil {
 		t.Fatal("unknown accepted")
 	}
-	branch := "other"
-	if err = st.UpdateRepoConfig(ctx, id, &branch, nil); err != nil {
+	if err = st.UpdateRepoAbout(ctx, id, "other", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	r, err := st.PutRepo(ctx, domain.Repo{ID: id})

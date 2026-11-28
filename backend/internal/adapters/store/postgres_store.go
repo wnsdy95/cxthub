@@ -110,9 +110,9 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 	}
 	var r domain.Repo
 	var topics string
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity,
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), required_doc_identity,
  COALESCE(description,''), COALESCE(website,''), COALESCE(topics,'null') FROM repos WHERE id=$1`, string(id)).
-		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity, &r.Description, &r.Website, &topics)
+		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.RequiredDocIdentity, &r.Description, &r.Website, &topics)
 	if err != nil {
 		return domain.Repo{}, mapNoRows(err)
 	}
@@ -170,7 +170,7 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 }
 
 func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity,
+	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), required_doc_identity,
  COALESCE(description,''), COALESCE(website,''), COALESCE(topics,'null') FROM repos WHERE team=$1`, team)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,7 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 	for rows.Next() {
 		var r domain.Repo
 		var topics string
-		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity, &r.Description, &r.Website, &topics); err != nil {
+		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.RequiredDocIdentity, &r.Description, &r.Website, &topics); err != nil {
 			return nil, err
 		}
 		if err := validateHash(r.ID); err != nil {
@@ -638,29 +638,6 @@ func (s *PostgresStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHa
 		`UPDATE repos SET description=$2, website=$3, topics=$4 WHERE id=$1`,
 		string(id), description, website, string(tj))
 	return err
-}
-
-// UpdateRepoConfig updates the default branch and protected branch settings (nil = unchanged).
-func (s *PostgresStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
-	if err := validateHash(id); err != nil {
-		return err
-	}
-	if defaultBranch != nil && *defaultBranch != "" {
-		if err := domain.ValidateBranchName(*defaultBranch); err != nil {
-			return err
-		}
-	}
-	if defaultBranch != nil && *defaultBranch != "" {
-		if _, err := s.db(ctx).Exec(ctx, `UPDATE repos SET default_branch=$2 WHERE id=$1`, string(id), *defaultBranch); err != nil {
-			return err
-		}
-	}
-	if protectDefault != nil {
-		if _, err := s.db(ctx).Exec(ctx, `UPDATE repos SET protect_default=$2 WHERE id=$1`, string(id), *protectDefault); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // PutSettingsBundle upserts the settings bundle.

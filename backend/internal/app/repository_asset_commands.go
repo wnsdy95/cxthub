@@ -24,7 +24,6 @@ const (
 type RepositoryAssetStore interface {
 	GetRepo(context.Context, domain.ContentHash) (domain.Repo, error)
 	UpdateRepoAbout(context.Context, domain.ContentHash, string, string, []string) error
-	UpdateRepoConfig(context.Context, domain.ContentHash, *string, *bool) error
 	PutSettingsBundle(context.Context, domain.ContentHash, domain.SettingsBundle) error
 	GetSecretsEnvelope(context.Context, domain.ContentHash) ([]byte, error)
 }
@@ -90,11 +89,6 @@ func (commands *RepositoryAssetCommands) PatchRepoProfile(ctx context.Context, r
 				return domain.Repo{}, err
 			}
 		}
-		if patch.DefaultBranch != nil && *patch.DefaultBranch != "" {
-			if err := domain.ValidateBranchName(*patch.DefaultBranch); err != nil {
-				return domain.Repo{}, err
-			}
-		}
 		if patch.Description != nil {
 			current.Description = *patch.Description
 		}
@@ -106,11 +100,6 @@ func (commands *RepositoryAssetCommands) PatchRepoProfile(ctx context.Context, r
 		}
 		if _, err := normalizeAboutWebsite(current.Website); err != nil {
 			return domain.Repo{}, err
-		}
-		if patch.DefaultBranch != nil || patch.ProtectDefault != nil {
-			if err := commands.updateConfig(bound, repo, patch.DefaultBranch, patch.ProtectDefault); err != nil {
-				return domain.Repo{}, err
-			}
 		}
 		if patch.Description != nil || patch.Website != nil || patch.Topics != nil {
 			if err := commands.updateAbout(bound, repo, current.Description, current.Website, current.Topics); err != nil {
@@ -133,18 +122,6 @@ func (commands *RepositoryAssetCommands) updateAbout(ctx context.Context, repo d
 		topics = topics[:20]
 	}
 	return commands.store.UpdateRepoAbout(ctx, repo, strings.TrimSpace(description), normalized, topics)
-}
-
-func (commands *RepositoryAssetCommands) updateConfig(ctx context.Context, repo domain.ContentHash, branch *string, protected *bool) error {
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return err
-	}
-	if branch != nil && *branch != "" {
-		if err := domain.ValidateBranchName(*branch); err != nil {
-			return err
-		}
-	}
-	return commands.store.UpdateRepoConfig(ctx, repo, branch, protected)
 }
 
 func (commands *RepositoryAssetCommands) PutSettings(ctx context.Context, repo domain.ContentHash, bundle domain.SettingsBundle) error {
