@@ -27,13 +27,6 @@ var repoAddressHistory = map[string]bool{
 	"enterprise_audit_events":   true,
 }
 
-// repoAddressAddressed are columns whose content is addressed by its own
-// hash: changing what is inside would break the address, so they are never
-// changed. The move reports where they still name the old identifier.
-var repoAddressAddressed = map[string]bool{
-	"settings_objects.data": true,
-}
-
 // repoAddressContent says whether a table holds conversation content: the
 // stored documents and what is made from them, keyed by a document's hash and
 // not by a repository. A conversation can quote an identifier, and what was
@@ -257,8 +250,6 @@ func (s *PostgresStore) MoveRepoAddress(ctx context.Context, request domain.Repo
 		name := hit.table + "." + hit.column.name
 		column := domain.RepoAddressColumn{Table: hit.table, Column: hit.column.name, Rows: hit.rows}
 		switch {
-		case repoAddressAddressed[name]:
-			out.Kept = append(out.Kept, column)
 		case !hit.column.rewritable():
 			stuck = append(stuck, fmt.Sprintf("%s (%s, %d rows)", name, hit.column.kind, hit.rows))
 		default:
@@ -318,10 +309,8 @@ func (s *PostgresStore) MoveRepoAddress(ctx context.Context, request domain.Repo
 	if err != nil {
 		return out, err
 	}
-	for _, hit := range left {
-		if !repoAddressAddressed[hit.table+"."+hit.column.name] {
-			return out, fmt.Errorf("%w: %s.%s still names the old identifier", domain.ErrIntegrity, hit.table, hit.column.name)
-		}
+	if len(left) > 0 {
+		return out, fmt.Errorf("%w: %s.%s still names the old identifier", domain.ErrIntegrity, left[0].table, left[0].column.name)
 	}
 	var stored, workspace string
 	if err := tx.QueryRow(ctx, `SELECT remote_url, COALESCE(repository_id,'') FROM repos WHERE id=$1`, string(request.To)).Scan(&stored, &workspace); err != nil {

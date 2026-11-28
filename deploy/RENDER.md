@@ -82,11 +82,13 @@ does not start without it, so the services are stopped for the window:
 5. Restore `ipAllowList: []`.
 6. Deploy this release to both services and resume them. Each log shows
    `schema: verified`; then open a repository's Sessions tab.
+7. Turn automatic deploys of `cxthub-api` and `cxthub-mcp` back on.
 
 0171 cannot be undone from the database. To go back, suspend both services,
 restore `before-0171.dump` into a new, empty database with its owners and
-rights (not with `--no-acl`), and deploy the previous release against it. What
-was written after the backup is lost.
+rights (not with `--no-acl`), run `SELECT cxt_reset_catalog(id) FROM repos
+ORDER BY id;` on it in one transaction as the operator, and deploy the previous
+release against it. What was written after the backup is lost.
 
 ## Provision
 

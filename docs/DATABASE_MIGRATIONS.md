@@ -384,8 +384,19 @@ serves comes from tables that stay.
 anywhere else. To go back, stop this release, restore the backup of step 3
 into an empty database, keeping its owners and rights (a restore with
 `--no-acl` loses the revoked rights of the accounting functions, and startup
-verification then refuses the database), point the previous release at it and
-start it. What was written after the backup is lost.
+verification then refuses the database), and rotate the epoch of every
+restored repository before anything serves it, as
+[catalog restore](CATALOG_SYNC.md#maintenance-and-restore) requires. As the
+operator, in one transaction:
+
+```sql
+BEGIN;
+SELECT cxt_reset_catalog(id) FROM repos ORDER BY id;
+COMMIT;
+```
+
+Then point the previous release at it and start it. What was written after the
+backup is lost.
 
 ## Moving a repository to another address
 
