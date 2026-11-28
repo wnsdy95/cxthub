@@ -15,6 +15,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The server, the web application and the deployment files (`backend/`,
+  `frontend/`, `deploy/`) are now source-available instead of Apache-2.0:
+  free for noncommercial use and for small businesses under the PolyForm
+  Small Business or PolyForm Noncommercial license, with a commercial license
+  for larger companies through sponsorship. The `cxt` CLI, integrations,
+  schemas and documentation stay Apache-2.0. Releases up to and including
+  0.2.0 remain Apache-2.0 as a whole. See [LICENSING.md](LICENSING.md).
 - A session's conversation opens with only what was said: the user's prompts
   and the agent's answers. The work before an answer (tool calls, their
   results, reasoning) opens from the button above it. The view can also show

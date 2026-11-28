@@ -684,7 +684,7 @@ export const en: Messages = {
     installNext1: 'After install, once in your code repo: `cxt setup https://cxthub.com/<namespace>/<repository>/<repository>`',
     installNext2:
       'That one command sets up init, git hooks, login, and agent hooks — after that every git action (commit·push·checkout·stash) syncs context automatically.',
-    sourceLink: 'View the open-source code',
+    sourceLink: 'View the source code',
     proofCapture: 'Sessions read from what the tools recorded',
     proofHistory: 'Each session cut at the commits it made',
     proofSecurity: 'Secret scrubbing and E2E encryption',

@@ -7,7 +7,7 @@
 
 Your coding-agent sessions, kept with the Git commits they produced.
 
-[![CI](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml/badge.svg)](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/wnsdy95/cxthub?display_name=tag&sort=semver)](https://github.com/wnsdy95/cxthub/releases) [![License](https://img.shields.io/github/license/wnsdy95/cxthub)](LICENSE)
+[![CI](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml/badge.svg)](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/wnsdy95/cxthub?display_name=tag&sort=semver)](https://github.com/wnsdy95/cxthub/releases) [![CLI license: Apache-2.0](https://img.shields.io/badge/CLI-Apache--2.0-blue)](LICENSES/Apache-2.0.txt) [![Server license: source-available](https://img.shields.io/badge/server-source--available-orange)](LICENSING.md)
 
 > [!WARNING]
 > CXTHub is alpha software. Back up important data, know who can read a
@@ -214,6 +214,10 @@ The filesystem store and development authentication mode are for trusted local
 use. Internet-facing installations must configure TLS, production
 authentication, PostgreSQL, backups, rate limits, and secret management.
 
+Running the server is free for noncommercial use and for small businesses.
+Larger companies need a commercial license, which comes with sponsoring the
+project. See [LICENSING.md](LICENSING.md).
+
 The REST API contract is [schemas/openapi.yaml](schemas/openapi.yaml).
 
 ## Development
@@ -257,6 +261,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE),
+CXTHub has two licenses, by directory:
+
+- The `cxt` CLI, the agent integrations, the schemas and the documentation are
+  open source under the [Apache License 2.0](LICENSES/Apache-2.0.txt).
+- The server, the web application and the deployment files (`backend/`,
+  `frontend/`, `deploy/`) are source-available. They are free for
+  noncommercial use and for small businesses. Larger companies need a
+  commercial license, which comes with
+  [sponsoring the project](https://github.com/sponsors/wnsdy95).
+
+[LICENSING.md](LICENSING.md) has the details, including the attribution every
+copy must carry. See also [NOTICE](NOTICE),
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and
 [TRADEMARKS.md](TRADEMARKS.md).

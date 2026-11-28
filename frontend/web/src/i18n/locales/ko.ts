@@ -687,7 +687,7 @@ export const ko = {
     installNext1: '설치 후 코드 레포에서 한 번만: `cxt setup https://cxthub.com/<namespace>/<repository>/<repository>`',
     installNext2:
       '이 한 번으로 초기화·git 훅·로그인·에이전트 훅까지 준비되고, 이후 git 을 쓸 때마다(commit·push·checkout·stash) 컨텍스트가 자동 동기화됩니다.',
-    sourceLink: '오픈소스 코드 보기',
+    sourceLink: '소스 코드 보기',
     proofCapture: '도구가 남긴 기록에서 세션을 읽음',
     proofHistory: '세션을 그 세션이 만든 커밋에서 나눔',
     proofSecurity: '시크릿 스크럽과 E2E 암호화',

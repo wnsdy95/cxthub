@@ -2,7 +2,6 @@
   "version": 1,
   "source": "wnsdy95/cxthub",
   "common": [
-    ["LICENSE", "LICENSE"],
     ["NOTICE", "NOTICE"],
     ["THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"],
     ["SECURITY.md", "SECURITY.md"],
@@ -28,6 +27,9 @@
       "repository": "wnsdy95/cxthub-backend",
       "visibility": "private",
       "paths": [
+        ["LICENSE", "LICENSE"],
+        ["LICENSING.md", "LICENSING.md"],
+        ["LICENSES/", "LICENSES/"],
         ["backend/", "backend/"],
         ["schemas/", "schemas/"],
         ["deploy/Dockerfile", "Dockerfile"],
@@ -41,6 +43,8 @@
       "repository": "wnsdy95/cxthub-frontend",
       "visibility": "private",
       "paths": [
+        ["LICENSING.md", "LICENSING.md"],
+        ["LICENSES/", "LICENSES/"],
         ["frontend/web/", ""],
         ["schemas/fixtures/markdown-display-v1.json", "tests/fixtures/markdown-display-v1.json"],
         ["schemas/fixtures/event-display-v1.json", "tests/fixtures/event-display-v1.json"],
@@ -52,6 +56,9 @@
       "repository": "wnsdy95/cxthub-mcp",
       "visibility": "private",
       "paths": [
+        ["LICENSE", "LICENSE"],
+        ["LICENSING.md", "LICENSING.md"],
+        ["LICENSES/", "LICENSES/"],
         ["backend/", "backend/"],
         ["schemas/", "schemas/"],
         ["deploy/Dockerfile.mcp", "Dockerfile"],

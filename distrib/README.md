@@ -50,4 +50,4 @@ Source and verified cxt CLI release assets are published from the same cxthub re
 
 ## License
 
-[Apache-2.0](../LICENSE)
+[Apache-2.0](LICENSE)

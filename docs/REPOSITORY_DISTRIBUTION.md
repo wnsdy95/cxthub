@@ -26,9 +26,13 @@ The CLI additionally includes `docs/CLI.md`, `integrations/**` including tracked
 dotfiles, `schemas/cir.schema.json`, `schemas/testdata/**`, and
 `scripts/test-go-batches.py` at those root-relative paths. Help and integration
 tests require the CLI reference and integration assets; preserve their paths
-and dotfiles rather than copying only visible directory entries. Shared
-`LICENSE`, `NOTICE`, and third-party notices come from the source; do not
-maintain mirror copies by hand.
+and dotfiles rather than copying only visible directory entries. `NOTICE`
+and third-party notices are shared. License files follow
+[LICENSING.md](../LICENSING.md): the CLI mirror's root `LICENSE` is the Apache
+License 2.0 from `cli/LICENSE`, the frontend mirror's is the server license
+from `frontend/web/LICENSE`, and the API and MCP mirrors carry the source root
+`LICENSE` map with `backend/LICENSE` and `schemas/LICENSE` at their paths. All
+of them come from the source; do not maintain mirror copies by hand.
 `distrib/repository-templates/{cli,backend,frontend,mcp}/` supplies
 each generated README and workflow. CLI release templates live there too. The
 source allowlist in `distrib/repositories.json` also copies the source root

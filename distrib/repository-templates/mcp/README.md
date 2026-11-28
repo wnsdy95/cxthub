@@ -50,5 +50,6 @@ the existing database and public issuer to avoid changing client identity.
 PostgreSQL is shared infrastructure, not a fifth source repository. Follow the
 source [distribution handoff](https://github.com/wnsdy95/cxthub/blob/main/docs/REPOSITORY_DISTRIBUTION.md)
 and [operations guide](https://github.com/wnsdy95/cxthub/blob/main/deploy/RENDER.md).
-Production and sync secrets must never enter this mirror. Shared `LICENSE`,
-`NOTICE`, and third-party notices are exported from the monorepo.
+Production and sync secrets must never enter this mirror. License files,
+`NOTICE`, and third-party notices are exported from the monorepo; `LICENSING.md`
+explains which license applies to which path.

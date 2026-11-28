@@ -1,7 +1,14 @@
 CXTHub
-Copyright 2026 CXTHub contributors
+Copyright 2026 wnsdy95 and CXTHub contributors
 
-This product includes software developed by the CXTHub contributors.
+This product includes software developed by wnsdy95 and the CXTHub
+contributors (https://github.com/wnsdy95/cxthub).
+
+Parts of CXTHub are under different licenses. The command-line client, the
+agent integrations, the schemas and the documentation are licensed under the
+Apache License 2.0. The server, the web application and the deployment files
+are licensed under the terms in their LICENSE files. LICENSING.md in the
+CXTHub repository explains which applies where.
 
 Third-party component notices are recorded in THIRD_PARTY_NOTICES.md and in
 the dependency lockfiles distributed with the source.
