@@ -116,13 +116,3 @@ func ValidateBranchName(name string) error {
 	}
 	return nil
 }
-
-// TeamIdentity identifies a snapshot author (data model table, sync protocol).
-//
-// Unlike Git's separate author and committer, cxt records a single Author (OQ-7).
-// It is for attribution and auditing, not access control (sync protocol).
-type TeamIdentity struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Team  string `json:"team"`
-}

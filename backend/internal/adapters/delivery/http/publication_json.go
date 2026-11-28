@@ -24,12 +24,12 @@ func (field *publicationField[T]) UnmarshalJSON(raw []byte) error {
 
 func (body *objectsBody) UnmarshalJSON(raw []byte) error {
 	input := struct {
-		Snapshots    publicationField[[]domain.Snapshot]     `json:"snapshots"`
+		Snapshots    publicationField[[]json.RawMessage]     `json:"snapshots"`
 		Docs         publicationField[[]domain.SessionDoc]   `json:"docs"`
 		ChunkedDocs  publicationField[[]inbound.ChunkedDoc]  `json:"chunked_docs"`
 		ChunkObjects publicationField[[]inbound.ChunkObject] `json:"chunk_objects"`
 	}{
-		Snapshots:    publicationField[[]domain.Snapshot]{value: body.Snapshots},
+		Snapshots:    publicationField[[]json.RawMessage]{value: body.Snapshots},
 		Docs:         publicationField[[]domain.SessionDoc]{value: body.Docs},
 		ChunkedDocs:  publicationField[[]inbound.ChunkedDoc]{value: body.ChunkedDocs},
 		ChunkObjects: publicationField[[]inbound.ChunkObject]{value: body.ChunkObjects},

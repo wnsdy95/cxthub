@@ -586,10 +586,11 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
+// negotiateBody leaves out snapshot_haves, which older clients still send:
+// the decoder ignores it.
 type negotiateBody struct {
-	SnapshotHaves []domain.ContentHash `json:"snapshot_haves"`
-	DocHaves      []domain.ContentHash `json:"doc_haves"`
-	ChunkHaves    []domain.ContentHash `json:"chunk_haves"`
+	DocHaves   []domain.ContentHash `json:"doc_haves"`
+	ChunkHaves []domain.ContentHash `json:"chunk_haves"`
 }
 
 func (s *Server) pushNegotiate(w http.ResponseWriter, r *http.Request) {
@@ -597,7 +598,7 @@ func (s *Server) pushNegotiate(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Negotiate(r.Context(), inbound.PushNegotiateInput{RepoID: s.repoID(r), SnapshotHaves: body.SnapshotHaves, DocHaves: body.DocHaves, ChunkHaves: body.ChunkHaves})
+	out, err := s.b.Negotiate(r.Context(), inbound.PushNegotiateInput{RepoID: s.repoID(r), DocHaves: body.DocHaves, ChunkHaves: body.ChunkHaves})
 	s.respond(w, out, err)
 }
 
@@ -620,7 +621,9 @@ func (s *Server) pushChunks(w http.ResponseWriter, r *http.Request) {
 }
 
 type objectsBody struct {
-	Snapshots    []domain.Snapshot     `json:"snapshots"`
+	// Snapshots holds the captures an older client may still send. They are
+	// only counted, so that the batch can be refused.
+	Snapshots    []json.RawMessage     `json:"snapshots"`
 	Docs         []domain.SessionDoc   `json:"docs"`
 	ChunkedDocs  []inbound.ChunkedDoc  `json:"chunked_docs"`
 	ChunkObjects []inbound.ChunkObject `json:"chunk_objects"`
@@ -636,7 +639,7 @@ func (s *Server) pushObjects(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.documentPublications.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Snapshots: body.Snapshots, Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
+	out, err := s.documentPublications.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Captures: len(body.Snapshots), Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
 	s.respond(w, out, err)
 }
 
@@ -854,7 +857,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			h.Set("Access-Control-Expose-Headers", "Retry-After")
 			h.Add("Vary", "Origin")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cxt-CSRF, X-Cxt-Identity, X-Cxt-Doc-Identities")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cxt-CSRF, X-Cxt-Doc-Identities")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

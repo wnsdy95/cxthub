@@ -61,7 +61,7 @@ func (commands *DocumentPublicationCommands) commit(ctx context.Context, in inbo
 	}
 	// A capture is no longer stored: a client that still sends one is told so
 	// before anything is written.
-	if len(in.Snapshots) > 0 {
+	if in.Captures > 0 {
 		return inbound.CommitOutput{}, fmt.Errorf("%w: this server stores sessions, not captures; update cxt", domain.ErrValidation)
 	}
 	// The staged discriminator is not an advertised publication capability.

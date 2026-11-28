@@ -38,8 +38,11 @@ type StoreChunksOutput struct {
 // CommitInput represents the push/objects body (sync protocol Step B).
 // ChunkedDocs represent the chunk wire format of a doc — the body is composed of ChunkObjects (server failure chunks) and reassembled, hashed, and stored in the same path as Docs.
 type CommitInput struct {
-	RepoID       domain.ContentHash
-	Snapshots    []domain.Snapshot
+	RepoID domain.ContentHash
+	// Captures is the number of capture records (the wire field "snapshots") in
+	// the request. The server no longer stores captures and refuses a batch
+	// that carries any.
+	Captures     int
 	Docs         []domain.SessionDoc
 	ChunkedDocs  []ChunkedDoc
 	ChunkObjects []ChunkObject
@@ -47,17 +50,14 @@ type CommitInput struct {
 
 // CommitOutput represents a store/duplicate aggregation.
 type CommitOutput struct {
-	StoredSnapshots  int
-	StoredDocs       int
-	DedupedSnapshots int
-	DedupedDocs      int
+	StoredDocs  int
+	DedupedDocs int
 }
 
 // PushNegotiateInput (sync protocol step A request).
 type PushNegotiateInput struct {
-	RepoID        domain.ContentHash
-	SnapshotHaves []domain.ContentHash
-	DocHaves      []domain.ContentHash
+	RepoID   domain.ContentHash
+	DocHaves []domain.ContentHash
 	// ChunkHaves is the chunk plan hash of docs the client will send — only missing parts are answered (delta upload).
 	ChunkHaves []domain.ContentHash
 }
@@ -68,11 +68,10 @@ type PushNegotiateOutput struct {
 	RootPublicationEnabled          bool                      `json:"root_publication_enabled"`
 	PreparedMemoryArchivesSupported bool                      `json:"prepared_memory_archives_supported,omitempty"`
 	AsyncDocsSupported              bool                      `json:"async_docs_supported,omitempty"`
-	SnapshotWants                   []domain.ContentHash      `json:"snapshot_wants"`
 	DocWants                        []domain.ContentHash      `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support (GCS ignores — operates as-is).
 	ChunksSupported bool `json:"chunks_supported,omitempty"`
-	// BoundedChunksSupported true if chunk bodies are sent as bounded batches to /push/chunks·/pull/chunks. For old servers, the existing push/objects compatibility paths are used.
+	// BoundedChunksSupported true if chunk bodies are sent as bounded batches to /push/chunks. For old servers, the existing push/objects compatibility paths are used.
 	BoundedChunksSupported bool     `json:"bounded_chunks_supported,omitempty"`
 	ChunkFormatsSupported  []string `json:"chunk_formats_supported,omitempty"`
 	// CIRVersionsSupported advertises document semantics the server can hash and store.

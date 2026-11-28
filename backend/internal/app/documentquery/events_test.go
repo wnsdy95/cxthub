@@ -169,12 +169,6 @@ func (legacy *eventPrefixLegacy) GetChunk(ctx context.Context, repo, hash domain
 	return bytes.Clone(body), nil
 }
 
-type eventPrefixSnapshots struct {
-	scope     *eventPrefixLocalScope
-	repo      domain.ContentHash
-	snapshots map[domain.ContentHash]domain.Snapshot
-}
-
 type eventPrefixDocument struct {
 	document  domain.SessionDoc
 	canonical []byte
@@ -184,12 +178,11 @@ type eventPrefixDocument struct {
 }
 
 type eventPrefixFixture struct {
-	test      *testing.T
-	repo      domain.ContentHash
-	scope     *eventPrefixLocalScope
-	legacy    *eventPrefixLegacy
-	snapshots *eventPrefixSnapshots
-	document  eventPrefixDocument
+	test     *testing.T
+	repo     domain.ContentHash
+	scope    *eventPrefixLocalScope
+	legacy   *eventPrefixLegacy
+	document eventPrefixDocument
 }
 
 func eventPrefix(test *testing.T) *eventPrefixFixture {
@@ -203,8 +196,7 @@ func eventPrefixWithJSON(test *testing.T, eventJSON []string) *eventPrefixFixtur
 	scope := &eventPrefixLocalScope{test: test}
 	fixture := &eventPrefixFixture{test: test, repo: repo, scope: scope,
 		legacy: &eventPrefixLegacy{scope: scope, repo: repo, documents: make(map[domain.ContentHash]domain.SessionDoc),
-			manifests: make(map[domain.ContentHash]domain.DocChunkManifest), chunks: make(map[domain.ContentHash][]byte)},
-		snapshots: &eventPrefixSnapshots{scope: scope, repo: repo, snapshots: make(map[domain.ContentHash]domain.Snapshot)}}
+			manifests: make(map[domain.ContentHash]domain.DocChunkManifest), chunks: make(map[domain.ContentHash][]byte)}}
 	fixture.document = fixture.addDocument(eventJSON)
 	return fixture
 }
@@ -233,7 +225,6 @@ func (fixture *eventPrefixFixture) addDocument(eventJSON []string) eventPrefixDo
 	}
 	plan, chunked := domain.PlanDocChunks(canonical)
 	fixture.legacy.documents[document.Hash] = document
-	fixture.snapshots.snapshots[document.Hash] = domain.Snapshot{ID: document.Hash, RepoID: fixture.repo, DocHash: document.Hash}
 	if chunked {
 		fixture.legacy.manifests[document.Hash] = plan.Manifest
 		for hash, body := range plan.Bodies {
