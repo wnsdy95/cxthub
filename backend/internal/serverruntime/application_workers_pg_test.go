@@ -189,7 +189,7 @@ func wave48PGOpenWorker(ctx context.Context) (*WorkerRuntime, error) {
 	}
 	return OpenWorker(ctx, func(storage store.Store) (ApplicationWorkerConfig, error) {
 		configuration := ApplicationWorkerConfig{
-			GitReader: gitevidence.NewGitHub(func() string { return "" }), NotificationSender: webhookdelivery.New(),
+			GitReader: gitevidence.NewGitHub(), NotificationSender: webhookdelivery.New(),
 		}
 		return configuration, nil
 	})
@@ -208,7 +208,7 @@ func TestWave48PGFullRootCompleteProductionPortsAndClose(test *testing.T) {
 		test.Fatal("one full worker role became ready without API and MCP peers")
 	}
 	bindings, err := newApplicationWorkers(worker.Store, ApplicationWorkerConfig{
-		GitReader:          gitevidence.NewGitHub(func() string { return "" }),
+		GitReader:          gitevidence.NewGitHub(),
 		NotificationSender: webhookdelivery.New(),
 	})
 	if err != nil {
@@ -274,7 +274,7 @@ func TestWave48PGFullRootOptionalGitHubUsesOneExplicitOwner(test *testing.T) {
 			return ApplicationWorkerConfig{}, err
 		}
 		return ApplicationWorkerConfig{
-			GitReader:    gitevidence.NewGitHub(func() string { return "" }),
+			GitReader:    gitevidence.NewGitHub(),
 			GitHubWorker: github, NotificationSender: webhookdelivery.New(),
 		}, nil
 	})

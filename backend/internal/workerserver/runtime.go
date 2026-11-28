@@ -73,7 +73,7 @@ func applicationWorkerEnvironmentFromEnvironment() (applicationWorkerEnvironment
 func (environment applicationWorkerEnvironment) sources(storage store.Store) (serverruntime.ApplicationWorkerConfig, error) {
 	configuration := environment.configuration
 	// Without a GitHub App public repositories are read without a credential.
-	configuration.GitReader = gitevidence.NewGitHub(nil)
+	configuration.GitReader = gitevidence.NewGitHub()
 	if environment.github == nil {
 		return configuration, nil
 	}

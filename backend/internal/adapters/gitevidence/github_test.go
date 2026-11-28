@@ -26,7 +26,7 @@ func TestGitHubSharedCooldownAndPaginatedHeads(t *testing.T) {
 		json.NewEncoder(w).Encode([]any{map[string]any{"name": "feature/x", "commit": map[string]string{"sha": strings.Repeat("a", 40)}}})
 	}))
 	defer ts.Close()
-	g := NewGitHub(nil)
+	g := NewGitHub()
 	g.base = ts.URL
 	for i := 0; i < 3; i++ {
 		if _, _, err := g.ListGitHeads(context.Background(), "https://github.com/org/project", 2); err == nil {

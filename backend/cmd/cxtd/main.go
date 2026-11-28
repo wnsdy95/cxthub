@@ -106,7 +106,7 @@ func serve(ctx context.Context, args []string) error {
 	// Without a GitHub App the server reads public repositories without a
 	// credential. With one, it reads a repository only through the
 	// installation that was told to read it.
-	gitReader := gitevidence.NewGitHub(nil)
+	gitReader := gitevidence.NewGitHub()
 	if githubConnections != nil {
 		gitReader = gitevidence.NewAuthenticated(func(ctx context.Context, path string) (string, string, string, error) {
 			id, resolved, e := githubConnections.EvidenceInstallation(ctx, path)
