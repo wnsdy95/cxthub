@@ -592,8 +592,8 @@ func TestPGWave41MaintenanceFactoryPrunesAndReconcilesDurableState(test *testing
 	}
 	storage := &wave41MaintenancePGStore{PostgresStore: postgres, test: test, actor: record.OwnerID}
 	workers, err := NewMaintenanceWorkers(MaintenanceWorkersConfig{Profile: systemmaintenance.Complete, Repositories: storage})
-	if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil {
-		test.Fatal("public maintenance factory did not assemble both complete PostgreSQL owners", err)
+	if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil || workers.Chunks == nil {
+		test.Fatal("public maintenance factory did not assemble every complete PostgreSQL owner", err)
 	}
 	if err := workers.Runtime.Process(ctx); err != nil {
 		test.Fatal("native runtime owner failed to prune actual expiring rows", err)
@@ -619,6 +619,18 @@ func TestPGWave41MaintenanceFactoryPrunesAndReconcilesDurableState(test *testing
 	}
 	if again := readUsage(postgres); !reflect.DeepEqual(again.Entries, fixed.Entries) || again.CurrentBytes != fixed.CurrentBytes {
 		test.Fatal("idle reconciliation rewrote prior accounting entries", again)
+	}
+	// The fixture chunk has no manifest: it is what an upload in progress looks
+	// like. A cleanup tick visits its repository, starts the grace period and
+	// deletes nothing; the pass then has no repository left.
+	if visited, err := workers.Chunks.Process(ctx); err != nil || visited != 1 {
+		test.Fatal("native chunk cleanup owner did not visit the one repository that owns chunks", visited, err)
+	}
+	if visited, err := workers.Chunks.Process(ctx); err != nil || visited != 0 {
+		test.Fatal("chunk cleanup revisited a repository inside its grace period", visited, err)
+	}
+	if swept := readUsage(postgres); !reflect.DeepEqual(swept.Entries, fixed.Entries) || swept.CurrentBytes != fixed.CurrentBytes {
+		test.Fatal("chunk cleanup inside the grace period changed the storage account", swept)
 	}
 	postgres.Close()
 	restarted, err := store.NewPostgresStore(ctx, collaborationDSN(test))
@@ -683,14 +695,19 @@ func TestPGWave41AuxiliaryFactoriesValidateCompleteAndKeepUnsupportedCompatibili
 		outbound.RepositoryStore
 		wave41NextStorageUsage
 	}{postgres, postgres}
-	for _, repositories := range []outbound.RepositoryStore{withoutMaintenance, runtimeOnly, storageOnly} {
+	withoutChunks := struct {
+		outbound.RepositoryStore
+		outbound.RuntimeStore
+		wave41NextStorageUsage
+	}{postgres, postgres, postgres}
+	for _, repositories := range []outbound.RepositoryStore{withoutMaintenance, runtimeOnly, storageOnly, withoutChunks} {
 		workers, err := NewMaintenanceWorkers(MaintenanceWorkersConfig{Profile: systemmaintenance.Complete, Repositories: repositories})
 		if err == nil || workers != nil {
-			test.Fatal("complete maintenance factory did not require both owners' support", err)
+			test.Fatal("complete maintenance factory did not require every owner's support", err)
 		}
 	}
 	workers, err := NewMaintenanceWorkers(MaintenanceWorkersConfig{Profile: systemmaintenance.Compatibility, Repositories: withoutMaintenance})
-	if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil {
+	if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil || workers.Chunks == nil {
 		test.Fatal("unsupported compatibility maintenance lost nonnil disabled owners", err)
 	}
 	if err := workers.Runtime.Process(context.Background()); err != nil {
@@ -698,5 +715,8 @@ func TestPGWave41AuxiliaryFactoriesValidateCompleteAndKeepUnsupportedCompatibili
 	}
 	if worked, err := workers.Storage.Process(context.Background()); err != nil || worked != 0 {
 		test.Fatal("unsupported compatibility storage owner was not a no-op", worked, err)
+	}
+	if visited, err := workers.Chunks.Process(context.Background()); err != nil || visited != 0 {
+		test.Fatal("unsupported compatibility chunk cleanup owner was not a no-op", visited, err)
 	}
 }

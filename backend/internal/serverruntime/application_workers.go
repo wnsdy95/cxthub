@@ -67,5 +67,6 @@ func newApplicationWorkers(storage store.Store, config ApplicationWorkerConfig) 
 		{name: "invitation-email", run: invitationEmailWorker.Run},
 		{name: "runtime-maintenance", run: maintenanceWorkers.Runtime.Run},
 		{name: "storage-maintenance", run: maintenanceWorkers.Storage.Run},
+		{name: "chunk-maintenance", run: maintenanceWorkers.Chunks.Run},
 	}...), nil
 }

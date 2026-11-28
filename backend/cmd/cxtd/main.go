@@ -49,6 +49,8 @@ func main() {
 		// Maintenance: repack legacy FS-store conversation documents into
 		// their chunk CAS form (lossless and idempotent).
 		// It is safe alongside a live server because replacement is atomic and newly created chunks receive a sweep grace period.
+		// PostgreSQL has no repack command: the chunk maintenance worker started
+		// by serve removes orphan document chunks there.
 		dataDir := flagOr(os.Args[2:], "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 		fs, err := store.OpenFSStore(dataDir)
 		if err != nil {
@@ -201,6 +203,7 @@ func serve(ctx context.Context, args []string) error {
 		lifecycle.start(invitationEmailWorker.Run)
 		lifecycle.start(maintenanceWorkers.Runtime.Run)
 		lifecycle.start(maintenanceWorkers.Storage.Run)
+		lifecycle.start(maintenanceWorkers.Chunks.Run)
 	}
 	return serverruntime.Serve(ctx, addr, runtime.HealthHandler(handler))
 }

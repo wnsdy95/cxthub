@@ -25,6 +25,7 @@ import (
 type PostgresStore struct {
 	docProofs   docProofCache
 	legacyBases legacyBaseHints
+	chunkSweep  docChunkSweeper
 	pool        *pgxpool.Pool
 }
 
@@ -328,6 +329,15 @@ func (s *PostgresStore) putPreparedDocInRawTransaction(ctx context.Context, tx p
 	} else if isMan {
 		// If the stored representation is newer/different from this writer's plan,
 		// ownership must follow the manifest that readers will actually assemble.
+		if !matchingManifest {
+			// These chunks are not the plan's, so this writer's advisory locks
+			// do not cover them. Hold the grants that already exist until
+			// commit: the orphan chunk cleanup must not delete one between
+			// here and the document grant below.
+			if err := retainDocChunkGrantsPG(ctx, tx, repoID, storedMan.Chunks); err != nil {
+				return false, err
+			}
+		}
 		for _, ch := range storedMan.Chunks {
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,

@@ -20,6 +20,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   results, reasoning) opens from the button above it. The view can also show
   only the prompts, each opening its turn, or every event.
 
+### Fixed
+
+- Remove conversation chunks from PostgreSQL once no stored document or pending
+  upload names them, such as the tail chunk of a capture replaced by a longer
+  one. A background worker deletes them after a one-hour grace period and
+  storage usage drops with them; no migration is needed.
+
 ### Removed
 
 - The server reads GitHub only through the GitHub App: a repository that no

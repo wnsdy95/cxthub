@@ -145,12 +145,13 @@ func TestAPIStartupDoesNotLaunchUnownedWorkers(test *testing.T) {
 		for _, method := range []string{
 			"githubWorker.Run", "remoteGitSync.Run", "documentWorkers.Finalization.Run", "notificationWorker.Run",
 			"invitationEmailWorker.Run", "maintenanceWorkers.Runtime.Run", "maintenanceWorkers.Storage.Run",
+			"maintenanceWorkers.Chunks.Run",
 		} {
 			if registered[method] != 1 {
 				test.Error("API worker must be registered exactly once", method, registered[method])
 			}
 		}
-		if len(registered) != 7 {
+		if len(registered) != 8 {
 			test.Error("API registered an unexpected additional worker", registered)
 		}
 		for position, method := range registrationOrder {

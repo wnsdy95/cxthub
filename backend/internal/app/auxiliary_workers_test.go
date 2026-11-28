@@ -467,6 +467,11 @@ func (storage *wave41MaintenanceStore) ReconcileNextStorageUsage(context.Context
 	return false, nil
 }
 
+func (storage *wave41MaintenanceStore) SweepNextDocChunks(context.Context) (domain.DocChunkSweep, error) {
+	storage.calls = append(storage.calls, "chunks")
+	return domain.DocChunkSweep{}, nil
+}
+
 func TestWave41MaintenanceFactoryProfilesAndRequiredRepositoryAdapter(test *testing.T) {
 	storage := store.NewFSStore(test.TempDir())
 	for _, profile := range []systemmaintenance.Profile{systemmaintenance.Compatibility, systemmaintenance.Complete} {
@@ -474,7 +479,7 @@ func TestWave41MaintenanceFactoryProfilesAndRequiredRepositoryAdapter(test *test
 			capabilities := &wave41MaintenanceStore{RepositoryStore: storage, RuntimeStore: storage}
 			config := MaintenanceWorkersConfig{Profile: profile, Repositories: capabilities}
 			workers, err := NewMaintenanceWorkers(config)
-			if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil {
+			if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil || workers.Chunks == nil {
 				test.Fatal("complete maintenance capabilities rejected", err)
 			}
 			if len(capabilities.calls) != 0 {
@@ -521,18 +526,29 @@ func TestWave41MaintenanceCompatibilityKeepsUnsupportedOwnersAndCompleteRejectsF
 			outbound.RepositoryStore
 			wave41StorageReconciler
 		}{RepositoryStore: storage, wave41StorageReconciler: complete}},
+		{name: "runtime-and-storage-without-chunks", repositories: struct {
+			outbound.RepositoryStore
+			outbound.RuntimeStore
+			wave41StorageReconciler
+		}{RepositoryStore: storage, RuntimeStore: storage, wave41StorageReconciler: complete}},
 	} {
 		test.Run(capabilities.name, func(test *testing.T) {
 			config := MaintenanceWorkersConfig{Profile: systemmaintenance.Compatibility, Repositories: capabilities.repositories}
 			workers, err := NewMaintenanceWorkers(config)
-			if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil {
+			if err != nil || workers == nil || workers.Runtime == nil || workers.Storage == nil || workers.Chunks == nil {
 				test.Fatal("compatibility lost unsupported maintenance owner no-op", err)
 			}
-			if capabilities.name != "storage-without-runtime" {
+			unsupportedStorage := capabilities.name == "FS-runtime-without-storage" || capabilities.name == "no-runtime-or-storage"
+			if unsupportedStorage {
 				workers.Storage.Run(context.Background())
 			}
-			if capabilities.name != "FS-runtime-without-storage" {
+			if capabilities.name == "no-runtime-or-storage" || capabilities.name == "storage-without-runtime" {
 				workers.Runtime.Run(context.Background())
+			}
+			// No fixture here can clean up chunks: the owner must be a no-op.
+			workers.Chunks.Run(context.Background())
+			if visited, err := workers.Chunks.Process(context.Background()); visited != 0 || err != nil {
+				test.Fatal("unsupported chunk cleanup performed work", visited, err)
 			}
 			config.Profile = systemmaintenance.Complete
 			if workers, err := NewMaintenanceWorkers(config); workers != nil || !errors.Is(err, domain.ErrCatalogUnsupported) {
