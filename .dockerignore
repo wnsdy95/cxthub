@@ -8,6 +8,7 @@
 !deploy/Dockerfile.mcp
 !deploy/Dockerfile.migrate
 !deploy/runtime-rights.Dockerfile
+!deploy/runtime-rights.sh
 
 !backend/
 !backend/go.mod
